@@ -1,0 +1,1501 @@
+{
+ "note": "Profile-mode flutter drive runs of integration_test/photo_scroll_test.dart (org.ournet.ournet.profile). Before = code prior to encrypted previews and history caches; after = this change. One run per cell; compare on the same device only. The Pixel large \"after\" run was not collected (device reassigned).",
+ "pixel8pro": {
+  "device": "Pixel 8 Pro (Tensor G3, Android 17, 60 Hz setting)",
+  "four_before": {
+   "photos": 4,
+   "notes": 6,
+   "refreshRateHz": 60.0,
+   "frameBudgetMs": 16.666666666666668,
+   "devicePixelRatio": 2.25,
+   "itemsQueryMs": 15,
+   "cycles": [
+    {
+     "name": "cold",
+     "originalChunkReads": 150,
+     "imageDecodes": 5,
+     "placeholderVisiblePct": 13.636363636363637,
+     "longestPlaceholderMs": 300,
+     "rssMiB": 367.17578125,
+     "imageCacheMiB": 10.986328125,
+     "imageCacheEntries": 6,
+     "frames": 347,
+     "framesOverBudget": 0,
+     "frameStageMs": {
+      "p50": 3.147,
+      "p90": 5.357,
+      "p95": 5.749,
+      "p99": 11.313,
+      "max": 14.224
+     },
+     "rasterMs": {
+      "p50": 3.114,
+      "p90": 5.127,
+      "p95": 5.543,
+      "p99": 7.444,
+      "max": 10.558
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.018,
+      "p90": 5.51,
+      "p95": 8.997,
+      "p99": 13.897,
+      "max": 20.303
+     }
+    },
+    {
+     "name": "warm1",
+     "originalChunkReads": 150,
+     "imageDecodes": 5,
+     "placeholderVisiblePct": 12.727272727272727,
+     "longestPlaceholderMs": 200,
+     "rssMiB": 388.6796875,
+     "imageCacheMiB": 20.1416015625,
+     "imageCacheEntries": 11,
+     "frames": 343,
+     "framesOverBudget": 1,
+     "frameStageMs": {
+      "p50": 3.298,
+      "p90": 5.374,
+      "p95": 5.941,
+      "p99": 9.486,
+      "max": 16.69
+     },
+     "rasterMs": {
+      "p50": 3.214,
+      "p90": 5.244,
+      "p95": 5.653,
+      "p99": 6.525,
+      "max": 7.037
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.002,
+      "p90": 4.754,
+      "p95": 7.359,
+      "p99": 16.066,
+      "max": 19.568
+     }
+    },
+    {
+     "name": "warm2",
+     "originalChunkReads": 150,
+     "imageDecodes": 5,
+     "placeholderVisiblePct": 8.108108108108109,
+     "longestPlaceholderMs": 200,
+     "rssMiB": 421.0234375,
+     "imageCacheMiB": 29.296875,
+     "imageCacheEntries": 16,
+     "frames": 346,
+     "framesOverBudget": 0,
+     "frameStageMs": {
+      "p50": 3.309,
+      "p90": 5.447,
+      "p95": 6.055,
+      "p99": 9.447,
+      "max": 14.635
+     },
+     "rasterMs": {
+      "p50": 3.245,
+      "p90": 5.263,
+      "p95": 5.691,
+      "p99": 6.474,
+      "max": 6.911
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 5.704,
+      "p95": 8.638,
+      "p99": 13.47,
+      "max": 21.84
+     }
+    },
+    {
+     "name": "warm3",
+     "originalChunkReads": 150,
+     "imageDecodes": 5,
+     "placeholderVisiblePct": 13.636363636363637,
+     "longestPlaceholderMs": 300,
+     "rssMiB": 462.38671875,
+     "imageCacheMiB": 38.4521484375,
+     "imageCacheEntries": 21,
+     "frames": 335,
+     "framesOverBudget": 0,
+     "frameStageMs": {
+      "p50": 3.138,
+      "p90": 5.309,
+      "p95": 6.475,
+      "p99": 12.0,
+      "max": 15.946
+     },
+     "rasterMs": {
+      "p50": 3.042,
+      "p90": 4.575,
+      "p95": 5.345,
+      "p99": 6.495,
+      "max": 6.788
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.007,
+      "p90": 5.486,
+      "p95": 9.269,
+      "p99": 16.291,
+      "max": 27.476
+     }
+    },
+    {
+     "name": "warm4",
+     "originalChunkReads": 150,
+     "imageDecodes": 5,
+     "placeholderVisiblePct": 10.714285714285714,
+     "longestPlaceholderMs": 200,
+     "rssMiB": 495.24609375,
+     "imageCacheMiB": 47.607421875,
+     "imageCacheEntries": 26,
+     "frames": 350,
+     "framesOverBudget": 1,
+     "frameStageMs": {
+      "p50": 3.224,
+      "p90": 5.377,
+      "p95": 6.051,
+      "p99": 7.144,
+      "max": 22.69
+     },
+     "rasterMs": {
+      "p50": 3.151,
+      "p90": 5.184,
+      "p95": 5.73,
+      "p99": 6.354,
+      "max": 6.623
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 4.82,
+      "p95": 6.291,
+      "p99": 14.975,
+      "max": 26.539
+     }
+    },
+    {
+     "name": "warm5",
+     "originalChunkReads": 150,
+     "imageDecodes": 5,
+     "placeholderVisiblePct": 12.727272727272727,
+     "longestPlaceholderMs": 250,
+     "rssMiB": 528.8984375,
+     "imageCacheMiB": 56.7626953125,
+     "imageCacheEntries": 31,
+     "frames": 341,
+     "framesOverBudget": 0,
+     "frameStageMs": {
+      "p50": 3.436,
+      "p90": 5.396,
+      "p95": 6.097,
+      "p99": 8.664,
+      "max": 16.537
+     },
+     "rasterMs": {
+      "p50": 3.337,
+      "p90": 5.105,
+      "p95": 5.849,
+      "p99": 6.757,
+      "max": 9.616
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.043,
+      "p90": 5.856,
+      "p95": 9.517,
+      "p99": 15.504,
+      "max": 20.272
+     }
+    }
+   ]
+  },
+  "large_before": {
+   "photos": 300,
+   "notes": 700,
+   "refreshRateHz": 60.0,
+   "frameBudgetMs": 16.666666666666668,
+   "devicePixelRatio": 2.25,
+   "itemsQueryMs": 646,
+   "cycles": [
+    {
+     "name": "cold",
+     "originalChunkReads": 728,
+     "imageDecodes": 91,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 564.41015625,
+     "imageCacheMiB": 98.876953125,
+     "imageCacheEntries": 54,
+     "frames": 5848,
+     "framesOverBudget": 0,
+     "frameStageMs": {
+      "p50": 3.618,
+      "p90": 5.535,
+      "p95": 6.11,
+      "p99": 9.263,
+      "max": 16.233
+     },
+     "rasterMs": {
+      "p50": 3.544,
+      "p90": 5.201,
+      "p95": 5.715,
+      "p99": 6.367,
+      "max": 10.845
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 5.379,
+      "p95": 7.795,
+      "p99": 13.808,
+      "max": 25.21
+     }
+    },
+    {
+     "name": "warm1",
+     "originalChunkReads": 728,
+     "imageDecodes": 91,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 566.16015625,
+     "imageCacheMiB": 98.876953125,
+     "imageCacheEntries": 54,
+     "frames": 5856,
+     "framesOverBudget": 1,
+     "frameStageMs": {
+      "p50": 3.66,
+      "p90": 5.542,
+      "p95": 6.207,
+      "p99": 9.501,
+      "max": 16.673
+     },
+     "rasterMs": {
+      "p50": 3.586,
+      "p90": 5.196,
+      "p95": 5.713,
+      "p99": 6.669,
+      "max": 12.06
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 5.576,
+      "p95": 7.911,
+      "p99": 13.93,
+      "max": 25.184
+     }
+    },
+    {
+     "name": "warm2",
+     "originalChunkReads": 728,
+     "imageDecodes": 91,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 562.62890625,
+     "imageCacheMiB": 98.876953125,
+     "imageCacheEntries": 54,
+     "frames": 5897,
+     "framesOverBudget": 1,
+     "frameStageMs": {
+      "p50": 3.629,
+      "p90": 5.557,
+      "p95": 6.123,
+      "p99": 8.772,
+      "max": 17.176
+     },
+     "rasterMs": {
+      "p50": 3.55,
+      "p90": 5.233,
+      "p95": 5.729,
+      "p99": 6.595,
+      "max": 11.153
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 5.502,
+      "p95": 7.976,
+      "p99": 13.377,
+      "max": 22.389
+     }
+    },
+    {
+     "name": "loaded1",
+     "originalChunkReads": 528,
+     "imageDecodes": 66,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 573.6015625,
+     "imageCacheMiB": 98.876953125,
+     "imageCacheEntries": 54,
+     "frames": 5848,
+     "framesOverBudget": 4,
+     "frameStageMs": {
+      "p50": 3.669,
+      "p90": 5.634,
+      "p95": 6.163,
+      "p99": 8.539,
+      "max": 65.36
+     },
+     "rasterMs": {
+      "p50": 3.572,
+      "p90": 5.35,
+      "p95": 5.782,
+      "p99": 6.56,
+      "max": 13.305
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 5.57,
+      "p95": 7.76,
+      "p99": 13.815,
+      "max": 1104.508
+     }
+    },
+    {
+     "name": "loaded2",
+     "originalChunkReads": 528,
+     "imageDecodes": 66,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 576.01953125,
+     "imageCacheMiB": 98.876953125,
+     "imageCacheEntries": 54,
+     "frames": 5869,
+     "framesOverBudget": 1,
+     "frameStageMs": {
+      "p50": 3.635,
+      "p90": 5.648,
+      "p95": 6.21,
+      "p99": 8.667,
+      "max": 85.252
+     },
+     "rasterMs": {
+      "p50": 3.558,
+      "p90": 5.325,
+      "p95": 5.833,
+      "p99": 6.534,
+      "max": 11.779
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 5.618,
+      "p95": 8.051,
+      "p99": 13.863,
+      "max": 717.593
+     }
+    }
+   ]
+  },
+  "four_after": {
+   "photos": 4,
+   "notes": 6,
+   "refreshRateHz": 60.0,
+   "frameBudgetMs": 16.666666666666668,
+   "devicePixelRatio": 2.25,
+   "itemsQueryMs": 5,
+   "cycles": [
+    {
+     "name": "cold",
+     "originalChunkReads": 90,
+     "imageDecodes": 3,
+     "thumbnailsGenerated": 3,
+     "placeholderVisiblePct": 9.821428571428571,
+     "longestPlaceholderMs": 250,
+     "rssMiB": 343.83984375,
+     "imageCacheMiB": 10.546875,
+     "imageCacheEntries": 4,
+     "frames": 357,
+     "framesOverBudget": 0,
+     "frameStageMs": {
+      "p50": 3.303,
+      "p90": 5.529,
+      "p95": 5.904,
+      "p99": 6.735,
+      "max": 8.794
+     },
+     "rasterMs": {
+      "p50": 3.161,
+      "p90": 5.4,
+      "p95": 5.779,
+      "p99": 6.514,
+      "max": 6.735
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 3.895,
+      "p95": 5.747,
+      "p99": 10.54,
+      "max": 25.653
+     }
+    },
+    {
+     "name": "warm1",
+     "originalChunkReads": 0,
+     "imageDecodes": 0,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 346.2890625,
+     "imageCacheMiB": 10.546875,
+     "imageCacheEntries": 4,
+     "frames": 354,
+     "framesOverBudget": 0,
+     "frameStageMs": {
+      "p50": 3.836,
+      "p90": 5.609,
+      "p95": 5.981,
+      "p99": 7.01,
+      "max": 9.931
+     },
+     "rasterMs": {
+      "p50": 3.782,
+      "p90": 5.469,
+      "p95": 5.828,
+      "p99": 6.294,
+      "max": 7.092
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 5.483,
+      "p95": 6.791,
+      "p99": 14.109,
+      "max": 21.336
+     }
+    },
+    {
+     "name": "warm2",
+     "originalChunkReads": 0,
+     "imageDecodes": 0,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 327.390625,
+     "imageCacheMiB": 10.546875,
+     "imageCacheEntries": 4,
+     "frames": 341,
+     "framesOverBudget": 0,
+     "frameStageMs": {
+      "p50": 3.823,
+      "p90": 5.735,
+      "p95": 6.213,
+      "p99": 7.441,
+      "max": 11.397
+     },
+     "rasterMs": {
+      "p50": 3.768,
+      "p90": 5.599,
+      "p95": 5.917,
+      "p99": 6.828,
+      "max": 7.192
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 5.207,
+      "p95": 7.282,
+      "p99": 13.239,
+      "max": 15.811
+     }
+    },
+    {
+     "name": "warm3",
+     "originalChunkReads": 0,
+     "imageDecodes": 0,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 342.5703125,
+     "imageCacheMiB": 10.546875,
+     "imageCacheEntries": 4,
+     "frames": 355,
+     "framesOverBudget": 0,
+     "frameStageMs": {
+      "p50": 3.913,
+      "p90": 5.656,
+      "p95": 6.097,
+      "p99": 7.491,
+      "max": 11.411
+     },
+     "rasterMs": {
+      "p50": 3.877,
+      "p90": 5.535,
+      "p95": 5.994,
+      "p99": 6.776,
+      "max": 7.491
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 4.928,
+      "p95": 6.605,
+      "p99": 11.685,
+      "max": 17.701
+     }
+    },
+    {
+     "name": "warm4",
+     "originalChunkReads": 0,
+     "imageDecodes": 0,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 337.30078125,
+     "imageCacheMiB": 10.546875,
+     "imageCacheEntries": 4,
+     "frames": 353,
+     "framesOverBudget": 0,
+     "frameStageMs": {
+      "p50": 3.87,
+      "p90": 5.682,
+      "p95": 5.929,
+      "p99": 7.208,
+      "max": 9.117
+     },
+     "rasterMs": {
+      "p50": 3.818,
+      "p90": 5.594,
+      "p95": 5.858,
+      "p99": 6.746,
+      "max": 7.225
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 5.383,
+      "p95": 7.524,
+      "p99": 13.435,
+      "max": 16.287
+     }
+    },
+    {
+     "name": "warm5",
+     "originalChunkReads": 0,
+     "imageDecodes": 0,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 338.1015625,
+     "imageCacheMiB": 10.546875,
+     "imageCacheEntries": 4,
+     "frames": 356,
+     "framesOverBudget": 0,
+     "frameStageMs": {
+      "p50": 4.076,
+      "p90": 5.68,
+      "p95": 6.018,
+      "p99": 6.924,
+      "max": 7.243
+     },
+     "rasterMs": {
+      "p50": 4.01,
+      "p90": 5.578,
+      "p95": 5.888,
+      "p99": 6.325,
+      "max": 7.212
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 4.764,
+      "p95": 6.66,
+      "p99": 10.516,
+      "max": 13.286
+     }
+    },
+    {
+     "name": "relaunch",
+     "originalChunkReads": 0,
+     "imageDecodes": 3,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 361.32421875,
+     "imageCacheMiB": 10.546875,
+     "imageCacheEntries": 4,
+     "frames": 355,
+     "framesOverBudget": 0,
+     "frameStageMs": {
+      "p50": 3.741,
+      "p90": 5.495,
+      "p95": 6.012,
+      "p99": 7.557,
+      "max": 8.758
+     },
+     "rasterMs": {
+      "p50": 3.689,
+      "p90": 5.398,
+      "p95": 5.875,
+      "p99": 7.557,
+      "max": 8.758
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.0,
+      "p90": 4.682,
+      "p95": 6.119,
+      "p99": 12.253,
+      "max": 13.739
+     }
+    }
+   ]
+  }
+ },
+ "bv6600pro": {
+  "device": "Blackview BV6600 Pro (Helio P35, 4 GB, Android 11, 60 Hz)",
+  "four_before": {
+   "photos": 4,
+   "notes": 6,
+   "refreshRateHz": 60.0,
+   "frameBudgetMs": 16.666666666666668,
+   "devicePixelRatio": 2.0,
+   "itemsQueryMs": 55,
+   "cycles": [
+    {
+     "name": "cold",
+     "originalChunkReads": 99,
+     "imageDecodes": 1,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 40.25974025974026,
+     "longestPlaceholderMs": 600,
+     "rssMiB": 226.3828125,
+     "imageCacheMiB": 1.8310546875,
+     "imageCacheEntries": 1,
+     "frames": 363,
+     "framesOverBudget": 29,
+     "frameStageMs": {
+      "p50": 8.339,
+      "p90": 15.615,
+      "p95": 19.317,
+      "p99": 33.039,
+      "max": 50.032
+     },
+     "rasterMs": {
+      "p50": 8.292,
+      "p90": 14.532,
+      "p95": 19.156,
+      "p99": 33.039,
+      "max": 50.032
+     },
+     "eventLoopDelayMs": {
+      "p50": 1.84,
+      "p90": 13.151,
+      "p95": 18.86,
+      "p99": 30.088,
+      "max": 35.258
+     }
+    },
+    {
+     "name": "warm1",
+     "originalChunkReads": 108,
+     "imageDecodes": 0,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 39.62264150943396,
+     "longestPlaceholderMs": 650,
+     "rssMiB": 224.10546875,
+     "imageCacheMiB": 1.8310546875,
+     "imageCacheEntries": 1,
+     "frames": 346,
+     "framesOverBudget": 36,
+     "frameStageMs": {
+      "p50": 8.944,
+      "p90": 16.885,
+      "p95": 21.157,
+      "p99": 31.002,
+      "max": 42.994
+     },
+     "rasterMs": {
+      "p50": 8.81,
+      "p90": 15.964,
+      "p95": 18.802,
+      "p99": 30.5,
+      "max": 42.994
+     },
+     "eventLoopDelayMs": {
+      "p50": 2.633,
+      "p90": 15.708,
+      "p95": 19.648,
+      "p99": 37.019,
+      "max": 55.862
+     }
+    },
+    {
+     "name": "warm2",
+     "originalChunkReads": 106,
+     "imageDecodes": 1,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 35.256410256410255,
+     "longestPlaceholderMs": 600,
+     "rssMiB": 229.0546875,
+     "imageCacheMiB": 3.662109375,
+     "imageCacheEntries": 2,
+     "frames": 367,
+     "framesOverBudget": 36,
+     "frameStageMs": {
+      "p50": 8.149,
+      "p90": 16.537,
+      "p95": 22.306,
+      "p99": 35.65,
+      "max": 101.915
+     },
+     "rasterMs": {
+      "p50": 7.988,
+      "p90": 15.524,
+      "p95": 22.067,
+      "p99": 35.65,
+      "max": 101.915
+     },
+     "eventLoopDelayMs": {
+      "p50": 1.448,
+      "p90": 15.221,
+      "p95": 18.078,
+      "p99": 27.628,
+      "max": 66.924
+     }
+    },
+    {
+     "name": "warm3",
+     "originalChunkReads": 108,
+     "imageDecodes": 1,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 32.05128205128205,
+     "longestPlaceholderMs": 650,
+     "rssMiB": 220.9140625,
+     "imageCacheMiB": 1.8310546875,
+     "imageCacheEntries": 1,
+     "frames": 378,
+     "framesOverBudget": 26,
+     "frameStageMs": {
+      "p50": 8.313,
+      "p90": 15.56,
+      "p95": 21.761,
+      "p99": 29.048,
+      "max": 43.814
+     },
+     "rasterMs": {
+      "p50": 8.265,
+      "p90": 14.225,
+      "p95": 20.057,
+      "p99": 29.048,
+      "max": 43.814
+     },
+     "eventLoopDelayMs": {
+      "p50": 1.274,
+      "p90": 13.981,
+      "p95": 19.097,
+      "p99": 29.782,
+      "max": 51.363
+     }
+    },
+    {
+     "name": "warm4",
+     "originalChunkReads": 111,
+     "imageDecodes": 1,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 38.46153846153846,
+     "longestPlaceholderMs": 650,
+     "rssMiB": 234.5625,
+     "imageCacheMiB": 3.662109375,
+     "imageCacheEntries": 2,
+     "frames": 407,
+     "framesOverBudget": 1,
+     "frameStageMs": {
+      "p50": 7.47,
+      "p90": 10.055,
+      "p95": 11.498,
+      "p99": 14.795,
+      "max": 17.225
+     },
+     "rasterMs": {
+      "p50": 7.447,
+      "p90": 9.84,
+      "p95": 10.416,
+      "p99": 14.051,
+      "max": 17.225
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.951,
+      "p90": 11.151,
+      "p95": 15.742,
+      "p99": 31.452,
+      "max": 47.314
+     }
+    },
+    {
+     "name": "warm5",
+     "originalChunkReads": 112,
+     "imageDecodes": 1,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 38.46153846153846,
+     "longestPlaceholderMs": 600,
+     "rssMiB": 231.58984375,
+     "imageCacheMiB": 5.4931640625,
+     "imageCacheEntries": 3,
+     "frames": 410,
+     "framesOverBudget": 3,
+     "frameStageMs": {
+      "p50": 7.545,
+      "p90": 10.001,
+      "p95": 11.498,
+      "p99": 15.756,
+      "max": 21.793
+     },
+     "rasterMs": {
+      "p50": 7.484,
+      "p90": 9.515,
+      "p95": 10.552,
+      "p99": 14.178,
+      "max": 21.793
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.698,
+      "p90": 11.679,
+      "p95": 16.664,
+      "p99": 23.91,
+      "max": 50.29
+     }
+    },
+    {
+     "name": "relaunch",
+     "originalChunkReads": 113,
+     "imageDecodes": 1,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 38.21656050955414,
+     "longestPlaceholderMs": 600,
+     "rssMiB": 241.65234375,
+     "imageCacheMiB": 1.8310546875,
+     "imageCacheEntries": 1,
+     "frames": 409,
+     "framesOverBudget": 4,
+     "frameStageMs": {
+      "p50": 7.919,
+      "p90": 10.616,
+      "p95": 11.985,
+      "p99": 15.163,
+      "max": 19.251
+     },
+     "rasterMs": {
+      "p50": 7.874,
+      "p90": 10.09,
+      "p95": 11.116,
+      "p99": 13.019,
+      "max": 19.251
+     },
+     "eventLoopDelayMs": {
+      "p50": 1.425,
+      "p90": 12.286,
+      "p95": 16.126,
+      "p99": 26.959,
+      "max": 39.451
+     }
+    }
+   ]
+  },
+  "large_before": {
+   "photos": 300,
+   "notes": 700,
+   "refreshRateHz": 60.0,
+   "frameBudgetMs": 16.666666666666668,
+   "devicePixelRatio": 2.0,
+   "itemsQueryMs": 4119,
+   "cycles": [
+    {
+     "name": "cold",
+     "originalChunkReads": 592,
+     "imageDecodes": 74,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 7.80416868637906,
+     "longestPlaceholderMs": 500,
+     "rssMiB": 279.04296875,
+     "imageCacheMiB": 98.876953125,
+     "imageCacheEntries": 54,
+     "frames": 5073,
+     "framesOverBudget": 9,
+     "frameStageMs": {
+      "p50": 7.964,
+      "p90": 9.749,
+      "p95": 11.575,
+      "p99": 13.321,
+      "max": 38.399
+     },
+     "rasterMs": {
+      "p50": 7.914,
+      "p90": 9.271,
+      "p95": 10.921,
+      "p99": 12.725,
+      "max": 38.399
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.765,
+      "p90": 12.101,
+      "p95": 16.474,
+      "p99": 25.578,
+      "max": 63.664
+     }
+    },
+    {
+     "name": "warm1",
+     "originalChunkReads": 592,
+     "imageDecodes": 74,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 7.93036750483559,
+     "longestPlaceholderMs": 450,
+     "rssMiB": 285.8203125,
+     "imageCacheMiB": 98.876953125,
+     "imageCacheEntries": 54,
+     "frames": 4940,
+     "framesOverBudget": 18,
+     "frameStageMs": {
+      "p50": 8.22,
+      "p90": 10.027,
+      "p95": 11.565,
+      "p99": 13.265,
+      "max": 34.405
+     },
+     "rasterMs": {
+      "p50": 8.181,
+      "p90": 9.418,
+      "p95": 10.941,
+      "p99": 12.618,
+      "max": 34.405
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.767,
+      "p90": 12.691,
+      "p95": 16.495,
+      "p99": 26.301,
+      "max": 50.298
+     }
+    },
+    {
+     "name": "warm2",
+     "originalChunkReads": 592,
+     "imageDecodes": 74,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 7.525325615050651,
+     "longestPlaceholderMs": 550,
+     "rssMiB": 286.77734375,
+     "imageCacheMiB": 98.876953125,
+     "imageCacheEntries": 54,
+     "frames": 5033,
+     "framesOverBudget": 11,
+     "frameStageMs": {
+      "p50": 8.144,
+      "p90": 10.387,
+      "p95": 12.007,
+      "p99": 14.791,
+      "max": 40.896
+     },
+     "rasterMs": {
+      "p50": 8.1,
+      "p90": 9.754,
+      "p95": 11.728,
+      "p99": 13.598,
+      "max": 40.896
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.765,
+      "p90": 12.389,
+      "p95": 16.616,
+      "p99": 26.029,
+      "max": 79.279
+     }
+    },
+    {
+     "name": "loaded1",
+     "originalChunkReads": 400,
+     "imageDecodes": 49,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 7.036144578313253,
+     "longestPlaceholderMs": 600,
+     "rssMiB": 281.34375,
+     "imageCacheMiB": 98.876953125,
+     "imageCacheEntries": 54,
+     "frames": 4638,
+     "framesOverBudget": 20,
+     "frameStageMs": {
+      "p50": 8.377,
+      "p90": 12.214,
+      "p95": 12.546,
+      "p99": 14.977,
+      "max": 404.346
+     },
+     "rasterMs": {
+      "p50": 8.323,
+      "p90": 12.165,
+      "p95": 12.449,
+      "p99": 13.32,
+      "max": 37.187
+     },
+     "eventLoopDelayMs": {
+      "p50": 1.46,
+      "p90": 13.88,
+      "p95": 19.26,
+      "p99": 30.475,
+      "max": 7178.452
+     }
+    },
+    {
+     "name": "loaded2",
+     "originalChunkReads": 392,
+     "imageDecodes": 49,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 4.7201946472019465,
+     "longestPlaceholderMs": 500,
+     "rssMiB": 285.02734375,
+     "imageCacheMiB": 98.876953125,
+     "imageCacheEntries": 54,
+     "frames": 4870,
+     "framesOverBudget": 14,
+     "frameStageMs": {
+      "p50": 8.269,
+      "p90": 9.791,
+      "p95": 11.82,
+      "p99": 14.187,
+      "max": 411.281
+     },
+     "rasterMs": {
+      "p50": 8.247,
+      "p90": 9.384,
+      "p95": 11.441,
+      "p99": 13.026,
+      "max": 40.398
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.94,
+      "p90": 12.431,
+      "p95": 16.621,
+      "p99": 26.159,
+      "max": 4399.862
+     }
+    }
+   ]
+  },
+  "four_after": {
+   "photos": 4,
+   "notes": 6,
+   "refreshRateHz": 60.0,
+   "frameBudgetMs": 16.666666666666668,
+   "devicePixelRatio": 2.0,
+   "itemsQueryMs": 2,
+   "cycles": [
+    {
+     "name": "cold",
+     "originalChunkReads": 90,
+     "imageDecodes": 3,
+     "thumbnailsGenerated": 3,
+     "placeholderVisiblePct": 20.64516129032258,
+     "longestPlaceholderMs": 600,
+     "rssMiB": 255.48828125,
+     "imageCacheMiB": 10.546875,
+     "imageCacheEntries": 4,
+     "frames": 396,
+     "framesOverBudget": 5,
+     "frameStageMs": {
+      "p50": 7.759,
+      "p90": 11.337,
+      "p95": 14.724,
+      "p99": 21.154,
+      "max": 33.579
+     },
+     "rasterMs": {
+      "p50": 7.746,
+      "p90": 11.102,
+      "p95": 13.935,
+      "p99": 21.154,
+      "max": 33.579
+     },
+     "eventLoopDelayMs": {
+      "p50": 1.264,
+      "p90": 12.565,
+      "p95": 16.902,
+      "p99": 26.143,
+      "max": 53.663
+     }
+    },
+    {
+     "name": "warm1",
+     "originalChunkReads": 0,
+     "imageDecodes": 0,
+     "thumbnailsGenerated": 1,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 248.2421875,
+     "imageCacheMiB": 10.546875,
+     "imageCacheEntries": 4,
+     "frames": 428,
+     "framesOverBudget": 2,
+     "frameStageMs": {
+      "p50": 8.203,
+      "p90": 11.576,
+      "p95": 12.175,
+      "p99": 15.163,
+      "max": 21.955
+     },
+     "rasterMs": {
+      "p50": 8.195,
+      "p90": 11.576,
+      "p95": 12.175,
+      "p99": 15.163,
+      "max": 21.955
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.313,
+      "p90": 10.01,
+      "p95": 14.03,
+      "p99": 20.572,
+      "max": 40.53
+     }
+    },
+    {
+     "name": "warm2",
+     "originalChunkReads": 0,
+     "imageDecodes": 0,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 249.64453125,
+     "imageCacheMiB": 10.546875,
+     "imageCacheEntries": 4,
+     "frames": 391,
+     "framesOverBudget": 1,
+     "frameStageMs": {
+      "p50": 8.679,
+      "p90": 12.193,
+      "p95": 13.214,
+      "p99": 15.788,
+      "max": 16.826
+     },
+     "rasterMs": {
+      "p50": 8.679,
+      "p90": 12.193,
+      "p95": 13.214,
+      "p99": 15.788,
+      "max": 16.826
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.322,
+      "p90": 12.501,
+      "p95": 15.667,
+      "p99": 24.587,
+      "max": 38.542
+     }
+    },
+    {
+     "name": "warm3",
+     "originalChunkReads": 0,
+     "imageDecodes": 0,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 240.73046875,
+     "imageCacheMiB": 10.546875,
+     "imageCacheEntries": 4,
+     "frames": 415,
+     "framesOverBudget": 0,
+     "frameStageMs": {
+      "p50": 7.954,
+      "p90": 11.879,
+      "p95": 12.398,
+      "p99": 13.495,
+      "max": 15.619
+     },
+     "rasterMs": {
+      "p50": 7.945,
+      "p90": 11.878,
+      "p95": 12.398,
+      "p99": 13.495,
+      "max": 15.619
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.16,
+      "p90": 10.145,
+      "p95": 13.956,
+      "p99": 23.893,
+      "max": 39.17
+     }
+    },
+    {
+     "name": "warm4",
+     "originalChunkReads": 0,
+     "imageDecodes": 0,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 247.0859375,
+     "imageCacheMiB": 10.546875,
+     "imageCacheEntries": 4,
+     "frames": 407,
+     "framesOverBudget": 3,
+     "frameStageMs": {
+      "p50": 8.531,
+      "p90": 13.78,
+      "p95": 14.991,
+      "p99": 16.12,
+      "max": 23.232
+     },
+     "rasterMs": {
+      "p50": 8.531,
+      "p90": 13.78,
+      "p95": 14.991,
+      "p99": 16.12,
+      "max": 23.232
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.15,
+      "p90": 11.149,
+      "p95": 15.388,
+      "p99": 25.937,
+      "max": 43.386
+     }
+    },
+    {
+     "name": "warm5",
+     "originalChunkReads": 0,
+     "imageDecodes": 0,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 249.41015625,
+     "imageCacheMiB": 10.546875,
+     "imageCacheEntries": 4,
+     "frames": 401,
+     "framesOverBudget": 2,
+     "frameStageMs": {
+      "p50": 8.516,
+      "p90": 12.222,
+      "p95": 13.259,
+      "p99": 14.563,
+      "max": 40.196
+     },
+     "rasterMs": {
+      "p50": 8.505,
+      "p90": 12.188,
+      "p95": 13.259,
+      "p99": 14.563,
+      "max": 40.196
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.161,
+      "p90": 11.609,
+      "p95": 15.569,
+      "p99": 25.158,
+      "max": 38.604
+     }
+    },
+    {
+     "name": "relaunch",
+     "originalChunkReads": 0,
+     "imageDecodes": 3,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 249.4765625,
+     "imageCacheMiB": 4.30267333984375,
+     "imageCacheEntries": 4,
+     "frames": 423,
+     "framesOverBudget": 2,
+     "frameStageMs": {
+      "p50": 8.383,
+      "p90": 11.821,
+      "p95": 13.52,
+      "p99": 14.775,
+      "max": 40.398
+     },
+     "rasterMs": {
+      "p50": 8.377,
+      "p90": 11.821,
+      "p95": 13.52,
+      "p99": 14.775,
+      "max": 40.398
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.187,
+      "p90": 9.312,
+      "p95": 13.551,
+      "p99": 25.026,
+      "max": 35.916
+     }
+    }
+   ]
+  },
+  "large_after": {
+   "photos": 300,
+   "notes": 700,
+   "refreshRateHz": 60.0,
+   "frameBudgetMs": 16.666666666666668,
+   "devicePixelRatio": 2.0,
+   "itemsQueryMs": 64,
+   "cycles": [
+    {
+     "name": "cold",
+     "originalChunkReads": 296,
+     "imageDecodes": 38,
+     "thumbnailsGenerated": 38,
+     "placeholderVisiblePct": 4.120213281628696,
+     "longestPlaceholderMs": 450,
+     "rssMiB": 261.26953125,
+     "imageCacheMiB": 98.63426208496094,
+     "imageCacheEntries": 38,
+     "frames": 4972,
+     "framesOverBudget": 46,
+     "frameStageMs": {
+      "p50": 8.178,
+      "p90": 11.291,
+      "p95": 12.303,
+      "p99": 16.307,
+      "max": 42.832
+     },
+     "rasterMs": {
+      "p50": 8.153,
+      "p90": 11.003,
+      "p95": 12.165,
+      "p99": 15.56,
+      "max": 41.146
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.805,
+      "p90": 12.022,
+      "p95": 15.631,
+      "p99": 25.218,
+      "max": 71.413
+     }
+    },
+    {
+     "name": "warm1",
+     "originalChunkReads": 0,
+     "imageDecodes": 0,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 262.9140625,
+     "imageCacheMiB": 98.63426208496094,
+     "imageCacheEntries": 38,
+     "frames": 4940,
+     "framesOverBudget": 1,
+     "frameStageMs": {
+      "p50": 8.612,
+      "p90": 12.124,
+      "p95": 12.382,
+      "p99": 14.751,
+      "max": 26.374
+     },
+     "rasterMs": {
+      "p50": 8.59,
+      "p90": 12.122,
+      "p95": 12.38,
+      "p99": 14.748,
+      "max": 26.374
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.408,
+      "p90": 11.579,
+      "p95": 15.757,
+      "p99": 25.114,
+      "max": 54.13
+     }
+    },
+    {
+     "name": "warm2",
+     "originalChunkReads": 0,
+     "imageDecodes": 0,
+     "thumbnailsGenerated": 0,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 262.03515625,
+     "imageCacheMiB": 98.63426208496094,
+     "imageCacheEntries": 38,
+     "frames": 5044,
+     "framesOverBudget": 8,
+     "frameStageMs": {
+      "p50": 8.442,
+      "p90": 12.091,
+      "p95": 12.427,
+      "p99": 14.707,
+      "max": 26.482
+     },
+     "rasterMs": {
+      "p50": 8.421,
+      "p90": 12.086,
+      "p95": 12.423,
+      "p99": 14.394,
+      "max": 26.482
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.391,
+      "p90": 11.175,
+      "p95": 15.178,
+      "p99": 24.787,
+      "max": 54.689
+     }
+    },
+    {
+     "name": "loaded1",
+     "originalChunkReads": 8,
+     "imageDecodes": 2,
+     "thumbnailsGenerated": 1,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 262.0,
+     "imageCacheMiB": 99.70993041992188,
+     "imageCacheEntries": 39,
+     "frames": 4738,
+     "framesOverBudget": 13,
+     "frameStageMs": {
+      "p50": 8.339,
+      "p90": 11.838,
+      "p95": 12.309,
+      "p99": 14.004,
+      "max": 69.053
+     },
+     "rasterMs": {
+      "p50": 8.317,
+      "p90": 11.8,
+      "p95": 12.265,
+      "p99": 13.245,
+      "max": 26.613
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.647,
+      "p90": 11.86,
+      "p95": 17.022,
+      "p99": 32.516,
+      "max": 190.162
+     }
+    },
+    {
+     "name": "loaded2",
+     "originalChunkReads": 8,
+     "imageDecodes": 1,
+     "thumbnailsGenerated": 1,
+     "placeholderVisiblePct": 0.0,
+     "longestPlaceholderMs": 0,
+     "rssMiB": 256.64453125,
+     "imageCacheMiB": 99.70993041992188,
+     "imageCacheEntries": 39,
+     "frames": 4954,
+     "framesOverBudget": 14,
+     "frameStageMs": {
+      "p50": 8.382,
+      "p90": 11.819,
+      "p95": 12.259,
+      "p99": 12.992,
+      "max": 75.548
+     },
+     "rasterMs": {
+      "p50": 8.366,
+      "p90": 11.8,
+      "p95": 12.239,
+      "p99": 12.929,
+      "max": 27.605
+     },
+     "eventLoopDelayMs": {
+      "p50": 0.699,
+      "p90": 11.72,
+      "p95": 15.817,
+      "p99": 26.394,
+      "max": 92.621
+     }
+    }
+   ]
+  }
+ }
+}

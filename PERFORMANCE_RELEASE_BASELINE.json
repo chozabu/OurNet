@@ -1,0 +1,14 @@
+{
+  "utc": "2026-09-10T09:26:25.647327Z",
+  "platform": "windows",
+  "dart": "3.12.2 (stable) (Tue Jun 9 01:11:39 2026 -0700) on \"windows_x64\"",
+  "messages": 100,
+  "fileBytes": 1048576,
+  "publish100EncryptedMs": 1462.234,
+  "quicSync100Ms": 6409.789,
+  "encryptAndStore1MiBMs": 141.601,
+  "quicDownloadDecrypt1MiBMs": 278.425,
+  "rssMiB": 132.2578125,
+  "inventoryBytes": 13597,
+  "transferMiBPerSecond": 3.5916314986082427
+}

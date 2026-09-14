@@ -1,0 +1,4 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="48dp" android:gravity="center_vertical">
+    <TextView android:id="@+id/widget_check" android:layout_width="48dp" android:layout_height="48dp" android:gravity="center" android:textColor="#143D32" android:textSize="28sp" />
+    <TextView android:id="@+id/widget_item_text" android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp" android:gravity="center_vertical" android:maxLines="2" android:ellipsize="end" android:textColor="#143D32" android:textSize="16sp" />
+</LinearLayout>

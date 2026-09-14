@@ -1,0 +1,3 @@
+# Desktop uses the signed iroh_quic library directly. Android has no upstream
+# prebuilt release and compiles the pinned mobile dependency once per ABI.
+use_precompiled_binaries: false

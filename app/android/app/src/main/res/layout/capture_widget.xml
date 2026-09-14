@@ -1,0 +1,4 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal" android:gravity="center" android:background="@drawable/widget_background">
+    <TextView android:id="@+id/widget_new_text" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" android:minHeight="48dp" android:gravity="center" android:text="＋ Note" android:contentDescription="Create text note" android:textColor="#143D32" android:textSize="18sp" />
+    <TextView android:id="@+id/widget_new_checklist" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" android:minHeight="48dp" android:gravity="center" android:text="☑ List" android:contentDescription="Create checklist" android:textColor="#143D32" android:textSize="18sp" />
+</LinearLayout>

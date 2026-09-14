@@ -1,0 +1,16 @@
+name: iroh_flutter
+version: 1.0.3
+publish_to: none
+environment:
+  sdk: ^3.12.0
+  flutter: '>=3.27.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  iroh_quic: 1.0.3
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: io.snowpine.iroh_flutter
+        pluginClass: IrohFlutterPlugin

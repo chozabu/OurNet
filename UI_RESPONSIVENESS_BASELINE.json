@@ -1,0 +1,40 @@
+{
+  "recordedUtc": "2026-09-14T08:10:27.3860074Z",
+  "platform": "windows",
+  "mode": "profile",
+  "scenario": "60 notes; synthetic 1024x1024 PNG import while typing, saving, filtering and scrolling",
+  "timingGatePassed": false,
+  "correctness": "All scenario assertions passed before the timing gate",
+  "result": {
+    "buildMode": "profile",
+    "frameStageMs": {
+      "count": 48,
+      "windowCount": 48,
+      "p95": 48.694,
+      "p99": 87.145,
+      "max": 87.145
+    },
+    "buildMs": {
+      "count": 48,
+      "windowCount": 48,
+      "p95": 8.904,
+      "p99": 19.249,
+      "max": 19.249
+    },
+    "rasterMs": {
+      "count": 48,
+      "windowCount": 48,
+      "p95": 48.694,
+      "p99": 87.145,
+      "max": 87.145
+    },
+    "eventLoopDelayMs": {
+      "count": 79,
+      "windowCount": 79,
+      "p95": 42.374,
+      "p99": 67.579,
+      "max": 67.579
+    },
+    "sampleCapacity": 600
+  }
+}

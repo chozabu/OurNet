@@ -1,0 +1,439 @@
+import 'dart:convert';
+import 'dart:math';
+import 'package:crypto/crypto.dart' as digest;
+import 'package:cryptography/cryptography.dart';
+
+typedef Json = Map<String, dynamic>;
+
+dynamic frozen(dynamic value) => value is Map
+    ? Map<String, dynamic>.unmodifiable(
+        value.map((k, v) => MapEntry(k as String, frozen(v))),
+      )
+    : value is List
+    ? List<dynamic>.unmodifiable(value.map(frozen))
+    : value;
+
+/// Cooperative time slicing for long loops on an interactive isolate. Each
+/// [pause] returns to the event loop once the budget is spent, so frames and
+/// input continue while history is decrypted, verified or indexed.
+class TimeSlice {
+  /// Fake-clock widget tests never fire timers, so their harness disables this.
+  static bool enabled = true;
+  final int budgetMicroseconds;
+  final _clock = Stopwatch()..start();
+  TimeSlice([this.budgetMicroseconds = 4000]);
+  Future<void> pause() async {
+    if (!enabled || _clock.elapsedMicroseconds < budgetMicroseconds) return;
+    await Future<void>.delayed(Duration.zero);
+    _clock.reset();
+  }
+}
+
+bool validContent(String kind, Json p) {
+  if (p['text'] != null &&
+      (p['text'] is! String || (p['text'] as String).length > 65536))
+    return false;
+  if (p['parent'] != null && p['parent'] is! String) return false;
+  if (p['chunks'] != null) {
+    if (p['chunks'] is! List ||
+        (p['chunks'] as List).length > 513 ||
+        !(p['chunks'] as List).every(
+          (h) => h is String && RegExp(r'^[0-9a-f]{64}$').hasMatch(h),
+        ) ||
+        p['size'] is! int ||
+        p['size'] < 0 ||
+        p['size'] > 64 * 1024 * 1024 ||
+        p['name'] is! String ||
+        (p['name'] as String).length > 255 ||
+        (p['key'] != null && p['key'] is! String))
+      return false;
+  }
+  return switch (kind) {
+    'note_op' =>
+      p['epoch'] is String &&
+          p['field'] is String &&
+          RegExp(
+            r'^(title|text|deleted|check:[a-zA-Z0-9_-]{1,80}:(text|done|deleted))$',
+          ).hasMatch(p['field']) &&
+          p['clock'] is int &&
+          p['clock'] >= 0 &&
+          p['clock'] < 9007199254740991 &&
+          p['parents'] is List &&
+          (p['parents'] as List).length <= 128 &&
+          (p['parents'] as List).every((v) => v is String && v.length <= 128) &&
+          (p['field'] == 'title' ||
+                  p['field'] == 'text' ||
+                  (p['field'] as String).endsWith(':text')
+              ? p['value'] is String && (p['value'] as String).length <= 16384
+              : p['value'] is bool) &&
+          (p['checkpoint'] == null || p['checkpoint'] is bool) &&
+          (p['request'] == null ||
+              p['request'] is String && (p['request'] as String).length <= 100),
+    'forum' =>
+      p['name'] is String &&
+          (p['name'] as String).trim().isNotEmpty &&
+          (p['name'] as String).length <= 100 &&
+          p['description'] is String &&
+          (p['description'] as String).length <= 4000,
+    'forum_hide' => p['object'] is String,
+    'room_leave' => p['epoch'] is String,
+    'delivery' => p['object'] is String,
+    'room' =>
+      p['room'] is String &&
+          p['owner'] is String &&
+          p['name'] is String &&
+          (p['name'] as String).trim().isNotEmpty &&
+          (p['name'] as String).length <= 100 &&
+          p['members'] is List &&
+          (p['members'] as List).length <= 64 &&
+          (p['members'] as List).every((v) => v is String) &&
+          (p['generation'] == null ||
+              p['generation'] is int &&
+                  p['generation'] >= 0 &&
+                  p['generation'] < 9007199254740991) &&
+          (p['epoch'] == null || p['epoch'] is String) &&
+          (p['archived'] == null || p['archived'] is bool) &&
+          (p['certificates'] == null ||
+              p['certificates'] is List &&
+                  (p['certificates'] as List).length <= 256 &&
+                  (p['certificates'] as List).every((c) => c is Map)),
+    'inbox' || 'room_item' =>
+      p['entry'] is String &&
+          p['clock'] is int &&
+          p['clock'] >= 0 &&
+          p['clock'] < 9007199254740991 &&
+          ['note', 'file', 'check', 'pin'].contains(p['type']) &&
+          (!['note', 'check'].contains(p['type']) || p['text'] is String) &&
+          (p['deleted'] == null || p['deleted'] is bool) &&
+          (p['type'] != 'file' || p['chunks'] is List) &&
+          (p['type'] != 'check' ||
+              (p['done'] is bool && p['list'] is String)) &&
+          (p['type'] != 'pin' ||
+              (p['target'] is String && p['pinned'] is bool)),
+    'drive' =>
+      p['entry'] is String &&
+          p['revision'] is String &&
+          p['parents'] is List &&
+          (p['parents'] as List).length <= 128 &&
+          (p['parents'] as List).every((v) => v is String) &&
+          p['name'] is String &&
+          (p['name'] as String).trim().isNotEmpty &&
+          (p['name'] as String).length <= 255 &&
+          !RegExp(r'[/\\\x00-\x1f]').hasMatch(p['name']) &&
+          (p['folder'] == null || p['folder'] is String) &&
+          p['deleted'] is bool &&
+          ['file', 'folder'].contains(p['type']) &&
+          (p['type'] == 'folder' || p['chunks'] is List),
+    'profile' =>
+      p['name'] is String &&
+          (p['name'] as String).isNotEmpty &&
+          (p['name'] as String).length <= 100,
+    'post' =>
+      p['text'] is String &&
+          (p['title'] == null ||
+              (p['title'] is String && (p['title'] as String).length <= 200)),
+    'message' => p['text'] is String || p['chunks'] is List,
+    'file' => p['chunks'] is List,
+    'vote' => p['object'] is String && [-1, 0, 1].contains(p['value']),
+    'delegate' => p['person'] is String,
+    'read' => p['object'] is String,
+    'location' =>
+      p['lat'] is String &&
+          p['lng'] is String &&
+          (double.tryParse(p['lat'])?.abs() ?? double.infinity) <= 90 &&
+          (double.tryParse(p['lng'])?.abs() ?? double.infinity) <= 180,
+    _ => true,
+  };
+}
+
+/// Version 2 canonical JSON: sorted string keys, integers, strings, booleans,
+/// null and arrays only. Floating point values are deliberately forbidden.
+String canonical(Object? value) {
+  if (value is Map) {
+    final keys = value.keys.cast<String>().toList()..sort();
+    return '{${keys.map((k) => '${jsonEncode(k)}:${canonical(value[k])}').join(',')}}';
+  }
+  if (value is List) return '[${value.map(canonical).join(',')}]';
+  if (value == null || value is String || value is bool || value is int) {
+    return jsonEncode(value);
+  }
+  throw FormatException('Unsupported signed value: ${value.runtimeType}');
+}
+
+List<int> bytes(Object? value) => utf8.encode(canonical(value));
+String hash(Object? value) => digest.sha256.convert(bytes(value)).toString();
+String blobHash(List<int> value) => digest.sha256.convert(value).toString();
+String b64(List<int> value) => base64UrlEncode(value);
+List<int> unb64(String value) => base64Url.decode(value);
+String randomId() =>
+    b64(List.generate(24, (_) => Random.secure().nextInt(256)));
+
+final _signer = Ed25519();
+Future<String> sign(Json value, SimpleKeyPair key) async =>
+    b64((await _signer.sign(bytes(value), keyPair: key)).bytes);
+Future<bool> verify(Json value, String signature, String publicKey) async {
+  try {
+    return await _signer.verify(
+      bytes(value),
+      signature: Signature(
+        unb64(signature),
+        publicKey: SimplePublicKey(unb64(publicKey), type: KeyPairType.ed25519),
+      ),
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
+/// An explicit, root-signed device certificate. The device key is also its
+/// transport key. The agreement key is bound by the same certificate.
+class DeviceCertificate {
+  final Json data;
+  final String signature;
+  DeviceCertificate(Json data, this.signature)
+    : data = frozen(jsonDecode(canonical(data)));
+  String get person => data['person'] as String;
+  String get device => data['device'] as String;
+  String get agreement => data['agreement'] as String;
+  String get label => data['label'] as String;
+  Json toJson() => {'data': data, 'signature': signature};
+  factory DeviceCertificate.fromJson(Json j) =>
+      DeviceCertificate(j['data'] as Json, j['signature'] as String);
+  Future<bool> valid() async {
+    try {
+      return data['domain'] == 'ournet/device/2' &&
+          label.length <= 100 &&
+          unb64(device).length == 32 &&
+          unb64(agreement).length == 32 &&
+          await verify(data, signature, person);
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
+/// Secrets are exported only to the platform vault, never the content store.
+class LocalIdentity {
+  final SimpleKeyPair? root;
+  final SimpleKeyPair deviceKey;
+  final SimpleKeyPair agreementKey;
+  final DeviceCertificate certificate;
+  LocalIdentity(this.root, this.deviceKey, this.agreementKey, this.certificate);
+  String get person => certificate.person;
+  String get device => certificate.device;
+  static Future<LocalIdentity> create({
+    String label = 'This device',
+    SimpleKeyPair? root,
+  }) async {
+    root ??= await _signer.newKeyPair();
+    final device = await _signer.newKeyPair();
+    final agreement = await X25519().newKeyPair();
+    final data = <String, dynamic>{
+      'domain': 'ournet/device/2',
+      'person': b64((await root.extractPublicKey()).bytes),
+      'device': b64((await device.extractPublicKey()).bytes),
+      'agreement': b64((await agreement.extractPublicKey()).bytes),
+      'label': label,
+    };
+    return LocalIdentity(
+      root,
+      device,
+      agreement,
+      DeviceCertificate(data, await sign(data, root)),
+    );
+  }
+
+  Future<Json> exportSecrets() async => {
+    'root': root == null ? null : b64(await root!.extractPrivateKeyBytes()),
+    'device': b64(await deviceKey.extractPrivateKeyBytes()),
+    'agreement': b64(await agreementKey.extractPrivateKeyBytes()),
+    'certificate': certificate.toJson(),
+  };
+  static Future<LocalIdentity> restore(Json j) async {
+    final root = j['root'] == null
+        ? null
+        : await _signer.newKeyPairFromSeed(unb64(j['root']));
+    final device = await _signer.newKeyPairFromSeed(unb64(j['device']));
+    final agreement = await X25519().newKeyPairFromSeed(unb64(j['agreement']));
+    final cert = DeviceCertificate.fromJson(j['certificate']);
+    if (!await cert.valid() ||
+        (root != null &&
+            b64((await root.extractPublicKey()).bytes) != cert.person) ||
+        b64((await device.extractPublicKey()).bytes) != cert.device ||
+        b64((await agreement.extractPublicKey()).bytes) != cert.agreement) {
+      throw StateError('Identity vault does not match certificate');
+    }
+    return LocalIdentity(root, device, agreement, cert);
+  }
+
+  Future<DeviceCertificate> authorise(DeviceCertificate request) async {
+    if (root == null)
+      throw StateError('Use the identity owner device to authorise devices');
+    if (!await request.valid()) throw StateError('Invalid enrolment request');
+    final data = <String, dynamic>{...request.data, 'person': person};
+    return DeviceCertificate(data, await sign(data, root!));
+  }
+
+  Future<LocalIdentity> enrol(DeviceCertificate approval) async {
+    if (!await approval.valid() ||
+        approval.device != device ||
+        approval.agreement != certificate.agreement) {
+      throw StateError('Approval is not for this device');
+    }
+    return LocalIdentity(null, deviceKey, agreementKey, approval);
+  }
+}
+
+/// Every object verifies without downloading any other application history.
+class SignedObject {
+  final Json data;
+  final String signature;
+  final DeviceCertificate certificate;
+  SignedObject(Json data, this.signature, this.certificate)
+    : data = frozen(jsonDecode(canonical(data)));
+  // Data, signature and certificate are immutable, so the content hash is too.
+  late final String id = hash(toJson());
+  String get author => certificate.person;
+  String get kind => data['kind'];
+  String get space => data['space'];
+  int get created => data['created'];
+  int get expires => data['expires'];
+  List<String> get audience => (data['audience'] as List).cast<String>();
+  bool get isPublic => audience.isEmpty;
+  Json toJson() => {
+    'data': data,
+    'signature': signature,
+    'certificate': certificate.toJson(),
+  };
+  factory SignedObject.fromJson(Json j) => SignedObject(
+    j['data'],
+    j['signature'],
+    DeviceCertificate.fromJson(j['certificate']),
+  );
+  Future<bool> valid() async {
+    try {
+      if (data['domain'] != 'ournet/object/2' ||
+          kind.length > 64 ||
+          space.length > 128 ||
+          created < 0 ||
+          created > 253402300799999 ||
+          expires < 0 ||
+          expires > 253402300799999 ||
+          audience.length > 64 ||
+          (data['via'] as List).length > 64 ||
+          !(data['via'] as List).every((v) => v is String) ||
+          data['payload'] is! Map<String, dynamic>)
+        return false;
+      if (isPublic && !validContent(kind, data['payload'])) return false;
+      if (!isPublic &&
+          (data['payload']['box'] is! String ||
+              data['payload']['wraps'] is! List ||
+              (data['payload']['wraps'] as List).length > 128))
+        return false;
+      return await certificate.valid() &&
+          await verify(data, signature, certificate.device);
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
+/// A sender-signed handoff addressed to a particular device. A receipt signs
+/// this exact handoff; neither proves unrecorded/off-protocol history.
+class Evidence {
+  final Json data;
+  final String signature;
+  final DeviceCertificate certificate;
+  Evidence(Json data, this.signature, this.certificate)
+    : data = frozen(jsonDecode(canonical(data)));
+  late final String id = hash(toJson());
+  String get objectId => data['object'];
+  Json toJson() => {
+    'data': data,
+    'signature': signature,
+    'certificate': certificate.toJson(),
+  };
+  factory Evidence.fromJson(Json j) => Evidence(
+    j['data'],
+    j['signature'],
+    DeviceCertificate.fromJson(j['certificate']),
+  );
+  Future<bool> valid() async =>
+      ['ournet/handoff/2', 'ournet/receipt/2'].contains(data['domain']) &&
+      await certificate.valid() &&
+      await verify(data, signature, certificate.device);
+}
+
+Future<Json> encryptFor(Json plain, List<DeviceCertificate> recipients) async {
+  final cipher = Chacha20.poly1305Aead();
+  final contentKey = await cipher.newSecretKey();
+  final box = await cipher.encrypt(bytes(plain), secretKey: contentKey);
+  final wraps = <Json>[];
+  for (final recipient in {for (final r in recipients) r.device: r}.values) {
+    final ephemeral = await X25519().newKeyPair();
+    final shared = await X25519().sharedSecretKey(
+      keyPair: ephemeral,
+      remotePublicKey: SimplePublicKey(
+        unb64(recipient.agreement),
+        type: KeyPairType.x25519,
+      ),
+    );
+    final key = await Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
+      secretKey: shared,
+      nonce: const [],
+      info: utf8.encode('ournet/wrap/2/${recipient.device}'),
+    );
+    final wrapped = await cipher.encrypt(
+      await contentKey.extractBytes(),
+      secretKey: key,
+      aad: utf8.encode(recipient.device),
+    );
+    wraps.add({
+      'device': recipient.device,
+      'ephemeral': b64((await ephemeral.extractPublicKey()).bytes),
+      'box': b64(wrapped.concatenation()),
+    });
+  }
+  return {'box': b64(box.concatenation()), 'wraps': wraps};
+}
+
+Future<Json> decryptFor(Json encrypted, LocalIdentity identity) async {
+  final wrap = (encrypted['wraps'] as List).cast<Json>().firstWhere(
+    (w) => w['device'] == identity.device,
+  );
+  final shared = await X25519().sharedSecretKey(
+    keyPair: identity.agreementKey,
+    remotePublicKey: SimplePublicKey(
+      unb64(wrap['ephemeral']),
+      type: KeyPairType.x25519,
+    ),
+  );
+  final key = await Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
+    secretKey: shared,
+    nonce: const [],
+    info: utf8.encode('ournet/wrap/2/${identity.device}'),
+  );
+  final cipher = Chacha20.poly1305Aead();
+  final raw = await cipher.decrypt(
+    SecretBox.fromConcatenation(
+      unb64(wrap['box']),
+      nonceLength: 12,
+      macLength: 16,
+    ),
+    secretKey: key,
+    aad: utf8.encode(identity.device),
+  );
+  return jsonDecode(
+        utf8.decode(
+          await cipher.decrypt(
+            SecretBox.fromConcatenation(
+              unb64(encrypted['box']),
+              nonceLength: 12,
+              macLength: 16,
+            ),
+            secretKey: SecretKey(raw),
+          ),
+        ),
+      )
+      as Json;
+}

@@ -1,0 +1,8 @@
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="180dp" android:minHeight="180dp"
+    android:minResizeWidth="150dp" android:minResizeHeight="130dp"
+    android:targetCellWidth="3" android:targetCellHeight="3"
+    android:resizeMode="horizontal|vertical" android:updatePeriodMillis="0"
+    android:initialLayout="@layout/note_widget"
+    android:configure="org.ournet.ournet.NoteWidgetConfiguration"
+    android:widgetFeatures="reconfigurable" android:widgetCategory="home_screen" />

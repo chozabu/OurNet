@@ -1,0 +1,12 @@
+**/.dart_tool/
+**/build/
+**/.flutter-plugins-dependencies
+**/ephemeral/
+*.db
+*.db-shm
+*.db-wal
+*.log
+app/native/
+vendor/iroh_dart/
+**/target/
+dist/

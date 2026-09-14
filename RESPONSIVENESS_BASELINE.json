@@ -1,0 +1,20 @@
+{
+  "utc": "2026-09-13T21:41:17.768285Z",
+  "platform": "windows",
+  "dart": "3.12.2 (stable) (Tue Jun 9 01:11:39 2026 -0700) on \"windows_x64\"",
+  "fileBytes": 8388608,
+  "description": "Local disk pipeline; no Flutter rendering or network transfer",
+  "coldImport": {
+    "elapsedMs": 869.98,
+    "eventLoopSamples": 60,
+    "eventLoopP95Ms": 8.542,
+    "eventLoopMaxMs": 65.147
+  },
+  "preview": {
+    "elapsedMs": 626.468,
+    "eventLoopSamples": 47,
+    "eventLoopP95Ms": 8.255,
+    "eventLoopMaxMs": 12.142
+  },
+  "rssBytes": 305590272
+}
