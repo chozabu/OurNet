@@ -1,17 +1,38 @@
 part of 'app.dart';
 
 extension _HomePages on _OurNetAppState {
-  Future<void> addFriend(BuildContext context) async {
-    await Navigator.push(
+  /// Returns the new friend, if one was added. From general entry points the
+  /// page offers to start a note shared with them straight away.
+  Future<String?> addFriend(
+    BuildContext context, {
+    bool offerSharedNote = false,
+  }) async {
+    final added = await Navigator.push<FriendAdded>(
       context,
       MaterialPageRoute(
         builder: (_) => FriendInvitePage(
           network: network,
           enablePlatform: widget.enablePlatform,
+          personName: name,
+          offerSharedNote: offerSharedNote,
         ),
       ),
     );
     refresh();
+    if (added?.shareNote == true) {
+      try {
+        final note = await notes.create();
+        await notes.changeMembers(note.id, [added!.person]);
+        update(() {
+          tab = 9;
+          activeRoom = null;
+        });
+        await openNote(note.id);
+      } catch (e) {
+        notice('$e');
+      }
+    }
+    return added?.person;
   }
 
   Widget recentActivity(List<SignedObject> objects, String fallback) {
@@ -86,7 +107,9 @@ extension _HomePages on _OurNetAppState {
       if (!snapshot.hasData) {
         return const Center(child: CircularProgressIndicator());
       }
-        final rooms = snapshot.data!.where((r) => r.data['note'] != true).toList();
+      final rooms = snapshot.data!
+          .where((r) => r.data['note'] != true)
+          .toList();
       if (activeRoom != null &&
           snapshot.connectionState == ConnectionState.done) {
         final previousRoom = activeRoom!.object.id;
@@ -110,7 +133,7 @@ extension _HomePages on _OurNetAppState {
               label: const Text('Create group'),
             ),
             TextButton.icon(
-              onPressed: busy ? null : () => act(() => addFriend(context)),
+              onPressed: () => addFriend(context, offerSharedNote: true),
               icon: const Icon(Icons.person_add_alt),
               label: const Text('Add friend'),
             ),

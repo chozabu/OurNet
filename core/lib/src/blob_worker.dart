@@ -6,6 +6,7 @@ import 'dart:convert';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:image/image.dart' as img;
+import 'package:sqlite3/sqlite3.dart';
 
 import 'model.dart';
 import 'store.dart';
@@ -105,6 +106,29 @@ class BlobWorker {
     return result['bytes'] as Uint8List?;
   }
 
+  /// Verifies and decrypts a whole locally stored attachment on a short-lived
+  /// isolate with its own read-only connection, so preview reads run beside
+  /// the serial worker instead of interleaving chunk by chunk. Callers bound
+  /// how many run at once. Returns null when any chunk is not stored locally.
+  Future<Uint8List?> readLocal(List<String> hashes, List<int>? key) async {
+    if (_closing) throw StateError('Attachment worker is closed');
+    final path = store.path;
+    if (path == null) {
+      final result = BytesBuilder(copy: false);
+      for (final hash in hashes) {
+        final plain = await decode(hash, key);
+        if (plain == null) return null;
+        result.add(plain);
+      }
+      return result.takeBytes();
+    }
+    final read = await Isolate.run(
+      () => _readLocal(path, hashes, key),
+      debugName: 'ournet-attachment-read',
+    );
+    return read?.materialize().asUint8List();
+  }
+
   /// Returns a decrypted local preview, or null when none is stored.
   Future<Uint8List?> readPreview(String id, List<int>? key) async {
     if (store.path == null) {
@@ -168,6 +192,51 @@ class BlobWorker {
       _isolate?.kill(priority: Isolate.immediate);
       _responses.close();
     }
+  }
+}
+
+Future<TransferableTypedData?> _readLocal(
+  String path,
+  List<String> hashes,
+  List<int>? keyBytes,
+) async {
+  final db = sqlite3.open(path, mode: OpenMode.readOnly);
+  try {
+    db.execute('PRAGMA busy_timeout=5000');
+    final statement = db.prepare('SELECT bytes FROM blobs WHERE id=?');
+    final key = keyBytes == null ? null : SecretKey(keyBytes);
+    final chunks = <Uint8List>[];
+    try {
+      for (final hash in hashes) {
+        final rows = statement.select([hash]);
+        if (rows.isEmpty) return null;
+        final bytes = rows.first['bytes'] as Uint8List;
+        // Same checks as the worker's decode: bounded, content-addressed,
+        // authenticated before any plaintext is returned.
+        if (bytes.length > 128 * 1024 + 64 || blobHash(bytes) != hash) {
+          throw StateError('Invalid file chunk');
+        }
+        chunks.add(
+          key == null
+              ? bytes
+              : Uint8List.fromList(
+                  await Chacha20.poly1305Aead().decrypt(
+                    SecretBox.fromConcatenation(
+                      bytes,
+                      nonceLength: 12,
+                      macLength: 16,
+                    ),
+                    secretKey: key,
+                  ),
+                ),
+        );
+      }
+    } finally {
+      statement.close();
+    }
+    return TransferableTypedData.fromList(chunks);
+  } finally {
+    db.close();
   }
 }
 

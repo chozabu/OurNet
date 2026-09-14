@@ -110,15 +110,19 @@ comparisons; label JIT and AOT results separately.
   import no longer sums every stored blob for each chunk. Existing databases gain
   this accounting automatically without changing signed content or encryption.
 - Lists never display originals. Image rows use durable **encrypted previews**
-  (longest edge 960 px, JPEG, PNG when translucent) stored in a separate
+  (longest edge 640 px, JPEG, PNG when translucent; earlier 960 px previews are still read) stored in a separate
   `previews` table, sealed with the file's own key and bound to the object ID
   (AEAD associated data), bounded to 128 MiB and evicted least-recently-used.
   `ThumbnailImage` uses the object ID as a stable image-cache key, and decodes
   at display resolution, so recreated rows are served synchronously from
   Flutter's bounded image cache; after eviction only the small preview is read.
-- A missing preview is generated at most twice concurrently: original read and
-  decryption on the attachment worker, downsampled engine decode, immediate
-  display of the decoded frame, then compression in a short-lived isolate and
+- A missing preview is generated at most twice concurrently. The locally
+  stored original is read, verified and decrypted on a short-lived isolate
+  (`BlobWorker.readLocal`), or through the worker when chunks must be fetched.
+  The downsampled engine decode is shown immediately, previews finishing
+  together reach the screen a frame apart, and the generation slot is released.
+  Up to two decoded previews then wait to be stored, one at a time after a
+  pause in frames: pixel read-back, compression in a short-lived isolate, and
   encryption/storage on the worker. Imports and received synced files prepare
   previews in the background. Requests for rows scrolled away before their turn
   are demoted to background preparation (bounded queue) rather than dropped.
@@ -228,6 +232,55 @@ On Windows (this reference PC, profile), `photo_scroll_test` passes (warm p95
 1.1 ms, 0 reads/decodes). The `responsiveness_test` gate still fails: p95 is
 12.2 ms (previously 48.7 ms raster) but one 42.5 ms raster frame exceeds the
 33.3 ms p99 limit among 53 frames. It has not been weakened.
+
+**Keep-style Notes grid, 14 September 2026** (Windows reference PC, profile,
+`PERF_ENFORCE=true`, single runs): `responsiveness_test` now passes. It takes a
+note in the editor while importing, filters, scrolls and clears the filter:
+135 frames, frame p95 10.2 ms, p99 15.3 ms, max 29.8 ms, event-loop p95 1.2 ms.
+`photo_scroll_test` (four photos) passes with 0 original reads, 0 decodes,
+0 % placeholders and 0 frames over budget; warm frame p95 is 1.7–1.9 ms. The
+grid packs the fixture into two columns, so each pass travels 343 px rather
+than the longer single-column list. Compare frame values, not travel, with
+earlier rows.
+
+On the **Blackview BV6600 Pro** the first grid build failed the photo gate.
+Generating four 12 MP previews took about 8 s. The grid shows all four at once,
+and its short passes (4 gestures, 698 px, about 2.8 s) ended before generation
+finished. Warm passes then still read originals (47 chunks) and showed
+placeholders for up to 1.5 s. Timing on the phone showed where the time went:
+- About 3 s reading and decrypting each original, because two reads
+  interleaved on the serial attachment worker.
+- About 0.3 s decoding.
+- About 2 s encoding and storing, while still holding a generation slot.
+
+Changes:
+- `BlobWorker.readLocal` verifies and decrypts a whole stored original on a
+  short-lived isolate with a read-only connection, in parallel with the worker.
+  The same size, hash and authentication checks apply.
+- The slot is released as soon as a preview is on screen. Stores run one at a
+  time, after a pause in frames, so GPU read-back and compression stay out of
+  scrolling.
+- Freshly decoded previews reach the screen one frame apart.
+- List previews use a 640 px edge (`list640`). Stored `list960` previews are
+  still used, not regenerated.
+
+| BV6600 Pro, four 12 MP photos | Committed list | First grid | Grid after fixes |
+|---|---:|---:|---:|
+| Original reads, warm passes | 0 | 47 / 13 / 0 | 0 in all passes |
+| Placeholders, warm passes | 0 % | up to 1,550 ms | 0 % |
+| Longest placeholder, cold pass | 450 ms | 1,750 ms | 1,200–1,500 ms |
+| Frame p95, all passes | 12.2–14.0 ms | 11.9–17.0 ms | 11.1–16.2 ms |
+| Frame p99, cold pass | 19.0 ms | 37.2 ms | 22.1–45.3 ms (five runs) |
+| Worst event-loop stall | 57 ms | 42 ms | 34–98 ms (up to 159 ms before stores ran one at a time) |
+
+The cold placeholder is longer than in the list because four photos wait at
+once rather than one as each scrolls into view. The last enforced run passed
+every gate except cold-pass p99, at 34.3 ms against a 33.3 ms limit. That pass
+generates all four previews, and its p99 (the second-worst of roughly 130
+frames) varies widely between runs on this phone. Assertions are unchanged.
+Previews for photos imported through the app or received by sync are prepared
+in the background before they are seen. This fixture writes photos directly,
+so it measures the worst case.
 
 Remaining issues: the 190 ms stall during import on the slowest phone exceeds
 the 100 ms target (object publication — key agreement, signing and

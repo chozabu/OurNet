@@ -53,7 +53,7 @@ object WidgetStore {
         }.generateKey()
     }
     private fun file(context: Context) = AtomicFile(File(context.noBackupFilesDir, "note-widgets.bin"))
-    fun read(context: Context): JSONObject {
+    @Synchronized fun read(context: Context): JSONObject {
         cached?.let { return JSONObject(it.toString()) }
         val atomic = file(context)
         val state = if (!atomic.baseFile.exists()) JSONObject() else {
@@ -67,10 +67,11 @@ object WidgetStore {
         if (!state.has("pending")) state.put("pending", JSONArray())
         if (!state.has("catalog")) state.put("catalog", JSONArray())
         if (!state.has("snapshots")) state.put("snapshots", JSONArray())
+        if (!state.has("board")) state.put("board", JSONArray())
         cached = JSONObject(state.toString())
         return state
     }
-    fun save(context: Context, state: JSONObject) {
+    @Synchronized fun save(context: Context, state: JSONObject) {
         val plain = state.toString().toByteArray(Charsets.UTF_8)
         require(plain.size <= MAX_BYTES) { "Widget storage is full. Open OurNet to sync." }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -89,8 +90,15 @@ object WidgetStore {
         val manager = AppWidgetManager.getInstance(context)
         for (id in manager.getAppWidgetIds(ComponentName(context, NoteWidgetProvider::class.java))) render(context, id)
         for (id in manager.getAppWidgetIds(ComponentName(context, CaptureWidgetProvider::class.java))) renderCapture(context, id)
+        val boards = manager.getAppWidgetIds(ComponentName(context, NoteBoardWidgetProvider::class.java))
+        for (id in boards) NoteBoard.render(context, id)
+        @Suppress("DEPRECATION")
+        if (boards.isNotEmpty()) manager.notifyAppWidgetViewDataChanged(boards, R.id.widget_board_list)
     }
-    private fun launch(context: Context, widget: Int, note: String?, checklist: Boolean = false): PendingIntent {
+    /** Board widgets currently placed; Dart prepares the board only when one exists. */
+    fun boardIds(context: Context): IntArray =
+        AppWidgetManager.getInstance(context).getAppWidgetIds(ComponentName(context, NoteBoardWidgetProvider::class.java))
+    fun launch(context: Context, widget: Int, note: String?, checklist: Boolean = false): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             action = "org.ournet.WIDGET_OPEN"
             data = Uri.parse("ournet-widget://open/$widget/${Uri.encode(note ?: if (checklist) "checklist" else "text")}")
@@ -206,13 +214,13 @@ object WidgetStore {
                         "activate" -> {
                             val profile = call.argument<String>("profile")!!
                             if (state.optString("profile") != profile) {
-                                state.put("profile", profile).put("snapshots", JSONArray()).put("catalog", JSONArray())
+                                state.put("profile", profile).put("snapshots", JSONArray()).put("catalog", JSONArray()).put("board", JSONArray())
                                 save(context, state); updateAll(context)
                             }
                             val launch = state.optJSONObject("launch")
                             if (launch != null && launch.optString("profile").isEmpty()) { launch.put("profile", profile); save(context, state) }
                         }
-                        "state" -> response = toValue(state)
+                        "state" -> response = toValue(state.put("boards", JSONArray(boardIds(context).toList())))
                         "publish" -> {
                             if (call.argument<String>("profile") == state.optString("profile")) {
                                 val catalog = JSONArray(call.argument<List<Any>>("catalog") ?: emptyList<Any>())
@@ -226,7 +234,9 @@ object WidgetStore {
                                         check.put("token", token)
                                     }
                                 }
-                                state.put("catalog", catalog).put("snapshots", snapshots)
+                                val board = JSONArray(call.argument<List<Any>>("board") ?: emptyList<Any>())
+                                require(board.length() <= NoteBoard.MAX_NOTES)
+                                state.put("catalog", catalog).put("snapshots", snapshots).put("board", board)
                                 save(context, state); updateAll(context)
                             }
                         }
@@ -234,6 +244,12 @@ object WidgetStore {
                         "failed" -> {
                             objects(state.getJSONArray("pending")).find { it.optString("id") == call.argument<String>("id") }?.put("error", call.argument<String>("error"))
                             save(context, state)
+                        }
+                        "pinBoard" -> {
+                            val manager = AppWidgetManager.getInstance(context)
+                            response = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+                                manager.isRequestPinAppWidgetSupported &&
+                                manager.requestPinAppWidget(ComponentName(context, NoteBoardWidgetProvider::class.java), null, null)
                         }
                         "claim" -> { if (state.optJSONObject("launch")?.optString("id") == call.argument<String>("id")) { state.remove("launch"); save(context, state) } }
                         else -> { main.post { result.notImplemented() }; return@execute }

@@ -20,6 +20,14 @@
         <activity android:name=".NoteWidgetConfiguration" android:exported="true" android:theme="@android:style/Theme.Material.Light.NoActionBar">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" /></intent-filter>
         </activity>
+        <receiver android:name=".NoteBoardWidgetProvider" android:exported="false" android:label="OurNet · Notes">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/note_board_widget_info" />
+        </receiver>
+        <service android:name=".NoteBoardService" android:exported="false" android:permission="android.permission.BIND_REMOTEVIEWS" />
+        <activity android:name=".NoteBoardConfiguration" android:exported="true" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" /></intent-filter>
+        </activity>
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:ournet_core/ournet_core.dart';
+import '../ui/note_colors.dart';
 import 'coalesced_task.dart';
 import 'session.dart';
 
@@ -39,6 +40,10 @@ class NoteWidgets {
   }
 
   void schedule() => task.schedule();
+
+  /// Asks the launcher to place the Notes board. False when unsupported.
+  Future<bool> pinBoard() async =>
+      await channel.invokeMethod<bool>('pinBoard') ?? false;
   Future<void> drain() async {
     final state = await channel.invokeMapMethod<String, dynamic>('state');
     if (_closed || state == null) return;
@@ -69,6 +74,7 @@ class NoteWidgets {
     final snapshots = <Map<String, dynamic>>[];
     for (final raw in (state['configs'] as List? ?? []).take(16)) {
       final config = Map<String, dynamic>.from(raw);
+      if (config['kind'] == 'board') continue;
       final note = config['profile'] == profile
           ? await notes.get(config['note'])
           : null;
@@ -114,9 +120,12 @@ class NoteWidgets {
       'profile': profile,
       'catalog': [
         for (final n in catalog.take(200))
-          {'id': n.data['entry'], 'title': n.data['title']},
+          {'id': n.data['entry'], 'title': n.data['label'] ?? 'Note'},
       ],
       'snapshots': snapshots,
+      'board': (state['boards'] as List? ?? []).isEmpty
+          ? const []
+          : board(catalog),
     });
     final launch = state['launch'];
     if (launch is Map && launch['profile'] == profile) {
@@ -130,6 +139,40 @@ class NoteWidgets {
         }),
       );
     }
+  }
+
+  /// Pinned then recently edited notes, bounded for the home-screen board.
+  List<Map<String, Object?>> board(List<EverydayItem> catalog) {
+    String bounded(Object? value, int length) {
+      final text = (value ?? '').toString();
+      return text.substring(0, text.length.clamp(0, length));
+    }
+
+    int updated(EverydayItem n) => n.data['updated'] as int? ?? 0;
+    final ordered = catalog.where((n) => n.data['deleted'] != true).toList()
+      ..sort((a, b) {
+        final pinned = (notes.pinned(b.data['entry']) ? 1 : 0).compareTo(
+          notes.pinned(a.data['entry']) ? 1 : 0,
+        );
+        return pinned != 0 ? pinned : updated(b).compareTo(updated(a));
+      });
+    return [
+      for (final n in ordered.take(40))
+        {
+          'id': n.data['entry'],
+          'title': bounded(n.data['title'], 100),
+          'text': bounded(n.data['body'], 400),
+          'color': noteTints[n.data['color']]?.$1 ?? 0xffffffff,
+          'pinned': notes.pinned(n.data['entry']),
+          'shared': (n.data['members'] as int? ?? 1) > 1,
+          'checks': [
+            for (final c in (n.data['checks'] as List? ?? const []).take(8))
+              {'text': bounded(c['text'], 160)},
+          ],
+          'moreUnchecked': n.data['moreUnchecked'] ?? 0,
+          'checkedCount': n.data['checkedCount'] ?? 0,
+        },
+    ];
   }
 
   void close() {

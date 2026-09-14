@@ -18,7 +18,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Profile APK installation failed' }
 adb -s $Device install -r (Join-Path $taskApp 'build/app/outputs/apk/androidTest/profile/app-profile-androidTest.apk')
 if ($LASTEXITCODE -ne 0) { throw 'Instrumentation APK installation failed' }
 try {
-  foreach ($taskMethod in @('nativeOutboxResizePrivacyAndDeepLinks', 'staleProfileAndQueueLimit', 'persistColdFixture', 'readColdFixture')) {
+  foreach ($taskMethod in @('nativeOutboxResizePrivacyAndDeepLinks', 'boardListsNotesAndHidesContents', 'staleProfileAndQueueLimit', 'persistColdFixture', 'readColdFixture')) {
     # Every instrumentation invocation is a new process; explicitly stop the
     # profile package between the disk persistence and cold-read checks too.
     adb -s $Device shell am force-stop $taskPackage

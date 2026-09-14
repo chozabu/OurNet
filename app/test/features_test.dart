@@ -88,15 +88,23 @@ void main() {
       );
       await tester.pumpAndSettle();
       await snapshot(tester, 'desktop-notes-previews');
-      await tester.tap(find.widgetWithText(ChoiceChip, 'Lists'));
-      await tester.pumpAndSettle();
-      await tester.enterText(find.byType(TextField).last, 'Bring seedlings');
-      await tester.tap(find.text('Add'));
+      await tester.tap(find.byTooltip('New list'));
+      await settled(tester);
+      await tester.enterText(
+        find.byWidgetPredicate(
+          (w) => w is TextField && w.decoration?.hintText == 'List item',
+        ),
+        'Bring seedlings',
+      );
+      await tester.pageBack();
+      await settled(tester);
       await settled(tester);
       expect(find.text('Bring seedlings'), findsOneWidget);
       await tester.tap(find.byType(Checkbox));
-      await settled(tester);
+      await tester.pump();
       expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, true);
+      await settled(tester);
+      expect(find.text('1 checked item'), findsOneWidget);
       await tester.tap(find.byTooltip('Search everything'));
       await settled(tester);
       await tester.enterText(find.byType(TextField).first, 'garden');

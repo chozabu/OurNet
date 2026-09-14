@@ -29,6 +29,28 @@ void main() {
           node.blobs.decode(hash, key, bytes: [1, 2, 3]),
           throwsStateError,
         );
+        // Whole-file reads verify and decrypt on their own connection.
+        final second = await node.blobs.encode(
+          Uint8List.fromList(List.generate(1000, (i) => i % 7)),
+          key,
+        );
+        final whole = await node.blobs.readLocal([hash, second], key);
+        expect(whole!.length, plain.length + 1000);
+        expect(whole.sublist(0, plain.length), plain);
+        expect(await node.blobs.readLocal([hash, 'missing'], key), isNull);
+        await expectLater(
+          node.blobs.readLocal([hash], Uint8List(32)),
+          throwsA(anything),
+        );
+        node.store.db.execute('UPDATE blobs SET bytes=? WHERE id=?', [
+          Uint8List.fromList([...encoded]..[0] ^= 1),
+          second,
+        ]);
+        await expectLater(
+          node.blobs.readLocal([hash, second], key),
+          throwsA(anything),
+        );
+        node.store.db.execute('DELETE FROM blobs WHERE id=?', [second]);
         // A failed job must not poison the worker or replace a verified blob.
         expect(await node.blobs.decode(hash, key), plain);
         final publicHash = await node.blobs.encode(plain, null);

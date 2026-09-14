@@ -53,7 +53,7 @@ bool validContent(String kind, Json p) {
       p['epoch'] is String &&
           p['field'] is String &&
           RegExp(
-            r'^(title|text|deleted|check:[a-zA-Z0-9_-]{1,80}:(text|done|deleted))$',
+            r'^(title|text|deleted|color|check:[a-zA-Z0-9_-]{1,80}:(text|done|deleted|order))$',
           ).hasMatch(p['field']) &&
           p['clock'] is int &&
           p['clock'] >= 0 &&
@@ -65,6 +65,12 @@ bool validContent(String kind, Json p) {
                   p['field'] == 'text' ||
                   (p['field'] as String).endsWith(':text')
               ? p['value'] is String && (p['value'] as String).length <= 16384
+              : p['field'] == 'color'
+              ? p['value'] is String &&
+                    RegExp(r'^[a-z]{1,16}$').hasMatch(p['value'])
+              : (p['field'] as String).endsWith(':order')
+              ? p['value'] is String &&
+                    RegExp(r'^[0-9A-Za-z]{1,64}$').hasMatch(p['value'])
               : p['value'] is bool) &&
           (p['checkpoint'] == null || p['checkpoint'] is bool) &&
           (p['request'] == null ||

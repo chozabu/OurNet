@@ -6,6 +6,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
 import '../services/pairing_discovery.dart';
+import 'friend_invite.dart' show CodeText;
 
 class AddDevicePage extends StatefulWidget {
   final PeerNetwork network;
@@ -49,8 +50,18 @@ class _AddDevicePageState extends State<AddDevicePage> {
             approvalContext = context;
             return AlertDialog(
               title: Text('Allow ${cert.label} to join?'),
-              content: Text(
-                'Only approve if this code matches your new device:\n\n$code\n\nThis device will have access to your profile.',
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Only approve if your new device shows this code:',
+                  ),
+                  const SizedBox(height: 12),
+                  Center(child: CodeText(code)),
+                  const SizedBox(height: 12),
+                  const Text('It will have access to your profile.'),
+                ],
               ),
               actions: [
                 TextButton(
@@ -71,7 +82,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
       setState(() {
         session = pairing;
         status =
-            'On your phone, choose Connect to my existing profile, then Scan QR code.';
+            'On your new device, open OurNet and choose Connect to my existing profile. On the same Wi-Fi it finds this device by itself; otherwise scan this code.';
       });
       try {
         final socket = await PairingDiscovery.advertise(pairing);
@@ -94,10 +105,13 @@ class _AddDevicePageState extends State<AddDevicePage> {
           timer?.cancel();
           discovery?.close();
           final expired = DateTime.now().isAfter(pairing.expires);
+          if (expired) {
+            // Keep a usable invitation on screen instead of a dead end.
+            unawaited(start());
+            return;
+          }
           setState(
-            () => status = expired
-                ? 'Invitation expired. Create a new one below.'
-                : 'Device approved. Your new device is connecting.',
+            () => status = 'Device approved. Your new device is connecting.',
           );
           if (!expired && shareHistory) {
             try {

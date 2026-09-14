@@ -30,7 +30,34 @@ class NoteDocument {
               ?.data['value']
           as String? ??
       'Note';
+  /// The written title, empty when none was given (lists fall back to 'Note').
+  String get rawTitle => (value('title') as String?) ?? '';
   String get text => (value('text') as String?) ?? '';
+
+  /// A short name for pickers: the title, else the first written line.
+  String get label {
+    final lines = [
+      rawTitle,
+      text,
+      ...checks.map(itemText),
+    ].expand((v) => v.split('\n')).map((v) => v.trim());
+    final first = lines.where((v) => v.isNotEmpty).firstOrNull ?? '';
+    return first.isEmpty
+        ? (checks.isEmpty ? 'Note' : 'List')
+        : first.substring(0, first.length.clamp(0, 100));
+  }
+
+  /// A shared colour name from [noteColors]; null or 'default' is uncoloured.
+  String? get color => value('color') as String?;
+
+  /// Newest locally accepted edit time, for most-recently-edited ordering.
+  int get updated => history.fold(
+    room.object.created,
+    (latest, r) => r.object.created > latest ? r.object.created : latest,
+  );
+  String itemText(String id) => (value('check:$id:text') as String?) ?? '';
+  bool done(String id) => value('check:$id:done') == true;
+  String? order(String id) => value('check:$id:order') as String?;
   Object? value(String field) {
     final versions = heads[field] ?? [];
     // Removal wins concurrent restore; an explicit restore observes removals.
@@ -42,19 +69,95 @@ class NoteDocument {
 
   List<String> parents(String field) =>
       (heads[field] ?? []).map((r) => r.object.id).toList();
-  List<String> get checks =>
-      (heads.keys
-          .where((k) => k.startsWith('check:') && k.endsWith(':text'))
-          .map((k) => k.split(':')[1])
-          .where((id) => value('check:$id:deleted') != true)
-          .toList()
-        ..sort());
+  /// Live items in display order: an explicit order key, then (for items
+  /// written before ordering existed) first-write clock and item ID.
+  late final List<String> checks = () {
+    final created = <String, int>{};
+    for (final op in history) {
+      final field = op.data['field'] as String;
+      if (!field.startsWith('check:') || !field.endsWith(':text')) continue;
+      final id = field.split(':')[1];
+      final clock = op.data['clock'] as int;
+      if (clock < (created[id] ?? clock + 1)) created[id] = clock;
+    }
+    return heads.keys
+        .where((k) => k.startsWith('check:') && k.endsWith(':text'))
+        .map((k) => k.split(':')[1])
+        .where((id) => value('check:$id:deleted') != true)
+        .toList()
+      ..sort((a, b) {
+        final byOrder = (order(a) ?? '').compareTo(order(b) ?? '');
+        if (byOrder != 0) return byOrder;
+        final byClock = (created[a] ?? 0).compareTo(created[b] ?? 0);
+        return byClock != 0 ? byClock : a.compareTo(b);
+      });
+  }();
   bool get hasConflicts => heads.entries.any(
     (e) =>
         (e.key == 'text' || e.key == 'title' || e.key.endsWith(':text')) &&
         e.value.map((r) => r.data['value']).toSet().length > 1,
   );
 }
+
+/// Shared note colours, in picker order. Unknown names display uncoloured.
+const noteColors = [
+  'default',
+  'coral',
+  'peach',
+  'sand',
+  'mint',
+  'sage',
+  'fog',
+  'storm',
+  'dusk',
+  'blossom',
+  'clay',
+  'chalk',
+];
+
+const _orderDigits =
+    '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+/// A key sorting strictly between [before] and [after] (null is unbounded).
+/// Keys never end in '0', so a later key can always be placed before them.
+/// Equal or inverted bounds (concurrent placements) sort after [before].
+String orderBetween(String? before, String? after) {
+  final low = before ?? '';
+  String? high = after;
+  if (high != null && high.compareTo(low) <= 0) high = null;
+  final result = StringBuffer();
+  for (var i = 0; ; i++) {
+    final lo = i < low.length ? _orderDigits.indexOf(low[i]) : 0;
+    final hi = high == null
+        ? _orderDigits.length
+        : i < high.length
+        ? _orderDigits.indexOf(high[i])
+        : 0;
+    if (hi - lo > 1) {
+      result.write(_orderDigits[(lo + hi) ~/ 2]);
+      return result.toString();
+    }
+    result.write(_orderDigits[lo]);
+    if (hi - lo == 1) high = null;
+  }
+}
+
+/// [count] short, evenly spaced keys for renumbering a whole list.
+List<String> orderSequence(int count) {
+  final base = _orderDigits.length;
+  final span = base * base;
+  return [
+    for (var i = 1; i <= count; i++)
+      () {
+        var n = i * span ~/ (count + 1);
+        if (n % base == 0) n++;
+        return '${_orderDigits[n ~/ base]}${_orderDigits[n % base]}';
+      }(),
+  ];
+}
+
+/// One register write in a batch.
+typedef NoteChange = ({String field, Object value, List<String> parents});
 
 /// One encrypted room per note, including personal notes. Membership epochs
 /// reuse Everyday; note registers retain concurrent branches instead of LWW
@@ -151,33 +254,41 @@ class Notes {
         if (note == null) continue;
         final text = note.text.isEmpty && note.checks.isNotEmpty
             ? note.checks
-                  .take(5)
-                  .map(
-                    (c) =>
-                        '${note.value('check:$c:done') == true ? '☑' : '☐'} ${note.value('check:$c:text')}',
-                  )
+                  .take(12)
+                  .map((c) => '${note.done(c) ? '☑' : '☐'} ${note.itemText(c)}')
                   .join('\n')
             : note.text;
+        final unchecked = note.checks.where((c) => !note.done(c)).toList();
+        String bounded(String value, int length) =>
+            value.substring(0, value.length.clamp(0, length));
         summary = EverydayItem(note.room.object, {
           'entry': id,
           'type': 'shared_note',
-          'title': note.title.substring(0, note.title.length.clamp(0, 100)),
-          'text': text.substring(0, text.length.clamp(0, 512)),
+          'title': bounded(note.rawTitle, 100),
+          'label': note.label,
+          'text': bounded(text, 512),
+          'body': bounded(note.text, 512),
           'checklist': note.checks.isNotEmpty,
           'epoch': note.epoch,
+          'color': note.color ?? 'default',
+          'updated': note.updated,
+          'owner': note.room.data['owner'],
+          'people': note.members.take(8).toList(),
+          // Unchecked items first, in list order, as a bounded card preview.
           'checks': [
-            for (final id in note.checks.take(3))
+            for (final id in unchecked.take(8))
               {
                 'id': id,
-                'text': (note.value('check:$id:text') as String).substring(
-                  0,
-                  (note.value('check:$id:text') as String).length.clamp(0, 160),
-                ),
-                'done': note.value('check:$id:done') == true,
+                'text': bounded(note.itemText(id), 160),
+                'done': false,
                 'parents': note.parents('check:$id:done'),
               },
           ],
+          'moreUnchecked': (unchecked.length - 8).clamp(0, maxChecks),
+          'checkedCount': note.checks.length - unchecked.length,
           'deleted': note.deleted || !note.available,
+          'removed': note.deleted,
+          'deletedParents': note.parents('deleted'),
           'available': note.available,
           'members': note.members.length,
           'conflicts': note.hasConflicts,
@@ -295,13 +406,20 @@ class Notes {
     return note;
   }
 
+  /// Creates a note. [checklist] adds one empty item when [items] is empty.
+  /// A repeated [stableId] returns the existing note rather than a duplicate.
   Future<NoteDocument> create({
-    String title = 'Note',
+    String title = '',
     String text = '',
     bool checklist = false,
+    List<String> items = const [],
+    String? color,
     String? stableId,
   }) => _serial(() async {
-    if (text.length > 16384 || title.length > 100)
+    if (text.length > 16384 ||
+        title.length > 100 ||
+        items.length > maxChecks ||
+        items.any((i) => i.length > 16384))
       throw StateError(
         'Use a title up to 100 characters and text up to 16,384 characters.',
       );
@@ -320,13 +438,20 @@ class Notes {
       noteId: key,
     );
     await _publish(room, 'title', title, [], 1);
-    await _publish(room, 'text', text, [], 2);
-    if (checklist)
-      await _publish(room, 'check:${randomId()}:text', 'New item', [], 3);
+    await _publish(room, 'text', text, [], 1);
+    if (color != null && color != 'default')
+      await _publish(room, 'color', color, [], 1);
+    final written = items.isEmpty && checklist ? [''] : items;
+    final keys = orderSequence(written.length);
+    for (var i = 0; i < written.length; i++) {
+      final item = randomId();
+      await _publish(room, 'check:$item:text', written[i], [], 1);
+      await _publish(room, 'check:$item:order', keys[i], [], 1);
+    }
     return (await get(id))!;
   });
 
-  Future<void> _publish(
+  Future<SignedObject> _publish(
     EverydayItem room,
     String field,
     Object value,
@@ -336,7 +461,7 @@ class Notes {
     bool checkpoint = false,
     List<String>? audience,
   }) async {
-    await node.publish(
+    return node.publish(
       'note_op',
       {
         'epoch': room.data['epoch'],
@@ -354,12 +479,25 @@ class Notes {
 
   /// Pass the editor's observed parents, never the newly received heads: saving
   /// an old draft must produce a recoverable branch, not overwrite unseen text.
-  Future<void> edit(
+  /// Returns the published operation ID (or null for an already applied
+  /// [request]), so an editor can observe its own write as the next parent.
+  Future<String?> edit(
     String id,
     String epoch,
     String field,
     Object value,
     List<String> parents, {
+    String? request,
+  }) async => (await apply(id, epoch, [
+    (field: field, value: value, parents: parents),
+  ], request: request)).single;
+
+  /// Validates every change against one document state, then publishes them
+  /// in order. Earlier changes remain published if a later publication fails.
+  Future<List<String?>> apply(
+    String id,
+    String epoch,
+    List<NoteChange> changes, {
     String? request,
   }) => _serial(() async {
     final note = await get(id, includeUnavailable: true);
@@ -367,16 +505,17 @@ class Notes {
       throw StateError(
         'This note is unavailable. Your draft is kept on this device.',
       );
-    if (request != null &&
+    bool applied(NoteChange change) =>
+        request != null &&
         [...note.history, ...note.earlier].any(
           (r) =>
               r.data['request'] == request &&
               r.object.author == node.person &&
               r.object.certificate.device == node.identity.device &&
-              r.data['field'] == field &&
-              r.data['value'] == value,
-        ))
-      return;
+              r.data['field'] == change.field &&
+              r.data['value'] == change.value,
+        );
+    if (changes.every(applied)) return [for (final _ in changes) null];
     if (!note.available)
       throw StateError(
         'This note is unavailable. Your draft is kept on this device.',
@@ -385,35 +524,44 @@ class Notes {
       throw StateError(
         'Collaborators changed. Reopen the note before saving; your draft is kept.',
       );
-    if (note.deleted && field != 'deleted')
-      throw StateError(
-        'This note was removed. Restore it before applying your draft.',
-      );
-    if (field.startsWith('check:') &&
-        !field.endsWith(':deleted') &&
-        note.value('check:${field.split(':')[1]}:deleted') == true) {
-      throw StateError(
-        'This checklist item was removed. Restore it in Recovery before editing.',
-      );
+    var added = 0;
+    for (final change in changes) {
+      final field = change.field;
+      if (note.deleted && field != 'deleted')
+        throw StateError(
+          'This note was removed. Restore it before applying your draft.',
+        );
+      if (field.startsWith('check:') &&
+          !field.endsWith(':deleted') &&
+          note.value('check:${field.split(':')[1]}:deleted') == true) {
+        throw StateError(
+          'This checklist item was removed. Restore it in Recovery before editing.',
+        );
+      }
+      if (field.startsWith('check:') &&
+          !note.heads.containsKey(field) &&
+          field.endsWith(':text') &&
+          note.checks.length + ++added > maxChecks)
+        throw StateError('A checklist supports $maxChecks items.');
     }
-    if (field.startsWith('check:') &&
-        !note.heads.containsKey(field) &&
-        field.endsWith(':text') &&
-        note.checks.length >= maxChecks)
-      throw StateError('A checklist supports $maxChecks items.');
     await Everyday(node).prepare(note.room);
     var clock = 0;
     for (final r in note.history) {
       if (r.data['clock'] > clock) clock = r.data['clock'];
     }
-    await _publish(
-      note.room,
-      field,
-      value,
-      parents,
-      clock + 1,
-      request: request,
-    );
+    return [
+      for (final change in changes)
+        applied(change)
+            ? null
+            : (await _publish(
+                note.room,
+                change.field,
+                change.value,
+                change.parents,
+                clock + 1,
+                request: request,
+              )).id,
+    ];
   });
 
   Future<void> changeMembers(

@@ -30,6 +30,10 @@ import 'add_device.dart';
 import 'onboarding.dart';
 import 'sync_status.dart';
 import 'note_editor.dart';
+import 'note_card.dart';
+import 'note_colors.dart';
+import 'package:animations/animations.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import '../services/note_widgets.dart';
 
 part 'home.dart';
@@ -43,6 +47,7 @@ part 'drive.dart';
 part 'discovery.dart';
 part 'group_members.dart';
 part 'forum_features.dart';
+part 'notes_home.dart';
 
 class OurNetApp extends StatefulWidget {
   final Node node;
@@ -83,6 +88,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   final performance = PerformanceMonitor();
   int _badgeCount = -1;
   bool _ringing = false;
+  Timer? _pausedStop;
   final messenger = GlobalKey<ScaffoldMessengerState>();
   final noteNavigator = GlobalKey<NavigatorState>();
   int tab = 9;
@@ -90,6 +96,13 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   bool showForum = false;
   bool attachmentFiles = false;
   String notesFilter = 'All';
+  final notesSearch = TextEditingController();
+  bool notesGrid = true;
+
+  /// Optimistic list state shown before summaries catch up.
+  final hiddenNotes = <String>{};
+  final noteChecks = <String, Map<String, bool>>{};
+  final roomChecks = <String, bool>{};
   String fileQuery = '';
   final fileSearch = TextEditingController();
   String fileSort = 'Newest';
@@ -185,6 +198,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     if (tab == 0) tab = 9;
     dark = node.store.setting('dark') == true;
     compact = node.store.setting('compact') == true;
+    notesGrid = node.store.setting('notesGrid') != false;
     accent = node.store.setting('accent') as int? ?? 0xff137d72;
     network = Network(node)..addListener(refresh);
     files = Files(node, network);
@@ -248,17 +262,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
             tab = 9;
             activeRoom = null;
           });
-          final note = id == null
-              ? await notes.create(
-                  checklist: checklist,
-                  title: checklist ? 'Checklist' : 'Note',
-                )
-              : await notes.get(id);
-          if (note == null) {
+          if (id != null && await notes.get(id) == null) {
             notice('This note is unavailable for this profile.');
             return;
           }
-          if (mounted) await openNote(note.id);
+          // New notes are created once something is written.
+          if (mounted) await openNote(id, checklist: checklist);
         }, notice);
         unawaited(noteWidgets!.start());
         shareInbox = ShareInbox(
@@ -346,6 +355,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     }
   }
 
+  void redraw() {
+    if (mounted) setState(() {});
+  }
+
   void refresh() {
     if (!mounted) return;
     setState(() {});
@@ -419,8 +432,28 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     }
     // A deliberate low-power default: no background relay work on a sleeping
     // phone. Incoming calls while suspended need a future wakeup integration.
+    // An open invitation keeps the connection so a friend or new device can
+    // be approved after sending the invitation from another app; networking
+    // still stops once it expires.
+    _pausedStop?.cancel();
     if (state == AppLifecycleState.paused && calls.phase == 'idle') {
-      unawaited(network.stop());
+      final open =
+          network.friendInvitation?.available == true ||
+          network.pairing?.available == true;
+      if (!open) {
+        unawaited(network.stop());
+      } else {
+        final expires = [
+          network.friendInvitation?.expires,
+          network.pairing?.expires,
+        ].whereType<DateTime>().reduce((a, b) => a.isAfter(b) ? a : b);
+        _pausedStop = Timer(
+          expires.difference(DateTime.now()) + const Duration(seconds: 5),
+          () {
+            if (calls.phase == 'idle') unawaited(network.stop());
+          },
+        );
+      }
     }
   }
 
@@ -428,6 +461,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   void dispose() {
     unawaited(draftStore.flush().catchError((Object _) {}));
     WidgetsBinding.instance.removeObserver(this);
+    _pausedStop?.cancel();
     _changes?.cancel();
     _dataRefresh.close();
     _deliveryRefresh.close();
@@ -446,6 +480,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     listName.dispose();
     composer.dispose();
     search.dispose();
+    notesSearch.dispose();
     fileSearch.dispose();
     super.dispose();
   }
@@ -615,166 +650,191 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
               ),
             ],
           );
-          return Scaffold(
-            appBar: AppBar(
-              leading: [4, 5, 7].contains(tab)
-                  ? BackButton(
-                      onPressed: () => update(() => tab = tab == 5 ? 2 : 8),
-                    )
-                  : null,
-              title: Text(
-                activeProfile == 'main'
-                    ? titles[tab]
-                    : '${titles[tab]} · $activeProfile',
-              ),
-              actions: [
-                if (busy)
-                  const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
-                if (wide)
-                  TextButton.icon(
-                    onPressed: busy
-                        ? null
-                        : () => act(() async {
-                            if (network.running) {
-                              await network.syncAll();
-                            } else {
-                              await network.start();
-                            }
-                          }),
-                    icon: Icon(
-                      network.running ? Icons.sync : Icons.power_settings_new,
-                    ),
-                    label: Text(network.running ? 'Sync now' : 'Connect'),
-                  ),
-                if (!wide)
-                  IconButton(
-                    tooltip: network.running ? 'Sync now' : 'Connect',
-                    onPressed: busy
-                        ? null
-                        : () => act(
-                            network.running ? network.syncAll : network.start,
-                          ),
-                    icon: Icon(
-                      network.running ? Icons.sync : Icons.power_settings_new,
-                    ),
-                  ),
-                if (wide)
-                  IconButton(
-                    tooltip: 'Toggle theme',
-                    onPressed: () {
-                      setState(() => dark = !dark);
-                      node.store.set('dark', dark);
-                    },
-                    icon: Icon(dark ? Icons.light_mode : Icons.dark_mode),
-                  ),
-                IconButton(
-                  tooltip: 'Search everything',
-                  onPressed: () => update(() => tab = 11),
-                  icon: const Icon(Icons.search),
+          final back = backDestination();
+          return PopScope(
+            canPop: back == null,
+            onPopInvokedWithResult: (didPop, _) {
+              if (!didPop) update(back ?? () {});
+            },
+            child: Scaffold(
+              appBar: AppBar(
+                leading: [4, 5, 7].contains(tab)
+                    ? BackButton(
+                        onPressed: () => update(() => tab = tab == 5 ? 2 : 8),
+                      )
+                    : null,
+                title: Text(
+                  activeProfile == 'main'
+                      ? titles[tab]
+                      : '${titles[tab]} · $activeProfile',
                 ),
-                if (wide)
+                actions: [
+                  if (busy)
+                    const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  if (wide)
+                    TextButton.icon(
+                      onPressed: busy
+                          ? null
+                          : () => act(() async {
+                              if (network.running) {
+                                await network.syncAll();
+                              } else {
+                                await network.start();
+                              }
+                            }),
+                      icon: Icon(
+                        network.running ? Icons.sync : Icons.power_settings_new,
+                      ),
+                      label: Text(network.running ? 'Sync now' : 'Connect'),
+                    ),
+                  if (!wide)
+                    IconButton(
+                      tooltip: network.running ? 'Sync now' : 'Connect',
+                      onPressed: busy
+                          ? null
+                          : () => act(
+                              network.running ? network.syncAll : network.start,
+                            ),
+                      icon: Icon(
+                        network.running ? Icons.sync : Icons.power_settings_new,
+                      ),
+                    ),
+                  if (wide)
+                    IconButton(
+                      tooltip: 'Toggle theme',
+                      onPressed: () {
+                        setState(() => dark = !dark);
+                        node.store.set('dark', dark);
+                      },
+                      icon: Icon(dark ? Icons.light_mode : Icons.dark_mode),
+                    ),
                   IconButton(
-                    tooltip: 'Your profile',
-                    onPressed: () => update(() => tab = 7),
-                    icon: const Icon(Icons.account_circle_outlined),
+                    tooltip: 'Search everything',
+                    onPressed: () => update(() => tab = 11),
+                    icon: const Icon(Icons.search),
                   ),
-                const SizedBox(width: 12),
-              ],
-            ),
-            drawer: wide ? null : Drawer(child: navigation),
-            body: Row(
-              children: [
-                if (wide) SizedBox(width: 244, child: navigation),
-                if (wide) const VerticalDivider(width: 1),
-                Expanded(
-                  child: Column(
-                    children: [
-                      if (calls.phase != 'idle') callPanel(),
-                      ValueListenableBuilder(
-                        valueListenable: imports,
-                        builder: (context, jobs, _) {
-                          if (jobs.isEmpty) return const SizedBox.shrink();
-                          final completed = jobs.values.fold(
-                            0,
-                            (n, j) => n + j.completed,
-                          );
-                          final total = jobs.values.fold(
-                            0,
-                            (n, j) => n + j.total,
-                          );
-                          return Column(
-                            children: [
-                              LinearProgressIndicator(
-                                value: total == 0 ? null : completed / total,
-                              ),
-                              Padding(
-                                padding: const EdgeInsets.all(8),
-                                child: Text(
-                                  'Saving ${jobs.length == 1 ? 'attachment' : '${jobs.length} attachments'} locally…',
+                  if (wide)
+                    IconButton(
+                      tooltip: 'Your profile',
+                      onPressed: () => update(() => tab = 7),
+                      icon: const Icon(Icons.account_circle_outlined),
+                    ),
+                  const SizedBox(width: 12),
+                ],
+              ),
+              drawer: wide ? null : Drawer(child: navigation),
+              body: Row(
+                children: [
+                  if (wide) SizedBox(width: 244, child: navigation),
+                  if (wide) const VerticalDivider(width: 1),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        if (calls.phase != 'idle') callPanel(),
+                        ValueListenableBuilder(
+                          valueListenable: imports,
+                          builder: (context, jobs, _) {
+                            if (jobs.isEmpty) return const SizedBox.shrink();
+                            final completed = jobs.values.fold(
+                              0,
+                              (n, j) => n + j.completed,
+                            );
+                            final total = jobs.values.fold(
+                              0,
+                              (n, j) => n + j.total,
+                            );
+                            return Column(
+                              children: [
+                                LinearProgressIndicator(
+                                  value: total == 0 ? null : completed / total,
                                 ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                      Expanded(
-                        child: Padding(
-                          padding: EdgeInsets.all(wide ? 24 : 12),
-                          child: page(context),
+                                Padding(
+                                  padding: const EdgeInsets.all(8),
+                                  child: Text(
+                                    'Saving ${jobs.length == 1 ? 'attachment' : '${jobs.length} attachments'} locally…',
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
                         ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: InkWell(
-                          onTap: () => update(() => tab = 4),
-                          child: Row(
-                            children: [
-                              Icon(
-                                network.running
-                                    ? Icons.circle
-                                    : Icons.circle_outlined,
-                                size: 10,
-                                color: network.running
-                                    ? Colors.teal
-                                    : Colors.grey,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
+                        Expanded(
+                          child: Padding(
+                            padding: EdgeInsets.all(wide ? 24 : 12),
+                            child: page(context),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: InkWell(
+                            onTap: () => update(() => tab = 4),
+                            child: Row(
+                              children: [
+                                Icon(
                                   network.running
-                                      ? 'Connected · friend devices only'
-                                      : 'Offline · local data available',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+                                      ? Icons.circle
+                                      : Icons.circle_outlined,
+                                  size: 10,
+                                  color: network.running
+                                      ? Colors.teal
+                                      : Colors.grey,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    network.running
+                                        ? 'Connected · friend devices only'
+                                        : 'Offline · local data available',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Network settings',
                                   style: Theme.of(context).textTheme.bodySmall,
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                'Network settings',
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           );
         },
       ),
     ),
   );
+
+  /// Where Android back goes inside the app, or null to leave it from Notes.
+  VoidCallback? backDestination() {
+    if ([4, 5, 7].contains(tab)) return () => tab = tab == 5 ? 2 : 8;
+    if (tab == 10 && activeRoom != null) return () => activeRoom = null;
+    if (tab == 2 && showConversation) return () => showConversation = false;
+    if (tab == 1 && showForum) return () => showForum = false;
+    if (tab != 9) {
+      return () {
+        tab = 9;
+        activeRoom = null;
+      };
+    }
+    return null;
+  }
+
   Widget page(BuildContext context) => switch (tab) {
     0 => everydayPage(context),
     1 => communities(context),

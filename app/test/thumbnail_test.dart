@@ -16,6 +16,12 @@ class CountingBlobWorker extends BlobWorker {
     if (bytes == null) chunkReads++;
     return super.decode(hash, key, bytes: bytes);
   }
+  @override
+  Future<Uint8List?> readLocal(List<String> hashes, List<int>? key) {
+    // Whole-file reads on a disk profile bypass decode; count their chunks.
+    if (store.path != null) chunkReads += hashes.length;
+    return super.readLocal(hashes, key);
+  }
 }
 
 class CountingNode extends Node {
@@ -105,6 +111,29 @@ void main() {
       expect(node.blobs.chunkReads, firstReads);
       expect(thumbnails.generated, 1);
       expect(node.store.preview('${object.id}/${Thumbnails.variant}'), stored);
+
+      // Previews stored by earlier builds under the larger variant are used
+      // as they are, not regenerated from the original.
+      await tester.runAsync(
+        () => files.storePreview(
+          object,
+          Thumbnails.legacyVariant,
+          Uint8List.fromList(List.filled(4 * 4 * 4, 200)),
+          4,
+          4,
+        ),
+      );
+      node.store.db.execute('DELETE FROM previews WHERE id=?', [
+        '${object.id}/${Thumbnails.variant}',
+      ]);
+      await tester.pumpWidget(const SizedBox());
+      imageCache.clear();
+      imageCache.clearLiveImages();
+      await tester.pumpWidget(row());
+      await settle();
+      expect(raw().image, isNotNull);
+      expect(node.blobs.chunkReads, firstReads);
+      expect(thumbnails.generated, 1);
 
       // Without a preview or local original, the row explains what is needed.
       final remote = {

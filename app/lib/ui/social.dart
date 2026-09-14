@@ -117,7 +117,7 @@ extension _SocialPages on _OurNetAppState {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           FilledButton.icon(
-            onPressed: busy ? null : () => act(() => addFriend(context)),
+            onPressed: () => addFriend(context, offerSharedNote: true),
             icon: const Icon(Icons.person_add_alt),
             label: const Text('Add friend'),
           ),

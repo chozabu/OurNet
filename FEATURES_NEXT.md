@@ -7,6 +7,18 @@ add a continuing note identity, field-level checklist operations, recoverable
 text branches, collaborator controls, native snapshots and an offline tap outbox.
 The older personal-note dialog/checklist descriptions below are historical.
 
+14 September (later): Keep-style Notes. Notes has a card grid with search and
+pinned notes. The editor autosaves, with Enter-to-add list items, drag reorder,
+a checked-items section and shared colours. On Android there is an all-notes
+**OurNet · Notes** board widget. Connecting is also simpler:
+- Friend invitations appear immediately and renew themselves.
+- Friends on the same Wi-Fi find each other without a QR code.
+- Comparison codes are large.
+- An open invitation can be approved from any screen.
+- A new friend can start a shared note straight away.
+- Joining a device searches nearby automatically.
+Details are in [NOTES_WIDGETS.md](NOTES_WIDGETS.md).
+
 - Expiring, single-use friend invitations. QR scanning on supported camera platforms or copied invitation text on any platform. Matching codes require approval on the inviter's device; identities and their private data remain separate. Existing contact cards still work.
 - Owner-signed private-group membership epochs, member lists, invitations, removal, departure and owner closure. Sharing old history is explicit and defaults off for new members. Continuing members retain the audience restrictions of individual older items. Legacy groups migrate when their owner edits membership.
 - Search across readable current Notes, group items, messages, forum posts and drive entries, with destination filters and source navigation.

@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
 
@@ -25,8 +26,16 @@ class Thumbnails {
       _instances[files.node] ??= Thumbnails._(files);
   Thumbnails._(this.files);
 
-  static const variant = 'list960';
-  static const maxEdge = 960;
+  // List cards show photos at most ~460 physical pixels tall, so a 640 px
+  // edge keeps them sharp while decode, read-back and compression cost less
+  // than half of the earlier 960 px previews, which are still used if stored.
+  static const variant = 'list640';
+  static const legacyVariant = 'list960';
+  static const maxEdge = 640;
+
+  Future<Uint8List?> _stored(SignedObject object) async =>
+      await files.readPreview(object, variant) ??
+      await files.readPreview(object, legacyVariant);
 
   /// Originals above this size need an explicit tap before their first preview.
   static const automaticLimit = 32 * 1024 * 1024;
@@ -38,8 +47,17 @@ class Thumbnails {
   final _background = ListQueue<_Job>();
   final _interest = <String, int>{};
   final _failed = <String>{};
-  int _active = 0;
-  static const _concurrency = 2;
+  int _active = 0, _storing = 0;
+  Future<void> _delivery = Future.value(), _stores = Future.value();
+
+  /// Resolves after the next frame, or at once when no frame is coming.
+  @visibleForTesting
+  static Future<void> Function() nextFrame = () async {
+    final scheduler = SchedulerBinding.instance;
+    if (scheduler.hasScheduledFrame) await scheduler.endOfFrame;
+  };
+  static Future<void> _nextFrame() => nextFrame();
+  static const _concurrency = 2, _maxStoring = 2;
 
   /// Test and diagnostics counters. No content or identifiers are retained.
   /// `skipped` counts requests deferred because their row scrolled away.
@@ -65,7 +83,7 @@ class Thumbnails {
     required bool generate,
     int limit = automaticLimit,
   }) async {
-    final stored = await files.readPreview(object, variant);
+    final stored = await _stored(object);
     if (stored != null) return (bytes: stored, image: null);
     if (!generate || _failed.contains(object.id)) {
       throw const ThumbnailUnavailable();
@@ -77,7 +95,7 @@ class Thumbnails {
 
   /// Prepare a preview ahead of display, e.g. after import or sync.
   Future<void> prepare(SignedObject object) async {
-    if (await files.readPreview(object, variant) != null) return;
+    if (await _stored(object) != null) return;
     await _schedule(object, automaticLimit, background: true).stored.future;
   }
 
@@ -129,20 +147,47 @@ class Thumbnails {
   Future<void> _run(_Job job) async {
     final id = job.object.id;
     ui.Image? image;
+    var released = false, storing = false;
+    void release() {
+      if (released) return;
+      released = true;
+      _active--;
+      _pump();
+    }
+
     try {
       image = await _decode(job.object, job.limit);
+      // Previews decoded together would upload in the same frame; hand them
+      // to the screen one frame apart.
+      final turn = _delivery.then((_) => _nextFrame());
+      _delivery = turn;
+      await turn;
       job.result.complete(image);
-      final pixels = await image.toByteData(
-        format: ui.ImageByteFormat.rawStraightRgba,
-      );
-      if (pixels == null) throw StateError('Image could not be read');
-      await files.storePreview(
-        job.object,
-        variant,
-        pixels.buffer.asUint8List(pixels.offsetInBytes, pixels.lengthInBytes),
-        image.width,
-        image.height,
-      );
+      // The preview is on screen; storing it (compression, encryption) need
+      // not hold up the next visible row. A bounded number of stores wait.
+      _storing++;
+      storing = true;
+      if (_storing <= _maxStoring) release();
+      final decoded = image;
+      // Stores run one at a time, each after a pause in scrolling: reading
+      // pixels back competes with the raster thread, and overlapping copies
+      // and compression stall the UI isolate on slow phones.
+      final store = _stores.then((_) async {
+        await quiet();
+        final pixels = await decoded.toByteData(
+          format: ui.ImageByteFormat.rawStraightRgba,
+        );
+        if (pixels == null) throw StateError('Image could not be read');
+        await files.storePreview(
+          job.object,
+          variant,
+          pixels.buffer.asUint8List(pixels.offsetInBytes, pixels.lengthInBytes),
+          decoded.width,
+          decoded.height,
+        );
+      });
+      _stores = store.catchError((Object _) {});
+      await store;
       generated++;
       job.stored.complete();
     } catch (error, stack) {
@@ -153,11 +198,31 @@ class Thumbnails {
       }
       job.fail(error, stack);
     } finally {
+      if (storing) _storing--;
       // Remove before disposing so no new consumer clones a disposed image.
       _jobs.remove(id);
       image?.dispose();
-      _active--;
-      _pump();
+      if (released) {
+        _pump();
+      } else {
+        release();
+      }
+    }
+  }
+
+  /// Waits for a pause in frames before GPU read-back. Widget tests with a
+  /// fake clock replace it; device performance tests keep the real wait.
+  @visibleForTesting
+  static Future<void> Function() quiet = _quiet;
+
+  static Future<void> _quiet() async {
+    final scheduler = SchedulerBinding.instance;
+    var calm = 0;
+    for (var i = 0; i < 100 && calm < 2; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final busy =
+          scheduler.hasScheduledFrame || scheduler.transientCallbackCount > 0;
+      calm = busy ? 0 : calm + 1;
     }
   }
 

@@ -8,34 +8,46 @@ import 'package:ournet_transport/ournet_transport.dart';
 import '../services/session.dart';
 import '../services/pairing_discovery.dart';
 import 'app.dart';
+import 'friend_invite.dart' show CodeText;
 
 class SetupApp extends StatelessWidget {
   final Node node;
-  const SetupApp({super.key, required this.node});
+
+  /// Same-network device discovery; disabled in widget tests.
+  final bool discover;
+  const SetupApp({super.key, required this.node, this.discover = true});
   @override
   Widget build(BuildContext context) => MaterialApp(
     theme: ThemeData(
       colorSchemeSeed: const Color(0xff137d72),
       useMaterial3: true,
     ),
-    home: SetupPage(node: node),
+    home: SetupPage(node: node, discover: discover),
   );
 }
 
 class SetupPage extends StatefulWidget {
   final Node node;
-  const SetupPage({super.key, required this.node});
+  final bool discover;
+  const SetupPage({super.key, required this.node, this.discover = true});
   @override
   State<SetupPage> createState() => _SetupPageState();
 }
 
 class _SetupPageState extends State<SetupPage> {
   final name = TextEditingController();
-  final device = TextEditingController(text: Platform.localHostname);
+  // Android reports "localhost"; offer a name people recognise instead.
+  final device = TextEditingController(
+    text: Platform.isAndroid || Platform.localHostname == 'localhost'
+        ? 'My phone'
+        : Platform.localHostname,
+  );
   final invitation = TextEditingController();
   String page = 'welcome', status = '';
+  String? code;
   bool busy = false;
   List<String> nearby = [];
+  int searches = 0;
   PeerNetwork? network;
   Future<void> act(Future<void> Function() action) async {
     setState(() {
@@ -66,6 +78,23 @@ class _SetupPageState extends State<SetupPage> {
     runApp(OurNetApp(node: node, initialTab: page == 'create' ? 7 : 0));
   }
 
+  /// Looks for an open Add device screen on this network while joining.
+  Future<void> searchNearby() async {
+    final generation = ++searches;
+    while (mounted && page == 'join' && generation == searches) {
+      if (!busy) {
+        try {
+          final results = await PairingDiscovery.find();
+          if (!mounted || generation != searches) return;
+          setState(() => nearby = results);
+        } catch (_) {
+          return;
+        }
+      }
+      await Future<void>.delayed(const Duration(seconds: 2));
+    }
+  }
+
   Future<void> join() async {
     final parsed = PairingSession.parse(invitation.text.trim());
     final node = await fresh();
@@ -74,16 +103,18 @@ class _SetupPageState extends State<SetupPage> {
     try {
       await net.start(automatic: false);
       if (!mounted) return;
-      setState(
-        () => status =
-            'Compare this code on your other device:\n${PairingSession.code(parsed['token'], node.identity.certificate)}\nThen approve the connection there.',
-      );
+      setState(() {
+        code = PairingSession.code(parsed['token'], node.identity.certificate);
+        status =
+            'Check that your other device shows this code, then approve there.';
+      });
       final identity = await PairingSession.join(net, invitation.text.trim());
       await net.stop();
       await finish(Node(identity, node.store));
     } finally {
       await net.stop();
       network = null;
+      if (mounted) setState(() => code = null);
     }
   }
 
@@ -139,7 +170,10 @@ class _SetupPageState extends State<SetupPage> {
                   ),
                   const SizedBox(height: 12),
                   OutlinedButton.icon(
-                    onPressed: () => setState(() => page = 'join'),
+                    onPressed: () {
+                      setState(() => page = 'join');
+                      if (widget.discover) unawaited(searchNearby());
+                    },
                     icon: const Icon(Icons.devices),
                     label: const Text('Connect to my existing profile'),
                   ),
@@ -202,26 +236,33 @@ class _SetupPageState extends State<SetupPage> {
                         icon: const Icon(Icons.qr_code_scanner),
                         label: const Text('Scan QR code'),
                       ),
-                    OutlinedButton.icon(
-                      onPressed: busy
-                          ? null
-                          : () => act(() async {
-                              final results = await PairingDiscovery.find();
-                              if (mounted) {
-                                setState(() {
-                                  nearby = results;
-                                  status = results.isEmpty
-                                      ? 'No devices found. Check that Add device is open and both devices use the same Wi-Fi, or scan the QR code.'
-                                      : 'Choose your device, then compare the approval code.';
-                                });
-                              }
-                            }),
-                      icon: const Icon(Icons.wifi_find),
-                      label: const Text('Find a nearby device'),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: widget.discover
+                                ? const CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  )
+                                : const Icon(Icons.wifi_find, size: 16),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              nearby.isEmpty
+                                  ? 'Looking for your other device on this Wi-Fi…'
+                                  : 'Choose your device, then compare the code.',
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                     ...nearby.map(
                       (text) => ListTile(
-                        leading: const Icon(Icons.computer),
+                        leading: const Icon(Icons.devices),
                         title: Text(
                           DeviceCertificate.fromJson(
                             jsonDecode(text)['card']['certificate'],
@@ -262,6 +303,11 @@ class _SetupPageState extends State<SetupPage> {
                     child: const Text('Back'),
                   ),
                 ],
+                if (busy && code != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 20),
+                    child: Center(child: CodeText(code!)),
+                  ),
                 if (busy) const LinearProgressIndicator(),
                 if (status.isNotEmpty)
                   Padding(

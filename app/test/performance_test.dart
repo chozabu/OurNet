@@ -29,7 +29,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('First note'), findsOneWidget);
     final reads = node.reads;
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Text'));
+    await tester.tap(find.byTooltip('Show'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.widgetWithText(CheckedPopupMenuItem<String>, 'Text notes'),
+    );
     await tester.pumpAndSettle();
     expect(node.reads, reads);
     expect(find.text('First note'), findsOneWidget);

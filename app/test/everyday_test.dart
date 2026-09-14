@@ -37,15 +37,19 @@ void main() {
       () => Future<void>.delayed(const Duration(milliseconds: 100)),
     );
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Take a note…'));
+    await tester.pumpAndSettle();
     await tester.enterText(
-      find.byType(TextField).first,
+      find.byKey(const ValueKey('note-text')),
       'Remember the receipt',
     );
-    await tester.tap(find.text('Save note'));
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 200)),
-    );
-    await tester.pumpAndSettle();
+    await tester.pageBack();
+    for (var i = 0; i < 4; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 150)),
+      );
+      await tester.pumpAndSettle();
+    }
     expect(find.text('Remember the receipt'), findsOneWidget);
     expect(tester.takeException(), isNull);
     final boundary = tester.renderObject<RenderRepaintBoundary>(

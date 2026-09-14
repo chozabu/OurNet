@@ -13,11 +13,14 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final node = Node(await LocalIdentity.create(), Store());
     addTearDown(node.close);
-    await tester.pumpWidget(SetupApp(node: node));
+    await tester.pumpWidget(SetupApp(node: node, discover: false));
     expect(find.text('Create a profile'), findsOneWidget);
     await tester.tap(find.text('Connect to my existing profile'));
     await tester.pumpAndSettle();
-    expect(find.text('Find a nearby device'), findsOneWidget);
+    expect(
+      find.text('Looking for your other device on this Wi-Fi…'),
+      findsOneWidget,
+    );
     expect(find.text('Or paste a pairing invitation'), findsOneWidget);
     expect(node.store.count, 0);
     expect(tester.takeException(), isNull);

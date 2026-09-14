@@ -203,6 +203,19 @@ class Files {
       final payload = await node.content(object);
       if (payload == null || payload['size'] is! int || payload['size'] > limit)
         throw StateError('Image exceeds preview limit');
+      // Stored chunks decrypt in parallel with other attachment work; fetch
+      // from a source device only when some are not on this device.
+      final chunks = (payload['chunks'] as List? ?? const []).cast<String>();
+      final local = await node.blobs.readLocal(
+        chunks,
+        payload['key'] == null ? null : unb64(payload['key']),
+      );
+      if (local != null) {
+        if (local.length > limit) {
+          throw StateError('Image exceeds preview limit');
+        }
+        return local;
+      }
       final result = BytesBuilder(copy: false);
       await for (final chunk in _plain(object)) {
         if (result.length + chunk.length > limit)

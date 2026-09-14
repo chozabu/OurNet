@@ -131,4 +131,54 @@ void main() {
       await b.close();
     },
   );
+
+  test(
+    'board lists pinned then recent notes and skips board configs',
+    () async {
+      final a = Node(await LocalIdentity.create(), Store());
+      final notes = Notes(a);
+      final older = await notes.create(title: 'Pinned list', items: ['Milk']);
+      await notes.create(text: 'Recent thought', color: 'mint');
+      notes.pin(older.id, true);
+      final service = NoteWidgets(notes, (_, _) async {}, (_) {});
+      Map<String, dynamic>? published;
+      var boards = <int>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(service.channel, (call) async {
+            if (call.method == 'state') {
+              return {
+                'pending': [],
+                'boards': boards,
+                'configs': [
+                  {
+                    'widget': 7,
+                    'kind': 'board',
+                    'profile': service.profile,
+                    'show': true,
+                  },
+                ],
+              };
+            }
+            if (call.method == 'publish') {
+              published = Map<String, dynamic>.from(call.arguments);
+            }
+            return null;
+          });
+      await service.drain();
+      expect(published!['board'], isEmpty);
+      expect(published!['snapshots'], isEmpty);
+      boards = [7];
+      await service.drain();
+      final board = (published!['board'] as List).cast<Map>();
+      expect(board.map((n) => n['title']), ['Pinned list', '']);
+      expect(board.first['pinned'], true);
+      expect(board.first['checks'].single['text'], 'Milk');
+      expect(board.last['text'], 'Recent thought');
+      expect(board.last['color'], isNot(0xffffffff));
+      service.close();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(service.channel, null);
+      await a.close();
+    },
+  );
 }

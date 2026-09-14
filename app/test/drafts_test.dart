@@ -7,7 +7,7 @@ import 'package:ournet_core/ournet_core.dart';
 
 void main() {
   testWidgets(
-    'note drafts survive reopening and notes can be removed and restored',
+    'note writing survives reopening and removed notes can be undone',
     (tester) async {
       tester.view.physicalSize = const Size(1200, 900);
       tester.view.devicePixelRatio = 1;
@@ -17,8 +17,15 @@ void main() {
       await Everyday(node).write({'type': 'note', 'text': 'A note to read'});
       await tester.pumpWidget(OurNetApp(node: node, enablePlatform: false));
       await settled(tester);
+      // Opening an older inbox note converts it into an editable note.
+      await tester.tap(find.text('A note to read'));
+      await settled(tester);
+      final body = find.byKey(const ValueKey('note-text'));
+      expect(tester.widget<TextField>(body).controller!.text, 'A note to read');
       await tester.enterText(
-        find.byType(TextField).last,
+        body,
+        'A note to read'
+        '\n'
         'Continue writing later',
       );
       await tester.pump(const Duration(milliseconds: 500));
@@ -27,22 +34,24 @@ void main() {
       await settled(tester);
       await tester.pumpWidget(OurNetApp(node: node, enablePlatform: false));
       await settled(tester);
-      expect(
-        tester.widget<TextField>(find.byType(TextField).last).controller!.text,
-        'Continue writing later',
-      );
-      await tester.tap(find.text('A note to read'));
+      expect(find.textContaining('Continue writing later'), findsOneWidget);
+      await tester.tap(find.textContaining('Continue writing later'));
       await settled(tester);
-      expect(find.widgetWithText(TextField, 'A note to read'), findsOneWidget);
-      await tester.tap(find.byTooltip('Remove note'));
+      await tester.tap(find.byTooltip('More'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove note'));
       await settled(tester);
       expect((await Notes(node).summaries()), isEmpty);
-      await tester.tap(find.byTooltip('Restore note'));
+      expect(find.textContaining('Continue writing later'), findsNothing);
+      await tester.tap(find.text('Undo'));
       await settled(tester);
       expect(
         (await Notes(node).summaries()).single.data['text'],
-        'A note to read',
+        'A note to read'
+        '\n'
+        'Continue writing later',
       );
+      expect(find.textContaining('Continue writing later'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
       await settled(tester);
       await node.close();

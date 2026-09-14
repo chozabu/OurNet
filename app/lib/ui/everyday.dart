@@ -1,22 +1,6 @@
 part of 'app.dart';
 
 extension _EverydayPages on _OurNetAppState {
-  Future<void> openNote(String id) async {
-    if (!mounted) return;
-    await noteNavigator.currentState!.push(
-      MaterialPageRoute<void>(
-        builder: (_) => NoteEditor(
-          notes: notes,
-          id: id,
-          drafts: draftStore,
-          network: network,
-          friends: {for (final person in people) person: name(person)},
-          personName: name,
-        ),
-      ),
-    );
-  }
-
   Future<List<EverydayItem>> noteItems() async => [
     ...await Everyday(node).items(),
     ...await notes.summaries(includeDeleted: true),
@@ -32,23 +16,6 @@ extension _EverydayPages on _OurNetAppState {
     } finally {
       if (mounted) update(() => savingNote = false);
     }
-  }
-
-  Future<void> savePersonalNote(String text, bool checklist) async {
-    if (!checklist) {
-      await notes.create(text: text);
-      return;
-    }
-    final title = listName.text.trim().isEmpty
-        ? 'Shopping'
-        : listName.text.trim();
-    final matching = (await notes.summaries())
-        .where((n) => n.data['title'] == title && n.data['checklist'] == true)
-        .firstOrNull;
-    final note = matching == null
-        ? await notes.create(title: title)
-        : (await notes.get(matching.data['entry']))!;
-    await notes.edit(note.id, note.epoch, 'check:${randomId()}:text', text, []);
   }
 
   Future<void> adoptNote(EverydayItem item) async {
@@ -68,7 +35,7 @@ extension _EverydayPages on _OurNetAppState {
       ..sort();
     final note = await notes.create(
       stableId: 'note-${stable.first}',
-      title: check ? item.data['list'] : 'Note',
+      title: check ? item.data['list'] : '',
       text: check ? '' : item.data['text'],
     );
     for (final entry in entries) {
@@ -188,9 +155,14 @@ extension _EverydayPages on _OurNetAppState {
     } else {
       final value = await Clipboard.getData(Clipboard.kTextPlain);
       if (value?.text?.trim().isNotEmpty == true) {
-        await Everyday(
-          node,
-        ).write({'type': 'note', 'text': value!.text!}, room: room);
+        if (room == null) {
+          await notes.create(text: value!.text!);
+          notice('Pasted into a new note');
+        } else {
+          await Everyday(
+            node,
+          ).write({'type': 'note', 'text': value!.text!}, room: room);
+        }
       }
     }
   }
@@ -268,8 +240,10 @@ extension _EverydayPages on _OurNetAppState {
   }
 
   Widget everydayPage(BuildContext context) {
-    final room = activeRoom;
-    final draftKey = 'notes/${room?.object.id ?? 'self'}';
+    final current = activeRoom;
+    if (current == null) return notesHome(context);
+    final EverydayItem room = current;
+    final draftKey = 'notes/${room.object.id}';
     if (notesComposerContext != draftKey) {
       if (notesComposerContext != null) {
         drafts[notesComposerContext!] = inboxComposer.value;
@@ -281,6 +255,7 @@ extension _EverydayPages on _OurNetAppState {
     }
     final colors = Theme.of(context).colorScheme;
     final typing = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final lists = everydaySection == 'Lists';
     return DropTarget(
       enable: widget.enablePlatform && !addingAttachment,
       onDragEntered: (_) => update(() => inboxDragging = true),
@@ -310,16 +285,11 @@ extension _EverydayPages on _OurNetAppState {
               children: [
                 Row(
                   children: [
-                    Icon(
-                      room == null
-                          ? Icons.note_alt_outlined
-                          : Icons.people_outline,
-                      size: 28,
-                    ),
+                    const Icon(Icons.people_outline, size: 28),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        room?.data['name'] ?? 'Notes',
+                        room.data['name'],
                         style: const TextStyle(
                           fontSize: 28,
                           fontWeight: FontWeight.w800,
@@ -327,30 +297,25 @@ extension _EverydayPages on _OurNetAppState {
                         ),
                       ),
                     ),
-                    if (room != null)
-                      IconButton(
-                        tooltip: 'Group members',
-                        onPressed: busy
-                            ? null
-                            : () => act(() => manageGroup(context, room)),
-                        icon: const Icon(Icons.manage_accounts_outlined),
-                      ),
+                    IconButton(
+                      tooltip: 'Group members',
+                      onPressed: busy
+                          ? null
+                          : () => act(() => manageGroup(context, room)),
+                      icon: const Icon(Icons.manage_accounts_outlined),
+                    ),
                   ],
                 ),
                 if (!typing) const SizedBox(height: 8),
                 Text(
                   inboxDragging
                       ? 'Drop to save here'
-                      : room == null
-                      ? 'Your notes, checklists and notes shared with friends.'
                       : '${(room.data['members'] as List).length} members · Private group',
                 ),
                 if (!typing) const SizedBox(height: 12),
                 SyncStatus(
                   network: network,
-                  people: room == null
-                      ? null
-                      : (room.data['members'] as List).cast<String>(),
+                  people: (room.data['members'] as List).cast<String>(),
                   suffix: ' · originals stay intact',
                   style: const TextStyle(fontSize: 12),
                 ),
@@ -358,54 +323,26 @@ extension _EverydayPages on _OurNetAppState {
             ),
           ),
           const SizedBox(height: 12),
-          if (room == null)
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  for (final filter in [
-                    'All',
-                    'Text',
-                    'Links',
-                    'Files',
-                    'Lists',
-                    'Pinned',
-                    'Removed',
-                  ])
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: ChoiceChip(
-                        label: Text(filter),
-                        selected: notesFilter == filter,
-                        onSelected: (_) => update(() => notesFilter = filter),
-                      ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final section in ['Conversation', 'Files', 'Lists'])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      label: Text(section),
+                      selected: everydaySection == section,
+                      onSelected: (_) =>
+                          update(() => everydaySection = section),
                     ),
-                ],
-              ),
+                  ),
+              ],
             ),
-          if (room != null)
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  for (final section in ['Conversation', 'Files', 'Lists'])
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: ChoiceChip(
-                        label: Text(section),
-                        selected: everydaySection == section,
-                        onSelected: (_) =>
-                            update(() => everydaySection = section),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+          ),
           Expanded(
             child: FutureBuilder<List<EverydayItem>>(
-              future: everydayView ??= room == null
-                  ? noteItems()
-                  : Everyday(node).items(room),
+              future: everydayView ??= Everyday(node).items(room),
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
                   return Center(
@@ -423,50 +360,21 @@ extension _EverydayPages on _OurNetAppState {
                     )
                     .map((i) => i.data['target'])
                     .toSet();
-                pins.addAll(node.store.trueSettings('notePin/'));
-                final visible = all
-                    .where(
-                      (i) =>
-                          i.data['type'] != 'pin' &&
-                          (notesFilter == 'Removed' && room == null
-                              ? i.data['deleted'] == true &&
-                                    i.data['type'] == 'shared_note'
-                              : i.data['deleted'] != true) &&
-                          (room == null &&
-                                  (notesFilter == 'All' ||
-                                      notesFilter == 'Removed' ||
-                                      i.data['type'] == 'shared_note' &&
-                                          (notesFilter == 'Text' &&
-                                                  i.data['checklist'] != true ||
-                                              notesFilter == 'Lists' &&
-                                                  i.data['checklist'] ==
-                                                      true) ||
-                                      notesFilter == 'Text' &&
-                                          i.data['type'] == 'note' &&
-                                          !(i.data['text'] ?? '')
-                                              .toString()
-                                              .startsWith('http') ||
-                                      notesFilter == 'Links' &&
-                                          (i.data['text'] ?? '')
-                                              .toString()
-                                              .startsWith('http') ||
-                                      notesFilter == 'Files' &&
-                                          i.data['type'] == 'file' ||
-                                      notesFilter == 'Lists' &&
-                                          i.data['type'] == 'check' ||
-                                      notesFilter == 'Pinned' &&
-                                          pins.contains(i.data['entry'])) ||
-                              room != null &&
-                                  everydaySection == 'Conversation' &&
-                                  i.data['type'] != 'check' ||
-                              room != null &&
-                                  everydaySection == 'Files' &&
-                                  i.data['type'] == 'file' ||
-                              (room != null && everydaySection == 'Lists' ||
-                                      room == null && notesFilter == 'Lists') &&
-                                  i.data['type'] == 'check'),
-                    )
-                    .toList();
+                for (final item in all) {
+                  if (roomChecks[item.data['entry']] ==
+                      (item.data['done'] == true)) {
+                    roomChecks.remove(item.data['entry']);
+                  }
+                }
+                final visible = all.where((i) {
+                  final type = i.data['type'];
+                  if (type == 'pin' || i.data['deleted'] == true) return false;
+                  return switch (everydaySection) {
+                    'Files' => type == 'file',
+                    'Lists' => type == 'check',
+                    _ => type != 'check',
+                  };
+                }).toList();
                 visible.sort((a, b) {
                   final pinned = (pins.contains(b.data['entry']) ? 1 : 0)
                       .compareTo(pins.contains(a.data['entry']) ? 1 : 0);
@@ -476,22 +384,18 @@ extension _EverydayPages on _OurNetAppState {
                 });
                 if (visible.isEmpty) {
                   return empty(
-                    room == null
-                        ? 'Your next small habit starts here'
-                        : everydaySection == 'Lists'
+                    lists
                         ? 'Less remembering. More doing.'
                         : 'Make yourselves at home',
-                    room == null
-                        ? 'Save a link or note below. Drop a file, or paste a screenshot.'
-                        : everydaySection == 'Lists'
+                    lists
                         ? 'Create a shopping, packing, or household checklist below.'
                         : 'Send a message or add the first file.',
-                    room == null ? Icons.devices : Icons.favorite_border,
+                    Icons.favorite_border,
                   );
                 }
                 return ListView.builder(
                   key: PageStorageKey(
-                    'everyday/${room?.object.id ?? 'self'}/${room == null ? notesFilter : everydaySection}',
+                    'everyday/${room.object.id}/$everydaySection',
                   ),
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   itemCount: visible.length,
@@ -503,8 +407,7 @@ extension _EverydayPages on _OurNetAppState {
               },
             ),
           ),
-          if ((room != null && everydaySection == 'Lists' ||
-              room == null && notesFilter == 'Lists'))
+          if (lists)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: TextField(
@@ -529,11 +432,7 @@ extension _EverydayPages on _OurNetAppState {
                   minLines: 1,
                   maxLines: 4,
                   decoration: InputDecoration(
-                    hintText:
-                        (room != null && everydaySection == 'Lists' ||
-                            room == null && notesFilter == 'Lists')
-                        ? 'Add an item…'
-                        : 'A link, a thought, something to keep…',
+                    hintText: lists ? 'Add an item…' : 'Write a message…',
                     border: InputBorder.none,
                     enabledBorder: InputBorder.none,
                   ),
@@ -546,9 +445,6 @@ extension _EverydayPages on _OurNetAppState {
                           ? null
                           : () => attachmentAct(() async {
                               final picker = widget.pickAttachment;
-                              final selected = picker == null
-                                  ? await FilePicker.pickFile()
-                                  : null;
                               if (picker != null) {
                                 final file = await picker();
                                 if (file != null) {
@@ -560,6 +456,7 @@ extension _EverydayPages on _OurNetAppState {
                                 }
                                 return;
                               }
+                              final selected = await FilePicker.pickFile();
                               if (selected?.path != null) {
                                 await addEverydayFile(
                                   selected!.path!,
@@ -585,22 +482,15 @@ extension _EverydayPages on _OurNetAppState {
                               final submitted = inboxComposer.text;
                               final text = submitted.trim();
                               if (text.isEmpty) return;
-                              final check =
-                                  (room != null && everydaySection == 'Lists' ||
-                                  room == null && notesFilter == 'Lists');
-                              if (room == null) {
-                                await savePersonalNote(text, check);
-                              } else {
-                                await Everyday(node).write({
-                                  'type': check ? 'check' : 'note',
-                                  'text': text,
-                                  if (check) 'done': false,
-                                  if (check)
-                                    'list': listName.text.trim().isEmpty
-                                        ? 'Shopping'
-                                        : listName.text.trim(),
-                                }, room: room);
-                              }
+                              await Everyday(node).write({
+                                'type': lists ? 'check' : 'note',
+                                'text': text,
+                                if (lists) 'done': false,
+                                if (lists)
+                                  'list': listName.text.trim().isEmpty
+                                      ? 'Shopping'
+                                      : listName.text.trim(),
+                              }, room: room);
                               await finishDraft(
                                 draftKey,
                                 submitted,
@@ -608,11 +498,7 @@ extension _EverydayPages on _OurNetAppState {
                               );
                             }),
                       icon: const Icon(Icons.arrow_upward, size: 18),
-                      label: Text(
-                        room == null && notesFilter != 'Lists'
-                            ? 'Save note'
-                            : 'Add',
-                      ),
+                      label: const Text('Add'),
                     ),
                   ],
                 ),
@@ -664,67 +550,6 @@ extension _EverydayPages on _OurNetAppState {
     Set<dynamic> pins,
   ) {
     final p = item.data, o = item.object;
-    if (p['type'] == 'shared_note') {
-      return Card(
-        child: Column(
-          children: [
-            ListTile(
-              leading: Icon(
-                p['members'] > 1
-                    ? Icons.people_outline
-                    : p['checklist'] == true
-                    ? Icons.checklist
-                    : Icons.notes,
-              ),
-              title: Text(
-                p['title'],
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text(
-                '${p['members'] > 1 ? '${p['members']} collaborators · ' : ''}${p['conflicts'] == true ? 'Competing edits to review\n' : ''}${p['checklist'] == true ? 'Checklist' : p['text']}',
-                maxLines: 5,
-                overflow: TextOverflow.ellipsis,
-              ),
-              onTap: () => openNote(p['entry']),
-              trailing: IconButton(
-                tooltip: pins.contains(p['entry']) ? 'Unpin' : 'Pin',
-                icon: Icon(
-                  pins.contains(p['entry'])
-                      ? Icons.push_pin
-                      : Icons.push_pin_outlined,
-                ),
-                onPressed: () =>
-                    notes.pin(p['entry'], !pins.contains(p['entry'])),
-              ),
-            ),
-            if (p['checklist'] == true && p['deleted'] != true)
-              for (final row in p['checks'] as List)
-                CheckboxListTile(
-                  value: row['done'] == true,
-                  title: Text(
-                    row['text'],
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  onChanged: (value) async {
-                    try {
-                      await notes.edit(
-                        p['entry'],
-                        p['epoch'],
-                        'check:${row['id']}:done',
-                        value!,
-                        (row['parents'] as List).cast<String>(),
-                      );
-                    } catch (e) {
-                      notice('$e');
-                    }
-                  },
-                ),
-          ],
-        ),
-      );
-    }
     final attachment = p['type'] == 'file', check = p['type'] == 'check';
     final local = !attachment || files.cached(p);
     final saved = Platform.isAndroid
@@ -754,14 +579,8 @@ extension _EverydayPages on _OurNetAppState {
             child: ListTile(
               leading: check
                   ? Checkbox(
-                      value: p['done'] == true,
-                      onChanged: busy
-                          ? null
-                          : (v) => act(
-                              () => Everyday(
-                                node,
-                              ).write({...p, 'done': v}, room: activeRoom),
-                            ),
+                      value: roomChecks[p['entry']] ?? p['done'] == true,
+                      onChanged: (v) => checkRoomItem(item, v == true),
                     )
                   : CircleAvatar(
                       backgroundColor: Theme.of(
@@ -780,7 +599,8 @@ extension _EverydayPages on _OurNetAppState {
                 maxLines: 5,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  decoration: check && p['done'] == true
+                  decoration:
+                      check && (roomChecks[p['entry']] ?? p['done']) == true
                       ? TextDecoration.lineThrough
                       : null,
                 ),
@@ -797,70 +617,8 @@ extension _EverydayPages on _OurNetAppState {
                   ? () => saveFile(context, o, p)
                   : () => readEverydayItem(context, item),
               trailing: PopupMenuButton<String>(
-                onSelected: (value) {
-                  if (value == 'copy') {
-                    act(() async {
-                      await Clipboard.setData(
-                        ClipboardData(text: p['text'] ?? ''),
-                      );
-                      notice('Copied');
-                    });
-                    return;
-                  }
-                  if (value == 'edit' || value == 'delete') {
-                    final room = activeRoom;
-                    act(() async {
-                      final text = value == 'edit'
-                          ? await ask(
-                              context,
-                              'Edit item',
-                              initial: p['text'] ?? '',
-                              lines: 3,
-                            )
-                          : null;
-                      if (value == 'edit' && (text == null || text.isEmpty)) {
-                        return;
-                      }
-                      await Everyday(node).write({
-                        ...p,
-                        'text': ?text,
-                        if (value == 'delete') 'deleted': true,
-                      }, room: room);
-                      if (value == 'delete' && mounted) {
-                        messenger.currentState?.showSnackBar(
-                          SnackBar(
-                            content: const Text('Item removed'),
-                            action: SnackBarAction(
-                              label: 'Undo',
-                              onPressed: () => act(() async {
-                                await Everyday(
-                                  node,
-                                ).write({...p, 'deleted': false}, room: room);
-                              }),
-                            ),
-                          ),
-                        );
-                      }
-                    });
-                    return;
-                  }
-                  if (value == 'save') {
-                    saveFile(context, o, p);
-                    return;
-                  }
-                  if (value == 'preview') {
-                    previewImage(context, o);
-                    return;
-                  }
-                  act(
-                    () => Everyday(node).write({
-                      'type': 'pin',
-                      'entry': 'pin:${p['entry']}',
-                      'target': p['entry'],
-                      'pinned': !pins.contains(p['entry']),
-                    }, room: activeRoom),
-                  );
-                },
+                onSelected: (value) =>
+                    everydayItemAction(context, item, value, pins),
                 itemBuilder: (_) => [
                   if (!attachment)
                     const PopupMenuItem(
@@ -894,6 +652,89 @@ extension _EverydayPages on _OurNetAppState {
           ),
         ],
       ),
+    );
+  }
+
+  /// Shows a group checklist change at once; the list catches up after saving.
+  void checkRoomItem(EverydayItem item, bool done) {
+    final p = item.data, room = activeRoom;
+    update(() => roomChecks[p['entry']] = done);
+    unawaited(
+      Everyday(node).write({...p, 'done': done}, room: room).catchError((
+        Object e,
+      ) {
+        update(() => roomChecks.remove(p['entry']));
+        notice('$e');
+      }),
+    );
+  }
+
+  void everydayItemAction(
+    BuildContext context,
+    EverydayItem item,
+    String value,
+    Set<dynamic> pins,
+  ) {
+    final p = item.data, o = item.object;
+    if (value == 'copy') {
+      act(() async {
+        await Clipboard.setData(ClipboardData(text: p['text'] ?? ''));
+        notice('Copied');
+      });
+      return;
+    }
+    if (value == 'edit' || value == 'delete') {
+      final room = activeRoom;
+      act(() async {
+        final text = value == 'edit'
+            ? await ask(
+                context,
+                'Edit item',
+                initial: p['text'] ?? '',
+                lines: 3,
+              )
+            : null;
+        if (value == 'edit' && (text == null || text.isEmpty)) {
+          return;
+        }
+        await Everyday(node).write({
+          ...p,
+          'text': ?text,
+          if (value == 'delete') 'deleted': true,
+        }, room: room);
+        if (value == 'delete' && mounted) {
+          messenger.currentState?.showSnackBar(
+            SnackBar(
+              content: const Text('Item removed'),
+              action: SnackBarAction(
+                label: 'Undo',
+                onPressed: () => act(() async {
+                  await Everyday(
+                    node,
+                  ).write({...p, 'deleted': false}, room: room);
+                }),
+              ),
+            ),
+          );
+        }
+      });
+      return;
+    }
+    if (value == 'save') {
+      saveFile(context, o, p);
+      return;
+    }
+    if (value == 'preview') {
+      previewImage(context, o);
+      return;
+    }
+    act(
+      () => Everyday(node).write({
+        'type': 'pin',
+        'entry': 'pin:${p['entry']}',
+        'target': p['entry'],
+        'pinned': !pins.contains(p['entry']),
+      }, room: activeRoom),
     );
   }
 }

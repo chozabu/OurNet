@@ -5,15 +5,36 @@ import 'package:ournet/services/drafts.dart';
 import 'package:ournet_core/ournet_core.dart';
 
 Future<void> settleNotes(WidgetTester tester) async {
-  await tester.runAsync(
-    () => Future<void>.delayed(const Duration(milliseconds: 250)),
-  );
+  for (var i = 0; i < 3; i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 120)),
+    );
+    await tester.pump();
+  }
   await tester.pumpAndSettle();
 }
 
+final itemField = find.byWidgetPredicate(
+  (w) => w is TextField && w.decoration?.hintText == 'List item',
+);
+
+NoteEditorState editorState(WidgetTester tester) =>
+    tester.state<NoteEditorState>(find.byType(NoteEditor));
+
+Future<void> flush(WidgetTester tester) async {
+  final saving = editorState(tester).flush();
+  for (var i = 0; i < 20; i++) {
+    var done = false;
+    saving.whenComplete(() => done = true);
+    await settleNotes(tester);
+    if (done) return;
+  }
+}
+
 void main() {
+  const never = Duration(days: 1);
   testWidgets(
-    'incoming edits preserve dirty text and saving exposes recovery',
+    'incoming edits preserve unsaved text and saving exposes recovery',
     (tester) async {
       final a = Node(await LocalIdentity.create(), Store());
       final b = Node(await LocalIdentity.create(), Store());
@@ -33,11 +54,12 @@ void main() {
             drafts: drafts,
             friends: {b.person: 'Bob'},
             personName: (id) => id == b.person ? 'Bob' : 'Alice',
+            autosaveDelay: never,
           ),
         ),
       );
       await settleNotes(tester);
-      final input = find.widgetWithText(TextField, 'Note text');
+      final input = find.byKey(const ValueKey('note-text'));
       await tester.enterText(input, 'Local unsaved writing');
       await tester.runAsync(() async {
         await other.edit(
@@ -54,15 +76,14 @@ void main() {
         tester.widget<TextField>(input).controller!.text,
         'Local unsaved writing',
       );
-      await tester.ensureVisible(find.text('Save'));
-      await tester.tap(find.text('Save'));
-      await settleNotes(tester);
+      await flush(tester);
       final result = await notes.get(note.id);
       expect(result!.hasConflicts, true);
       expect(result.heads['text']!.map((r) => r.data['value']).toSet(), {
         'Local unsaved writing',
         'Remote writing',
       });
+      expect(find.textContaining('Competing writing'), findsOneWidget);
       await tester.tap(find.byTooltip('Collaborators'));
       await tester.pumpAndSettle();
       expect(find.text('Bob'), findsOneWidget);
@@ -72,7 +93,9 @@ void main() {
       );
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Recovery'));
+      await tester.tap(find.byTooltip('More'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Recovery'));
       await tester.pumpAndSettle();
       expect(find.text('Remote writing'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -83,7 +106,7 @@ void main() {
     },
   );
 
-  testWidgets('membership change rejects old draft and retains it encrypted', (
+  testWidgets('membership change holds an old draft for review, encrypted', (
     tester,
   ) async {
     final a = Node(await LocalIdentity.create(), Store());
@@ -99,23 +122,27 @@ void main() {
           drafts: drafts,
           friends: {b.person: 'Bob'},
           personName: (_) => 'Friend',
+          autosaveDelay: never,
         ),
       ),
     );
     await settleNotes(tester);
     await tester.enterText(
-      find.widgetWithText(TextField, 'Note text'),
+      find.byKey(const ValueKey('note-text')),
       'Draft for review',
     );
     await tester.runAsync(() => notes.changeMembers(note.id, [b.person]));
     await settleNotes(tester);
-    await tester.ensureVisible(find.text('Save'));
-    await tester.tap(find.text('Save'));
-    await settleNotes(tester);
-    expect(find.textContaining('Collaborators changed.'), findsOneWidget);
+    await flush(tester);
+    expect(
+      find.textContaining('Collaborators changed while you were writing'),
+      findsOneWidget,
+    );
     expect((await notes.get(note.id))!.text, 'Original');
     await tester.pumpWidget(const SizedBox());
+    await settleNotes(tester);
     await tester.runAsync(() => drafts.flush());
+    expect((await notes.get(note.id))!.text, 'Original');
     expect(
       a.store.setting('drafts/v1').toString(),
       isNot(contains('Draft for review')),
@@ -125,5 +152,97 @@ void main() {
     expect(restored.values.values.join(), contains('Draft for review'));
     await a.close();
     await b.close();
+  });
+
+  testWidgets(
+    'new lists split lines into items, check them off and keep order',
+    (tester) async {
+      final a = Node(await LocalIdentity.create(), Store());
+      final notes = Notes(a), drafts = DraftStore(a);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: NoteEditor(
+            notes: notes,
+            checklist: true,
+            drafts: drafts,
+            friends: const {},
+            personName: (_) => 'You',
+            autosaveDelay: never,
+          ),
+        ),
+      );
+      await settleNotes(tester);
+      expect(itemField, findsOneWidget);
+      // Nothing is written for an untouched new note.
+      await flush(tester);
+      expect(await notes.summaries(), isEmpty);
+      await tester.enterText(itemField, 'Milk\nEggs\nBread');
+      await tester.pump();
+      expect(itemField, findsNWidgets(3));
+      await flush(tester);
+      var saved = (await notes.list()).single;
+      expect(saved.checks.map(saved.itemText), ['Milk', 'Eggs', 'Bread']);
+      // Checking shows at once and moves the item to the checked section.
+      await tester.tap(find.byType(Checkbox).first);
+      await tester.pump();
+      expect(find.text('1 checked item'), findsOneWidget);
+      await flush(tester);
+      saved = (await notes.list()).single;
+      expect(saved.done(saved.checks.first), true);
+      // Enter in the middle of a list inserts directly after that item.
+      final eggs = find.byWidgetPredicate(
+        (w) => w is TextField && w.controller?.text == 'Eggs',
+      );
+      await tester.enterText(eggs, 'Eggs\nButter');
+      await tester.pump();
+      await flush(tester);
+      saved = (await notes.list()).single;
+      expect(saved.checks.map(saved.itemText), [
+        'Milk',
+        'Eggs',
+        'Butter',
+        'Bread',
+      ]);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await settleNotes(tester);
+      await a.close();
+    },
+  );
+
+  testWidgets('leaving a new note saves it without pressing anything', (
+    tester,
+  ) async {
+    final a = Node(await LocalIdentity.create(), Store());
+    final notes = Notes(a), drafts = DraftStore(a);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NoteEditor(
+          notes: notes,
+          drafts: drafts,
+          friends: const {},
+          personName: (_) => 'You',
+          autosaveDelay: never,
+        ),
+      ),
+    );
+    await settleNotes(tester);
+    await tester.enterText(
+      find.byKey(const ValueKey('note-title')),
+      'Groceries',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('note-text')),
+      'Remember the bags',
+    );
+    await tester.pumpWidget(const SizedBox());
+    for (var i = 0; i < 5 && (await notes.summaries()).isEmpty; i++) {
+      await settleNotes(tester);
+    }
+    final saved = (await notes.list()).single;
+    expect(saved.rawTitle, 'Groceries');
+    expect(saved.text, 'Remember the bags');
+    expect(saved.hasConflicts, false);
+    await a.close();
   });
 }

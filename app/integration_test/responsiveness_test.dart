@@ -73,44 +73,40 @@ void main() {
         await tester.tap(find.byTooltip('Add original file'));
         await tester.pump();
         expect(find.text('Saving attachment locally…'), findsOneWidget);
-        await tester.enterText(
-          find.byType(TextField).last,
+        // Writing a note stays responsive while the import runs.
+        await tester.tap(find.text('Take a note…'));
+        await tester.pumpAndSettle();
+        final body = find.byKey(const ValueKey('note-text'));
+        await tester.enterText(body, 'Typed during import');
+        await tester.pump();
+        expect(
+          tester.widget<TextField>(body).controller!.text,
           'Typed during import',
         );
-        await tester.pump();
-        expect(
-          tester
-              .widget<TextField>(find.byType(TextField).last)
-              .controller!
-              .text,
-          'Typed during import',
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Show'));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.widgetWithText(CheckedPopupMenuItem<String>, 'Text notes'),
         );
-        expect(
-          tester
-              .widget<FilledButton>(
-                find.widgetWithText(FilledButton, 'Save note'),
-              )
-              .onPressed,
-          isNotNull,
-        );
-        await tester.tap(find.text('Save note'));
         await tester.pump();
-        await tester.tap(find.widgetWithText(ChoiceChip, 'Text'));
-        await tester.pump();
-        expect(
-          tester
-              .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Text'))
-              .selected,
-          isTrue,
+        expect(find.widgetWithText(InputChip, 'Text notes'), findsOneWidget);
+        await tester.drag(
+          find.byType(CustomScrollView).last,
+          const Offset(0, -200),
         );
-        await tester.drag(find.byType(ListView).last, const Offset(0, -200));
         final deadline = DateTime.now().add(const Duration(seconds: 45));
         while (find.text('Saving attachment locally…').evaluate().isNotEmpty &&
             DateTime.now().isBefore(deadline)) {
           await tester.pump(const Duration(milliseconds: 16));
         }
         expect(find.text('Saving attachment locally…'), findsNothing);
-        await tester.tap(find.widgetWithText(ChoiceChip, 'All'));
+        await tester.tap(find.byTooltip('Show'));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.widgetWithText(CheckedPopupMenuItem<String>, 'All notes'),
+        );
         await tester.pumpAndSettle();
         // Include automatic image preview/decryption in the measured journey.
         await tester.pump(const Duration(milliseconds: 500));

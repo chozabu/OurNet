@@ -77,6 +77,52 @@ class NoteWidgetTest {
         }
     }
 
+    @Test fun boardListsNotesAndHidesContents() {
+        assertEquals("org.ournet.ournet.profile", context.packageName)
+        val host = AppWidgetHost(context, 9842)
+        val id = host.allocateAppWidgetId()
+        val manager = AppWidgetManager.getInstance(context)
+        val original = onWorker { WidgetStore.read(context) }
+        try {
+            assertTrue(manager.bindAppWidgetIdIfAllowed(id, ComponentName(context, NoteBoardWidgetProvider::class.java)))
+            val board = JSONArray()
+                .put(JSONObject().put("id", "pinned").put("title", "Groceries").put("text", "").put("color", 0xFFE2F6D3.toInt())
+                    .put("pinned", true).put("checks", JSONArray().put(JSONObject().put("text", "Oat milk"))).put("checkedCount", 2))
+                .put(JSONObject().put("id", "recent").put("title", "").put("text", "Private board text").put("checks", JSONArray()))
+            onWorker {
+                // No configuration: the board is usable straight from the widget picker.
+                WidgetStore.save(context, fixture(0).put("configs", JSONArray()).put("board", board))
+                NoteBoard.render(context, id)
+            }
+            instrumentation.runOnMainSync {
+                val view = host.createView(context, id, manager.getAppWidgetInfo(id))
+                view.updateAppWidgetSize(null, 250, 180, 400, 500)
+                assertNotNull("Board layout inflates in a real host", view.findViewById<android.view.View>(R.id.widget_board_list))
+            }
+            val factory = NoteBoardFactory(context, id)
+            factory.onDataSetChanged()
+            assertEquals(2, factory.count)
+            instrumentation.runOnMainSync {
+                val row = factory.getViewAt(0).apply(context, android.widget.FrameLayout(context))
+                assertEquals("Groceries", row.findViewById<android.widget.TextView>(R.id.board_item_title).text.toString())
+                assertTrue(row.findViewById<android.widget.TextView>(R.id.board_item_checks).text.contains("Oat milk"))
+                assertTrue(row.findViewById<android.widget.TextView>(R.id.board_item_meta).text.contains("2 checked"))
+                val second = factory.getViewAt(1).apply(context, android.widget.FrameLayout(context))
+                assertEquals(android.view.View.GONE, second.findViewById<android.widget.TextView>(R.id.board_item_title).visibility)
+            }
+            onWorker {
+                val state = WidgetStore.read(context)
+                state.put("configs", JSONArray().put(JSONObject().put("widget", id).put("kind", "board").put("profile", "test-profile").put("show", false)))
+                WidgetStore.save(context, state)
+            }
+            factory.onDataSetChanged()
+            assertEquals(0, factory.count)
+        } finally {
+            onWorker { WidgetStore.save(context, original) }
+            host.deleteAppWidgetId(id)
+        }
+    }
+
     @Test fun staleProfileAndQueueLimit() {
         assertEquals("org.ournet.ournet.profile", context.packageName)
         onWorker {

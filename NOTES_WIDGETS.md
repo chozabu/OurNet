@@ -5,33 +5,79 @@ fixed group membership and read-only personal note dialogs.
 
 ## Try the features
 
-1. In **Notes**, save a text note, or choose **Lists**, name a list and add items.
-   Tap a note/list title to open its editor. Existing personal inbox notes are
-   converted when opened; opening an old checklist converts its same-name items
-   together. Its old encrypted records remain stored, marked as moved. Old group
-   conversations and group lists keep their existing behaviour.
-2. In the editor, choose **Collaborators** (person-plus). Select existing friends
-   and save. Only the owner can change collaborators; other people can **Leave
-   note**. Keep both applications open and connected for replication. Use this
-   version on every participating device.
-3. Edit text and press **Save**, or check items directly. The Notes list shows
-   shared notes and personal notes together, with collaborator indicators and
-   the first three checklist items. Pins are personal. Search includes the
-   bounded note preview; open the note to read its entire contents.
-4. Use **Recovery** (history icon) to copy received earlier writing, or select a
-   competing text version into the editor and save it. Combine versions manually
-   when both contain useful writing. Removed notes and locally received copies of
-   notes you left are under **Notes → Removed**. Restore a removed note in its
-   editor; removed checklist items can be restored from Recovery.
-5. On Android, long-press the home screen, choose **Widgets → OurNet → Single
-   note**, and select a note/list. Contents are hidden by default. Enable **Show
-   contents on the home screen** to show text and interactive checkboxes. Anyone
-   looking at the home screen can see enabled contents. Use the gear to change
-   the selection/privacy setting; long-press and resize using the launcher.
-6. Tap a checkbox to save a desired state locally, including with OurNet closed
-   and offline. Tap note text or **Open in OurNet** to edit that specific note.
-   **Quick capture** provides separate text-note and checklist actions.
-   Old inbox notes become selectable after opening them once in this version.
+Updated later on 14 September 2026 with Keep-style editing, the card grid and
+the Notes board widget. The earlier Save-button editor described in older
+notes no longer exists.
+
+1. **Notes** shows cards in a staggered grid (a single column with the view
+   toggle). Pinned notes come first; others are ordered by their latest edit.
+   Search filters titles, text and list items as you type. The filter menu
+   selects text notes, lists, links, files and photos, or **Removed**.
+2. Tap **Take a note…** to write, or the checkbox button for a new list. Nothing
+   is created until something is written. Writing saves after a short pause
+   and when you leave the note; there is no Save button. Older inbox notes and
+   checklists convert into editable notes when opened, as before.
+3. In a list, Enter starts the next item and Backspace in an empty item removes
+   it (hardware keyboards). Pasting several lines creates several items. Drag
+   the handle to reorder. Checked items move to a collapsible **checked items**
+   section. **More → Show/Hide checkboxes** converts between text and a list.
+4. The palette sets a shared colour. Pins stay personal. Checking an item on a
+   card, swiping a card away, or **Remove note** apply on screen at once; a
+   removal offers **Undo**. Long-press or right-click a card for pin, colour,
+   copy and remove.
+5. **Collaborators** (person-plus) works as before, and the owner can now
+   **Invite a new friend** from the same dialog; the new friend is preselected.
+   Use this version on every participating device.
+6. **More → Recovery** copies received earlier writing or selects a competing
+   version into the editor. A banner offers **Review** when competing writing
+   exists, and **Review draft** when collaborators changed while typing.
+7. On Android, choose **Add Notes widget** in the Notes filter menu, or
+   long-press the home screen and pick **OurNet · Notes**. It needs no setup:
+   it lists pinned and recent notes with **+** (note) and **☑** (list) buttons.
+   Tap a card to open that note. The gear hides contents. **Single note** and
+   **Quick capture** remain available, and Single note keeps its
+   hidden-by-default contents and interactive checkboxes.
+
+## Editing, ordering and colour
+
+- The editor autosaves 1.5 s after typing stops, on leaving the note, when the
+  app is paused, and with Ctrl+S. List changes (check, reorder, remove, add,
+  colour) are applied immediately on screen and published as one batch through
+  `Notes.apply`. Each published text write becomes the editor's observed parent
+  for the next save, so continued typing never creates a branch against this
+  device's own writing. Unseen writing from others still becomes a branch.
+- Every autosave is a signed object and counts toward the 10,000-object local
+  quota. The pause keeps this to roughly one object per burst of typing.
+- A brand-new note that is closed within the first pause is still saved on
+  leaving. If the process is killed before then, that first unsaved moment
+  is lost, because new notes have no draft until they exist. Existing notes
+  keep the encrypted draft behaviour.
+- New registers: `check:<id>:order` (a string key, `[0-9A-Za-z]{1,64}`) and
+  `color` (a lowercase palette name). Order keys are generated between
+  neighbours and never end in `0`, so an item can always be placed before
+  another. Items written before ordering existed sort first, by their first
+  write, until a reorder renumbers the list. Concurrent moves of the same item
+  converge like any register; colliding keys fall back to item ID order.
+- **Compatibility:** earlier builds reject `order` and `color` operations as
+  invalid content, so they neither display nor replicate them. Other writing
+  still merges. Update every participating device.
+
+## Notes board widget
+
+- Rows come from the same encrypted native snapshot store. Dart publishes the
+  board only while a board widget is placed: up to 40 notes (pinned, then most
+  recently edited) with a 400-character body, eight unchecked items, counts and
+  a light colour. The Android host never decrypts note history to draw.
+- Board contents are shown by default, unlike Single note, because the board
+  exists to glance at notes. The widget description and settings screen state
+  that anyone who can see the home screen can read it. **Show note contents**
+  can be turned off per widget; hidden boards keep only the capture buttons.
+- Rows open notes through a mutable fill-in `PendingIntent` template with an
+  explicit `MainActivity` component. Checking items from the board is not
+  offered, matching Keep's multi-note widget; use Single note for that.
+- Collection data uses `RemoteViewsService` (minimum SDK 24). Placing a board
+  requests `configuration_optional` on Android 12 and later. Earlier versions
+  show the one-checkbox settings screen once.
 
 ## Conflict and membership semantics
 
@@ -77,7 +123,7 @@ AES-GCM key in `noBackupFilesDir`. They do not open Flutter, read original image
 decrypt note history or start networking to draw. Snapshots/outbox share an
 atomic encrypted file (512 KiB limit). A single native worker has a 64-job queue;
 at most 128 pending checkbox requests and 16 configured note widgets are accepted.
-Configuration lists at most 200 notes. Each snapshot includes at most 2,000 body
+Configuration lists at most 200 notes by title or first line. Each snapshot includes at most 2,000 body
 characters and 20 checklist previews (160 characters each); widget height shows
 up to 12 rows and links to the full note. Privacy-hidden snapshots omit contents.
 
@@ -127,4 +173,25 @@ with bounded worker work; an explicit immutable PendingIntent targets each actio
   everyday application ID. See `tool/check-note-widgets.ps1` for the real launcher,
   privacy, queue, encrypted persistence and process-restart checks.
 
-See the validation record below for actual results and outstanding limitations.
+## Validation record — Keep-style update, 14 September 2026
+
+- `dart test` in `core`: 38 passed, including order-key properties, concurrent
+  reorder/rename/add/colour convergence between collaborators, and batch limits.
+- `dart test` in `transport`: 12 passed (native library on `PATH`).
+- `flutter test` in `app`: 33 passed. Covers autosave conflicts, membership
+  review, splitting and ordering items, saving on leaving, the card grid,
+  optimistic card checks, search, swipe removal with Undo, board snapshots,
+  friend discovery and the invitation screen.
+- Android `NoteWidgetTest` on BV6600PRO (profile package): all five methods
+  passed, including `boardListsNotesAndHidesContents` in a real widget host.
+  By hand on the same phone: the board placed through **Add Notes widget**,
+  showed a list note, and opened it and a new note. Enter created list items
+  with the soft keyboard, and leaving saved the list.
+- Windows profile runs of `responsiveness_test` and `photo_scroll_test` both
+  pass their enforced budgets.
+- On the BV6600 Pro, preview reads now run in parallel, storage waits for a
+  pause in scrolling, and warm passes have no original reads or placeholders.
+  Cold-pass frame p99 while generating all four previews still sits at the
+  33.3 ms limit (22–45 ms across runs). See `PERFORMANCE.md`.
+- Not yet checked by hand: drag reordering on a touch screen, and colour
+  contrast of every palette entry in dark mode.
