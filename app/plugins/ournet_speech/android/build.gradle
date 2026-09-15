@@ -1,0 +1,54 @@
+// The Android Gradle Plugin builds whisper.cpp and the plugin with the NDK.
+
+group = "org.ournet.ournet_speech"
+version = "1.0"
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath("com.android.tools.build:gradle:9.0.1")
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+
+android {
+    namespace = "org.ournet.ournet_speech"
+    compileSdk = 36
+    ndkVersion = android.ndkVersion
+
+    externalNativeBuild {
+        cmake {
+            path = "../src/CMakeLists.txt"
+            // ggml requires CMake 3.14; the SDK's bundled 3.22.1 is used.
+            version = "3.22.1"
+        }
+    }
+
+    defaultConfig {
+        minSdk = 24
+        externalNativeBuild {
+            cmake {
+                // Release-grade optimisation even in debug builds: an
+                // unoptimised whisper.cpp is far slower than real time.
+                arguments "-DCMAKE_BUILD_TYPE=Release"
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}

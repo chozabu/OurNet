@@ -139,7 +139,7 @@ void main() {
       final notes = Notes(a);
       final older = await notes.create(title: 'Pinned list', items: ['Milk']);
       await notes.create(text: 'Recent thought', color: 'mint');
-      notes.pin(older.id, true);
+      await notes.pin(older.id, true);
       final service = NoteWidgets(notes, (_, _) async {}, (_) {});
       Map<String, dynamic>? published;
       var boards = <int>[];

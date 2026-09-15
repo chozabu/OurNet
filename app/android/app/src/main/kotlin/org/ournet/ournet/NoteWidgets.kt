@@ -98,11 +98,11 @@ object WidgetStore {
     /** Board widgets currently placed; Dart prepares the board only when one exists. */
     fun boardIds(context: Context): IntArray =
         AppWidgetManager.getInstance(context).getAppWidgetIds(ComponentName(context, NoteBoardWidgetProvider::class.java))
-    fun launch(context: Context, widget: Int, note: String?, checklist: Boolean = false): PendingIntent {
+    fun launch(context: Context, widget: Int, note: String?, checklist: Boolean = false, voice: Boolean = false): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             action = "org.ournet.WIDGET_OPEN"
-            data = Uri.parse("ournet-widget://open/$widget/${Uri.encode(note ?: if (checklist) "checklist" else "text")}")
-            putExtra("widget", widget); putExtra("note", note); putExtra("checklist", checklist)
+            data = Uri.parse("ournet-widget://open/$widget/${Uri.encode(note ?: if (voice) "voice" else if (checklist) "checklist" else "text")}")
+            putExtra("widget", widget); putExtra("note", note); putExtra("checklist", checklist); putExtra("voice", voice)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         return PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
@@ -174,6 +174,7 @@ object WidgetStore {
         val views = RemoteViews(context.packageName, R.layout.capture_widget)
         views.setOnClickPendingIntent(R.id.widget_new_text, launch(context, id, null))
         views.setOnClickPendingIntent(R.id.widget_new_checklist, launch(context, id, null, true))
+        views.setOnClickPendingIntent(R.id.widget_new_voice, launch(context, id, null, voice = true))
         AppWidgetManager.getInstance(context).updateAppWidget(id, views)
     }
     fun toggle(context: Context, intent: Intent) {
@@ -270,7 +271,8 @@ object WidgetStore {
             // profile that happens to be open when a stale PendingIntent fires.
             state.put("launch", JSONObject().put("id", UUID.randomUUID().toString())
                 .put("profile", config?.optString("profile") ?: state.optString("profile"))
-                .put("note", copy.getStringExtra("note")).put("checklist", copy.getBooleanExtra("checklist", false)))
+                .put("note", copy.getStringExtra("note")).put("checklist", copy.getBooleanExtra("checklist", false))
+                .put("voice", copy.getBooleanExtra("voice", false)))
             save(context, state); notifyFlutter()
         }
     }

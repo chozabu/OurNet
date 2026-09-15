@@ -34,6 +34,7 @@ object NoteBoard {
         val views = RemoteViews(context.packageName, R.layout.note_board_widget)
         views.setOnClickPendingIntent(R.id.widget_board_new_text, WidgetStore.launch(context, id, null))
         views.setOnClickPendingIntent(R.id.widget_board_new_list, WidgetStore.launch(context, id, null, true))
+        views.setOnClickPendingIntent(R.id.widget_board_new_voice, WidgetStore.launch(context, id, null, voice = true))
         views.setOnClickPendingIntent(R.id.widget_board_title, PendingIntent.getActivity(context, 20000 + id,
             Intent(context, MainActivity::class.java).setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
@@ -99,11 +100,14 @@ class NoteBoardFactory(private val context: Context, private val widget: Int) : 
         text(R.id.board_item_checks, (checks + listOfNotNull(if (more > 0) "+ $more more" else null)).joinToString("\n"))
         text(R.id.board_item_meta, listOfNotNull(
             if (note.optBoolean("pinned")) "Pinned" else null,
+            note.optString("voice").ifBlank { null }?.let { "🎤 $it" },
+            if (note.optInt("pictures") > 0) "🖼 ${note.optInt("pictures")}" else null,
+            if (note.optBoolean("reminder")) "⏰" else null,
             if (checked > 0) "$checked checked" else null,
             if (note.optBoolean("shared")) "Shared" else null,
         ).joinToString(" · "))
         if (note.optString("title").isBlank() && note.optString("text").isBlank() && checks.isEmpty()) {
-            text(R.id.board_item_text, "Empty note")
+            text(R.id.board_item_text, if (note.optString("voice").isNotBlank()) "Voice note" else if (note.optInt("pictures") > 0) "Photo" else "Empty note")
         }
         views.setOnClickFillInIntent(R.id.board_item_root, Intent()
             .setData(Uri.parse("ournet-widget://open/$widget/${Uri.encode(note.optString("id"))}"))

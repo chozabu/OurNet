@@ -14,6 +14,11 @@ class EverydaySync {
   Timer? timer;
   bool busy = false, closed = false;
   final errors = <String, String>{};
+
+  /// Note attachments (photos, drawings, recordings) waiting to be cached,
+  /// found by an insertion cursor so passes never rescan note history.
+  final _noteFiles = <String>{};
+  int _noteCursor = 0;
   EverydaySync(this.network, this.onUpdate, {this.onCached}) {
     timer = Timer.periodic(const Duration(seconds: 15), (_) => sync());
   }
@@ -55,10 +60,52 @@ class EverydaySync {
           /* Retry this item on the next foreground pass. */
         }
       }
+      changed = await _cacheNoteFiles() || changed;
     } finally {
       busy = false;
       if (!closed && changed) onUpdate();
     }
+  }
+
+  Future<bool> _cacheNoteFiles() async {
+    final node = network.node;
+    final slice = TimeSlice();
+    while (true) {
+      final page = node.store.insertedAfter(_noteCursor, ['note_op']);
+      if (page.isEmpty) break;
+      for (final (cursor, object) in page) {
+        _noteCursor = cursor;
+        final payload = await node.content(object);
+        if (payload != null &&
+            payload['chunks'] is List &&
+            (payload['field'] as String).endsWith(':meta') &&
+            !files.cached(payload)) {
+          _noteFiles.add(object.id);
+        }
+        await slice.pause();
+      }
+    }
+    var changed = false;
+    for (final id in _noteFiles.toList()) {
+      if (closed || !network.running) break;
+      final object = node.store.get(id);
+      final payload = object == null ? null : await node.content(object);
+      if (object == null || payload == null) {
+        _noteFiles.remove(id);
+        continue;
+      }
+      try {
+        await files.cache(object);
+        _noteFiles.remove(id);
+        errors.remove(id);
+        onCached?.call(object, payload);
+        changed = true;
+      } catch (error) {
+        errors[id] = '$error';
+        /* A source device may come online later. */
+      }
+    }
+    return changed;
   }
 
   void close() {

@@ -51,30 +51,14 @@ bool validContent(String kind, Json p) {
   return switch (kind) {
     'note_op' =>
       p['epoch'] is String &&
-          p['field'] is String &&
-          RegExp(
-            r'^(title|text|deleted|color|check:[a-zA-Z0-9_-]{1,80}:(text|done|deleted|order))$',
-          ).hasMatch(p['field']) &&
-          p['clock'] is int &&
-          p['clock'] >= 0 &&
-          p['clock'] < 9007199254740991 &&
-          p['parents'] is List &&
-          (p['parents'] as List).length <= 128 &&
-          (p['parents'] as List).every((v) => v is String && v.length <= 128) &&
-          (p['field'] == 'title' ||
-                  p['field'] == 'text' ||
-                  (p['field'] as String).endsWith(':text')
-              ? p['value'] is String && (p['value'] as String).length <= 16384
-              : p['field'] == 'color'
-              ? p['value'] is String &&
-                    RegExp(r'^[a-z]{1,16}$').hasMatch(p['value'])
-              : (p['field'] as String).endsWith(':order')
-              ? p['value'] is String &&
-                    RegExp(r'^[0-9A-Za-z]{1,64}$').hasMatch(p['value'])
-              : p['value'] is bool) &&
-          (p['checkpoint'] == null || p['checkpoint'] is bool) &&
-          (p['request'] == null ||
-              p['request'] is String && (p['request'] as String).length <= 100),
+          _register(p) &&
+          _noteValue(p['field'] as String, p['value'], p) &&
+          (p['checkpoint'] == null || p['checkpoint'] is bool),
+    'note_self' =>
+      p['target'] is String &&
+          (p['target'] as String).length <= 200 &&
+          _register(p) &&
+          _selfValue(p['field'] as String, p['value']),
     'forum' =>
       p['name'] is String &&
           (p['name'] as String).trim().isNotEmpty &&
@@ -151,6 +135,108 @@ bool validContent(String kind, Json p) {
     _ => true,
   };
 }
+
+/// Register fields: a name, or `name:<id>:name` for per-item values. Names
+/// this build does not know are accepted with a bounded value, so newer builds
+/// can add fields that older ones keep, replicate and simply do not display.
+final _fieldName = RegExp(
+  r'^[a-z][a-zA-Z0-9]{0,31}(:[a-zA-Z0-9_-]{1,80}:[a-z][a-zA-Z0-9]{0,31})?$',
+);
+final _orderKey = RegExp(r'^[0-9A-Za-z]{1,64}$');
+final _colorName = RegExp(r'^[a-z]{1,16}$');
+
+bool _register(Json p) =>
+    p['field'] is String &&
+    _fieldName.hasMatch(p['field']) &&
+    p['clock'] is int &&
+    p['clock'] >= 0 &&
+    p['clock'] < 9007199254740991 &&
+    p['parents'] is List &&
+    (p['parents'] as List).length <= 128 &&
+    (p['parents'] as List).every((v) => v is String && v.length <= 128) &&
+    (p['request'] == null ||
+        p['request'] is String && (p['request'] as String).length <= 100);
+
+bool _text(Object? v, [int limit = 16384]) => v is String && v.length <= limit;
+bool _bounded(Object? v) {
+  if (v is String) return v.length <= 16384;
+  if (v is bool || v is int) return true;
+  if (v is! Map && v is! List) return false;
+  try {
+    return bytes(v).length <= 8192;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Known shared-note registers keep strict types; see `Notes` for meaning.
+bool _noteValue(String field, Object? v, Json p) {
+  final parts = field.split(':');
+  final name = parts.last;
+  if (parts.length == 1) {
+    return switch (field) {
+      'title' || 'text' => _text(v),
+      'deleted' => v is bool,
+      'color' ||
+      'background' ||
+      'format' => v is String && _colorName.hasMatch(v),
+      'created' => v is int && v >= 0 && v < 253402300799999,
+      _ => _bounded(v),
+    };
+  }
+  if (parts.first == 'check') {
+    return switch (name) {
+      'text' => _text(v),
+      'done' || 'deleted' => v is bool,
+      'order' => v is String && _orderKey.hasMatch(v),
+      'indent' => v is int && v >= 0 && v <= 1,
+      _ => _bounded(v),
+    };
+  }
+  if (parts.first == 'file') {
+    return switch (name) {
+      // The attachment itself: encrypted chunks travel in this same payload.
+      'meta' =>
+        v is Map &&
+            _bounded(v) &&
+            ['audio', 'image', 'drawing'].contains(v['kind']) &&
+            p['chunks'] is List,
+      'strokes' => v is Map && _bounded(v) && p['chunks'] is List,
+      'transcript' => _text(v),
+      'deleted' => v is bool,
+      'order' => v is String && _orderKey.hasMatch(v),
+      _ => _bounded(v),
+    };
+  }
+  return _bounded(v);
+}
+
+/// Personal note state, readable only by this person's own devices.
+bool _selfValue(String field, Object? v) => switch (field) {
+  'pin' || 'archive' || 'labelDeleted' => v is bool,
+  // The removal (operation ID) this person emptied from Removed.
+  'purged' => v is String && v.length <= 128,
+  'order' => v is String && _orderKey.hasMatch(v),
+  'labelName' => v is String && v.trim().isNotEmpty && v.length <= 50,
+  'labels' =>
+    v is List &&
+        v.length <= 64 &&
+        v.every((l) => l is String && l.length <= 64),
+  'reminder' =>
+    v is Map &&
+        _bounded(v) &&
+        (v.isEmpty ||
+            (v['at'] is int &&
+                v['at'] >= 0 &&
+                [
+                  'none',
+                  'daily',
+                  'weekly',
+                  'monthly',
+                  'yearly',
+                ].contains(v['repeat'] ?? 'none'))),
+  _ => _bounded(v),
+};
 
 /// Version 2 canonical JSON: sorted string keys, integers, strings, booleans,
 /// null and arrays only. Floating point values are deliberately forbidden.

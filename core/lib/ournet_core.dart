@@ -8,3 +8,4 @@ export 'src/voting.dart';
 export 'src/drive.dart';
 export 'src/everyday.dart';
 export 'src/notes.dart';
+export 'src/note_state.dart';

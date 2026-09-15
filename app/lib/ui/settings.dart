@@ -190,6 +190,21 @@ extension _SettingsPages on _OurNetAppState {
           refresh();
         }),
       ),
+      const Divider(),
+      SpeechSettings(speech: speech, notice: notice),
+      ListTile(
+        leading: const Icon(Icons.label_outline),
+        title: const Text('Note labels'),
+        subtitle: const Text(
+          'Private to you and synced between your own devices',
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () async {
+          await manageLabels(context, notes.state, notice: notice);
+          update(() {});
+        },
+      ),
+      const Divider(),
       SwitchListTile(
         title: const Text('Dark appearance'),
         value: dark,

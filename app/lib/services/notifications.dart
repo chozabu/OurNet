@@ -9,10 +9,18 @@ class Notifications {
   StreamSubscription<void>? subscription;
   bool enabled = false, ready = false;
   void Function(String)? onOpen;
+
+  /// A reminder notification for a note was opened.
+  void Function(String note)? onOpenNote;
   void Function()? onCallOpen;
   void Function(String)? onError;
   Notifications(this.node);
-  Future<void> initialise() async {
+  Future<void>? _initialising;
+
+  /// Safe to call more than once; later calls wait for the first.
+  Future<void> initialise() => _initialising ??= _initialise();
+
+  Future<void> _initialise() async {
     seen.addAll(node.store.ids());
     enabled = node.store.setting('notifications') == true;
     await plugin.initialize(
@@ -35,7 +43,12 @@ class Notifications {
           onCallOpen?.call();
           return;
         }
-        if (response.payload != null) onOpen?.call(response.payload!);
+        final payload = response.payload;
+        if (payload != null && payload.startsWith('note:')) {
+          onOpenNote?.call(payload.substring(5));
+        } else if (payload != null) {
+          onOpen?.call(payload);
+        }
       },
     );
     ready = true;

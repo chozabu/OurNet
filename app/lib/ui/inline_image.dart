@@ -21,6 +21,12 @@ class InlineImage extends StatefulWidget {
   final Json payload;
   final bool online;
   final bool thumbnail;
+
+  /// Overrides for embedding in note cards and the note editor.
+  final double? height;
+  final BoxFit? fit;
+  final double radius;
+  final VoidCallback? onTap;
   const InlineImage({
     super.key,
     required this.files,
@@ -28,6 +34,10 @@ class InlineImage extends StatefulWidget {
     required this.payload,
     required this.online,
     this.thumbnail = false,
+    this.height,
+    this.fit,
+    this.radius = 12,
+    this.onTap,
   });
   @override
   State<InlineImage> createState() => _InlineImageState();
@@ -127,24 +137,30 @@ class _InlineImageState extends State<InlineImage> {
       width: widget.thumbnail ? 160 : null,
       height: widget.thumbnail
           ? null
-          : (230 * MediaQuery.devicePixelRatioOf(context)).round(),
+          : ((widget.height ?? 230) * MediaQuery.devicePixelRatioOf(context))
+                .round(),
       allowUpscaling: false,
     );
     return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(widget.radius),
       child: SizedBox(
         width: widget.thumbnail ? 64 : double.infinity,
-        height: widget.thumbnail ? 64 : 230,
+        height: widget.thumbnail ? 64 : widget.height ?? 230,
         child: ColoredBox(
           color: Theme.of(context).colorScheme.surfaceContainerHighest,
           child: Image(
             image: image,
-            fit: widget.thumbnail ? BoxFit.cover : BoxFit.contain,
+            fit:
+                widget.fit ??
+                (widget.thumbnail ? BoxFit.cover : BoxFit.contain),
             semanticLabel: widget.payload['name'],
             gaplessPlayback: true,
             frameBuilder: (context, child, frame, synchronous) =>
                 frame != null || synchronous
-                ? InkWell(onTap: () => openOriginal(provider), child: child)
+                ? InkWell(
+                    onTap: widget.onTap ?? () => openOriginal(provider),
+                    child: child,
+                  )
                 : spinner(),
             errorBuilder: (context, error, _) {
               final unavailable = error is ThumbnailUnavailable;

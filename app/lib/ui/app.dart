@@ -35,6 +35,14 @@ import 'note_colors.dart';
 import 'package:animations/animations.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import '../services/note_widgets.dart';
+import '../services/reminders.dart';
+import '../services/speech.dart';
+import 'drawing.dart';
+import 'note_markup.dart';
+import 'note_organise.dart';
+import 'speech_settings.dart';
+import 'voice_recorder.dart';
+import 'package:image_picker/image_picker.dart';
 
 part 'home.dart';
 part 'everyday.dart';
@@ -74,6 +82,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   ShareInbox? shareInbox;
   late final Notes notes;
   NoteWidgets? noteWidgets;
+  late final Speech speech;
+  NoteReminders? reminders;
   bool savingNote = false;
   Future<List<DriveEntry>>? driveView;
   String? driveFolder;
@@ -101,6 +111,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
 
   /// Optimistic list state shown before summaries catch up.
   final hiddenNotes = <String>{};
+  final selectedNotes = <String>{};
+  final noteObjects = <String, SignedObject?>{};
+  final notesSearchFocus = FocusNode();
   final noteChecks = <String, Map<String, bool>>{};
   final roomChecks = <String, bool>{};
   String fileQuery = '';
@@ -202,6 +215,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     accent = node.store.setting('accent') as int? ?? 0xff137d72;
     network = Network(node)..addListener(refresh);
     files = Files(node, network);
+    speech = Speech(notes, files)..addListener(refresh);
     everydaySync = EverydaySync(
       network,
       refresh,
@@ -256,7 +270,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       }
       WidgetsBinding.instance.addObserver(this);
       if (Platform.isAndroid) {
-        noteWidgets = NoteWidgets(notes, (id, checklist) async {
+        noteWidgets = NoteWidgets(notes, (id, mode) async {
           if (!mounted) return;
           update(() {
             tab = 9;
@@ -266,8 +280,13 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
             notice('This note is unavailable for this profile.');
             return;
           }
+          if (!mounted) return;
+          if (mode == 'voice') {
+            await captureVoice();
+            return;
+          }
           // New notes are created once something is written.
-          if (mounted) await openNote(id, checklist: checklist);
+          await openNote(id, checklist: mode == 'checklist');
         }, notice);
         unawaited(noteWidgets!.start());
         shareInbox = ShareInbox(
@@ -283,6 +302,25 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         );
         unawaited(shareInbox!.start());
       }
+      unawaited(
+        speech.start().catchError(
+          (Object e) => notice('Voice transcription unavailable: $e'),
+        ),
+      );
+      reminders = NoteReminders(notes, notifications);
+      notifications.onOpenNote = (id) {
+        if (!mounted) return;
+        update(() {
+          tab = 9;
+          activeRoom = null;
+        });
+        unawaited(openNote(id));
+      };
+      unawaited(
+        reminders!.start().catchError(
+          (Object e) => notice('Reminders unavailable: $e'),
+        ),
+      );
       unawaited(
         calls.initialise().catchError(
           (Object e) => notice('Calls unavailable: $e'),
@@ -470,6 +508,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     everydaySync.close();
     shareInbox?.close();
     noteWidgets?.close();
+    reminders?.close();
+    speech
+      ..removeListener(refresh)
+      ..close();
+    notesSearchFocus.dispose();
     network.removeListener(refresh);
     calls.removeListener(refresh);
     if (widget.enablePlatform) unawaited(calls.close());

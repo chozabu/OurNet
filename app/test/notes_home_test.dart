@@ -22,7 +22,7 @@ void main() {
   });
 
   testWidgets(
-    'notes grid shows pinned, coloured and list cards, searches and swipes',
+    'notes grid shows pinned, coloured and list cards, searches and archives',
     (tester) async {
       tester.view.physicalSize = const Size(1200, 900);
       tester.view.devicePixelRatio = 1;
@@ -44,7 +44,7 @@ void main() {
         true,
         [],
       );
-      notes.pin(groceries.id, true);
+      await tester.runAsync(() => notes.pin(groceries.id, true));
       final trip = await notes.create(
         title: 'Weekend trip',
         text: 'Leave Friday after work.\nBook the cabin and pack boots.',
@@ -114,12 +114,13 @@ void main() {
         const Offset(-500, 0),
       );
       await settled(tester);
+      // Swiping archives, as in Keep; the note stays in Archive.
       expect(find.text('Door code is on the fridge'), findsNothing);
-      expect(find.text('Note removed'), findsOneWidget);
-      expect(
-        (await notes.summaries()).map((s) => s.data['body']),
-        isNot(contains('Door code is on the fridge')),
+      expect(find.text('Note archived'), findsOneWidget);
+      final door = (await notes.summaries()).firstWhere(
+        (s) => s.data['body'] == 'Door code is on the fridge',
       );
+      expect(notes.state.archived(door.data['entry']), true);
       await tester.tap(find.text('Undo'));
       await settled(tester);
       expect(find.text('Door code is on the fridge'), findsOneWidget);

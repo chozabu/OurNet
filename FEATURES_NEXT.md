@@ -2,6 +2,11 @@
 
 Implemented in September 2026.
 
+15 September: [Voice notes and Keep parity](NOTES_KEEP.md): recordings with
+on-device transcription (also from the widgets), photos, drawings, archive,
+labels, reminders, nested lists, formatting, undo/redo, selection, rearranging
+and forward-compatible note fields.
+
 14 September: [Individual shared notes and Android widgets](NOTES_WIDGETS.md)
 add a continuing note identity, field-level checklist operations, recoverable
 text branches, collaborator controls, native snapshots and an offline tap outbox.

@@ -42,6 +42,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(engine)
         WidgetStore.attach(applicationContext, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/widgets"))
         WidgetStore.receiveLaunch(applicationContext, intent)
+        SystemSpeech.attach(applicationContext, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/speech"))
         channel = MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/share")
         channel!!.setMethodCallHandler { call, result ->
             when (call.method) {

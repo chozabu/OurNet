@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:ournet_core/ournet_core.dart';
 import '../ui/note_colors.dart';
+import '../ui/note_markup.dart';
+import '../ui/voice_recorder.dart' show formatDuration;
 import 'coalesced_task.dart';
 import 'session.dart';
 
@@ -9,7 +11,9 @@ import 'session.dart';
 /// operations. A checkbox action carries observed parents and membership epoch.
 class NoteWidgets {
   final Notes notes;
-  final Future<void> Function(String?, bool) open;
+
+  /// Opens a note, or a new `text`, `checklist` or `voice` note when null.
+  final Future<void> Function(String? id, String mode) open;
   final void Function(String) notice;
   final MethodChannel channel;
   late final CoalescedTask task;
@@ -132,9 +136,14 @@ class NoteWidgets {
       // Claim before navigation to avoid duplicate routes on activity recreation.
       await channel.invokeMethod<void>('claim', {'id': launch['id']});
       unawaited(
-        open(launch['note'], launch['checklist'] == true).catchError((
-          Object e,
-        ) {
+        open(
+          launch['note'],
+          launch['voice'] == true
+              ? 'voice'
+              : launch['checklist'] == true
+              ? 'checklist'
+              : 'text',
+        ).catchError((Object e) {
           notice('Could not open the note: $e');
         }),
       );
@@ -149,19 +158,43 @@ class NoteWidgets {
     }
 
     int updated(EverydayItem n) => n.data['updated'] as int? ?? 0;
-    final ordered = catalog.where((n) => n.data['deleted'] != true).toList()
-      ..sort((a, b) {
-        final pinned = (notes.pinned(b.data['entry']) ? 1 : 0).compareTo(
-          notes.pinned(a.data['entry']) ? 1 : 0,
-        );
-        return pinned != 0 ? pinned : updated(b).compareTo(updated(a));
-      });
+    final ordered =
+        catalog
+            .where(
+              (n) =>
+                  n.data['deleted'] != true &&
+                  !notes.state.archived(n.data['entry']),
+            )
+            .toList()
+          ..sort((a, b) {
+            final pinned = (notes.pinned(b.data['entry']) ? 1 : 0).compareTo(
+              notes.pinned(a.data['entry']) ? 1 : 0,
+            );
+            return pinned != 0 ? pinned : updated(b).compareTo(updated(a));
+          });
     return [
       for (final n in ordered.take(40))
         {
           'id': n.data['entry'],
           'title': bounded(n.data['title'], 100),
-          'text': bounded(n.data['body'], 400),
+          'text': bounded(() {
+            final body = n.data['format'] == 'markup'
+                ? NoteMarkup.plain('${n.data['body'] ?? ''}')
+                : '${n.data['body'] ?? ''}';
+            return body.trim().isEmpty ? n.data['transcript'] : body;
+          }(), 400),
+          'voice':
+              [
+                for (final f in (n.data['files'] as List? ?? const []))
+                  if (f['kind'] == 'audio')
+                    formatDuration(f['duration'] as int? ?? 0),
+              ].firstOrNull ??
+              '',
+          'pictures': [
+            for (final f in (n.data['files'] as List? ?? const []))
+              if (f['kind'] == 'image' || f['kind'] == 'drawing') f,
+          ].length,
+          'reminder': notes.state.reminder(n.data['entry']) != null,
           'color': noteTints[n.data['color']]?.$1 ?? 0xffffffff,
           'pinned': notes.pinned(n.data['entry']),
           'shared': (n.data['members'] as int? ?? 1) > 1,

@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:math';
+import 'dart:typed_data';
 import 'everyday.dart';
+import 'note_state.dart';
 import 'model.dart';
 import 'node.dart';
 
@@ -30,6 +33,7 @@ class NoteDocument {
               ?.data['value']
           as String? ??
       'Note';
+
   /// The written title, empty when none was given (lists fall back to 'Note').
   String get rawTitle => (value('title') as String?) ?? '';
   String get text => (value('text') as String?) ?? '';
@@ -40,15 +44,70 @@ class NoteDocument {
       rawTitle,
       text,
       ...checks.map(itemText),
+      ...files.map(transcript),
     ].expand((v) => v.split('\n')).map((v) => v.trim());
     final first = lines.where((v) => v.isNotEmpty).firstOrNull ?? '';
     return first.isEmpty
-        ? (checks.isEmpty ? 'Note' : 'List')
+        ? (checks.isNotEmpty
+              ? 'List'
+              : files.any((f) => fileMeta(f)['kind'] == 'audio')
+              ? 'Voice note'
+              : 'Note')
         : first.substring(0, first.length.clamp(0, 100));
   }
 
   /// A shared colour name from [noteColors]; null or 'default' is uncoloured.
   String? get color => value('color') as String?;
+
+  /// A shared background pattern name; null or 'none' has no pattern.
+  String? get background => value('background') as String?;
+
+  /// 'markup' when the body uses lightweight formatting (see `NoteMarkup`).
+  String get format => (value('format') as String?) ?? 'plain';
+
+  /// Original creation time, which an import may set; otherwise the note's.
+  int get created => (value('created') as int?) ?? room.object.created;
+
+  /// Nesting level of a checklist item: 0, or 1 under the previous item.
+  int indent(String id) => (value('check:$id:indent') as int?) ?? 0;
+
+  /// Live attachments (audio, images, drawings) in display order.
+  late final List<String> files = () {
+    final first = <String, int>{};
+    for (final op in history) {
+      final field = op.data['field'] as String;
+      if (!field.startsWith('file:') || !field.endsWith(':meta')) continue;
+      final id = field.split(':')[1];
+      final clock = op.data['clock'] as int;
+      if (clock < (first[id] ?? clock + 1)) first[id] = clock;
+    }
+    return heads.keys
+        .where((k) => k.startsWith('file:') && k.endsWith(':meta'))
+        .map((k) => k.split(':')[1])
+        .where((id) => value('file:$id:deleted') != true)
+        .toList()
+      ..sort((a, b) {
+        final byOrder = (value('file:$a:order') as String? ?? '').compareTo(
+          value('file:$b:order') as String? ?? '',
+        );
+        if (byOrder != 0) return byOrder;
+        final byClock = (first[a] ?? 0).compareTo(first[b] ?? 0);
+        return byClock != 0 ? byClock : a.compareTo(b);
+      });
+  }();
+
+  /// The signed operation holding an attachment's encrypted chunks.
+  EverydayItem? file(String id) => heads['file:$id:meta']?.firstOrNull;
+
+  /// `kind` (audio, image, drawing), `mime`, and kind-specific details such as
+  /// `duration` in milliseconds or `width`/`height` in pixels.
+  Json fileMeta(String id) =>
+      (value('file:$id:meta') as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// A drawing's editable strokes, stored as a separate encrypted file.
+  EverydayItem? strokes(String id) => heads['file:$id:strokes']?.firstOrNull;
+  String transcript(String id) =>
+      (value('file:$id:transcript') as String?) ?? '';
 
   /// Newest locally accepted edit time, for most-recently-edited ordering.
   int get updated => history.fold(
@@ -69,6 +128,7 @@ class NoteDocument {
 
   List<String> parents(String field) =>
       (heads[field] ?? []).map((r) => r.object.id).toList();
+
   /// Live items in display order: an explicit order key, then (for items
   /// written before ordering existed) first-write clock and item ID.
   late final List<String> checks = () {
@@ -94,7 +154,10 @@ class NoteDocument {
   }();
   bool get hasConflicts => heads.entries.any(
     (e) =>
-        (e.key == 'text' || e.key == 'title' || e.key.endsWith(':text')) &&
+        (e.key == 'text' ||
+            e.key == 'title' ||
+            e.key.endsWith(':text') ||
+            e.key.endsWith(':transcript')) &&
         e.value.map((r) => r.data['value']).toSet().length > 1,
   );
 }
@@ -165,6 +228,10 @@ typedef NoteChange = ({String field, Object value, List<String> parents});
 class Notes {
   final Node node;
   Notes(this.node);
+
+  /// Pins, archive, labels, reminders and manual order: personal, synced
+  /// between this person's own devices, never visible to collaborators.
+  late final state = NoteState(node);
   final _rooms = <String, EverydayItem>{};
   final _cache = LinkedHashMap<String, NoteDocument>();
   final _summaries = <String, EverydayItem>{};
@@ -204,6 +271,7 @@ class Notes {
       _summaries.clear();
       _policy = policy;
     }
+    await state.refresh();
     final slice = TimeSlice();
     while (true) {
       final page = node.store.insertedAfter(_cursor, [
@@ -259,6 +327,10 @@ class Notes {
                   .join('\n')
             : note.text;
         final unchecked = note.checks.where((c) => !note.done(c)).toList();
+        final transcripts = note.files
+            .map(note.transcript)
+            .where((t) => t.isNotEmpty)
+            .join('\n');
         String bounded(String value, int length) =>
             value.substring(0, value.length.clamp(0, length));
         summary = EverydayItem(note.room.object, {
@@ -281,6 +353,7 @@ class Notes {
                 'id': id,
                 'text': bounded(note.itemText(id), 160),
                 'done': false,
+                'indent': note.indent(id),
                 'parents': note.parents('check:$id:done'),
               },
           ],
@@ -288,10 +361,37 @@ class Notes {
           'checkedCount': note.checks.length - unchecked.length,
           'deleted': note.deleted || !note.available,
           'removed': note.deleted,
+          if (note.deleted)
+            ...() {
+              final removal = note.heads['deleted']!.firstWhere(
+                (r) => r.data['value'] == true,
+              );
+              return {
+                'removal': removal.object.id,
+                'removedAt': removal.object.created,
+              };
+            }(),
           'deletedParents': note.parents('deleted'),
           'available': note.available,
           'members': note.members.length,
           'conflicts': note.hasConflicts,
+          'background': note.background ?? 'none',
+          'format': note.format,
+          'created': note.created,
+          'transcript': bounded(transcripts, 512),
+          // Attachment references only; cards read stored previews by object.
+          'files': [
+            for (final f in note.files.take(6))
+              {
+                // Chunk references and key, as a file payload for previews.
+                ..._fileFields(note.file(f)!.data),
+                'id': f,
+                'object': note.file(f)!.object.id,
+                'kind': note.fileMeta(f)['kind'],
+                'duration': note.fileMeta(f)['duration'],
+              },
+          ],
+          'fileCount': note.files.length,
         });
         _summaries[id] = summary;
       }
@@ -415,6 +515,9 @@ class Notes {
     List<String> items = const [],
     String? color,
     String? stableId,
+    String? background,
+    String? format,
+    int? created,
   }) => _serial(() async {
     if (text.length > 16384 ||
         title.length > 100 ||
@@ -441,6 +544,11 @@ class Notes {
     await _publish(room, 'text', text, [], 1);
     if (color != null && color != 'default')
       await _publish(room, 'color', color, [], 1);
+    if (background != null && background != 'none')
+      await _publish(room, 'background', background, [], 1);
+    if (format != null && format != 'plain')
+      await _publish(room, 'format', format, [], 1);
+    if (created != null) await _publish(room, 'created', created, [], 1);
     final written = items.isEmpty && checklist ? [''] : items;
     final keys = orderSequence(written.length);
     for (var i = 0; i < written.length; i++) {
@@ -460,10 +568,12 @@ class Notes {
     String? request,
     bool checkpoint = false,
     List<String>? audience,
+    Json extra = const {},
   }) async {
     return node.publish(
       'note_op',
       {
+        ...extra,
         'epoch': room.data['epoch'],
         'field': field,
         'value': value,
@@ -592,6 +702,7 @@ class Notes {
             head.data['clock'],
             checkpoint: true,
             audience: members,
+            extra: _fileFields(head.data),
           );
         }
       },
@@ -619,10 +730,165 @@ class Notes {
     );
   });
 
-  void pin(String id, bool value) {
-    node.store.set('notePin/$id', value);
-    node.notify();
+  Future<void> pin(String id, bool value) => state.set('pin', id, value);
+  bool pinned(String id) => state.pinned(id);
+
+  static const chunkSize = 128 * 1024;
+  static const maxFileSize = 64 * 1024 * 1024;
+  static const maxFiles = 32;
+
+  /// Encrypts [source] into content-addressed chunks and publishes it as an
+  /// attachment register (`file:<id>:meta`, or `file:<id>:strokes` with
+  /// [field]). Replacing an existing attachment passes its [parents].
+  /// Returns the attachment ID.
+  Future<String> attach(
+    String id,
+    String epoch,
+    Stream<List<int>> source, {
+    required String name,
+    required Json meta,
+    String? fileId,
+    String field = 'meta',
+    List<String> parents = const [],
+  }) async {
+    final key = List<int>.generate(32, (_) => Random.secure().nextInt(256));
+    final chunks = <String>[];
+    var pending = BytesBuilder(copy: false);
+    var size = 0;
+    await for (final part in source) {
+      size += part.length;
+      if (size > maxFileSize) {
+        throw StateError('Attachments are up to 64 MiB.');
+      }
+      pending.add(part);
+      while (pending.length >= chunkSize) {
+        final all = pending.takeBytes();
+        chunks.add(
+          await node.blobs.encode(
+            Uint8List.sublistView(all, 0, chunkSize),
+            key,
+          ),
+        );
+        pending = BytesBuilder(copy: false)
+          ..add(Uint8List.sublistView(all, chunkSize));
+      }
+    }
+    if (pending.length > 0) {
+      chunks.add(await node.blobs.encode(pending.takeBytes(), key));
+    }
+    final file = fileId ?? randomId();
+    var safeName = name.replaceAll(RegExp(r'[/\\\x00-\x1f]'), '_');
+    safeName = safeName.substring(0, safeName.length.clamp(0, 255));
+    await _serial(() async {
+      final note = await _writable(id, epoch);
+      final isNew = !note.heads.containsKey('file:$file:meta');
+      if (isNew && field == 'meta' && note.files.length >= maxFiles) {
+        throw StateError('A note holds up to $maxFiles attachments.');
+      }
+      final clock = _clock(note) + 1;
+      await _publish(
+        note.room,
+        'file:$file:$field',
+        meta,
+        parents,
+        clock,
+        extra: {
+          'chunks': chunks,
+          'name': safeName.trim().isEmpty ? 'Attachment' : safeName,
+          'size': size,
+          'key': b64(key),
+        },
+      );
+      if (isNew && field == 'meta') {
+        final last = note.files.isEmpty
+            ? null
+            : note.value('file:${note.files.last}:order') as String?;
+        await _publish(
+          note.room,
+          'file:$file:order',
+          orderBetween(last, null),
+          [],
+          clock,
+        );
+      }
+    });
+    return file;
   }
 
-  bool pinned(String id) => node.store.setting('notePin/$id') == true;
+  /// An independent copy with this person's labels. Attachments reuse their
+  /// encrypted chunks. Collaborators and personal pins are not copied.
+  Future<NoteDocument> copy(String id) async {
+    final source = await get(id, includeUnavailable: true);
+    if (source == null) throw StateError('This note is unavailable.');
+    final copied = await create(
+      title: source.rawTitle,
+      text: source.text,
+      items: [for (final c in source.checks) source.itemText(c)],
+      color: source.color,
+      background: source.background,
+      format: source.format,
+    );
+    final changes = <NoteChange>[
+      for (final (i, c) in copied.checks.indexed) ...[
+        if (source.done(source.checks[i]))
+          (field: 'check:$c:done', value: true, parents: const <String>[]),
+        if (source.indent(source.checks[i]) > 0)
+          (
+            field: 'check:$c:indent',
+            value: source.indent(source.checks[i]),
+            parents: const <String>[],
+          ),
+      ],
+    ];
+    if (changes.isNotEmpty) await apply(copied.id, copied.epoch, changes);
+    if (source.files.isNotEmpty) {
+      await _serial(() async {
+        final note = await _writable(copied.id, copied.epoch);
+        final clock = _clock(note) + 1;
+        for (final f in source.files) {
+          final file = randomId();
+          for (final field in ['meta', 'strokes', 'transcript', 'order']) {
+            final head = source.heads['file:$f:$field']?.firstOrNull;
+            if (head == null) continue;
+            await _publish(
+              note.room,
+              'file:$file:$field',
+              head.data['value'],
+              [],
+              clock,
+              extra: _fileFields(head.data),
+            );
+          }
+        }
+      });
+    }
+    final labels = state.labelsOf(id);
+    if (labels.isNotEmpty) await state.set('labels', copied.id, labels);
+    return (await get(copied.id))!;
+  }
+
+  Future<NoteDocument> _writable(String id, String epoch) async {
+    final note = await get(id);
+    if (note == null || !note.available) {
+      throw StateError('This note is unavailable.');
+    }
+    if (note.epoch != epoch) {
+      throw StateError('Collaborators changed. Reopen the note and try again.');
+    }
+    if (note.deleted) {
+      throw StateError('This note was removed. Restore it first.');
+    }
+    await Everyday(node).prepare(note.room);
+    return note;
+  }
+
+  int _clock(NoteDocument note) => note.history.fold(
+    0,
+    (max, r) => (r.data['clock'] as int) > max ? r.data['clock'] as int : max,
+  );
+
+  static Json _fileFields(Json data) => {
+    for (final key in ['chunks', 'name', 'size', 'key'])
+      if (data[key] != null) key: data[key],
+  };
 }
