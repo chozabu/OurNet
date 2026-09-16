@@ -470,13 +470,63 @@ class FolderSync {
       final mappedPaths = {
         for (final value in state.values) value['path'] as String,
       };
+      // A folder deletion concurrent with an added/edited descendant is a
+      // folder conflict, not permission to hide or remove the descendant.
+      final baselineByPath = {
+        for (final item in state.values) item['path'] as String: item,
+      };
+      final dirtyParents = <String>{};
+      for (final item in local.entries) {
+        final liveRemoteChild =
+            remote[item.key]?.heads.any((v) => !v.deleted) ?? false;
+        if (baselineByPath[item.key]?['token'] == item.value.token &&
+            !liveRemoteChild)
+          continue;
+        var parent = item.key;
+        while (parent.contains('/')) {
+          parent = parent.substring(0, parent.lastIndexOf('/'));
+          dirtyParents.add(parent);
+        }
+      }
+      for (final path in dirtyParents) {
+        final entry = remote[path];
+        if (entry == null ||
+            entry.conflicted ||
+            !entry.current.deleted ||
+            !entry.current.isFolder ||
+            local[path]?.directory != true)
+          continue;
+        final base = state[entry.current.entry];
+        if (base == null) continue;
+        final object = await Drive(node).write(
+          {...entry.current.data, 'deleted': false},
+          parents: [base['revision'] as String],
+        );
+        final version = DriveVersion(object, (await node.content(object))!);
+        state[version.entry] = {
+          ...base,
+          'revision': version.data['revision'],
+          'token': local[path]!.token,
+        };
+        persist(version.entry);
+        remote[path] = DriveEntry(entry.history, [version, ...entry.heads]);
+      }
       // Local additions are processed parent-first, including empty directories.
       final paths = {...local.keys, ...remote.keys}.toList()
         ..sort((a, b) {
           final d = a.split('/').length.compareTo(b.split('/').length);
           return d == 0 ? a.compareTo(b) : d;
         });
-      final folderIds = <String, String>{'': root};
+      final folderIds = <String, String>{
+        '': root,
+        // A concurrent new child follows its parent's stable identity even
+        // when that parent has moved outside this device's connected subtree.
+        for (final item in state.entries)
+          if (item.value['directory'] == true &&
+              byId[item.key]?.current.isFolder == true &&
+              byId[item.key]?.current.deleted == false)
+            item.value['path'] as String: item.key,
+      };
       for (final path in paths) {
         if (_closed) return;
         try {

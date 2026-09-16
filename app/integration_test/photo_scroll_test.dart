@@ -252,7 +252,11 @@ void main() {
           (await node.content(await Drive(node).folder('Connected')))!['entry']
               as String;
       folderSync = FolderSync(files, DiskFolderBackend.new);
-      await folderSync.connect(driveRoot, connected.path);
+      // Resolve Android's app-cache alias for this disk-backend fixture.
+      await folderSync.connect(
+        driveRoot,
+        await connected.resolveSymbolicLinks(),
+      );
       await folderSync.sync();
       debugPrint('photo scroll: launching');
       await launch();

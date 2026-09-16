@@ -9,7 +9,7 @@ database files, and speaks a new protocol incompatible with the old app.
 
 ## Windows
 
-From PowerShell in `D:\git\OurNetAS`:
+From PowerShell in the repository root:
 
 ```powershell
 .\tool\run.ps1 -Profile alice

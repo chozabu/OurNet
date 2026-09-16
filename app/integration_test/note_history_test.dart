@@ -136,7 +136,12 @@ void main() {
         DiskFolderBackend.new,
         automatic: false,
       );
-      await folderSync.connect(driveRoot, localFolder.path);
+      // Android's app cache path may include the /data/user/0 alias. Resolve
+      // this fixture path before using the desktop backend's no-links policy.
+      await folderSync.connect(
+        driveRoot,
+        await localFolder.resolveSymbolicLinks(),
+      );
       final camera = PhaseRecorder(budget)..start();
       await File(
         '${localFolder.path}/added.txt',

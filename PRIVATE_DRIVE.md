@@ -103,7 +103,8 @@ not an independent backup.
 
 `transport/test/folder_sync_test.dart` exercises paired-device additions,
 deletions, conflicts, resolution, nonempty destinations, disk-store restarts,
-missing roots, disconnects and compare-before-write protection. Existing endpoint
+missing roots, disconnects, rename/move races, deleted parents with new children,
+and compare-before-write protection. Existing endpoint
 transfer tests cover encrypted chunk delivery. `core/test/drive_test.dart` checks
 that repeated drive reads do not revisit retained revisions.
 
@@ -111,4 +112,17 @@ The note-history and photo-scroll profile journeys now include an active folder
 connection. `integration_test/folder_provider_test.dart` is an interactive Android
 SAF acceptance test: run it in the profile application with `SAF_PICKER_TEST=true`
 and choose an empty disposable folder. It imports a phone file, replaces it,
-applies a drive deletion, creates nested entries, and removes only its own files.
+applies a drive deletion, renames and moves nested entries, and removes only its
+own files.
+
+Verified on 2026-09-16: the full Windows check (package tests, analysis and all
+four profile performance journeys), all 14 folder-sync regressions, and the
+Android document-provider acceptance test on a physical Pixel 8 Pro passed.
+The Pixel history/editor profile journey also passed with folder import active:
+camera-return frame-stage p95 3.751 ms, p99 10.856 ms, worst sampled event-loop
+delay 22.658 ms (16.67 ms frame and 100 ms delay budgets). The first Android
+timing attempt stopped on a test-cache symlink; both disk-backed performance
+fixtures now resolve their temporary directory paths. That incomplete attempt
+also recorded initial-sync raster p95 16.825 ms, slightly above the frame budget;
+the completed rerun recorded 2.033 ms without changing timing thresholds.
+Android photo-scroll timing and macOS/Linux platform validation were not run.

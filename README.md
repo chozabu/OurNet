@@ -3,7 +3,7 @@
 A friend-to-friend application with persistent person identities, independent
 devices, selective encrypted sharing, and signed records of origin and handoff.
 This is the second prototype; it intentionally does not interoperate with the
-old Rust prototype in `D:\git\ournetcc`.
+old Rust prototype (`ournetcc`).
 
 **Start here: [TRY_IT.md](TRY_IT.md).** Windows and Android debug builds are
 available locally. The current validation and remaining work are recorded in

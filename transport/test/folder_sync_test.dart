@@ -349,6 +349,64 @@ void main() {
       );
     },
   );
+  test(
+    'directory deletion versus a new child preserves a visible folder conflict',
+    () async {
+      await Directory('${desktop.path}/photos').create();
+      await File('${desktop.path}/photos/old.txt').writeAsString('old');
+      await settle();
+      await File('${desktop.path}/photos/old.txt').delete();
+      await Directory('${desktop.path}/photos').delete();
+      await File(
+        '${phone.path}/photos/new.txt',
+      ).writeAsString('new phone file');
+      await left.sync();
+      await right.sync(); // Both devices publish while disconnected.
+      await exchange();
+      await right.sync();
+      await exchange();
+      final folder = (await Drive(
+        a,
+      ).entries()).singleWhere((e) => e.current.data['name'] == 'photos');
+      expect(folder.conflicted, true);
+      expect(
+        await File('${phone.path}/photos/new.txt').readAsString(),
+        'new phone file',
+      );
+      await Drive(a).revise(folder, {'deleted': false});
+      await settle();
+      expect(
+        await File('${desktop.path}/photos/new.txt').readAsString(),
+        'new phone file',
+      );
+    },
+  );
+  test(
+    'a new child follows a folder moved outside the connected subtree',
+    () async {
+      await Directory('${desktop.path}/photos').create();
+      await File('${desktop.path}/photos/old.txt').writeAsString('old');
+      await settle();
+      final folder = (await Drive(
+        a,
+      ).entries()).singleWhere((e) => e.current.data['name'] == 'photos');
+      await Drive(a).revise(folder, {'folder': null});
+      await File(
+        '${phone.path}/photos/new.txt',
+      ).writeAsString('concurrent new child');
+      await exchange();
+      await settle();
+      final child = (await Drive(
+        a,
+      ).entries()).singleWhere((e) => e.current.data['name'] == 'new.txt');
+      expect(child.current.data['folder'], folder.current.entry);
+      expect(child.current.deleted, false);
+      final output = File('${temp.path}/new-child-export');
+      await Files(a, PeerNetwork(a)).save(child.current.object, output.path);
+      expect(await output.readAsString(), 'concurrent new child');
+      expect(await Directory('${phone.path}/photos').exists(), false);
+    },
+  );
   test('backend compare-before-write preserves a newer local edit', () async {
     final file = File('${desktop.path}/race.txt');
     await file.writeAsString('before');

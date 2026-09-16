@@ -1,6 +1,6 @@
 # Previous prototype review
 
-Reviewed: `D:/git/ournetcc`, 9 September 2026.
+Reviewed: the `ournetcc` Rust prototype, 9 September 2026.
 
 ## Recommendation
 
