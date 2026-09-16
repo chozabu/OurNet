@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:isolate';
+import 'package:cryptography/cryptography.dart';
 
 import 'model.dart';
 import 'store.dart';
@@ -16,9 +17,14 @@ class Node {
   final Set<String> subscriptions = {};
   final Set<String> blocked = {};
   final Set<String> revoked = {};
+  Future<void> _publications = Future.value();
+  int _pendingPublications = 0;
+  bool _closing = false;
+  Future<void>? _closeFuture;
   static const maxObjects = 10000;
   static const maxObjectBytes = 256 * 1024;
   static const maxEvidence = 128;
+  static const maxPageBytes = 1024 * 1024;
   Node(this.identity, this.store, {int Function()? clock})
     : now = clock ?? (() => DateTime.now().millisecondsSinceEpoch) {
     for (final j in (store.setting('contacts') as List? ?? [])) {
@@ -30,6 +36,11 @@ class Node {
     );
     blocked.addAll((store.setting('blocked') as List? ?? []).cast<String>());
     revoked.addAll((store.setting('revoked') as List? ?? []).cast<String>());
+    // Profiles that applied revocations before withdrawal existed.
+    if (canonical(store.setting('revokedWithdrawn')) !=
+        canonical(revoked.toList()..sort())) {
+      _withdrawRevokedEvidence();
+    }
   }
   String get person => identity.person;
   void notify() {
@@ -78,6 +89,53 @@ class Node {
     List<String> audience = const [],
     List<String> via = const [],
     int expires = 0,
+  }) {
+    if (_closing || _pendingPublications >= 32) {
+      return Future.error(
+        StateError(
+          _closing ? 'Node is closing' : 'Too many pending publications',
+        ),
+      );
+    }
+    if (store.path == null) {
+      return _publish(
+        kind,
+        content,
+        space: space,
+        audience: audience,
+        via: via,
+        expires: expires,
+      );
+    }
+    _pendingPublications++;
+    final result = _publications.then(
+      (_) => _publish(
+        kind,
+        content,
+        space: space,
+        audience: audience,
+        via: via,
+        expires: expires,
+      ),
+    );
+    _publications = result.then<void>(
+      (_) {
+        _pendingPublications--;
+      },
+      onError: (Object _, StackTrace __) {
+        _pendingPublications--;
+      },
+    );
+    return result;
+  }
+
+  Future<SignedObject> _publish(
+    String kind,
+    Json content, {
+    required String space,
+    required List<String> audience,
+    required List<String> via,
+    required int expires,
   }) async {
     if (!validContent(kind, content)) throw StateError('Invalid $kind content');
     if (revoked.contains(identity.device))
@@ -102,16 +160,20 @@ class Node {
       'expires': expires,
       'audience': audience.isEmpty ? <String>[] : (recipients.toList()..sort()),
       'via': via.toSet().toList()..sort(),
-      'payload': audience.isEmpty ? content : await encryptFor(content, certs),
+      'payload': content,
     };
-    final object = SignedObject(
+    final object = await _preparePublication(
       data,
-      await sign(data, identity.deviceKey),
+      certs,
+      await identity.deviceKey.extract(),
       identity.certificate,
+      background: store.path != null,
     );
-    if (!await object.valid()) throw StateError('Invalid object fields');
-    if (bytes(object.toJson()).length > maxObjectBytes ||
-        store.count >= maxObjects) {
+    // Policy may change while cryptography runs on the worker.
+    if (revoked.contains(identity.device)) {
+      throw StateError('This device has been revoked');
+    }
+    if (store.count >= maxObjects) {
       throw StateError('Local object quota reached');
     }
     store.put(object);
@@ -193,35 +255,75 @@ class Node {
         proof['person'] != object.author ||
         !await verify(proof, p['signature'], object.author))
       throw StateError('Invalid revocation');
-    revoked.add(proof['device']);
+    if (!revoked.add(proof['device'])) return;
     store.set('revoked', revoked.toList()..sort());
+    _withdrawRevokedEvidence();
+  }
+
+  /// Evidence signed by a revoked device, and handoffs or receipts that
+  /// depend on it, can no longer be proven. Peers reject it, so it is removed
+  /// rather than offered, and inventory digests stay comparable.
+  void _withdrawRevokedEvidence() {
+    if (revoked.isNotEmpty) {
+      final withdrawn = [
+        for (final id in store.objectsWithEvidenceFrom(revoked))
+          ..._withdrawn(store.evidence(id)),
+      ];
+      if (withdrawn.isNotEmpty) {
+        store.batch(() => store.removeEvidence(withdrawn));
+      }
+    }
+    store.set('revokedWithdrawn', revoked.toList()..sort());
+  }
+
+  /// IDs among [records] signed by a revoked device or depending on one.
+  Set<String> _withdrawn(Iterable<Evidence> records) {
+    final withdrawn = {
+      for (final e in records)
+        if (revoked.contains(e.certificate.device)) e.id,
+    };
+    if (withdrawn.isEmpty) return withdrawn;
+    for (var changed = true; changed;) {
+      changed = false;
+      for (final e in records) {
+        if (withdrawn.contains(e.id)) continue;
+        final depends = e.data['domain'] == 'ournet/receipt/2'
+            ? withdrawn.contains(e.data['handoff'])
+            : (e.data['parents'] as List? ?? const []).any(withdrawn.contains);
+        if (depends) {
+          withdrawn.add(e.id);
+          changed = true;
+        }
+      }
+    }
+    return withdrawn;
   }
 
   Json inventory({String? peerDevice}) {
-    final evidence = store.evidenceIds();
     final peer = peerDevice == null ? null : contacts[peerDevice];
     return {
       'version': 2,
       'subscriptions': subscriptions.toList()..sort(),
       'have': {
-        for (final id in store.ids())
+        for (final route in store.routes)
           if (peerDevice == null ||
-              (peer != null &&
-                  canOffer(store.get(id)!, peer, {store.get(id)!.space})))
-            id: hash(evidence[id] ?? const <String>[]),
+              (peer != null && _offerable(route, peer, {route.space})))
+            route.id: store.evidenceDigest(route.id),
       },
       'revoked': revoked.toList()..sort(),
     };
   }
 
-  bool canOffer(SignedObject o, DeviceCertificate peer, Set<String> wanted) {
+  bool canOffer(SignedObject o, DeviceCertificate peer, Set<String> wanted) =>
+      _offerable(ObjectRoute.of(o), peer, wanted);
+
+  bool _offerable(ObjectRoute o, DeviceCertificate peer, Set<String> wanted) {
     if (blocked.contains(o.author) ||
-        revoked.contains(o.certificate.device) ||
+        revoked.contains(o.device) ||
         (o.expires != 0 && o.expires <= now()))
       return false;
     if (!o.isPublic)
-      return o.audience.contains(peer.person) ||
-          (o.data['via'] as List).contains(peer.person);
+      return o.audience.contains(peer.person) || o.via.contains(peer.person);
     return o.kind == 'revoke' ||
         o.kind == 'profile' ||
         wanted.contains(o.space) ||
@@ -234,6 +336,21 @@ class Node {
     identity.certificate,
   );
 
+  /// Signs evidence records together; disk profiles sign in a short-lived
+  /// isolate, as publications do, so sync pages do not stall the UI isolate.
+  Future<List<Evidence>> _makeEvidence(List<Json> records) async {
+    if (records.isEmpty) return const [];
+    final key = await identity.deviceKey.extract();
+    final certificate = identity.certificate;
+    Future<List<Evidence>> signAll() async => [
+      for (final data in records)
+        Evidence(data, await sign(data, key), certificate)..id,
+    ];
+    return store.path == null
+        ? signAll()
+        : Isolate.run(signAll, debugName: 'ournet-evidence');
+  }
+
   /// Pages reconcile evidence independently of object presence. They are
   /// bounded by count AND encoded size. Caller re-exchanges inventory to page.
   Future<List<Json>> offer(String peerDevice, Json inventory) async {
@@ -245,29 +362,27 @@ class Node {
     final have = inventory['have'] as Json;
     if (have.length > maxObjects || wanted.length > 256)
       throw StateError('Inventory too large');
-    final out = <Json>[];
-    var size = 0;
-    final evidenceIds = store.evidenceIds();
+    // Choose a page first, then sign its new handoffs together off the UI
+    // isolate. Handoffs minted for objects that miss this page are reused.
+    final page = <SignedObject>[];
+    final handoffs = <Json>[];
     final slice = TimeSlice();
-    for (final object in store.objects(limit: maxObjects)) {
-      // Each object is read and updated without an intervening yield.
+    for (final id in store.recentIds(limit: maxObjects)) {
+      if (page.length >= 32) break;
+      // Already reconciled: skip before parsing the object or its evidence.
+      if (have[id] == store.evidenceDigest(id)) continue;
       await slice.pause();
-      if (!canOffer(object, peer, wanted)) continue;
-      // Already reconciled: skip before parsing any evidence records.
-      if (have.containsKey(object.id) &&
-          hash(evidenceIds[object.id] ?? const <String>[]) == have[object.id]) {
-        continue;
-      }
-      var evidence = store.evidence(object.id);
-      final known = have[object.id];
+      final object = store.get(id);
+      if (object == null || !canOffer(object, peer, wanted)) continue;
+      final evidence = store.evidence(id);
       // Mint once per target, never on each repeated sync.
-      final existing = evidence.where(
+      final minted = evidence.any(
         (e) =>
             e.data['domain'] == 'ournet/handoff/2' &&
             e.certificate.device == identity.device &&
             e.data['to'] == peerDevice,
       );
-      if (existing.isEmpty && !have.containsKey(object.id)) {
+      if (!minted && !have.containsKey(id)) {
         final parents = evidence
             .where(
               (e) =>
@@ -278,147 +393,226 @@ class Node {
             .toList();
         if (object.author != person && parents.isEmpty) continue;
         if (evidence.length >= maxEvidence - 2) continue;
-        final handoff = await makeEvidence({
+        handoffs.add({
           'domain': 'ournet/handoff/2',
-          'object': object.id,
+          'object': id,
           'to': peerDevice,
           'parents': parents.take(1).toList(),
           'created': now(),
         });
-        store.putEvidence(handoff);
-        evidence = store.evidence(object.id);
       }
-      if (have.containsKey(object.id) &&
-          hash(evidence.map((e) => e.id).toList()..sort()) == known)
-        continue;
+      page.add(object);
+    }
+    final signed = await _makeEvidence(handoffs);
+    store.batch(() => signed.forEach(store.putEvidence));
+    final out = <Json>[];
+    // Budget the encoded list as [receive] measures it: brackets and commas.
+    var size = 2;
+    for (final object in page) {
+      await slice.pause();
       final item = <String, dynamic>{
         'object': object.toJson(),
-        'evidence': evidence.map((e) => e.toJson()).toList(),
+        'evidence': store.evidence(object.id).map((e) => e.toJson()).toList(),
       };
-      final itemSize = bytes(item).length;
-      if (out.length >= 32 || size + itemSize > 1024 * 1024) break;
+      final itemSize = bytes(item).length + (out.isEmpty ? 0 : 1);
+      if (size + itemSize > maxPageBytes) break;
       size += itemSize;
       out.add(item);
     }
     return out;
   }
 
+  /// Parses a received item once; null when it is malformed.
+  static _Received? _parse(dynamic item) {
+    try {
+      return (
+        object: SignedObject.fromJson(item['object']),
+        evidence: [
+          for (final e in item['evidence'] as List) Evidence.fromJson(e),
+        ],
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Stored records are content-addressed and were verified on arrival, so a
+  /// page only sends new objects and evidence to the verifier (null = stored).
+  Json _unverified(dynamic item, _Received? parsed) => parsed == null
+      ? const {'object': 'malformed'} // Fails verification.
+      : {
+          'object': store.get(parsed.object.id) == null ? item['object'] : null,
+          'evidence': [
+            for (final (i, e) in parsed.evidence.indexed)
+              store.hasEvidence(parsed.object.id, e.id)
+                  ? null
+                  : item['evidence'][i],
+          ],
+        };
+
   Future<int> receive(String peerDevice, List<dynamic> items) async {
     if (!allowedPeer(peerDevice)) throw StateError('Peer is not admitted');
-    if (items.length > 32 || bytes(items).length > 1024 * 1024)
+    if (items.length > 32 || bytes(items).length > maxPageBytes)
       throw StateError('Page quota exceeded');
-    var changed = 0;
     // Signature checks depend only on the received records, so the page is
     // verified in a short-lived isolate instead of blocking this one.
-    final signatures = await _verifySignatures(items);
     final slice = TimeSlice();
-    for (final (index, item) in items.indexed) {
+    final parsed = <_Received?>[];
+    final unverified = <Json>[];
+    for (final item in items) {
+      await slice.pause();
+      parsed.add(_parse(item));
+      unverified.add(_unverified(item, parsed.last));
+    }
+    final signatures = await _verifySignatures(unverified);
+    // Receipts for the page are signed together once its items are stored.
+    final receipts = <String, Json>{};
+    var changed = 0;
+    // Items are independent. A rejected item must not block the rest of the
+    // page: offers are deterministic, so the same page would return forever.
+    (Object, StackTrace)? rejected;
+    for (var index = 0; index < items.length; index++) {
       // Yield only between items; each item's checks and writes stay atomic.
       await slice.pause();
-      final o = SignedObject.fromJson(item['object']);
-      if (bytes(o.toJson()).length > maxObjectBytes || !signatures[index].$1)
-        throw StateError('Invalid object');
-      if (revoked.contains(o.certificate.device) || blocked.contains(o.author))
-        continue;
-      if (o.expires != 0 && o.expires <= now()) continue;
-      if (!o.isPublic &&
-          !o.audience.contains(person) &&
-          !(o.data['via'] as List).contains(person))
-        continue;
-      if (o.isPublic &&
-          !['profile', 'revoke'].contains(o.kind) &&
-          !subscriptions.contains(o.space) &&
-          o.author != person)
-        continue;
-      final incoming = (item['evidence'] as List)
-          .map((e) => Evidence.fromJson(e))
-          .toList();
-      final all = {
-        for (final e in store.evidence(o.id)) e.id: e,
-        for (final e in incoming) e.id: e,
-      };
-      if (all.length > maxEvidence) throw StateError('Evidence quota exceeded');
-      for (final (position, e) in incoming.indexed) {
-        if (e.objectId != o.id ||
-            !signatures[index].$2[position] ||
-            revoked.contains(e.certificate.device))
-          throw StateError('Invalid evidence');
-      }
-      final verified = <String>{};
-      bool path(Evidence e, Set<String> visiting) {
-        if (verified.contains(e.id)) return true;
-        if (!visiting.add(e.id)) return false;
-        bool ok;
-        if (e.data['domain'] == 'ournet/receipt/2') {
-          final h = all[e.data['handoff']];
-          ok =
-              h != null &&
-              h.data['domain'] == 'ournet/handoff/2' &&
-              h.data['to'] == e.certificate.device &&
-              path(h, visiting);
-        } else {
-          final parents = (e.data['parents'] as List).cast<String>();
-          ok = parents.isEmpty
-              ? e.certificate.person == o.author
-              : parents.length == 1 &&
-                    all[parents.single] != null &&
-                    all[parents.single]!.data['domain'] == 'ournet/receipt/2' &&
-                    all[parents.single]!.certificate.device ==
-                        e.certificate.device &&
-                    path(all[parents.single]!, visiting);
-        }
-        visiting.remove(e.id);
-        if (ok) verified.add(e.id);
-        return ok;
-      }
-
-      if (all.values.any((e) => !path(e, {})))
-        throw StateError('Unproven handoff chain');
-      final held = store.get(o.id) != null;
-      final handoffs = all.values
-          .where(
-            (e) =>
-                e.data['domain'] == 'ournet/handoff/2' &&
-                e.data['to'] == identity.device &&
-                e.certificate.device == peerDevice,
-          )
-          .toList();
-      if (!held && handoffs.isEmpty)
-        throw StateError('No handoff from authenticated peer');
-      if (!held && store.count >= maxObjects)
-        throw StateError('Storage quota exceeded');
-      await applyRevocation(o);
-      if (store.put(o)) changed++;
-      if (o.kind == 'read') {
-        final payload = await content(o);
-        final original = payload == null ? null : store.get(payload['object']);
-        if (original != null &&
-            original.author == person &&
-            original.audience.contains(o.author)) {
-          store.set('readBy/${original.id}', o.author);
-        }
-      }
-      for (final e in incoming) {
-        if (store.putEvidence(e)) changed++;
-      }
-      for (final h in handoffs) {
-        if (all.values.any(
-          (e) =>
-              e.data['handoff'] == h.id &&
-              e.certificate.device == identity.device,
-        ))
-          continue;
-        if (store.evidence(o.id).length >= maxEvidence) break;
-        final receipt = await makeEvidence({
-          'domain': 'ournet/receipt/2',
-          'object': o.id,
-          'handoff': h.id,
-          'created': now(),
-        });
-        if (store.putEvidence(receipt)) changed++;
+      try {
+        changed += await _receiveItem(
+          peerDevice,
+          parsed[index],
+          signatures[index],
+          receipts,
+        );
+      } catch (error, stack) {
+        rejected ??= (error, stack);
       }
     }
+    // A revocation later in the page may have withdrawn a handoff.
+    final signed = await _makeEvidence([
+      for (final r in receipts.values)
+        if (store.hasEvidence(r['object'], r['handoff'])) r,
+    ]);
+    changed += store.batch(() => signed.where(store.putEvidence).length);
     if (changed > 0) notify();
+    // Report rejection when nothing was accepted, so callers back off.
+    if (changed == 0 && rejected != null) {
+      Error.throwWithStackTrace(rejected.$1, rejected.$2);
+    }
+    return changed;
+  }
+
+  /// Checks and stores one received item, queueing receipts for its handoffs.
+  Future<int> _receiveItem(
+    String peerDevice,
+    _Received? item,
+    (bool, List<bool>) signatures,
+    Map<String, Json> receipts,
+  ) async {
+    if (item == null || !signatures.$1) throw StateError('Invalid object');
+    final (object: o, evidence: received) = item;
+    if (o.encodedLength > maxObjectBytes) throw StateError('Invalid object');
+    if (revoked.contains(o.certificate.device) || blocked.contains(o.author))
+      return 0;
+    if (o.expires != 0 && o.expires <= now()) return 0;
+    if (!o.isPublic &&
+        !o.audience.contains(person) &&
+        !(o.data['via'] as List).contains(person))
+      return 0;
+    if (o.isPublic &&
+        !['profile', 'revoke'].contains(o.kind) &&
+        !subscriptions.contains(o.space) &&
+        o.author != person)
+      return 0;
+    for (final (position, e) in received.indexed) {
+      if (e.objectId != o.id || !signatures.$2[position])
+        throw StateError('Invalid evidence');
+    }
+    // Evidence from revoked devices is ignored, not fatal: peers that have not
+    // yet learned of the revocation still hold and offer it.
+    final stored = store.evidence(o.id);
+    final withdrawn = _withdrawn([...stored, ...received]);
+    final incoming = [
+      for (final e in received)
+        if (!withdrawn.contains(e.id)) e,
+    ];
+    final all = {
+      for (final e in stored)
+        if (!withdrawn.contains(e.id)) e.id: e,
+      for (final e in incoming) e.id: e,
+    };
+    if (all.length > maxEvidence) throw StateError('Evidence quota exceeded');
+    final verified = <String>{};
+    bool path(Evidence e, Set<String> visiting) {
+      if (verified.contains(e.id)) return true;
+      if (!visiting.add(e.id)) return false;
+      bool ok;
+      if (e.data['domain'] == 'ournet/receipt/2') {
+        final h = all[e.data['handoff']];
+        ok =
+            h != null &&
+            h.data['domain'] == 'ournet/handoff/2' &&
+            h.data['to'] == e.certificate.device &&
+            path(h, visiting);
+      } else {
+        final parents = (e.data['parents'] as List).cast<String>();
+        ok = parents.isEmpty
+            ? e.certificate.person == o.author
+            : parents.length == 1 &&
+                  all[parents.single] != null &&
+                  all[parents.single]!.data['domain'] == 'ournet/receipt/2' &&
+                  all[parents.single]!.certificate.device ==
+                      e.certificate.device &&
+                  path(all[parents.single]!, visiting);
+      }
+      visiting.remove(e.id);
+      if (ok) verified.add(e.id);
+      return ok;
+    }
+
+    if (all.values.any((e) => !path(e, {})))
+      throw StateError('Unproven handoff chain');
+    final held = store.get(o.id) != null;
+    final handoffs = all.values
+        .where(
+          (e) =>
+              e.data['domain'] == 'ournet/handoff/2' &&
+              e.data['to'] == identity.device &&
+              e.certificate.device == peerDevice,
+        )
+        .toList();
+    if (!held && handoffs.isEmpty)
+      throw StateError('No handoff from authenticated peer');
+    if (!held && store.count >= maxObjects)
+      throw StateError('Storage quota exceeded');
+    await applyRevocation(o);
+    final changed = store.batch(
+      () => [
+        store.put(o),
+        for (final e in incoming) store.putEvidence(e),
+      ].where((added) => added).length,
+    );
+    if (o.kind == 'read') {
+      final payload = await content(o);
+      final original = payload == null ? null : store.get(payload['object']);
+      if (original != null &&
+          original.author == person &&
+          original.audience.contains(o.author)) {
+        store.set('readBy/${original.id}', o.author);
+      }
+    }
+    for (final h in handoffs) {
+      if (all.values.any(
+        (e) =>
+            e.data['handoff'] == h.id &&
+            e.certificate.device == identity.device,
+      ))
+        continue;
+      if (store.evidence(o.id).length >= maxEvidence) break;
+      receipts[h.id] = {
+        'domain': 'ournet/receipt/2',
+        'object': o.id,
+        'handoff': h.id,
+        'created': now(),
+      };
+    }
     return changed;
   }
 
@@ -436,7 +630,11 @@ class Node {
     notify();
   }
 
-  Future<void> close() async {
+  Future<void> close() => _closeFuture ??= _close();
+
+  Future<void> _close() async {
+    _closing = true;
+    if (store.path != null) await _publications;
     try {
       await blobs.close();
     } finally {
@@ -444,6 +642,35 @@ class Node {
       store.close();
     }
   }
+}
+
+// Only the device signing key and public recipient certificates cross this
+// boundary; the root identity and database never leave the owning isolate.
+// Node serializes and bounds requests. In-memory stores retain the synchronous
+// test path; real disk profiles offload encryption, signing and verification.
+Future<SignedObject> _preparePublication(
+  Json data,
+  List<DeviceCertificate> recipients,
+  SimpleKeyPairData key,
+  DeviceCertificate certificate, {
+  required bool background,
+}) {
+  Future<SignedObject> prepare() async {
+    if ((data['audience'] as List).isNotEmpty) {
+      data['payload'] = await encryptFor(data['payload'], recipients);
+    }
+    final object = SignedObject(data, await sign(data, key), certificate);
+    if (!await object.valid()) throw StateError('Invalid object fields');
+    if (object.encodedLength > Node.maxObjectBytes) {
+      throw StateError('Local object quota reached');
+    }
+    object.id; // Compute the content hash here too.
+    return object;
+  }
+
+  return background
+      ? Isolate.run(prepare, debugName: 'ournet-publish')
+      : prepare();
 }
 
 /// Validity of each item's object and evidence records, computed elsewhere.
@@ -461,10 +688,13 @@ Future<List<(bool, List<bool>)>> _verifySignatures(List<dynamic> items) =>
       return [
         for (final item in items)
           (
-            await check(() => SignedObject.fromJson(item['object']).valid()),
+            item['object'] == null ||
+                await check(
+                  () => SignedObject.fromJson(item['object']).valid(),
+                ),
             [
               for (final e in item['evidence'] as List? ?? const [])
-                await check(() => Evidence.fromJson(e).valid()),
+                e == null || await check(() => Evidence.fromJson(e).valid()),
             ],
           ),
       ];
@@ -487,3 +717,5 @@ Future<int> syncPair(Node a, Node b, {int rounds = 8}) async {
   }
   return total;
 }
+
+typedef _Received = ({SignedObject object, List<Evidence> evidence});

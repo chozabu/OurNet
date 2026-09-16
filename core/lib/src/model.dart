@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 import 'package:crypto/crypto.dart' as digest;
@@ -253,7 +254,9 @@ String canonical(Object? value) {
 }
 
 List<int> bytes(Object? value) => utf8.encode(canonical(value));
-String hash(Object? value) => digest.sha256.convert(bytes(value)).toString();
+String hash(Object? value) => canonicalHash(canonical(value));
+String canonicalHash(String canonical) =>
+    digest.sha256.convert(utf8.encode(canonical)).toString();
 String blobHash(List<int> value) => digest.sha256.convert(value).toString();
 String b64(List<int> value) => base64UrlEncode(value);
 List<int> unb64(String value) => base64Url.decode(value);
@@ -291,13 +294,24 @@ class DeviceCertificate {
   Json toJson() => {'data': data, 'signature': signature};
   factory DeviceCertificate.fromJson(Json j) =>
       DeviceCertificate(j['data'] as Json, j['signature'] as String);
+  // A person has few certificates, but every object and evidence record
+  // carries one. Verify each distinct certificate once per isolate.
+  static final _verified = LinkedHashSet<String>();
+
   Future<bool> valid() async {
+    final key = '$signature${canonical(data)}';
+    if (_verified.contains(key)) return true;
     try {
-      return data['domain'] == 'ournet/device/2' &&
+      final ok =
+          data['domain'] == 'ournet/device/2' &&
           label.length <= 100 &&
           unb64(device).length == 32 &&
           unb64(agreement).length == 32 &&
           await verify(data, signature, person);
+      if (ok && _verified.add(key) && _verified.length > 64) {
+        _verified.remove(_verified.first);
+      }
+      return ok;
     } catch (_) {
       return false;
     }
@@ -383,8 +397,11 @@ class SignedObject {
   final DeviceCertificate certificate;
   SignedObject(Json data, this.signature, this.certificate)
     : data = frozen(jsonDecode(canonical(data)));
-  // Data, signature and certificate are immutable, so the content hash is too.
-  late final String id = hash(toJson());
+  // Data, signature and certificate are immutable, so the canonical encoding,
+  // its size and the content hash are computed at most once.
+  late final String wire = canonical(toJson());
+  late final String id = canonicalHash(wire);
+  late final int encodedLength = utf8.encode(wire).length;
   String get author => certificate.person;
   String get kind => data['kind'];
   String get space => data['space'];
@@ -438,7 +455,8 @@ class Evidence {
   final DeviceCertificate certificate;
   Evidence(Json data, this.signature, this.certificate)
     : data = frozen(jsonDecode(canonical(data)));
-  late final String id = hash(toJson());
+  late final String wire = canonical(toJson());
+  late final String id = canonicalHash(wire);
   String get objectId => data['object'];
   Json toJson() => {
     'data': data,

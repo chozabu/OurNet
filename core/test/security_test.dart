@@ -36,6 +36,53 @@ void main() {
     },
   );
   test(
+    'held objects still reject new forged evidence and forged certificates',
+    () async {
+      final a = Node(await LocalIdentity.create(), Store()),
+          c = Node(await LocalIdentity.create(), Store());
+      addTearDown(() async {
+        await a.close();
+        await c.close();
+      });
+      await a.addContact(c.identity.certificate);
+      await c.addContact(a.identity.certificate);
+      await a.publish('post', {'text': 'shared'}, audience: [c.person]);
+      await syncPair(a, c);
+      expect(c.store.count, 1);
+      // Stored records skip re-verification; a new record is still checked.
+      final page = await a.offer(c.identity.device, {
+        ...c.inventory(),
+        'have': <String, dynamic>{},
+      });
+      final item = page.single;
+      final handoff = Json.from(item['evidence'].first);
+      final forged = {
+        ...handoff,
+        'data': {...handoff['data'], 'created': 2},
+      };
+      await expectLater(
+        c.receive(a.identity.device, [
+          {
+            'object': item['object'],
+            'evidence': [...item['evidence'], forged],
+          },
+        ]),
+        throwsStateError,
+      );
+      // A verified certificate does not validate one with another signature.
+      final certificate = a.identity.certificate;
+      expect(await certificate.valid(), isTrue);
+      final other = await LocalIdentity.create();
+      expect(
+        await DeviceCertificate(
+          certificate.data,
+          other.certificate.signature,
+        ).valid(),
+        isFalse,
+      );
+    },
+  );
+  test(
     'enrolled device has no root and cannot authorise or revoke devices',
     () async {
       final owner = await LocalIdentity.create(),

@@ -1,9 +1,9 @@
 # Try private drive between your devices
 
 OurNet 0.2 adds an app-managed private drive. Files and folders are encrypted for
-devices enrolled under the same person identity. This is not yet a watcher that
-mirrors arbitrary folders elsewhere on your PC. Import, replace and export files
-through OurNet; drive metadata then syncs automatically while connected.
+devices enrolled under the same person identity. You can import, replace and export files through OurNet, or connect a local
+folder for two-way synchronization. Drive metadata syncs between connected
+devices independently of each device's chosen local folder.
 
 ## Pair two profiles or devices
 
@@ -40,6 +40,75 @@ It applies to drive history; old private chat history still has no migration UI.
 - New files with the same name are separate entries. Names are not file IDs.
 
 The current limits remain 64 MiB per file, 512 MiB of stored chunks and 10,000
-signed objects. History resharing consumes additional objects. Cleanup/retention,
-filesystem watching, large transfers and background Android delivery remain work.
+signed objects. History resharing consumes additional objects. Cleanup/retention, large transfers and background Android delivery remain work.
 Use your own test files first; the protocol and recovery model are still evolving.
+
+
+## Connect an ordinary folder (Windows and Android)
+
+On the desktop, open **Files → Private drive → Sync a folder**, choose e.g.
+`D:\Pixel8Pro`, and confirm its drive name and the connection preview. The
+original directory stays where it is. On the phone, open the resulting
+**Pixel8Pro** folder and choose **Connect to local folder**. Android's system
+picker can grant access to an existing or newly created **Documents/Pixel8Pro**
+folder. The persisted document-tree permission is used directly; OurNet never
+converts the URI to an assumed `/storage/...` path or requests all-files access.
+
+Without a local connection the folder remains browsable inside OurNet; the
+existing offline switch retains encrypted copies in app storage. A connected
+folder contains ordinary decrypted files accessible through the OS. A connection
+is local to this device and never dictates another device's location.
+
+* Changes and deletions propagate individually in both directions. Deleting
+  `old.txt` on the desktop and adding `new.txt` on an offline phone produces both
+  changes after synchronization: `old.txt` disappears and `new.txt` is on both.
+* Concurrent edits, including delete-versus-edit, retain separate revisions.
+  Local contents are preserved while conflicted; **Version history → Use this
+  version** resolves content conflicts and the chosen version is then applied.
+* Connecting a nonempty destination preserves matching local files as concurrent
+  revisions, even if their contents happen to match. There is no timestamp winner.
+* **Sync now** checks a connection immediately. Desktop filesystem notifications
+  trigger debounced checks; a 15-second reconciliation catches missed events and
+  changes to Android document trees. Reopening the app also schedules a check.
+  Mobile work is not guaranteed while OurNet is suspended or closed.
+* **Disconnect (keep files)** stops synchronization without deleting either copy.
+  Missing roots, revoked permissions, incomplete provider listings, unsupported
+  names and case collisions fail safely instead of looking like mass deletions.
+* Each device persists per-entry revision/token baselines separately from drive
+  history. Only new drive records are decoded when maintaining the drive index.
+  Transfers run serially for folder connections using bounded temporary files;
+  encryption and blob hashing continue to use the node's attachment worker.
+
+Current boundaries: the existing 64 MiB file, 512 MiB encrypted-chunk and 10,000
+record quotas still apply. Local filename changes are represented as delete/add.
+Drive-side renames and moves preserve entry identities and are applied to local
+paths, including nested directories and case-only Windows renames. Concurrent
+file edits still retain separate revision branches; name collisions never overwrite
+an existing destination.
+Symlinks/junctions, unsupported portable filenames, nested/overlapping local
+connections, native files-on-demand placeholders, and a mobile background service
+are not supported. SAF providers must expose modification timestamps and support
+safe document creation/rename; unsupported providers report a connection error.
+Local change detection uses filesystem/provider metadata, so edits deliberately
+preserving all reported size/timestamps may not be detected.
+
+Android replacement stages a new document and renames the old document to a
+`.ournet-*.backup` before committing. An interrupted provider operation may leave
+that backup for manual recovery; reserved `.ournet-*` entries are never imported.
+Deletion is nonrecursive and refuses folders containing unaccounted-for files.
+History remains recoverable within the existing retention model; folder sync is
+not an independent backup.
+
+### Validation
+
+`transport/test/folder_sync_test.dart` exercises paired-device additions,
+deletions, conflicts, resolution, nonempty destinations, disk-store restarts,
+missing roots, disconnects and compare-before-write protection. Existing endpoint
+transfer tests cover encrypted chunk delivery. `core/test/drive_test.dart` checks
+that repeated drive reads do not revisit retained revisions.
+
+The note-history and photo-scroll profile journeys now include an active folder
+connection. `integration_test/folder_provider_test.dart` is an interactive Android
+SAF acceptance test: run it in the profile application with `SAF_PICKER_TEST=true`
+and choose an empty disposable folder. It imports a phone file, replaces it,
+applies a drive deletion, creates nested entries, and removes only its own files.

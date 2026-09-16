@@ -8,6 +8,7 @@ import 'package:ournet/ui/note_card.dart';
 import 'package:ournet/ui/note_editor.dart';
 import 'package:ournet/ui/note_markup.dart';
 import 'package:ournet/ui/note_organise.dart';
+import 'package:ournet/ui/voice_recorder.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'features_test.dart' show settled;
 import 'note_editor_test.dart' show settleNotes, flush, editorState, itemField;
@@ -22,7 +23,7 @@ void main() {
     Node? node,
     bool checklist = false,
     void Function(String, bool)? onArchived,
-    Future<({String path, String name, int duration, String mime})?> Function(
+    Future<VoiceRecording?> Function(
       BuildContext,
     )?
     recordVoice,

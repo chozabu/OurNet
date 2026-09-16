@@ -1,7 +1,42 @@
 import 'package:test/test.dart';
 import 'package:ournet_core/ournet_core.dart';
 
+class CountingDriveNode extends Node {
+  CountingDriveNode(super.identity, super.store);
+  int reads = 0;
+  @override
+  Future<Json?> content(SignedObject object) {
+    reads++;
+    return super.content(object);
+  }
+}
+
 void main() {
+  test('drive index processes only new revisions after long history', () async {
+    final node = CountingDriveNode(await LocalIdentity.create(), Store());
+    addTearDown(node.close);
+    final drive = Drive(node);
+    await drive.folder('History');
+    for (var i = 0; i < 100; i++) {
+      await drive.revise((await drive.entries()).single, {
+        'name': 'Revision $i',
+      });
+    }
+    final entry = (await drive.entries()).single;
+    expect(entry.history, hasLength(101));
+    final before = node.reads;
+    for (var i = 0; i < 20; i++) {
+      await Drive(node).entries();
+    }
+    expect(
+      node.reads,
+      before,
+      reason: 'Unchanged views must not revisit history',
+    );
+    await drive.revise(entry, {'name': 'One change'});
+    expect((await drive.entries()).single.current.data['name'], 'One change');
+    expect(node.reads, before + 1);
+  });
   test(
     'own devices retain concurrent revisions, resolve, delete and restore',
     () async {

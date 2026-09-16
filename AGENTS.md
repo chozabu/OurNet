@@ -22,9 +22,16 @@ transfer is in `transport`. Preserve the separation between these packages.
 - Lists must not read, decrypt or decode originals: show durable encrypted
   previews with stable image-cache keys (`ThumbnailImage`), and derive per-row
   data once per build (`memo`) rather than rescanning history in item builders.
-- Android profile runs install as `org.ournet.ournet.profile`; never run
+- Work that runs on every change (sync, refreshes, widgets) must cost the
+  same on a long history as on a new profile: keep incremental state instead of
+  rescanning, and never re-verify or re-hash stored records. Extend
+  `integration_test/note_history_test.dart` for sync and editor changes.
+- Android profile runs install as `org.chozabu.ournet.profile`; never run
   measurement builds under the everyday application ID. Extend
   `integration_test/photo_scroll_test.dart` for list/image changes.
+- Tester builds go to Google Play internal testing via
+  `tool/release-android.ps1 -Notes "..."`. The upload keystore and Play service
+  account key live in `%USERPROFILE%\.ournet-signing`, never in the repo.
 - Follow `PERFORMANCE.md` for measurement boundaries, profile-mode runs and
   baselines. Do not compare debug timings to profile/release timings or collect
   benchmark results while other builds or test suites are running.

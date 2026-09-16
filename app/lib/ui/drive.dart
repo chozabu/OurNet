@@ -1,6 +1,96 @@
 part of 'app.dart';
 
 extension _DrivePages on _OurNetAppState {
+  Future<void> connectFolder({DriveEntry? folder}) async {
+    if (connectingFolder) return;
+    setState(() => connectingFolder = true);
+    try {
+      final location = await pickSyncFolder();
+      if (location == null || !mounted) return;
+      final local = await folderBackend(location).scan();
+      if (!mounted) return;
+      final bytes = local.values.fold<int>(0, (n, item) => n + item.size);
+      var remoteBytes = 0, remoteFiles = 0;
+      if (folder != null) {
+        final entries = await Drive(node).entries();
+        final parents = {
+          for (final e in entries) e.current.entry: e.current.data['folder'],
+        };
+        for (final entry in entries) {
+          if (entry.current.deleted || entry.current.isFolder) continue;
+          var parent = entry.current.data['folder'];
+          final seen = <String>{};
+          while (parent is String && seen.add(parent)) {
+            if (parent == folder.current.entry) {
+              remoteFiles++;
+              remoteBytes += entry.current.data['size'] as int;
+              break;
+            }
+            parent = parents[parent];
+          }
+        }
+      }
+      if (!mounted) return;
+      final name =
+          folder?.current.data['name'] as String? ??
+          await ask(
+            context,
+            'Name in My drive',
+            initial: Platform.isAndroid
+                ? 'Phone folder'
+                : Directory(
+                    location,
+                  ).uri.pathSegments.where((p) => p.isNotEmpty).last,
+          );
+      if (name == null || name.trim().isEmpty || !mounted) return;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Connect $name?'),
+          content: SingleChildScrollView(
+            child: Text(
+              '$location\n\n${local.length} local entries · $bytes bytes\n\n'
+              'Changes and deletions sync both ways. Files in this folder are ordinary, decrypted files. '
+              'Existing files with matching names are preserved as conflicts; nothing is silently overwritten. '
+              '$remoteFiles drive files · up to $remoteBytes bytes to download.\n\n'
+              'Sync runs while OurNet is running and resumes when you reopen it. '
+              'Current limits: 64 MiB per file and 512 MiB of encrypted storage. '
+              'Disconnecting leaves the files in place.',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Connect folder'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+      final id =
+          folder?.current.entry ??
+          (await node.content(
+                await Drive(node).folder(name.trim(), parent: driveFolder),
+              ))!['entry']
+              as String;
+      await folderSync.connect(id, location);
+      if (mounted) {
+        setState(() {
+          driveFolder = id;
+          driveView = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) notice('Folder connection: $e');
+    } finally {
+      if (mounted) setState(() => connectingFolder = false);
+    }
+  }
+
   Widget filePage(BuildContext context) => Column(
     children: [
       Wrap(
@@ -235,6 +325,8 @@ extension _DrivePages on _OurNetAppState {
         return const Center(child: CircularProgressIndicator());
       }
       final entries = snapshot.data!;
+      final connections = folderSync.connections;
+      final connection = connections[driveFolder];
       final folder = entries
           .where((e) => e.current.entry == driveFolder)
           .firstOrNull;
@@ -260,103 +352,161 @@ extension _DrivePages on _OurNetAppState {
                       EverydayItem(b.current.object, b.current.data),
                     );
             });
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Encrypted for your devices',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-          ),
-          const Text(
-            'Add files here to sync their history between devices enrolled under your identity.',
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Keep files offline on this device'),
-            subtitle: Text(
-              driveSync.busy
-                  ? 'Downloading encrypted copies…'
-                  : driveSync.error ??
-                        'Copies download automatically while connected.',
-            ),
-            value: driveSync.enabled,
-            onChanged: driveSync.setEnabled,
-          ),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.icon(
-                onPressed: busy ? null : () => uploadDrive(),
-                icon: const Icon(Icons.upload_file),
-                label: const Text('Add file'),
-              ),
-              OutlinedButton.icon(
-                onPressed: busy
-                    ? null
-                    : () => act(() async {
-                        final value = await ask(context, 'New folder');
-                        if (value != null && value.isNotEmpty) {
-                          await Drive(node).folder(value, parent: driveFolder);
+      return CustomScrollView(
+        key: PageStorageKey('drive/$driveFolder'),
+        slivers: [
+          SliverToBoxAdapter(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Encrypted for your devices',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+                ),
+                const Text(
+                  'Add files here to sync their history between devices enrolled under your identity.',
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Keep files offline on this device'),
+                  subtitle: Text(
+                    driveSync.busy
+                        ? 'Downloading encrypted copies…'
+                        : driveSync.error ??
+                              'Copies download automatically while connected.',
+                  ),
+                  value: driveSync.enabled,
+                  onChanged: driveSync.setEnabled,
+                ),
+                if (connection != null)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.sync),
+                    title: const Text('Connected local folder · two-way sync'),
+                    subtitle: Text(
+                      '${connection['location']}\n${folderSync.status[driveFolder] ?? 'Waiting to check local folder'}',
+                    ),
+                    trailing: PopupMenuButton<String>(
+                      onSelected: (action) async {
+                        if (action == 'sync') {
+                          await folderSync.sync();
+                        } else {
+                          await folderSync.disconnect(driveFolder!);
                         }
-                      }),
-                icon: const Icon(Icons.create_new_folder_outlined),
-                label: const Text('New folder'),
-              ),
-              TextButton(
-                onPressed: busy
-                    ? null
-                    : () => act(() async {
-                        final count = await Drive(node).shareHistory();
-                        notice(
-                          'Shared $count revisions with your enrolled devices',
-                        );
-                      }),
-                child: const Text('Share history with new devices'),
-              ),
-              TextButton(
-                onPressed: () => driveHistory(context, entries),
-                child: const Text('History & deleted items'),
-              ),
-            ],
-          ),
-          Row(
-            children: [
-              if (driveFolder != null)
-                IconButton(
-                  tooltip: 'Parent folder',
-                  onPressed: () => update(
-                    () => driveFolder = folder?.current.data['folder'],
+                      },
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: 'sync', child: Text('Sync now')),
+                        PopupMenuItem(
+                          value: 'disconnect',
+                          child: Text('Disconnect (keep files)'),
+                        ),
+                      ],
+                    ),
                   ),
-                  icon: const Icon(Icons.arrow_upward),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (widget.enablePlatform &&
+                        !Platform.isIOS &&
+                        connection == null)
+                      OutlinedButton.icon(
+                        onPressed: connectingFolder
+                            ? null
+                            : () => connectFolder(folder: folder),
+                        icon: const Icon(Icons.folder_copy_outlined),
+                        label: Text(
+                          connectingFolder
+                              ? 'Checking folder…'
+                              : folder == null
+                              ? 'Sync a folder'
+                              : 'Connect to local folder',
+                        ),
+                      ),
+                    FilledButton.icon(
+                      onPressed: busy ? null : () => uploadDrive(),
+                      icon: const Icon(Icons.upload_file),
+                      label: const Text('Add file'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: busy
+                          ? null
+                          : () => act(() async {
+                              final value = await ask(context, 'New folder');
+                              if (value != null && value.isNotEmpty) {
+                                await Drive(
+                                  node,
+                                ).folder(value, parent: driveFolder);
+                              }
+                            }),
+                      icon: const Icon(Icons.create_new_folder_outlined),
+                      label: const Text('New folder'),
+                    ),
+                    TextButton(
+                      onPressed: busy
+                          ? null
+                          : () => act(() async {
+                              final count = await Drive(node).shareHistory();
+                              notice(
+                                'Shared $count revisions with your enrolled devices',
+                              );
+                            }),
+                      child: const Text('Share history with new devices'),
+                    ),
+                    TextButton(
+                      onPressed: () => driveHistory(context, entries),
+                      child: const Text('History & deleted items'),
+                    ),
+                  ],
                 ),
-              TextButton(
-                onPressed: () => update(() => driveFolder = null),
-                child: const Text('My drive'),
-              ),
-              if (folder != null)
-                Expanded(
-                  child: Text(
-                    '/ ${folder.current.data['name']}',
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                Row(
+                  children: [
+                    if (driveFolder != null)
+                      IconButton(
+                        tooltip: 'Parent folder',
+                        onPressed: () => update(
+                          () => driveFolder = folder?.current.data['folder'],
+                        ),
+                        icon: const Icon(Icons.arrow_upward),
+                      ),
+                    TextButton(
+                      onPressed: () => update(() => driveFolder = null),
+                      child: const Text('My drive'),
+                    ),
+                    if (folder != null)
+                      Expanded(
+                        child: Text(
+                          '/ ${folder.current.data['name']}',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
                 ),
-            ],
+              ],
+            ),
           ),
-          Expanded(
-            child: visible.isEmpty
-                ? empty(
-                    'This folder is empty',
-                    'Add a file or create a folder.',
-                    Icons.folder_open,
-                  )
-                : ListView(
-                    children: [
-                      for (final entry in visible)
-                        driveRow(context, entry, entries),
-                    ],
-                  ),
-          ),
+          if (visible.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: empty(
+                'This folder is empty',
+                'Add a file or create a folder.',
+                Icons.folder_open,
+              ),
+            )
+          else
+            SliverList.builder(
+              itemCount: visible.length,
+              itemBuilder: (context, index) {
+                final entry = visible[index];
+                return driveRow(
+                  context,
+                  entry,
+                  entries,
+                  connections.containsKey(entry.current.entry),
+                );
+              },
+            ),
         ],
       );
     },
@@ -366,6 +516,7 @@ extension _DrivePages on _OurNetAppState {
     BuildContext context,
     DriveEntry entry,
     List<DriveEntry> entries,
+    bool connected,
   ) {
     final v = entry.current, p = v.data;
     return Card(
@@ -393,7 +544,9 @@ extension _DrivePages on _OurNetAppState {
               : v.deleted
               ? 'Deleted'
               : v.isFolder
-              ? 'Folder'
+              ? connected
+                    ? 'Connected to a local folder'
+                    : 'Folder · browse on demand'
               : '${p['size']} bytes · ${files.cached(p) ? 'Available offline' : 'Download on request'}',
         ),
         onTap: () => v.isFolder

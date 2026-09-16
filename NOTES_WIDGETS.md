@@ -169,7 +169,7 @@ with bounded worker work; an explicit immutable PendingIntent targets each actio
 - `flutter drive --profile -d BV6600PROEEA004660 --driver=test_driver/performance.dart --target=integration_test/responsiveness_test.dart --dart-define=PERF_ENFORCE=true` (from `app`)
 - Repeat with `integration_test/photo_scroll_test.dart`. The photo fixture now
   includes a shared checklist row alongside the existing notes and images.
-- Android instrumentation builds target **org.ournet.ournet.profile**, never the
+- Android instrumentation builds target **org.chozabu.ournet.profile**, never the
   everyday application ID. See `tool/check-note-widgets.ps1` for the real launcher,
   privacy, queue, encrypted persistence and process-restart checks.
 

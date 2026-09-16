@@ -1,0 +1,9 @@
+name: play_upload
+description: Uploads an Android App Bundle to a Google Play testing track.
+publish_to: none
+environment:
+  sdk: ^3.12.0
+dependencies:
+  googleapis: ^17.0.0
+  googleapis_auth: ^2.3.3
+  http: ^1.6.0

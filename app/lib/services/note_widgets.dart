@@ -19,6 +19,10 @@ class NoteWidgets {
   late final CoalescedTask task;
   StreamSubscription<void>? _changes;
   bool _closed = false;
+
+  /// The last snapshot sent to Android. Every note change reaches [drain];
+  /// most leave widgets unchanged and need no re-encryption or redraw.
+  String? _published;
   String get profile =>
       '$activeProfile:${notes.node.person}:${notes.node.identity.device}';
   NoteWidgets(
@@ -34,7 +38,10 @@ class NoteWidgets {
       await channel.invokeMethod<void>('activate', {'profile': profile});
       if (_closed) return;
       channel.setMethodCallHandler((call) async {
-        if (call.method == 'changed') schedule();
+        if (call.method == 'changed') {
+          _published = null; // Widget configuration may have changed.
+          schedule();
+        }
       });
       _changes = notes.node.changes.stream.listen((_) => schedule());
       schedule();
@@ -120,7 +127,7 @@ class NoteWidgets {
       });
     }
     if (_closed) return;
-    await channel.invokeMethod<void>('publish', {
+    final snapshot = {
       'profile': profile,
       'catalog': [
         for (final n in catalog.take(200))
@@ -130,7 +137,12 @@ class NoteWidgets {
       'board': (state['boards'] as List? ?? []).isEmpty
           ? const []
           : board(catalog),
-    });
+    };
+    final encoded = canonical(snapshot);
+    if (encoded != _published) {
+      await channel.invokeMethod<void>('publish', snapshot);
+      _published = encoded;
+    }
     final launch = state['launch'];
     if (launch is Map && launch['profile'] == profile) {
       // Claim before navigation to avoid duplicate routes on activity recreation.

@@ -19,12 +19,100 @@ class Store {
       id TEXT PRIMARY KEY, kind TEXT NOT NULL, space TEXT NOT NULL,
       author TEXT NOT NULL, created INTEGER NOT NULL, wire TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS objects_view ON objects(kind,space,created);
+      CREATE INDEX IF NOT EXISTS objects_kind ON objects(kind);
       CREATE TABLE IF NOT EXISTS evidence(id TEXT PRIMARY KEY, object_id TEXT NOT NULL, wire TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS evidence_object ON evidence(object_id);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS blobs(id TEXT PRIMARY KEY, bytes BLOB NOT NULL);
     ''');
     db.execute('PRAGMA user_version=1');
+    // Derived routing index contains no plaintext message payloads.
+    if (db
+        .select("SELECT name FROM sqlite_master WHERE name='message_peers'")
+        .isEmpty) {
+      db.execute('''BEGIN IMMEDIATE;
+        CREATE TABLE message_peers(owner TEXT NOT NULL, peer TEXT NOT NULL,
+          id TEXT NOT NULL, created INTEGER NOT NULL, PRIMARY KEY(owner,peer,id));
+        CREATE INDEX message_history ON message_peers(owner,peer,created DESC,id);
+        INSERT OR IGNORE INTO message_peers
+          SELECT o.author,j.value,o.id,o.created FROM objects o,
+          json_each(o.wire,'\$.data.audience') j
+          WHERE o.kind='message' AND j.value!=o.author;
+        INSERT OR IGNORE INTO message_peers
+          SELECT j.value,o.author,o.id,o.created FROM objects o,
+          json_each(o.wire,'\$.data.audience') j
+          WHERE o.kind='message' AND j.value!=o.author;
+        COMMIT;
+      ''');
+    }
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS message_object ON message_peers(id)',
+    );
+    db.execute('''
+      CREATE TRIGGER IF NOT EXISTS message_added AFTER INSERT ON objects
+      WHEN NEW.kind='message' BEGIN
+        INSERT OR IGNORE INTO message_peers
+          SELECT NEW.author,value,NEW.id,NEW.created
+          FROM json_each(NEW.wire,'\$.data.audience') WHERE value!=NEW.author;
+        INSERT OR IGNORE INTO message_peers
+          SELECT value,NEW.author,NEW.id,NEW.created
+          FROM json_each(NEW.wire,'\$.data.audience') WHERE value!=NEW.author;
+      END;
+      CREATE TRIGGER IF NOT EXISTS message_removed AFTER DELETE ON objects
+      BEGIN DELETE FROM message_peers WHERE id=OLD.id; END;
+    ''');
+
+    if (db
+        .select("SELECT name FROM sqlite_master WHERE name='message_unread'")
+        .isEmpty) {
+      db.execute('''BEGIN IMMEDIATE;
+        CREATE TABLE message_unread(owner TEXT NOT NULL, peer TEXT NOT NULL,
+          id TEXT NOT NULL, expires INTEGER NOT NULL, PRIMARY KEY(owner,peer,id));
+        CREATE INDEX message_unread_object ON message_unread(id);
+        CREATE INDEX message_unread_expiry ON message_unread(expires);
+        CREATE TABLE message_counts(owner TEXT NOT NULL, peer TEXT NOT NULL,
+          unread INTEGER NOT NULL, PRIMARY KEY(owner,peer));
+        CREATE TRIGGER message_unread_increment AFTER INSERT ON message_unread
+        BEGIN
+          INSERT INTO message_counts VALUES(NEW.owner,NEW.peer,1)
+          ON CONFLICT(owner,peer) DO UPDATE SET unread=unread+1;
+        END;
+        CREATE TRIGGER message_unread_decrement AFTER DELETE ON message_unread
+        BEGIN
+          UPDATE message_counts SET unread=unread-1 WHERE owner=OLD.owner AND peer=OLD.peer;
+        END;
+        INSERT INTO message_unread
+          SELECT p.owner,p.peer,p.id,json_extract(o.wire,'\$.data.expires')
+          FROM message_peers p JOIN objects o ON o.id=p.id
+          LEFT JOIN settings s ON s.key='read/' || p.id
+          WHERE p.owner!=o.author AND COALESCE(s.value,'false')!='true';
+        COMMIT;
+      ''');
+    }
+    db.execute('''
+      CREATE TRIGGER IF NOT EXISTS message_unread_arrived AFTER INSERT ON message_peers
+      BEGIN
+        INSERT OR IGNORE INTO message_unread
+          SELECT NEW.owner,NEW.peer,NEW.id,json_extract(o.wire,'\$.data.expires')
+          FROM objects o LEFT JOIN settings s ON s.key='read/' || o.id
+          WHERE o.id=NEW.id AND NEW.owner!=o.author AND COALESCE(s.value,'false')!='true';
+      END;
+      CREATE TRIGGER IF NOT EXISTS message_unread_removed AFTER DELETE ON message_peers
+      BEGIN DELETE FROM message_unread WHERE owner=OLD.owner AND peer=OLD.peer AND id=OLD.id; END;
+    ''');
+    for (final event in ['INSERT', 'UPDATE']) {
+      db.execute('''
+        CREATE TRIGGER IF NOT EXISTS message_read_${event.toLowerCase()} AFTER $event ON settings
+        WHEN substr(NEW.key,1,5)='read/' BEGIN
+          DELETE FROM message_unread WHERE id=substr(NEW.key,6) AND NEW.value='true';
+          INSERT OR IGNORE INTO message_unread
+            SELECT p.owner,p.peer,p.id,json_extract(o.wire,'\$.data.expires')
+            FROM message_peers p JOIN objects o ON o.id=p.id
+            WHERE p.id=substr(NEW.key,6) AND p.owner!=o.author AND NEW.value!='true';
+        END;
+      ''');
+    }
+
     db.execute('''CREATE TABLE IF NOT EXISTS previews(
       id TEXT PRIMARY KEY, bytes BLOB NOT NULL, size INTEGER NOT NULL, used INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS previews_used ON previews(used);
@@ -47,6 +135,16 @@ class Store {
     ''');
   }
 
+  // Statements are compiled once: sync and list refreshes run the same few
+  // queries for every object, and compiling them each time was measurable.
+  final _statements = <String, PreparedStatement>{};
+  PreparedStatement _statement(String sql) =>
+      _statements[sql] ??= db.prepare(sql, persistent: true);
+  ResultSet _select(String sql, [List<Object?> parameters = const []]) =>
+      _statement(sql).select(parameters);
+  void _execute(String sql, [List<Object?> parameters = const []]) =>
+      _statement(sql).execute(parameters);
+
   /// Encrypted local previews (e.g. list thumbnails) are derived data. They are
   /// bounded separately from original chunks and evicted least-recently-used.
   static const maxPreviewBytes = 128 * 1024 * 1024;
@@ -64,14 +162,33 @@ class Store {
     return object;
   }
 
+  /// Runs synchronous [writes] as one transaction: one disk sync for the
+  /// batch instead of one per row, which stalls the UI isolate on phones.
+  T batch<T>(T Function() writes) {
+    db.execute('BEGIN IMMEDIATE');
+    try {
+      final result = writes();
+      db.execute('COMMIT');
+      return result;
+    } catch (_) {
+      db.execute('ROLLBACK');
+      // Reload rather than trust rows that were rolled back.
+      _evidence = null;
+      _evidenceRecords.clear();
+      _routes.clear();
+      _routesCursor = 0;
+      rethrow;
+    }
+  }
+
   bool put(SignedObject object) {
-    db.execute('INSERT OR IGNORE INTO objects VALUES (?,?,?,?,?,?)', [
+    _execute('INSERT OR IGNORE INTO objects VALUES (?,?,?,?,?,?)', [
       object.id,
       object.kind,
       object.space,
       object.author,
       object.created,
-      canonical(object.toJson()),
+      object.wire,
     ]);
     return db.updatedRows > 0;
   }
@@ -79,9 +196,59 @@ class Store {
   SignedObject? get(String id) {
     final cached = _parsed[id];
     if (cached != null) return cached;
-    final rows = db.select('SELECT wire FROM objects WHERE id=?', [id]);
+    final rows = _select('SELECT wire FROM objects WHERE id=?', [id]);
     return rows.isEmpty ? null : _parse(id, rows.first['wire']);
   }
+
+  /// Incremental unread totals, excluding blocked authors and expired records.
+  int conversationUnread(
+    String owner, {
+    String? peer,
+    Set<String> blocked = const {},
+  }) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _execute('DELETE FROM message_unread WHERE expires>0 AND expires<=?', [
+      now,
+    ]);
+    return _select(
+          'SELECT COALESCE(SUM(unread),0) AS n FROM message_counts WHERE owner=? '
+          '${peer == null ? '' : 'AND peer=? '}'
+          'AND peer NOT IN (SELECT value FROM json_each(?))',
+          [owner, if (peer != null) peer, jsonEncode(blocked.toList())],
+        ).first['n']
+        as int;
+  }
+
+  /// Stable newest-first keyset pagination, including timestamp ties.
+  List<SignedObject> conversation(
+    String owner,
+    String peer, {
+    SignedObject? before,
+    int limit = 50,
+  }) => [
+    for (final row in _select(
+      'SELECT id FROM message_peers WHERE owner=? AND peer=? '
+      '${before == null ? '' : 'AND (created<? OR (created=? AND id>?)) '}'
+      'ORDER BY created DESC,id LIMIT ?',
+      [
+        owner,
+        peer,
+        if (before != null) ...[before.created, before.created, before.id],
+        limit.clamp(1, 200),
+      ],
+    ))
+      if (get(row['id'] as String) case final object?) object,
+  ];
+
+  /// Arrival order, independent of signed wall clocks. Used by derived views
+  /// to consume new immutable records without revisiting retained history.
+  List<(int, SignedObject)> objectsAfter(String kind, int cursor) => [
+    for (final row in _select(
+      'SELECT rowid,id FROM objects WHERE kind=? AND rowid>? ORDER BY rowid LIMIT 256',
+      [kind, cursor],
+    ))
+      (row['rowid'] as int, get(row['id'] as String)!),
+  ];
 
   List<SignedObject> objects({
     String? kind,
@@ -111,7 +278,7 @@ class Store {
     final wires = <String, String>{};
     for (var i = 0; i < missing.length; i += 500) {
       final page = missing.skip(i).take(500).toList();
-      for (final row in db.select(
+      for (final row in _select(
         'SELECT id, wire FROM objects WHERE id IN (SELECT value FROM json_each(?))',
         [jsonEncode(page)],
       )) {
@@ -127,10 +294,57 @@ class Store {
     ];
   }
 
-  List<String> ids({int limit = 10000}) => db
-      .select('SELECT id FROM objects ORDER BY id LIMIT ?', [limit])
-      .map((r) => r['id'] as String)
-      .toList();
+  /// IDs newest first, without reading or parsing the objects.
+  List<String> recentIds({int limit = 10000}) => [
+    for (final row in _select(
+      'SELECT id FROM objects ORDER BY created DESC,id LIMIT ?',
+      [limit],
+    ))
+      row['id'] as String,
+  ];
+
+  List<String> ids({int limit = 10000}) => [
+    for (final row in _select('SELECT id FROM objects ORDER BY id LIMIT ?', [
+      limit,
+    ]))
+      row['id'] as String,
+  ];
+
+  /// Sharing fields of every stored object, for inventories. SQLite extracts
+  /// them without parsing objects in Dart; later calls read only new rows.
+  Iterable<ObjectRoute> get routes {
+    while (true) {
+      final rows = _select(
+        'SELECT rowid, id, kind, space, author, json_extract(wire, '
+        "'\$.certificate.data.device', '\$.data.expires', '\$.data.audience', "
+        "'\$.data.via') AS fields FROM objects WHERE rowid>? ORDER BY rowid "
+        'LIMIT 2000',
+        [_routesCursor],
+      );
+      if (rows.isEmpty) break;
+      for (final row in rows) {
+        final fields = jsonDecode(row['fields'] as String) as List;
+        _routes[row['id'] as String] = ObjectRoute(
+          id: row['id'] as String,
+          kind: row['kind'] as String,
+          space: row['space'] as String,
+          author: row['author'] as String,
+          device: fields[0] as String,
+          expires: fields[1] as int,
+          audience: (fields[2] as List).cast<String>(),
+          via: (fields[3] as List).cast<String>(),
+        );
+        _routesCursor = row['rowid'] as int;
+      }
+    }
+    return _routes.values;
+  }
+
+  final _routes = <String, ObjectRoute>{};
+  int _routesCursor = 0;
+
+  int get insertionCursor =>
+      (_select('SELECT MAX(rowid) AS n FROM objects').first['n'] as int?) ?? 0;
 
   /// Insertion cursor, independent of untrusted sender timestamps. Readers
   /// process bounded pages and never rescan unrelated history on refresh.
@@ -139,7 +353,7 @@ class Store {
     List<String> kinds, {
     int limit = 128,
   }) => [
-    for (final row in db.select(
+    for (final row in _select(
       'SELECT rowid, id, wire FROM objects WHERE rowid>? AND kind IN '
       '(SELECT value FROM json_each(?)) ORDER BY rowid LIMIT ?',
       [cursor, jsonEncode(kinds), limit.clamp(1, 128)],
@@ -147,41 +361,96 @@ class Store {
       (row['rowid'] as int, _parse(row['id'] as String, row['wire'] as String)),
   ];
   List<SignedObject> unread(String kind, String person) => [
-    for (final row in db.select(
+    for (final row in _select(
       "SELECT o.id, o.wire FROM objects o LEFT JOIN settings s ON s.key=? || o.id WHERE o.kind=? AND o.author!=? AND (s.value IS NULL OR s.value!='true')",
       [kind == 'message' ? 'read/' : 'seen/', kind, person],
     ))
       _parse(row['id'] as String, row['wire'] as String),
   ];
   int get count =>
-      db.select('SELECT COUNT(*) AS n FROM objects').first['n'] as int;
+      _select('SELECT COUNT(*) AS n FROM objects').first['n'] as int;
   bool putEvidence(Evidence evidence) {
-    db.execute('INSERT OR IGNORE INTO evidence VALUES (?,?,?)', [
+    _execute('INSERT OR IGNORE INTO evidence VALUES (?,?,?)', [
       evidence.id,
       evidence.objectId,
-      canonical(evidence.toJson()),
+      evidence.wire,
     ]);
-    return db.updatedRows > 0;
+    final added = db.updatedRows > 0;
+    if (added) {
+      _evidenceRecords.remove(evidence.objectId);
+      _evidence
+          ?.putIfAbsent(evidence.objectId, _EvidenceSet.new)
+          .add(evidence.id);
+    }
+    return added;
   }
 
-  /// Sorted evidence IDs per object, from one query without parsing records.
-  Map<String, List<String>> evidenceIds() {
-    final result = <String, List<String>>{};
-    for (final row in db.select(
+  /// Sorted evidence IDs per object, loaded with one query and then kept
+  /// current by [putEvidence], the only writer of evidence rows.
+  Map<String, _EvidenceSet> get _evidenceSets => _evidence ??= () {
+    final result = <String, _EvidenceSet>{};
+    for (final row in _select(
       'SELECT object_id, id FROM evidence ORDER BY object_id, id',
     )) {
-      (result[row['object_id'] as String] ??= []).add(row['id'] as String);
+      (result[row['object_id'] as String] ??= _EvidenceSet()).add(
+        row['id'] as String,
+      );
     }
     return result;
+  }();
+  Map<String, _EvidenceSet>? _evidence;
+  static final _noEvidence = hash(const <String>[]);
+
+  /// Inventory digest of an object's evidence IDs. Sync compares these for
+  /// every object on every page, so each digest is computed once per change.
+  String evidenceDigest(String objectId) =>
+      _evidenceSets[objectId]?.digestOf() ?? _noEvidence;
+
+  /// Whether evidence [id] for [objectId] is stored (and so was verified).
+  bool hasEvidence(String objectId, String id) =>
+      _evidenceSets[objectId]?.ids.contains(id) ?? false;
+
+  /// Parsed evidence for an object, sorted by ID. Sync reads it for every
+  /// offered or received item, so recent results are kept until it changes.
+  List<Evidence> evidence(String objectId) {
+    final cached = _evidenceRecords.remove(objectId);
+    final records =
+        cached ??
+        List<Evidence>.unmodifiable(
+          _select('SELECT wire FROM evidence WHERE object_id=? ORDER BY id', [
+            objectId,
+          ]).map((r) => Evidence.fromJson(jsonDecode(r['wire']))),
+        );
+    _evidenceRecords[objectId] = records;
+    if (_evidenceRecords.length > 1024) {
+      _evidenceRecords.remove(_evidenceRecords.keys.first);
+    }
+    return records;
   }
 
-  List<Evidence> evidence(String objectId) => db
-      .select('SELECT wire FROM evidence WHERE object_id=? ORDER BY id', [
-        objectId,
-      ])
-      .map((r) => Evidence.fromJson(jsonDecode(r['wire'])))
-      .toList();
-  void set(String key, Object? value) => db.execute(
+  final _evidenceRecords = LinkedHashMap<String, List<Evidence>>();
+
+  /// Objects holding evidence signed by any of [devices].
+  Set<String> objectsWithEvidenceFrom(Set<String> devices) => {
+    for (final row in _select(
+      'SELECT DISTINCT object_id FROM evidence WHERE '
+      "json_extract(wire, '\$.certificate.data.device') IN "
+      '(SELECT value FROM json_each(?))',
+      [jsonEncode(devices.toList())],
+    ))
+      row['object_id'] as String,
+  };
+
+  /// Deletes evidence records, e.g. those withdrawn by a revocation.
+  void removeEvidence(Iterable<String> ids) {
+    for (final id in ids) {
+      _execute('DELETE FROM evidence WHERE id=?', [id]);
+    }
+    _evidence = null;
+    _evidenceRecords.clear();
+  }
+
+  void set(String key, Object? value) => _execute(
     'INSERT INTO settings VALUES (?,?) '
     'ON CONFLICT(key) DO UPDATE SET value=excluded.value '
     'WHERE settings.value != excluded.value',
@@ -190,15 +459,30 @@ class Store {
 
   /// Keys of settings with [prefix] whose value is `true`, in one query.
   Set<String> trueSettings(String prefix) => {
-    for (final row in db.select(
+    for (final row in _select(
       "SELECT key FROM settings WHERE key >= ? AND key < ? AND value='true'",
       [prefix, '$prefix\u{10FFFF}'],
     ))
       (row['key'] as String).substring(prefix.length),
   };
 
+  Map<String, dynamic> settingsUnder(String prefix) => {
+    for (final row in _select(
+      'SELECT key,value FROM settings WHERE key>=? AND key<?',
+      [prefix, '$prefix\uffff'],
+    ))
+      (row['key'] as String).substring(prefix.length): jsonDecode(
+        row['value'] as String,
+      ),
+  };
+
+  void removeSettingsUnder(String prefix) => _execute(
+    'DELETE FROM settings WHERE key>=? AND key<?',
+    [prefix, '$prefix\uffff'],
+  );
+
   dynamic setting(String key) {
-    final rows = db.select('SELECT value FROM settings WHERE key=?', [key]);
+    final rows = _select('SELECT value FROM settings WHERE key=?', [key]);
     return rows.isEmpty ? null : jsonDecode(rows.first['value']);
   }
 
@@ -207,65 +491,106 @@ class Store {
       throw StateError('Invalid blob');
     if (hasBlob(id)) return;
     final total =
-        db.select('SELECT bytes FROM blob_usage WHERE id=1').first['bytes']
+        _select('SELECT bytes FROM blob_usage WHERE id=1').first['bytes']
             as int;
     if (total + bytes.length > 512 * 1024 * 1024)
       throw StateError('Blob storage limit is 512 MiB');
-    db.execute('INSERT INTO blobs VALUES (?,?)', [
-      id,
-      Uint8List.fromList(bytes),
-    ]);
+    _execute('INSERT INTO blobs VALUES (?,?)', [id, Uint8List.fromList(bytes)]);
   }
 
   List<int>? blob(String id) {
-    final rows = db.select('SELECT bytes FROM blobs WHERE id=?', [id]);
+    final rows = _select('SELECT bytes FROM blobs WHERE id=?', [id]);
     return rows.isEmpty ? null : rows.first['bytes'] as Uint8List;
   }
 
   bool hasBlob(String id) =>
-      db.select('SELECT 1 FROM blobs WHERE id=?', [id]).isNotEmpty;
+      _select('SELECT 1 FROM blobs WHERE id=?', [id]).isNotEmpty;
 
   /// One query for a file's chunk list instead of one query per chunk.
   bool hasBlobs(List<String> ids) =>
       ids.isEmpty ||
-      db.select(
+      _select(
             'SELECT COUNT(*) AS n FROM blobs WHERE id IN (SELECT DISTINCT value FROM json_each(?))',
             [jsonEncode(ids)],
           ).first['n'] ==
           ids.toSet().length;
 
   Uint8List? preview(String id) {
-    final rows = db.select('SELECT bytes, used FROM previews WHERE id=?', [id]);
+    final rows = _select('SELECT bytes, used FROM previews WHERE id=?', [id]);
     if (rows.isEmpty) return null;
     final now = DateTime.now().millisecondsSinceEpoch;
     // Refresh recency coarsely to avoid a write for every read.
     if ((rows.first['used'] as int) < now - 60 * 60 * 1000) {
-      db.execute('UPDATE previews SET used=? WHERE id=?', [now, id]);
+      _execute('UPDATE previews SET used=? WHERE id=?', [now, id]);
     }
     return rows.first['bytes'] as Uint8List;
   }
 
   void putPreview(String id, List<int> bytes) {
     if (bytes.length > maxPreviewSize) throw StateError('Preview too large');
-    db.execute('INSERT OR REPLACE INTO previews VALUES (?,?,?,?)', [
+    _execute('INSERT OR REPLACE INTO previews VALUES (?,?,?,?)', [
       id,
       Uint8List.fromList(bytes),
       bytes.length,
       DateTime.now().millisecondsSinceEpoch,
     ]);
     var total =
-        db.select('SELECT COALESCE(SUM(size),0) AS n FROM previews').first['n']
+        _select('SELECT COALESCE(SUM(size),0) AS n FROM previews').first['n']
             as int;
     if (total <= maxPreviewBytes) return;
-    for (final row in db.select(
+    for (final row in _select(
       'SELECT id, size FROM previews WHERE id!=? ORDER BY used LIMIT 256',
       [id],
     )) {
-      db.execute('DELETE FROM previews WHERE id=?', [row['id']]);
+      _execute('DELETE FROM previews WHERE id=?', [row['id']]);
       total -= row['size'] as int;
       if (total <= maxPreviewBytes * 0.9) break;
     }
   }
 
-  void close() => db.close();
+  void close() {
+    for (final statement in _statements.values) {
+      statement.close();
+    }
+    db.close();
+  }
+}
+
+/// The fields that decide whether an object may be offered to a peer.
+class ObjectRoute {
+  final String id, kind, space, author, device;
+  final int expires;
+  final List<String> audience, via;
+  const ObjectRoute({
+    required this.id,
+    required this.kind,
+    required this.space,
+    required this.author,
+    required this.device,
+    required this.expires,
+    required this.audience,
+    required this.via,
+  });
+  ObjectRoute.of(SignedObject o)
+    : this(
+        id: o.id,
+        kind: o.kind,
+        space: o.space,
+        author: o.author,
+        device: o.certificate.device,
+        expires: o.expires,
+        audience: o.audience,
+        via: (o.data['via'] as List).cast<String>(),
+      );
+  bool get isPublic => audience.isEmpty;
+}
+
+class _EvidenceSet {
+  final ids = SplayTreeSet<String>();
+  String? _digest;
+  void add(String id) {
+    if (ids.add(id)) _digest = null;
+  }
+
+  String digestOf() => _digest ??= hash(ids.toList());
 }

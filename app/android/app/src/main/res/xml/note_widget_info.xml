@@ -4,5 +4,5 @@
     android:targetCellWidth="3" android:targetCellHeight="3"
     android:resizeMode="horizontal|vertical" android:updatePeriodMillis="0"
     android:initialLayout="@layout/note_widget"
-    android:configure="org.ournet.ournet.NoteWidgetConfiguration"
+    android:configure="org.chozabu.ournet.NoteWidgetConfiguration"
     android:widgetFeatures="reconfigurable" android:widgetCategory="home_screen" />

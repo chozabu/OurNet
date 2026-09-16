@@ -59,6 +59,9 @@ class NoteEditor extends StatefulWidget {
 
   /// Records audio; replaced in tests.
   final Future<VoiceRecording?> Function(BuildContext context)? recordVoice;
+
+  /// Picks a photo; replaced in tests.
+  final Future<XFile?> Function(ImageSource source)? pickImage;
   final Duration autosaveDelay;
   const NoteEditor({
     super.key,
@@ -78,6 +81,7 @@ class NoteEditor extends StatefulWidget {
     this.notice,
     this.onReminderSet,
     this.recordVoice,
+    this.pickImage,
     this.autosaveDelay = const Duration(milliseconds: 1500),
   });
   @override
@@ -1338,7 +1342,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
   }
 
   Future<void> withNote(Future<void> Function() action) async {
-    if (attaching) return;
+    if (!mounted || attaching) return;
     setState(() => attaching = true);
     try {
       if (!await ensureNote()) return;
@@ -1352,7 +1356,9 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
   }
 
   Future<void> addRecording() async {
-    final record = widget.recordVoice ?? recordVoice;
+    final record =
+        widget.recordVoice ??
+        (context) => recordVoice(context, speech: widget.speech);
     final recording = await record(context);
     if (recording == null) return;
     await withNote(() async {
@@ -1369,7 +1375,16 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
             'duration': recording.duration,
           },
         );
-        await transcribe(attached);
+        final speech = widget.speech;
+        if (speech != null && mounted) {
+          await transcribeRecording(
+            context,
+            speech,
+            id!,
+            attached,
+            live: recording.transcript,
+          );
+        }
       } finally {
         if (await file.exists()) await file.delete();
       }
@@ -1379,24 +1394,31 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
   Future<void> transcribe(String file, {bool replace = false}) async {
     final speech = widget.speech;
     if (speech == null || id == null) return;
-    if (speech.engine == 'off') return;
-    if (speech.engine == 'whisper' && !await speech.installed(speech.model)) {
-      if (!mounted) return;
-      final ready = await offerSpeechModel(context, speech);
-      if (!ready) return;
-    }
-    speech.transcribe(id!, file, replace: replace);
+    await transcribeRecording(
+      context,
+      speech,
+      id!,
+      file,
+      automatic: false,
+      replace: replace,
+    );
   }
 
   Future<void> addImage(ImageSource source) async {
+    if (!mounted || attaching || pickingImage) return;
+    pickingImage = true;
     final XFile? picked;
     try {
-      picked = await ImagePicker().pickImage(source: source);
+      picked =
+          await (widget.pickImage?.call(source) ??
+              ImagePicker().pickImage(source: source));
     } catch (e) {
       report('Images are unavailable: $e');
       return;
+    } finally {
+      pickingImage = false;
     }
-    if (picked == null) return;
+    if (picked == null || !mounted) return;
     await withNote(() async {
       final name = picked!.name;
       final extension = name.split('.').last.toLowerCase();
@@ -1423,6 +1445,8 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       );
     });
   }
+
+  bool pickingImage = false;
 
   Future<void> addDrawing({String? existing}) async {
     final files = widget.files;
@@ -1500,6 +1524,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       ?..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
+          persist: false,
           content: const Text('Attachment removed'),
           action: SnackBarAction(
             label: 'Undo',

@@ -71,6 +71,8 @@ void main() {
       Future<void> exercise() async {
         monitor.start();
         await tester.tap(find.byTooltip('Add original file'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Save an original file'));
         await tester.pump();
         expect(find.text('Saving attachment locally…'), findsOneWidget);
         // Writing a note stays responsive while the import runs.

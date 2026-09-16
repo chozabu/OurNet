@@ -1,4 +1,5 @@
 import '../services/drafts.dart';
+import '../services/folder_connections.dart';
 import '../services/coalesced_task.dart';
 import '../services/performance.dart';
 import '../services/share_inbox.dart';
@@ -16,7 +17,8 @@ import 'package:flutter/services.dart';
 import 'package:app_badge_plus/app_badge_plus.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:ournet_core/ournet_core.dart';
-import 'package:ournet_transport/ournet_transport.dart' show DriveSync;
+import 'package:ournet_transport/ournet_transport.dart'
+    show DriveSync, FolderSync;
 import '../services/network.dart';
 import '../services/files.dart';
 import '../services/calls.dart';
@@ -29,6 +31,8 @@ import '../build_info.dart';
 import 'add_device.dart';
 import 'onboarding.dart';
 import 'sync_status.dart';
+import 'sync_health.dart';
+import 'conversation_delivery.dart';
 import 'note_editor.dart';
 import 'note_card.dart';
 import 'note_colors.dart';
@@ -62,12 +66,16 @@ class OurNetApp extends StatefulWidget {
   final bool enablePlatform;
   final int? initialTab;
   final Future<({String path, String name})?> Function()? pickAttachment;
+
+  /// Replaces the platform image picker in note editors (tests).
+  final Future<XFile?> Function(ImageSource source)? pickImage;
   const OurNetApp({
     super.key,
     required this.node,
     this.enablePlatform = true,
     this.initialTab,
     this.pickAttachment,
+    this.pickImage,
   });
   @override
   State<OurNetApp> createState() => _OurNetAppState();
@@ -78,6 +86,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   late final Network network;
   late final Files files;
   late final DriveSync driveSync;
+  late final FolderSync folderSync;
+  bool connectingFolder = false;
   late final EverydaySync everydaySync;
   ShareInbox? shareInbox;
   late final Notes notes;
@@ -143,6 +153,15 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   String? composerContext;
   String? notesComposerContext;
   final deliveryLabels = <String, String>{};
+  final conversationOlder = <String, List<SignedObject>>{};
+  final conversationEnd = <String>{};
+  final conversationPending = <String>{};
+  final conversationScroll = <String, ScrollController>{};
+  int conversationCursor = 0;
+  final sendingMessages = <String>{};
+  final messageErrors = <String, String>{};
+  final fileProgress = <String, double>{};
+  final fileErrors = <String, String>{};
   final search = TextEditingController();
   static const titles = [
     'Home',
@@ -177,6 +196,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     if (widget.enablePlatform) performance.start();
+    conversationCursor = node.store.insertionCursor;
     draftStore = DraftStore(node);
     notes = Notes(node);
     inboxComposer.addListener(
@@ -226,6 +246,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       },
     );
     driveSync = DriveSync(network, onUpdate: refresh);
+    folderSync = FolderSync(
+      files,
+      folderBackend,
+      onUpdate: refresh,
+      automatic: widget.enablePlatform,
+    );
     calls = Calls(network)..addListener(refresh);
     notifications = Notifications(node)
       ..onError = notice
@@ -250,6 +276,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       };
     _deliveryRefresh = CoalescedTask(loadDeliveryLabels, (e) => notice('$e'));
     _dataRefresh = CoalescedTask(() async {
+      await refreshConversations();
       searchIndex = null;
       driveView = null;
       everydayView = null;
@@ -462,6 +489,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       );
     }
     if (state == AppLifecycleState.resumed && widget.enablePlatform) {
+      // Speech settings may have changed outside the app.
+      folderSync.schedule();
+      unawaited(speech.checkLive());
       unawaited(shareInbox?.drain());
       noteWidgets?.schedule();
       unawaited(
@@ -502,6 +532,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _pausedStop?.cancel();
     _changes?.cancel();
     _dataRefresh.close();
+    for (final controller in conversationScroll.values) {
+      controller.dispose();
+    }
     _deliveryRefresh.close();
     imports.dispose();
     performance.stop();
@@ -518,6 +551,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     if (widget.enablePlatform) unawaited(calls.close());
     unawaited(network.stop());
     unawaited(driveSync.close());
+    unawaited(folderSync.close());
     unawaited(notifications.close());
     inboxComposer.dispose();
     listName.dispose();
@@ -555,9 +589,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     'unread/$kind',
     () => node.store.unread(kind, node.person).where(node.visible).toList(),
   );
-  int unread(String kind) => unreadObjects(
-    kind,
-  ).where((o) => o.isPublic || o.audience.contains(node.person)).length;
+  int unread(String kind) => kind == 'message'
+      ? node.store.conversationUnread(node.person, blocked: node.blocked)
+      : unreadObjects(
+          kind,
+        ).where((o) => o.isPublic || o.audience.contains(node.person)).length;
 
   /// Recent objects of [kind] grouped by space, once per build.
   Map<String, List<SignedObject>> objectsBySpace(String kind) =>
@@ -820,27 +856,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                             onTap: () => update(() => tab = 4),
                             child: Row(
                               children: [
-                                Icon(
-                                  network.running
-                                      ? Icons.circle
-                                      : Icons.circle_outlined,
-                                  size: 10,
-                                  color: network.running
-                                      ? Colors.teal
-                                      : Colors.grey,
-                                ),
-                                const SizedBox(width: 8),
                                 Expanded(
-                                  child: Text(
-                                    network.running
-                                        ? 'Connected · friend devices only'
-                                        : 'Offline · local data available',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodySmall,
-                                  ),
+                                  child: SyncHealthLine(network: network),
                                 ),
                                 const SizedBox(width: 8),
                                 Text(

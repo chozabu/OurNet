@@ -5,14 +5,15 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:image/image.dart' as img;
 import 'package:integration_test/integration_test.dart';
 import 'package:ournet/services/thumbnails.dart';
 import 'package:ournet/ui/app.dart';
 import 'package:ournet_core/ournet_core.dart';
-import 'package:ournet_transport/ournet_transport.dart' show Files, PeerNetwork;
+import 'package:ournet_transport/ournet_transport.dart'
+    show Files, PeerNetwork, FolderSync, DiskFolderBackend;
+
+import 'perf_support.dart';
 
 /// Repeatable Notes photo-scrolling journey for physical devices.
 ///
@@ -47,6 +48,7 @@ class CountingBlobWorker extends BlobWorker {
     if (bytes == null) chunkReads++;
     return super.decode(hash, key, bytes: bytes);
   }
+
   @override
   Future<Uint8List?> readLocal(List<String> hashes, List<int>? key) {
     // Whole-file reads on a disk profile bypass decode; count their chunks.
@@ -62,64 +64,6 @@ class CountingNode extends Node {
   CountingBlobWorker get blobs => _blobs;
 }
 
-class PhaseRecorder {
-  final double frameBudgetMs;
-  PhaseRecorder(this.frameBudgetMs);
-  final _timings = <FrameTiming>[];
-  final _delays = <double>[];
-  Timer? _timer;
-  final _clock = Stopwatch();
-  int _last = 0;
-
-  void _onTimings(List<FrameTiming> timings) => _timings.addAll(timings);
-
-  void start() {
-    SchedulerBinding.instance.addTimingsCallback(_onTimings);
-    _clock.start();
-    _last = _clock.elapsedMicroseconds;
-    _timer = Timer.periodic(const Duration(milliseconds: 10), (_) {
-      final now = _clock.elapsedMicroseconds;
-      _delays.add(max(0, now - _last - 10000) / 1000);
-      _last = now;
-    });
-  }
-
-  Future<Map<String, Object>> stop() async {
-    // The engine batches timing reports; wait for this phase's frames.
-    await Future<void>.delayed(const Duration(milliseconds: 400));
-    _timer?.cancel();
-    SchedulerBinding.instance.removeTimingsCallback(_onTimings);
-    double ms(Duration d) => d.inMicroseconds / 1000;
-    final build = _timings.map((t) => ms(t.buildDuration)).toList()..sort();
-    final raster = _timings.map((t) => ms(t.rasterDuration)).toList()..sort();
-    final stage =
-        _timings
-            .map((t) => max(ms(t.buildDuration), ms(t.rasterDuration)))
-            .toList()
-          ..sort();
-    final total = _timings.map((t) => ms(t.totalSpan)).toList()..sort();
-    double pct(List<double> v, double p) =>
-        v.isEmpty ? 0 : v[max(0, (v.length * p).ceil() - 1)];
-    Map<String, double> summary(List<double> v) => {
-      'p50': pct(v, .5),
-      'p90': pct(v, .9),
-      'p95': pct(v, .95),
-      'p99': pct(v, .99),
-      'max': v.isEmpty ? 0 : v.last,
-    };
-    return {
-      'frames': _timings.length,
-      'framesOverBudget': stage.where((v) => v > frameBudgetMs).length,
-      'framesOverTwoBudgets': stage.where((v) => v > 2 * frameBudgetMs).length,
-      'frameStageMs': summary(stage),
-      'buildMs': summary(build),
-      'rasterMs': summary(raster),
-      'totalSpanMs': summary(total),
-      'eventLoopDelayMs': summary(_delays..sort()),
-    };
-  }
-}
-
 const scenario = String.fromEnvironment('PHOTO_SCENARIO', defaultValue: 'four');
 const enforce = bool.fromEnvironment('PERF_ENFORCE');
 const warmCycles = int.fromEnvironment('WARM_CYCLES', defaultValue: 5);
@@ -128,44 +72,6 @@ const dragMs = int.fromEnvironment('DRAG_MS', defaultValue: 260);
 // Gestures per downward pass; 0 scrolls to the end. The large collection uses a
 // bounded window so repeated passes finish in minutes, not hours.
 const passGestures = int.fromEnvironment('PASS_GESTURES', defaultValue: -1);
-
-/// Deterministic photo-like JPEG: smooth lighting, large shapes and sensor
-/// noise so size and decode cost resemble a phone camera image.
-Uint8List makePhoto(int seed, int width, int height) {
-  final random = Random(seed);
-  final image = img.Image(width: width, height: height);
-  final cx = random.nextDouble() * width, cy = random.nextDouble() * height;
-  final hue = random.nextDouble();
-  for (var y = 0; y < height; y++) {
-    for (var x = 0; x < width; x++) {
-      final d = sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) / width;
-      final band = (sin(x / 37.0 + seed) + cos(y / 53.0)) * 18;
-      final n = random.nextInt(24) - 12;
-      int c(double phase) =>
-          (128 + 90 * sin(hue * 6.28 + phase - d * 3) + band + n)
-              .clamp(0, 255)
-              .toInt();
-      image.setPixelRgb(x, y, c(0), c(2.1), c(4.2));
-    }
-  }
-  return img.encodeJpg(image, quality: 90);
-}
-
-Future<List<File>> fixtures(Directory cache, int count, int w, int h) async {
-  final result = <File>[];
-  for (var i = 0; i < count; i++) {
-    final file = File('${cache.path}/photo-v1-$w-$h-$i.jpg');
-    if (!await file.exists()) {
-      final bytes = await compute(
-        (int seed) => makePhoto(seed, w, h),
-        1000 + i,
-      );
-      await file.writeAsBytes(bytes, flush: true);
-    }
-    result.add(file);
-  }
-  return result;
-}
 
 void main() {
   final binding = CountingBinding();
@@ -197,6 +103,7 @@ void main() {
       Store(path: '${directory.path}/profile.db'),
     );
     Node? other;
+    FolderSync? folderSync;
     try {
       final setup = Stopwatch()..start();
       // Phone camera photos for the four-photo case. The large collection uses
@@ -338,6 +245,15 @@ void main() {
         expect(listFinder, findsOneWidget);
       }
 
+      // An idle connected folder remains active while lists scroll. No
+      // original file may be read just because presentation state changes.
+      final connected = await Directory('${directory.path}/connected').create();
+      final driveRoot =
+          (await node.content(await Drive(node).folder('Connected')))!['entry']
+              as String;
+      folderSync = FolderSync(files, DiskFolderBackend.new);
+      await folderSync.connect(driveRoot, connected.path);
+      await folderSync.sync();
       debugPrint('photo scroll: launching');
       await launch();
       debugPrint('photo scroll: list shown');
@@ -485,6 +401,8 @@ void main() {
         }
 
         await tester.tap(find.byTooltip('Add original file'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Save an original file'));
         final syncing = () async {
           for (final page in syncPages) {
             await node.receive(other!.identity.device, page);
@@ -494,6 +412,8 @@ void main() {
         cycles.add(await cycle('loaded1'));
         await waitForImport();
         await tester.tap(find.byTooltip('Add original file'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Save an original file'));
         cycles.add(await cycle('loaded2'));
         await syncing;
         await waitForImport();
@@ -530,6 +450,8 @@ void main() {
           (warm.last['rssMiB'] as double) - (warm.first['rssMiB'] as double);
       report['warmRssGrowthMiB'] = rssGrowth;
       expect(rssGrowth, lessThan(32));
+
+      expect(tester.takeException(), isNull);
       if (enforce) {
         for (final c in cycles) {
           final stage = c['frameStageMs'] as Map<String, double>;
@@ -548,6 +470,7 @@ void main() {
         }
       }
     } finally {
+      await folderSync?.close();
       debugPrint('photo scroll: cleanup');
       await tester.pumpWidget(const SizedBox());
       await Future<void>.delayed(const Duration(milliseconds: 200));

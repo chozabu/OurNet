@@ -1,4 +1,4 @@
-package org.ournet.ournet
+package org.chozabu.ournet
 
 import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetManager
@@ -29,13 +29,13 @@ class NoteWidgetTest {
         .setAction("org.ournet.WIDGET_CHECK").putExtra("widget", id).putExtra("field", "check:milk:done").putExtra("token", token)
 
     @Test fun nativeOutboxResizePrivacyAndDeepLinks() {
-        assertEquals("org.ournet.ournet.profile", context.packageName)
+        assertEquals("org.chozabu.ournet.profile", context.packageName)
         val host = AppWidgetHost(context, 9841)
         val id = host.allocateAppWidgetId()
         val manager = AppWidgetManager.getInstance(context)
         val original = onWorker { WidgetStore.read(context) }
         try {
-            assertTrue("Grant test launcher binding with adb shell appwidget grantbind --package org.ournet.ournet.profile --user 0",
+            assertTrue("Grant test launcher binding with adb shell appwidget grantbind --package org.chozabu.ournet.profile --user 0",
                 manager.bindAppWidgetIdIfAllowed(id, ComponentName(context, NoteWidgetProvider::class.java)))
             onWorker {
                 WidgetStore.save(context, fixture(id))
@@ -78,7 +78,7 @@ class NoteWidgetTest {
     }
 
     @Test fun boardListsNotesAndHidesContents() {
-        assertEquals("org.ournet.ournet.profile", context.packageName)
+        assertEquals("org.chozabu.ournet.profile", context.packageName)
         val host = AppWidgetHost(context, 9842)
         val id = host.allocateAppWidgetId()
         val manager = AppWidgetManager.getInstance(context)
@@ -124,7 +124,7 @@ class NoteWidgetTest {
     }
 
     @Test fun staleProfileAndQueueLimit() {
-        assertEquals("org.ournet.ournet.profile", context.packageName)
+        assertEquals("org.chozabu.ournet.profile", context.packageName)
         onWorker {
             val original = WidgetStore.read(context)
             try {
@@ -146,7 +146,7 @@ class NoteWidgetTest {
     // Run these two methods in separate instrumentation processes, stopping the
     // profile package between them. This checks actual disk/keystore cold start.
     @Test fun persistColdFixture() {
-        assertEquals("org.ournet.ournet.profile", context.packageName)
+        assertEquals("org.chozabu.ournet.profile", context.packageName)
         onWorker {
             val original = WidgetStore.read(context)
             val state = fixture(0).put("testOriginal", original).put("coldMarker", "saved-before-process-death")

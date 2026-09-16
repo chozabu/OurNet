@@ -705,6 +705,7 @@ extension _EverydayPages on _OurNetAppState {
         if (value == 'delete' && mounted) {
           messenger.currentState?.showSnackBar(
             SnackBar(
+              persist: false,
               content: const Text('Item removed'),
               action: SnackBarAction(
                 label: 'Undo',

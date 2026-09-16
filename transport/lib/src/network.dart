@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:iroh_quic/iroh_quic.dart' as iroh;
 import 'package:ournet_core/ournet_core.dart';
+import 'sync_queue.dart';
 
 part 'pairing.dart';
 part 'friend_invitation.dart';
@@ -19,16 +20,79 @@ class PeerNetwork {
     if (!updates.isClosed) updates.add(null);
   }
 
-  PeerNetwork(this.node);
+  /// This app's build stamp, sent to peers so either side can spot a
+  /// mismatch. Empty for development builds.
+  final String build;
+
+  PeerNetwork(this.node, {this.build = ''}) {
+    final saved = node.store.setting('peerHealth');
+    if (saved is Map) {
+      for (final MapEntry(:key, :value) in saved.entries) {
+        if (value is! Map) continue;
+        if (value['synced'] case final int ms) {
+          lastSync[key] = DateTime.fromMillisecondsSinceEpoch(ms);
+        }
+        if (value['build'] case final String b) peerBuilds[key] = b;
+      }
+    }
+  }
   iroh.Endpoint? _endpoint;
   StreamSubscription<void>? _changes;
+  StreamSubscription<void>? _relayStatus;
   Timer? _debounce;
   final Map<String, Timer> _retry = {};
   final Map<String, int> _failures = {};
   final Set<String> _busy = {};
   final Set<iroh.Connection> _connections = {};
   final Set<Future<void>> _jobs = {};
+  late final _syncQueue = SyncQueue(_sync);
+
+  /// When each device last completed a sync; kept across restarts.
   final Map<String, DateTime> lastSync = {};
+
+  /// Most recent exchange failure per device; success clears it.
+  final Map<String, String> syncErrors = {};
+
+  /// When a sync with each device was last attempted, in this session.
+  final Map<String, DateTime> lastAttempt = {};
+
+  /// When each device last reached this one with an admitted request.
+  final Map<String, DateTime> lastInbound = {};
+
+  /// Build stamp each device reported in its most recent exchange.
+  final Map<String, String> peerBuilds = {};
+
+  /// Inbound handshakes that failed since the network started. The accept
+  /// loop survives them; the count shows whether peers are struggling.
+  int acceptFailures = 0;
+  String? lastAcceptError;
+
+  /// Home relay connections; empty in local mode or before the first report.
+  List<({String url, bool connected, String? error})> relays = const [];
+
+  /// Whether this network uses relays and address lookup.
+  bool local = false;
+
+  void _remember(String device) {
+    final synced = lastSync[device];
+    final build = peerBuilds[device];
+    final saved = Map<String, dynamic>.from(
+      node.store.setting('peerHealth') as Map? ?? const {},
+    );
+    saved[device] = {
+      if (synced != null) 'synced': synced.millisecondsSinceEpoch,
+      if (build != null) 'build': build,
+    };
+    node.store.set('peerHealth', saved);
+  }
+
+  void _noteBuild(String device, Object? build) {
+    if (build is! String || build.length > 64) return;
+    if (peerBuilds[device] == build) return;
+    peerBuilds[device] = build;
+    _remember(device);
+  }
+
   final Map<String, int> _progress = {};
 
   /// Fires as syncs start, exchange pages and finish. Kept separate from
@@ -54,7 +118,19 @@ class PeerNetwork {
     notifyListeners();
   }
 
-  Future<void> start({bool local = false, bool automatic = true}) async {
+  Future<void> _lifecycle = Future.value();
+  Future<void> _transition(Future<void> Function() action) {
+    final next = _lifecycle.then((_) => action());
+    _lifecycle = next.catchError((Object _) {});
+    return next;
+  }
+
+  // Camera/permission activities can pause and resume before bind or close
+  // finishes. Keep endpoint ownership and subscriptions in transition order.
+  Future<void> start({bool local = false, bool automatic = true}) =>
+      _transition(() => _start(local: local, automatic: automatic));
+
+  Future<void> _start({required bool local, required bool automatic}) async {
     if (running) return;
     try {
       await iroh.Iroh.init();
@@ -66,10 +142,29 @@ class PeerNetwork {
         relayMode: local ? iroh.RelayMode.disabled : iroh.RelayMode.n0Default,
       );
       error = null;
+      this.local = local;
+      acceptFailures = 0;
+      lastAcceptError = null;
+      relays = const [];
+      if (!local) {
+        _relayStatus = _endpoint!.homeRelayStatus().listen((status) {
+          relays = [
+            for (final r in status)
+              (url: r.url, connected: r.connected, error: r.lastError),
+          ];
+          notifyListeners();
+        }, onError: (Object _) {});
+      }
       if (automatic)
         _changes = node.changes.stream.listen((_) {
-          _debounce?.cancel();
-          _debounce = Timer(const Duration(milliseconds: 400), syncAll);
+          // A busy editor must not postpone delivery indefinitely. Batch from
+          // the first change, rather than restarting the timer on every edit.
+          _debounce ??= Timer(const Duration(milliseconds: 400), () {
+            _debounce = null;
+            for (final device in node.contacts.keys.toList()) {
+              unawaited(sync(device));
+            }
+          });
         });
       unawaited(_accept());
       log(local ? 'Local network started' : 'Network started');
@@ -149,23 +244,37 @@ class PeerNetwork {
   }
 
   Future<void> sync(String device) {
-    final job = _sync(device);
-    _jobs.add(job);
-    return job.whenComplete(() => _jobs.remove(job));
+    final job = _syncQueue.schedule(device);
+    if (_jobs.add(job)) {
+      unawaited(
+        job.then<void>(
+          (_) {
+            _jobs.remove(job);
+          },
+          onError: (Object error, StackTrace stack) {
+            _jobs.remove(job);
+          },
+        ),
+      );
+    }
+    return job;
   }
 
   Future<void> _sync(String device) async {
     if (!running || !node.allowedPeer(device) || !_busy.add(device)) return;
     _progress[device] = 0;
+    lastAttempt[device] = DateTime.now();
     _activity();
     try {
-      // Bounded work per session; subsequent changes or manual sync resume it.
+      // Bounded work per session; exhausted pages schedule a continuation.
       var exhausted = true;
       for (var page = 0; page < 16; page++) {
         final reply = await request(device, {
           'type': 'pull',
           'inventory': node.inventory(peerDevice: device),
+          if (build.isNotEmpty) 'build': build,
         });
+        _noteBuild(device, reply['build']);
         final incoming = await node.receive(device, reply['items']);
         final outgoing = await node.offer(device, reply['inventory']);
         final pushed = await request(device, {
@@ -174,12 +283,16 @@ class PeerNetwork {
         });
         _progress[device] = _progress[device]! + incoming + outgoing.length;
         _activity();
-        if (incoming == 0 && outgoing.isEmpty && pushed['changed'] == 0) {
+        // Without changes on either side the next page would be identical,
+        // e.g. items the peer ignores; stop rather than resend them.
+        if (incoming == 0 && pushed['changed'] == 0) {
           exhausted = false;
           break;
         }
       }
+      syncErrors.remove(device);
       lastSync[device] = DateTime.now();
+      _remember(device);
       _failures.remove(device);
       _retry.remove(device)?.cancel();
       if (exhausted && running) {
@@ -187,6 +300,7 @@ class PeerNetwork {
       }
       log('Synced ${node.contacts[device]?.label ?? device}');
     } catch (e) {
+      syncErrors[device] = e.toString();
       final failures = (_failures[device] ?? 0) + 1;
       _failures[device] = failures;
       _retry.remove(device)?.cancel();
@@ -203,15 +317,8 @@ class PeerNetwork {
   }
 
   Future<void> syncAll() async {
-    final devices = node.contacts.keys.toList();
-    var next = 0;
-    Future<void> worker() async {
-      while (running && next < devices.length) {
-        await sync(devices[next++]);
-      }
-    }
-
-    await Future.wait([worker(), worker()]);
+    if (!running) return;
+    await Future.wait(node.contacts.keys.toList().map(sync));
   }
 
   Future<void> _accept() async {
@@ -240,8 +347,12 @@ class PeerNetwork {
           }),
         );
       } catch (e) {
-        if (running) log('Accept failed: $e');
-        break;
+        // accept() also completes the handshake, so one peer that gives up
+        // or speaks another protocol must not stop all inbound connections.
+        if (!identical(_endpoint, endpoint) || endpoint.isClosed) break;
+        acceptFailures++;
+        lastAcceptError = '$e';
+        log('Accept failed: $e');
       }
     }
   }
@@ -264,11 +375,14 @@ class PeerNetwork {
         reply = await pairing!.approve(peer, j);
       } else {
         if (!node.allowedPeer(peer)) throw StateError('Device not admitted');
+        lastInbound[peer] = DateTime.now();
         switch (j['type']) {
           case 'pull':
+            _noteBuild(peer, j['build']);
             reply = {
               'items': await node.offer(peer, j['inventory']),
               'inventory': node.inventory(peerDevice: peer),
+              if (build.isNotEmpty) 'build': build,
             };
           case 'push':
             reply = {'changed': await node.receive(peer, j['items'])};
@@ -307,14 +421,20 @@ class PeerNetwork {
     }
   }
 
-  Future<void> stop() async {
+  Future<void> stop() => _transition(_stop);
+
+  Future<void> _stop() async {
     pairing?.close();
     friendInvitation?.close();
     final endpoint = _endpoint;
     _endpoint = null;
     await _changes?.cancel();
     _changes = null;
+    await _relayStatus?.cancel();
+    _relayStatus = null;
+    relays = const [];
     _debounce?.cancel();
+    _debounce = null;
     for (final timer in _retry.values) {
       timer.cancel();
     }

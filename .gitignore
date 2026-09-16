@@ -10,3 +10,9 @@ app/native/
 vendor/iroh_dart/
 **/target/
 dist/
+
+# Service account keys / signing secrets - never commit
+ournet-play-*.json
+play-service-account.json
+*-service-account.json
+.ournet-signing/

@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path $PSScriptRoot -Parent
 $taskApp = Join-Path $taskRoot 'app'
-$taskPackage = 'org.ournet.ournet.profile'
+$taskPackage = 'org.chozabu.ournet.profile'
 if (-not $SkipBuild) {
   Push-Location (Join-Path $taskApp 'android')
   try {
@@ -24,7 +24,7 @@ try {
     adb -s $Device shell am force-stop $taskPackage
     # Android clears the host grant on force-stop.
     adb -s $Device shell appwidget grantbind --package $taskPackage --user current
-    $taskOutput = adb -s $Device shell am instrument -w -r -e class "org.ournet.ournet.NoteWidgetTest#$taskMethod" "$taskPackage.test/androidx.test.runner.AndroidJUnitRunner" 2>&1
+    $taskOutput = adb -s $Device shell am instrument -w -r -e class "org.chozabu.ournet.NoteWidgetTest#$taskMethod" "$taskPackage.test/androidx.test.runner.AndroidJUnitRunner" 2>&1
     $taskOutput
     if ($LASTEXITCODE -ne 0 -or ($taskOutput -join "`n") -notmatch 'OK \(1 test\)') {
       throw "Android widget check failed: $taskMethod"

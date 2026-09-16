@@ -67,7 +67,7 @@ flutter drive --profile -d DEVICE_ID --driver=test_driver/performance.dart --tar
 flutter drive --profile -d DEVICE_ID --driver=test_driver/performance.dart --target=integration_test/photo_scroll_test.dart --dart-define=PHOTO_SCENARIO=large --dart-define=WARM_CYCLES=2
 ```
 
-Android profile builds use the application ID `org.ournet.ournet.profile`
+Android profile builds use the application ID `org.chozabu.ournet.profile`
 (label "OurNet profile"), so `flutter drive --profile` never replaces the
 everyday debug/release app or its data. Some devices intermittently restart the
 first launch after installation, which makes the driver fail with
@@ -135,8 +135,12 @@ comparisons; label JIT and AOT results separately.
   (32 MiB of ciphertext). Notes/group/drive rebuilds no longer repeat public-key
   decryption for every item. Long history loops (records, drive entries, sync
   offers and received pages) yield to the event loop every 4 ms between items;
-  each item remains atomic. Sync inventories use one evidence-ID query instead
-  of parsing evidence per object.
+  each item remains atomic.
+- Sync cost must not grow with history for routine changes. The store keeps
+  each object's evidence digest current, so inventory and offer skip reconciled
+  objects without hashing or parsing them. Only records not already stored are
+  verified, in an isolate. Handoffs and receipts are signed in batches off the
+  UI isolate, and a page's writes commit in transactions.
 - UI lists share per-build derived data (profile names, unread objects, forum
   definitions and moderation, reply counts) instead of rescanning history per
   row. File presence is one query per file and positive results are remembered.
@@ -289,6 +293,97 @@ for a 12 MP photo shows a placeholder for up to ~0.6 s on that phone; and
 the 512 MiB local blob quota limits how many full-size phone originals can be
 stored locally, independent of scrolling performance.
 
+## Camera-return ANR investigation, 15 September 2026
+
+**Symptom.** After adding a photo to a note, the BV6600 Pro repeatedly showed
+"not responding". Its ANR reports (`adb shell dumpsys dropbox --print
+data_app_anr`) show why the warnings kept coming. Between two ANRs 12 minutes
+apart, the main thread used 638 s of CPU (88%), and the process averaged 341%
+CPU for 5 minutes. With Flutter's merged threading on Android, the main thread
+runs the Dart UI isolate, so a busy UI isolate delays Android input.
+
+**Cause: routine work grew with local history.** A fresh profile did not
+reproduce it: adding a 12 MP photo cost ~10 s of UI-thread CPU at 25–35%, then
+idled. The cost grows with history because every note change (each autosave,
+the attachment operation) starts a sync with connected devices. On an 825-object
+history, the phone measured:
+
+- Offer and inventory hashed evidence for **every object on every page**, in
+  both directions: 130 ms offering to an in-sync peer (87 ms stall) and 57 ms
+  per inventory. A single edit plus sync took ~850 ms with 125–160 ms stalls.
+- Initial or catch-up sync re-verified every object and evidence record already
+  stored, and every copy of the same device certificate. Verification was 34 s
+  of a 45 s PC sync, and 201 s on the phone for 825 objects.
+- Handoff and receipt signatures (pure-Dart Ed25519), and one fsync per stored
+  row, ran on the UI isolate.
+
+**Changes (core, protocol and data unchanged):**
+
+- The store keeps each object's evidence digest current as evidence is written.
+  Inventory and offer compare digests and skip reconciled objects before
+  parsing them.
+- Received objects and evidence already stored are content-addressed and were
+  verified on arrival, so only new records are sent for verification. Each
+  distinct certificate is verified once per verifier isolate. Forged new
+  evidence for a held object is still rejected (`security_test`).
+- Handoffs for a page, and receipts for a received page, are signed together in
+  a short-lived isolate on disk profiles, as publications already were.
+  Receipts for items already stored are still written if a later item fails.
+- Each item's writes, and each batch of evidence, commit in one transaction
+  (`Store.batch`). Hot statements are compiled once. Parsed evidence is cached
+  until it changes. Each record's canonical encoding is computed once.
+- Home-screen widgets are not re-sent, re-encrypted and redrawn when a change
+  leaves their content unchanged.
+
+**Repeatable journey.** `integration_test/note_history_test.dart` builds
+`NOTES`×`EDITS` note revisions (default 25×30, 825 objects), pairs a second
+device of the same person and keeps it syncing 400 ms after changes, as
+`PeerNetwork` does. It then opens a note in the full app, returns a
+12 MP fixture photo "from the camera" (with pause/resume notifications), and
+types through four autosaves while the photo is stored and previewed. It
+verifies that the text and photo reach the other device, and reports UI-thread
+CPU (Android `/proc/thread-self/stat`), frames and event-loop delay per phase.
+Both nodes run on the UI isolate, so the sync cost includes the simulated peer.
+The external camera and the network stack are not exercised.
+
+```powershell
+cd app
+flutter drive --profile -d DEVICE_ID --driver=test_driver/performance.dart --target=integration_test/note_history_test.dart
+```
+
+`NOTE_HISTORY_BASELINE.json` records single profile runs on the BV6600 Pro,
+before and after the changes:
+
+| 825 objects, BV6600 Pro | Before | After |
+|---|---:|---:|
+| Initial sync: UI-thread CPU | 71.5 s | 26.6 s |
+| Initial sync: wall time | 202 s | 94 s |
+| Initial sync: event-loop delay p95 / max | 23 / 193 ms | 4.9 / 108 ms |
+| Camera return + typing (21.6 s): UI-thread CPU | 10.5 s | 7.8 s |
+| Camera return + typing: event-loop delay p99 / max | 82 / 169 ms | 26 / 74 ms |
+| Camera return + typing: frame total span p99 | 113 ms | 47 ms |
+
+A separate probe of the same history on the phone: offering to an in-sync peer
+went from 130 ms (87 ms stall) to 20 ms (no stall), inventory from 57 to 12 ms,
+and an edit plus sync from ~850 ms to ~270 ms (stall 125–160 → 30–50 ms).
+
+Earlier changes in this investigation still apply: disk-profile publication
+(encrypt, sign, verify, ID) and draft encryption run in short-lived isolates;
+network start/stop transitions are serialized across camera pause/resume; and
+the editor allows one image picker at a time and ignores results after it
+closes.
+
+Remaining: the camera-return phase still has ~10 frames over two frame budgets
+(builds up to 50–80 ms) and uses about a third of a core. The initial sync still
+has ~100 ms stalls. Histories much larger than 825 objects have not been
+measured on the phone. Stall-free offer and inventory scale with object count
+(map lookups), while initial sync scales with the number of new records. On
+this phone, some `flutter drive` runs hang at first launch after install
+("Flutter Driver extension is taking a long time"). Stop the app and rerun with
+`--use-application-binary` pointing at the built APK. The Dart CPU profiler
+connection also drops during this journey's camera phase, so function-level
+profiles of that phase were not collected.
+
 ## Transport throughput baseline
 
 Run from `transport`:
@@ -345,3 +440,24 @@ Android battery/thermal/background measurements still require physical hardware.
 Development test times can be measured with `Measure-Command { .\tool\check.ps1 }`.
 Package build time can be measured with `Measure-Command { .\tool\package.ps1 }`.
 Separate first native builds from incremental Dart builds in comparisons.
+
+## Conversation history journey, 16 September 2026
+
+`integration_test/conversation_history_test.dart` uses two temporary disk profiles
+and 1,005 encrypted messages. After initial sync it opens an older history page,
+scrolls, then receives twelve new messages while typing. It asserts that loaded
+reading position and draft are preserved, then opens the latest page and sends
+the draft. Initial fixture creation and initial sync are outside the timed phase.
+The two nodes share the process; the journey does not exercise a WAN connection.
+
+`tool/check.ps1 -Performance -Device windows` now includes this journey after the
+existing responsiveness, photo-scroll and note-history journeys. It uses the
+same frame p95/p99 and 100 ms event-loop-delay budgets, with at least eleven
+measured frames. No timing assertion was weakened.
+
+On this Windows reference machine, all four journeys passed on the final source.
+The messaging phase measured 116 frames over 2.4 seconds: frame-stage p95 8.938 ms,
+p99 10.596 ms, maximum 10.752 ms, and maximum sampled event-loop delay 15.338 ms.
+Report: `app/build/conversation_history_test-windows.json`. This is one profile
+run, not a comparative speedup claim. No physical Android device was connected;
+Android, WAN and real voice/video acceptance remain outstanding.

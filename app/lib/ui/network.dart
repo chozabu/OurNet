@@ -38,6 +38,16 @@ extension _NetworkPages on _OurNetAppState {
         ],
       ),
       const SizedBox(height: 12),
+      ConnectionHealthCard(
+        network: network,
+        onRestart: () => act(() async {
+          final local = network.running && network.local;
+          await network.stop();
+          await network.start(local: local);
+          notice('Network restarted');
+        }),
+      ),
+      const SizedBox(height: 12),
       const Text(
         'A contact card binds a device to its owner. Confirm the identity with your friend. Both sides must add the other.',
       ),
@@ -55,14 +65,19 @@ extension _NetworkPages on _OurNetAppState {
             node.revoked.contains(c.device) ? Icons.block : Icons.devices,
           ),
           title: Text('${name(c.person)} · ${c.label}'),
-          subtitle: Text(
-            '${short(c.device)} · ${network.lastSync[c.device] ?? 'Not yet synced'}',
-          ),
+          subtitle: node.revoked.contains(c.device)
+              ? Text('${short(c.device)} · Access removed')
+              : DeviceHealthText(
+                  network: network,
+                  device: c.device,
+                  prefix: short(c.device),
+                ),
+          isThreeLine: true,
           trailing: Wrap(
             children: [
               IconButton(
                 tooltip: 'Sync this device',
-                onPressed: () => act(() => network.sync(c.device)),
+                onPressed: () => act(() => syncNow(c.device)),
                 icon: const Icon(Icons.sync),
               ),
               if (c.person == node.person)
@@ -88,6 +103,22 @@ extension _NetworkPages on _OurNetAppState {
       ),
     ],
   );
+
+  /// Syncs one device and reports the outcome, which [PeerNetwork.sync]
+  /// records rather than throws.
+  Future<void> syncNow(String device) async {
+    if (!network.running) await network.start();
+    final label = node.contacts[device]?.label ?? 'device';
+    notice('Syncing with $label…');
+    await network.sync(device);
+    final error = network.syncErrors[device];
+    notice(
+      error == null
+          ? 'Synced with $label'
+          : 'Couldn’t sync with $label. ${friendlySyncError(error)}',
+    );
+  }
+
   Widget locations(BuildContext context) => ListView(
     children: [
       WorldMap(node: node),

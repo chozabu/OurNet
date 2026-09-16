@@ -35,12 +35,16 @@ extension _NotesHome on _OurNetAppState {
     onArchived: (id, pinned) => noteArchived([id], pinned: {if (pinned) id}),
     onOpenNote: (id) => unawaited(openNote(id)),
     onReminderSet: () async => reminders?.requestPermission(),
+    pickImage: widget.pickImage,
     notice: notice,
   );
 
   Future<void> openNote(String? id, {bool checklist = false}) async {
     if (!mounted) return;
-    await noteNavigator.currentState!.push(
+    await noteNavigator.currentState!.push(noteRoute(id, checklist: checklist));
+  }
+
+  Route<void> noteRoute(String? id, {bool checklist = false}) =>
       PageRouteBuilder<void>(
         transitionDuration: const Duration(milliseconds: 260),
         reverseTransitionDuration: const Duration(milliseconds: 200),
@@ -51,48 +55,54 @@ extension _NotesHome on _OurNetAppState {
               secondaryAnimation: secondary,
               child: child,
             ),
-      ),
-    );
-  }
+      );
 
-  /// Keep's microphone button: record at once, save the audio in a new note,
-  /// transcribe it on this device and open the note.
+  /// Keep's microphone button: record at once; on stop, the recorder turns
+  /// into the new note holding the audio and, with live system speech, its
+  /// transcript. Otherwise transcription starts once the note is open.
   Future<void> captureVoice() async {
     final context = noteNavigator.currentContext;
     if (context == null) return;
-    final recording = await recordVoice(context);
-    if (recording == null || !mounted) return;
-    final file = File(recording.path);
-    try {
-      final note = await notes.create();
-      final attached = await notes.attach(
-        note.id,
-        note.epoch,
-        file.openRead(),
-        name: recording.name,
-        meta: {
-          'kind': 'audio',
-          'mime': recording.mime,
-          'duration': recording.duration,
-        },
-      );
-      unawaited(openNote(note.id));
-      final speech = this.speech;
-      if (speech.engine == 'off') return;
-      if (speech.engine == 'whisper' && !await speech.installed(speech.model)) {
-        final dialogContext = noteNavigator.currentContext;
-        if (dialogContext == null ||
-            !dialogContext.mounted ||
-            !await offerSpeechModel(dialogContext, speech)) {
-          return;
+    await recordVoice(
+      context,
+      speech: speech,
+      save: (recording) async {
+        final file = File(recording.path);
+        try {
+          final note = await notes.create();
+          final attached = await notes.attach(
+            note.id,
+            note.epoch,
+            file.openRead(),
+            name: recording.name,
+            meta: {
+              'kind': 'audio',
+              'mime': recording.mime,
+              'duration': recording.duration,
+            },
+          );
+          if (recording.transcript case final text?) {
+            await speech.saveTranscript(note.id, attached, text);
+          } else {
+            // After the note opens, so a model download can be offered.
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => unawaited(
+                transcribeRecording(
+                  noteNavigator.currentContext,
+                  speech,
+                  note.id,
+                  attached,
+                ),
+              ),
+            );
+          }
+          return noteRoute(note.id);
+        } finally {
+          // The note opens without waiting for the temporary file to go.
+          unawaited(file.delete().then<void>((_) {}, onError: (Object _) {}));
         }
-      }
-      speech.transcribe(note.id, attached);
-    } catch (e) {
-      notice('Could not save the recording: $e');
-    } finally {
-      if (await file.exists()) await file.delete();
-    }
+      },
+    );
   }
 
   /// Keep's drawing button: a new note holding one drawing.
@@ -164,38 +174,59 @@ extension _NotesHome on _OurNetAppState {
     }
   }
 
-  void noteRemoved(String id) {
-    update(() => hiddenNotes.add(id));
+  void noteRemoved(String id) => notesRemoved([id]);
+
+  /// One Undo snackbar for a whole removal, however many notes it covers.
+  void notesRemoved(List<String> ids) {
+    if (ids.isEmpty) return;
+    update(() => hiddenNotes.addAll(ids));
     messenger.currentState
       ?..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: const Text('Note removed'),
+          // Action snackbars persist by default; this one should time out.
+          persist: false,
+          content: Text(
+            ids.length == 1 ? 'Note removed' : '${ids.length} notes removed',
+          ),
           action: SnackBarAction(
             label: 'Undo',
-            onPressed: () => unawaited(setNoteRemoved(id, false)),
+            onPressed: () => unawaited(setNotesRemoved(ids, false)),
           ),
         ),
       );
   }
 
-  Future<void> setNoteRemoved(String id, bool removed) async {
-    update(() => removed ? hiddenNotes.add(id) : hiddenNotes.remove(id));
-    try {
-      final note = await notes.get(id, includeUnavailable: true);
-      if (note == null) throw StateError('This note is unavailable.');
-      await notes.edit(
-        id,
-        note.epoch,
-        'deleted',
-        removed,
-        note.parents('deleted'),
-      );
-      if (removed) noteRemoved(id);
-    } catch (e) {
-      update(() => removed ? hiddenNotes.remove(id) : hiddenNotes.add(id));
-      notice('$e');
+  Future<void> setNoteRemoved(String id, bool removed) =>
+      setNotesRemoved([id], removed);
+
+  Future<void> setNotesRemoved(List<String> ids, bool removed) async {
+    update(() {
+      for (final id in ids) {
+        removed ? hiddenNotes.add(id) : hiddenNotes.remove(id);
+      }
+    });
+    final done = <String>[];
+    Object? error;
+    for (final id in ids) {
+      try {
+        final note = await notes.get(id, includeUnavailable: true);
+        if (note == null) throw StateError('This note is unavailable.');
+        await notes.edit(
+          id,
+          note.epoch,
+          'deleted',
+          removed,
+          note.parents('deleted'),
+        );
+        done.add(id);
+      } catch (e) {
+        error ??= e;
+        update(() => removed ? hiddenNotes.remove(id) : hiddenNotes.add(id));
+      }
     }
+    if (removed) notesRemoved(done);
+    if (error != null) notice('$error');
   }
 
   /// Offers Undo for an archive, restoring any pins archiving cleared.
@@ -205,6 +236,7 @@ extension _NotesHome on _OurNetAppState {
       ?..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
+          persist: false,
           content: Text(
             ids.length == 1 ? 'Note archived' : '${ids.length} notes archived',
           ),
@@ -969,9 +1001,7 @@ extension _NotesHome on _OurNetAppState {
                     update(selectedNotes.clear);
                   case 'remove':
                     update(selectedNotes.clear);
-                    for (final id in ids) {
-                      await setNoteRemoved(id, true);
-                    }
+                    await setNotesRemoved(ids, true);
                 }
               },
               itemBuilder: (_) => [
@@ -1331,9 +1361,7 @@ extension _NotesHome on _OurNetAppState {
             const SingleActivator(LogicalKeyboardKey.delete): () {
               final ids = selectedNotes.toList();
               update(selectedNotes.clear);
-              for (final id in ids) {
-                unawaited(setNoteRemoved(id, true));
-              }
+              unawaited(setNotesRemoved(ids, true));
             },
             const SingleActivator(LogicalKeyboardKey.keyA, control: true): () =>
                 update(() {

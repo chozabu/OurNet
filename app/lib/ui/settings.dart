@@ -63,13 +63,9 @@ extension _SettingsPages on _OurNetAppState {
                 node.revoked.contains(c.device) ? Icons.block : Icons.devices,
               ),
               title: Text(c.label),
-              subtitle: Text(
-                node.revoked.contains(c.device)
-                    ? 'Access removed'
-                    : network.lastSync[c.device] == null
-                    ? 'Waiting to sync'
-                    : 'Last synced ${network.lastSync[c.device]}',
-              ),
+              subtitle: node.revoked.contains(c.device)
+                  ? const Text('Access removed')
+                  : DeviceHealthText(network: network, device: c.device),
               trailing:
                   node.identity.root == null || node.revoked.contains(c.device)
                   ? null
@@ -133,6 +129,7 @@ extension _SettingsPages on _OurNetAppState {
                   'objects': node.store.count,
                   'devices': node.contacts.length,
                   'networkRunning': network.running,
+                  'sync': syncDiagnostics(network),
                   'driveOffline': driveSync.enabled,
                   'driveError': driveSync.error,
                   'performance': performance.snapshot(),

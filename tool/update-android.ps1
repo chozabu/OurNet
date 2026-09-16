@@ -49,7 +49,7 @@ if (!(Test-Path -LiteralPath $taskApk)) { throw 'No debug APK found. Run without
 Write-Host "Updating OurNet on $Device (keeping profile and files)..."
 & $taskAdb -s $Device install -r $taskApk
 if ($LASTEXITCODE -ne 0) { throw 'Install failed. No uninstall or data reset was attempted. Check the adb error above.' }
-& $taskAdb -s $Device shell am start -S -n org.ournet.ournet/.MainActivity
+& $taskAdb -s $Device shell am start -S -n org.chozabu.ournet/.MainActivity
 if ($LASTEXITCODE -ne 0) { throw 'Installed successfully, but Android could not launch OurNet.' }
 if ($Desktop) {
   if ($SkipBuild) { & (Join-Path $PSScriptRoot 'run.ps1') -Profile $Profile }

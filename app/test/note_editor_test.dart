@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ournet/ui/note_editor.dart';
 import 'package:ournet/services/drafts.dart';
@@ -33,6 +35,69 @@ Future<void> flush(WidgetTester tester) async {
 
 void main() {
   const never = Duration(days: 1);
+  testWidgets(
+    'camera is single flight and ignores a result after editor closes',
+    (tester) async {
+      final node = Node(await LocalIdentity.create(), Store());
+      final notes = Notes(node);
+      final picked = Completer<XFile?>();
+      var calls = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: NoteEditor(
+            notes: notes,
+            drafts: DraftStore(node),
+            friends: const {},
+            personName: (_) => 'You',
+            pickImage: (source) {
+              expect(source, ImageSource.camera);
+              calls++;
+              return picked.future;
+            },
+          ),
+        ),
+      );
+      final state = editorState(tester);
+      final pending = state.addImage(ImageSource.camera);
+      await state.addImage(ImageSource.camera);
+      expect(calls, 1);
+      await tester.pumpWidget(const SizedBox());
+      picked.complete(XFile('unused-photo.jpg'));
+      await pending;
+      expect(tester.takeException(), isNull);
+      expect(await notes.list(), isEmpty);
+      await node.close();
+    },
+  );
+
+  testWidgets(
+    'cancelled camera can be reopened without creating an empty note',
+    (tester) async {
+      final node = Node(await LocalIdentity.create(), Store());
+      final notes = Notes(node);
+      var calls = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: NoteEditor(
+            notes: notes,
+            drafts: DraftStore(node),
+            friends: const {},
+            personName: (_) => 'You',
+            pickImage: (_) async {
+              calls++;
+              return null;
+            },
+          ),
+        ),
+      );
+      await editorState(tester).addImage(ImageSource.camera);
+      await editorState(tester).addImage(ImageSource.camera);
+      expect(calls, 2);
+      expect(await notes.list(), isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      await node.close();
+    },
+  );
   testWidgets(
     'incoming edits preserve unsaved text and saving exposes recovery',
     (tester) async {

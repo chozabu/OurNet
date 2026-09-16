@@ -66,7 +66,7 @@ The debug APK is built at:
 `app\build\app\outputs\flutter-apk\app-debug.apk`
 
 Install it as a development APK on your own device, or use
-`flutter run -d <device-id>` from `app`. The package is `org.ournet.ournet`, separate
+`flutter run -d <device-id>` from `app`. The package is `org.chozabu.ournet`, separate
 from the old prototype. APK compilation has been checked; on-device behaviour
 must still be verified. Background receipt while the app is suspended is not
 promised. Private messages use encrypted device envelopes, not a forward-secret

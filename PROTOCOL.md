@@ -59,6 +59,10 @@ exchange up to 32 objects and about 1 MiB per page, with at most 16 rounds in on
 sync. Exhausted pages schedule a continuation after yielding. Changes trigger
 debounced sync; failed peers get exponential retry backoff.
 The UI exposes manual sync. A sleeping phone stops idle networking.
+A pull request and its reply may carry an optional `build` string (at most 64
+characters) naming the sender's app build; peers ignore it, or show it when it
+differs from their own. A failed inbound handshake is logged and counted, and
+the endpoint keeps accepting further connections.
 
 Local limits: 10,000 objects, 256 KiB per signed object, 128 evidence records per
 object, 64 MiB per file, 512 MiB total stored blob bytes, and four simultaneous

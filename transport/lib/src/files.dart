@@ -9,6 +9,7 @@ import 'network.dart';
 
 class Files {
   static final _previews = Expando<_PreviewQueue>();
+  static final _transfers = Expando<_TransferQueue>();
   final Node node;
   final PeerNetwork network;
   Files(this.node, this.network);
@@ -141,11 +142,15 @@ class Files {
     );
   }
 
-  Stream<List<int>> _plain(SignedObject object) async* {
+  Stream<List<int>> _plain(
+    SignedObject object, {
+    void Function(int, int)? onProgress,
+  }) async* {
     final payload = await node.content(object);
     if (payload == null || payload['chunks'] is! List)
       throw StateError('File is not readable by this device');
     var size = 0;
+    onProgress?.call(0, payload['size'] as int);
     final key = payload['key'] == null ? null : unb64(payload['key']);
     for (final id in (payload['chunks'] as List).cast<String>()) {
       var plain = await node.blobs.decode(id, key);
@@ -183,6 +188,7 @@ class Files {
       size += plain.length;
       if (size > maxSize || size > payload['size'])
         throw StateError('File size exceeded');
+      onProgress?.call(size, payload['size'] as int);
       yield plain;
     }
     if (size != payload['size']) throw StateError('File size mismatch');
@@ -229,25 +235,42 @@ class Files {
   }
 
   /// Retain verified encrypted chunks without writing plaintext to disk.
-  Future<void> cache(SignedObject object) async {
-    await for (final _ in _plain(object)) {}
-  }
+  Future<void> cache(
+    SignedObject object, {
+    void Function(int, int)? onProgress,
+  }) => (_transfers[node] ??= _TransferQueue()).run(
+    'cache/${object.id}',
+    () async {
+      await for (final _ in _plain(object, onProgress: onProgress)) {}
+    },
+  );
 
-  Future<void> save(SignedObject object, String path) async {
-    final target = File('$path.ournet-part');
-    final output = await target.open(mode: FileMode.write);
-    try {
-      await for (final data in _plain(object)) {
-        await output.writeFrom(data);
+  /// Verified encrypted chunks remain cached after interruption, including
+  /// across process restarts. Retries fetch only missing chunks. The plaintext
+  /// export is temporary and is removed on failure.
+  Future<void> save(
+    SignedObject object,
+    String path, {
+    void Function(int, int)? onProgress,
+  }) => (_transfers[node] ??= _TransferQueue()).run(
+    'save/${object.id}/$path',
+    () async {
+      final target = File('$path.${randomId()}.ournet-part');
+      final output = await target.open(mode: FileMode.write);
+      var closed = false;
+      try {
+        await for (final data in _plain(object, onProgress: onProgress)) {
+          await output.writeFrom(data);
+        }
+        await output.close();
+        closed = true;
+        await target.rename(path);
+      } finally {
+        if (!closed) await output.close();
+        if (await target.exists()) await target.delete();
       }
-      await output.close();
-      await target.rename(path);
-    } catch (_) {
-      await output.close();
-      if (await target.exists()) await target.delete();
-      rethrow;
-    }
-  }
+    },
+  );
 }
 
 /// Bound preview memory/CPU pressure and share duplicate in-flight requests.
@@ -268,6 +291,43 @@ class _PreviewQueue {
       _active++;
       try {
         result.complete(await load());
+      } catch (error, stack) {
+        result.completeError(error, stack);
+      } finally {
+        _pending.remove(key);
+        _active--;
+        if (_waiting.isNotEmpty) _waiting.removeFirst()();
+      }
+    }
+
+    if (_active < 2) {
+      start();
+    } else {
+      _waiting.add(start);
+    }
+    return result.future;
+  }
+}
+
+/// Bound original transfers independently of preview memory. Callers retry a
+/// full queue explicitly; duplicate cache/export requests share existing work.
+class _TransferQueue {
+  final _pending = <String, Future<void>>{};
+  final _waiting = Queue<void Function()>();
+  int _active = 0;
+
+  Future<void> run(String key, Future<void> Function() load) {
+    final existing = _pending[key];
+    if (existing != null) return existing;
+    if (_pending.length >= 16)
+      return Future.error(StateError('Transfer queue is full; retry shortly'));
+    final result = Completer<void>();
+    _pending[key] = result.future;
+    void start() async {
+      _active++;
+      try {
+        await load();
+        result.complete();
       } catch (error, stack) {
         result.completeError(error, stack);
       } finally {

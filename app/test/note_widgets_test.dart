@@ -22,7 +22,7 @@ void main() {
       'value': true,
       'parents': [],
     };
-    var pending = <Map<String, dynamic>>[operation], ack = 0;
+    var pending = <Map<String, dynamic>>[operation], ack = 0, publishes = 0;
     Map<String, dynamic>? published;
     Map<String, dynamic>? launch = {
       'id': 'open-1',
@@ -51,6 +51,7 @@ void main() {
               pending = [];
               return null;
             case 'publish':
+              publishes++;
               published = Map<String, dynamic>.from(call.arguments);
               return null;
             case 'claim':
@@ -76,6 +77,10 @@ void main() {
       (published!['snapshots'] as List).single['checks'].single['done'],
       true,
     );
+    // Unchanged widget content is not sent (re-encrypted and redrawn) again.
+    final sent = publishes;
+    await service.drain();
+    expect(publishes, sent);
     await notes.edit(note.id, note.epoch, 'deleted', true, []);
     await service.drain();
     expect((published!['snapshots'] as List).single['available'], false);

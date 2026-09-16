@@ -138,9 +138,8 @@ void main() {
       'created': 1,
     });
     node.store.putEvidence(evidence);
-    expect(node.store.evidenceIds(), {
-      first.first.id: [evidence.id],
-    });
+    expect(node.store.hasEvidence(first.first.id, evidence.id), isTrue);
+    expect(node.store.evidenceDigest(first.first.id), hash([evidence.id]));
     node.block(node.person, true);
     expect(await node.content(first.first), isNull);
   });

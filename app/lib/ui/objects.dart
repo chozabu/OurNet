@@ -1,7 +1,11 @@
 part of 'app.dart';
 
 extension _ObjectsPages on _OurNetAppState {
-  Widget objectList(BuildContext context, List<SignedObject> objects) {
+  Widget objectList(
+    BuildContext context,
+    List<SignedObject> objects, {
+    ScrollController? controller,
+  }) {
     objects = objects.where(contentVisible).toList();
     if (objects.isEmpty) {
       return empty(
@@ -11,6 +15,7 @@ extension _ObjectsPages on _OurNetAppState {
       );
     }
     return ListView.builder(
+      controller: controller,
       key: PageStorageKey('objects/$tab/$contact/$space/$selectedThread'),
       itemCount: objects.length,
       itemBuilder: (context, index) {
@@ -137,10 +142,20 @@ extension _ObjectsPages on _OurNetAppState {
                       ),
                     if (p['chunks'] != null)
                       OutlinedButton.icon(
-                        onPressed: () => saveFile(context, o, p),
+                        onPressed: fileProgress.containsKey(o.id)
+                            ? null
+                            : () => saveFile(context, o, p),
                         icon: const Icon(Icons.download),
-                        label: Text('${p['name']} · ${p['size']} bytes'),
+                        label: Text(
+                          fileProgress.containsKey(o.id)
+                              ? '${p['name']} · preparing ${(fileProgress[o.id]! * 100).round()}%'
+                              : fileErrors.containsKey(o.id)
+                              ? '${p['name']} · Retry download'
+                              : '${p['name']} · ${p['size']} bytes',
+                        ),
                       ),
+                    if (fileErrors[o.id] case final error?)
+                      Text('$error · Verified chunks are kept for retry.'),
                     if (o.kind == 'post' && selectedThread == null)
                       TextButton.icon(
                         onPressed: () => update(() {
@@ -208,7 +223,20 @@ extension _ObjectsPages on _OurNetAppState {
               o.audience.contains(e.certificate.person) &&
               e.certificate.person != node.person,
         );
-    return receipts.isEmpty
+    final helperAccepted = node.store
+        .evidence(o.id)
+        .any(
+          (e) =>
+              e.data['domain'] == 'ournet/receipt/2' &&
+              e.certificate.device != node.identity.device &&
+              ((o.data['via'] as List).contains(e.certificate.person) ||
+                  e.certificate.person == node.person),
+        );
+    return receipts.isEmpty && helperAccepted
+        ? attachment
+              ? 'Attachment details stored on another device · original still needs a source'
+              : 'Stored by a forwarding device · waiting for recipient'
+        : receipts.isEmpty
         ? (network.running
               ? 'Saved here · waiting for recipient'
               : 'Saved here · sends when connected')
@@ -353,22 +381,55 @@ extension _ObjectsPages on _OurNetAppState {
       ),
     );
   });
-  void saveFile(BuildContext context, SignedObject o, Json payload) =>
-      act(() async {
-        final temp = File(
-          '${(await getTemporaryDirectory()).path}/${o.id}.download',
-        );
-        try {
-          await files.save(o, temp.path);
-          final destination = await FilePicker.saveFile(
-            fileName: payload['name'],
-            bytes: await temp.readAsBytes(),
-          );
-          if (destination != null) notice('File saved');
-        } finally {
-          if (await temp.exists()) await temp.delete();
-        }
-      });
+  Future<void> saveFile(
+    BuildContext context,
+    SignedObject o,
+    Json payload,
+  ) async {
+    if (fileProgress.containsKey(o.id)) return;
+    if (fileProgress.length >= 2) {
+      notice('Two files are already being prepared. Retry when one finishes.');
+      return;
+    }
+    update(() {
+      fileProgress[o.id] = 0;
+      fileErrors.remove(o.id);
+    });
+    File? temp;
+    final progressClock = Stopwatch()..start();
+    var lastUpdate = -100;
+    try {
+      temp = File(
+        '${(await getTemporaryDirectory()).path}/${o.id}.${randomId()}.download',
+      );
+      await files.save(
+        o,
+        temp.path,
+        onProgress: (done, total) {
+          if (done == total ||
+              progressClock.elapsedMilliseconds - lastUpdate >= 100) {
+            lastUpdate = progressClock.elapsedMilliseconds;
+            update(() => fileProgress[o.id] = total == 0 ? 1 : done / total);
+          }
+        },
+      );
+      if (!mounted) return;
+      final destination = await FilePicker.saveFile(
+        fileName: payload['name'],
+        bytes: await temp.readAsBytes(),
+      );
+      if (destination != null) notice('File saved');
+    } catch (error) {
+      update(() => fileErrors[o.id] = 'Download interrupted: $error');
+    } finally {
+      try {
+        if (temp != null && await temp.exists()) await temp.delete();
+      } finally {
+        update(() => fileProgress.remove(o.id));
+      }
+    }
+  }
+
   Widget publicFilePage(BuildContext context) => Column(
     children: [
       Row(

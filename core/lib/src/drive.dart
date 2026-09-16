@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'model.dart';
 import 'node.dart';
 
@@ -23,45 +24,9 @@ class DriveEntry {
 class Drive {
   final Node node;
   Drive(this.node);
-  Future<List<DriveEntry>> entries() async {
-    final groups = <String, List<DriveVersion>>{};
-    final slice = TimeSlice();
-    for (final o in node.store.objects(kind: 'drive', limit: Node.maxObjects)) {
-      await slice.pause();
-      if (o.author != node.person ||
-          o.isPublic ||
-          o.audience.length != 1 ||
-          o.audience.single != node.person)
-        continue;
-      final p = await node.content(o);
-      if (p != null) (groups[p['entry']] ??= []).add(DriveVersion(o, p));
-    }
-    return groups.values
-        .map((versions) {
-          final unique = <String, DriveVersion>{};
-          for (final v in versions) {
-            unique.putIfAbsent(v.data['revision'], () => v);
-          }
-          versions = unique.values.toList();
-          final ids = versions.map((v) => v.data['revision']).toSet();
-          final superseded = <String>{
-            for (final v in versions)
-              for (final parent in v.data['parents'])
-                if (ids.contains(parent)) parent,
-          };
-          final heads =
-              versions
-                  .where((v) => !superseded.contains(v.data['revision']))
-                  .toList()
-                ..sort((a, b) {
-                  final time = b.object.created.compareTo(a.object.created);
-                  return time == 0 ? a.object.id.compareTo(b.object.id) : time;
-                });
-          return DriveEntry(versions, heads);
-        })
-        .where((e) => e.heads.isNotEmpty)
-        .toList();
-  }
+  static final _indexes = Expando<_DriveIndex>();
+  Future<List<DriveEntry>> entries() =>
+      (_indexes[node] ??= _DriveIndex(node)).read();
 
   Future<SignedObject> write(Json data, {List<String> parents = const []}) =>
       node.publish(
@@ -106,4 +71,69 @@ class Drive {
     }
     return count;
   }
+}
+
+/// Decrypted state is memory-only. Restart rebuilds once; subsequent reads
+/// consume only newly arrived records, including reshared older revisions.
+class _DriveIndex {
+  final Node node;
+  int cursor = 0;
+  final groups = <String, _DriveGroup>{};
+  Future<List<DriveEntry>>? active;
+  _DriveIndex(this.node);
+  Future<List<DriveEntry>> read() =>
+      active ??= _read().whenComplete(() => active = null);
+  Future<List<DriveEntry>> _read() async {
+    final slice = TimeSlice();
+    while (true) {
+      final page = node.store.objectsAfter('drive', cursor);
+      if (page.isEmpty) break;
+      for (final (sequence, o) in page) {
+        await slice.pause();
+        if (o.author == node.person &&
+            !o.isPublic &&
+            o.audience.length == 1 &&
+            o.audience.single == node.person) {
+          final payload = await node.content(o);
+          if (payload != null) {
+            (groups[payload['entry']] ??= _DriveGroup()).add(
+              DriveVersion(o, payload),
+            );
+          }
+        }
+        cursor = sequence;
+      }
+    }
+    return [
+      for (final group in groups.values)
+        if (group.heads.isNotEmpty) group.view,
+    ];
+  }
+}
+
+class _DriveGroup {
+  final revisions = <String>{};
+  final superseded = <String>{};
+  final history = <DriveVersion>[];
+  final heads = <String, DriveVersion>{};
+  DriveEntry? cached;
+  void add(DriveVersion version) {
+    final id = version.data['revision'] as String;
+    if (!revisions.add(id)) return;
+    history.add(version);
+    for (final parent in (version.data['parents'] as List).cast<String>()) {
+      superseded.add(parent);
+      heads.remove(parent);
+    }
+    if (!superseded.contains(id)) heads[id] = version;
+    cached = null;
+  }
+
+  DriveEntry get view => cached ??= DriveEntry(
+    UnmodifiableListView(history),
+    heads.values.toList()..sort((a, b) {
+      final time = b.object.created.compareTo(a.object.created);
+      return time == 0 ? a.object.id.compareTo(b.object.id) : time;
+    }),
+  );
 }

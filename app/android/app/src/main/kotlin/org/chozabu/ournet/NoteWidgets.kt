@@ -1,4 +1,4 @@
-package org.ournet.ournet
+package org.chozabu.ournet
 
 import android.app.Activity
 import android.app.PendingIntent

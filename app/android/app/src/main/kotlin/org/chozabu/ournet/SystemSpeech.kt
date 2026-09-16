@@ -1,4 +1,4 @@
-package org.ournet.ournet
+package org.chozabu.ournet
 
 import android.content.Context
 import android.content.Intent
@@ -13,13 +13,20 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 /** Optional transcription through the system speech service, which may send
- * audio to its provider. Chosen explicitly in Settings; the default is
- * on-device Whisper. Needs Android 13 to read audio from a file rather than
- * the microphone, so an existing recording can be transcribed. */
+ * audio to its provider. Chosen explicitly by the person, never by default.
+ * Needs Android 13 to read audio from a file rather than the microphone, so
+ * an existing recording can be transcribed. Live transcription while
+ * recording is handled by [LiveSpeech]. */
 object SystemSpeech {
     fun attach(context: Context, channel: MethodChannel) {
+        val live = LiveSpeech(context, channel)
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
+                "liveStatus" -> live.status(call.argument<String>("language") ?: "auto", result)
+                "liveStart" -> live.start(call.argument<String>("path")!!, call.argument<String>("language") ?: "auto",
+                    call.argument<String>("source"), call.argument<String>("engine") ?: "auto", result)
+                "liveStop" -> live.stop((call.argument<Int>("settle") ?: 2000).toLong(), result)
+                "liveCancel" -> live.cancel(result)
                 "available" -> result.success(
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                         SpeechRecognizer.isRecognitionAvailable(context))
@@ -70,7 +77,7 @@ object SystemSpeech {
         })
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            if (language != "auto") putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLocale(language))
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, input)
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)

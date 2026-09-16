@@ -22,9 +22,9 @@ foreach ($taskPackage in @('core', 'transport', 'app')) {
 if ($Performance) {
   Push-Location (Join-Path $taskRoot 'app')
   try {
-    # Android profile builds install as org.ournet.ournet.profile, separate
+    # Android profile builds install as org.chozabu.ournet.profile, separate
     # from the everyday app and its data. Each report is kept by name.
-    foreach ($taskTarget in @('responsiveness_test', 'photo_scroll_test')) {
+    foreach ($taskTarget in @('responsiveness_test', 'photo_scroll_test', 'note_history_test', 'conversation_history_test')) {
       Remove-Item build/integration_response_data.json -ErrorAction SilentlyContinue
       flutter drive --profile -d $Device --driver=test_driver/performance.dart "--target=integration_test/$taskTarget.dart" --dart-define=PERF_ENFORCE=true
       $taskExit = $LASTEXITCODE

@@ -1,4 +1,4 @@
-package org.ournet.ournet
+package org.chozabu.ournet
 
 import android.content.Context
 import android.content.Intent
@@ -16,6 +16,7 @@ import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     private val worker = Executors.newSingleThreadExecutor()
+    private var folders: FolderAccess? = null
     private var channel: MethodChannel? = null
     private val queueDir get() = File(filesDir, "share-inbox").apply { mkdirs() }
 
@@ -32,6 +33,7 @@ class MainActivity : FlutterActivity() {
     override fun shouldDestroyEngineWithHost() = !isChangingConfigurations
 
     override fun onDestroy() {
+        folders?.close()
         if (isChangingConfigurations) flutterEngine?.let {
             FlutterEngineCache.getInstance().put(RELAUNCH_ENGINE, it)
         }
@@ -40,6 +42,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
+        folders = FolderAccess(this, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/folders"))
         WidgetStore.attach(applicationContext, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/widgets"))
         WidgetStore.receiveLaunch(applicationContext, intent)
         SystemSpeech.attach(applicationContext, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/speech"))
@@ -70,6 +73,10 @@ class MainActivity : FlutterActivity() {
             }
         }
         receive(intent)
+    }
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (folders?.activityResult(requestCode, resultCode, data) == true) return
+        super.onActivityResult(requestCode, resultCode, data)
     }
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

@@ -136,28 +136,15 @@ extension _SocialPages on _OurNetAppState {
                           leading: const Icon(Icons.person_outline),
                           title: Text(name(person)),
                           subtitle: recentActivity(
-                            messageObjects()
-                                .where(
-                                  (o) =>
-                                      !o.isPublic &&
-                                      ((o.author == person &&
-                                              o.audience.contains(
-                                                node.person,
-                                              )) ||
-                                          (o.author == node.person &&
-                                              o.audience.contains(person))),
-                                )
-                                .toList(),
+                            node.store.conversation(
+                              node.person,
+                              person,
+                              limit: 1,
+                            ),
                             'Private conversation',
                           ),
                           selected: contact == person,
-                          trailing: unreadBadge(
-                            unreadObjects('message').where(
-                              (o) =>
-                                  o.author == person &&
-                                  o.audience.contains(node.person),
-                            ),
-                          ),
+                          trailing: conversationUnreadBadge(person),
                           onTap: () => update(() {
                             contact = person;
                             showConversation = true;
@@ -292,13 +279,19 @@ extension _SocialPages on _OurNetAppState {
     ],
   );
 
+  Widget conversationUnreadBadge(String person) {
+    final count = node.store.conversationUnread(
+      node.person,
+      peer: person,
+      blocked: node.blocked,
+    );
+    return Badge.count(count: count, isLabelVisible: count > 0);
+  }
+
   Widget unreadBadge(Iterable<SignedObject> unread) {
     final count = unread.length;
     return Badge.count(count: count, isLabelVisible: count > 0);
   }
-
-  List<SignedObject> messageObjects() =>
-      memo('messages', () => node.store.objects(kind: 'message'));
 
   /// Direct reply counts for every post, computed once per build.
   Map<String, int> replyCounts() => memo('replies', () {
@@ -357,6 +350,146 @@ extension _SocialPages on _OurNetAppState {
     return depth;
   }
 
+  int compareMessages(SignedObject a, SignedObject b) {
+    final time = b.created.compareTo(a.created);
+    return time == 0 ? a.id.compareTo(b.id) : time;
+  }
+
+  Future<void> refreshConversations() async {
+    final end = node.store.insertionCursor;
+    while (conversationCursor < end) {
+      final page = node.store.insertedAfter(conversationCursor, ['message']);
+      if (page.isEmpty) break;
+      for (final (cursor, object) in page) {
+        conversationCursor = cursor;
+        final peers = object.author == node.person
+            ? object.audience
+            : object.audience.contains(node.person)
+            ? [object.author]
+            : <String>[];
+        for (final peer in peers) {
+          final loaded = conversationOlder[peer];
+          if (loaded == null) continue;
+          final scroll = conversationScroll[peer];
+          if (loaded.isNotEmpty &&
+              (conversationPending.contains(peer) ||
+                  scroll == null ||
+                  !scroll.hasClients ||
+                  scroll.offset > 16)) {
+            // Do not move the reader's visible messages under background sync.
+            // Keep only a dirty flag, not an unbounded queue of unseen arrivals.
+            conversationPending.add(peer);
+            continue;
+          }
+          // Ignore arrivals older than the loaded range until that page opens.
+          if (loaded.isNotEmpty &&
+              !conversationEnd.contains(peer) &&
+              compareMessages(object, loaded.last) > 0) {
+            continue;
+          }
+          var low = 0, high = loaded.length;
+          while (low < high) {
+            final mid = (low + high) ~/ 2;
+            if (compareMessages(loaded[mid], object) < 0) {
+              low = mid + 1;
+            } else {
+              high = mid;
+            }
+          }
+          if (low == loaded.length || loaded[low].id != object.id) {
+            loaded.insert(low, object);
+          }
+        }
+      }
+      await Future<void>.delayed(Duration.zero);
+    }
+    if (conversationCursor < end) conversationCursor = end;
+  }
+
+  List<String> messageHelpers(String recipient) {
+    final helper = node.store.setting('messageHelper/$recipient');
+    return helper is String &&
+            people.contains(helper) &&
+            helper != recipient &&
+            !node.blocked.contains(helper)
+        ? [helper]
+        : const [];
+  }
+
+  Future<void> chooseMessageHelper(BuildContext context) async {
+    final recipient = contact;
+    if (recipient == null) return;
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Optional text forwarding'),
+        children: [
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text(
+              'A chosen contact can retain encrypted text messages while you are offline. '
+              'Both people must connect to that helper, and it must remain available. '
+              'It cannot read message text, but can see routing metadata. '
+              'This does not forward attachment originals or wake sleeping phones. '
+              'Changes apply to new text messages only. Your own linked devices can also hold messages.',
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, ''),
+            child: const Text('Direct and my linked devices only'),
+          ),
+          for (final person in people.where(
+            (p) => p != recipient && p != node.person,
+          ))
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, person),
+              child: Text(name(person)),
+            ),
+        ],
+      ),
+    );
+    if (chosen != null) {
+      update(
+        () => node.store.set(
+          'messageHelper/$recipient',
+          chosen.isEmpty ? null : chosen,
+        ),
+      );
+    }
+  }
+
+  Future<void> sendConversationMessage() async {
+    final recipient = contact;
+    if (recipient == null || sendingMessages.contains(recipient)) return;
+    final draftKey = composerContext;
+    final submitted = composer.text;
+    if (submitted.trim().isEmpty) return;
+    update(() {
+      sendingMessages.add(recipient);
+      messageErrors.remove(recipient);
+    });
+    try {
+      await node.publish(
+        'message',
+        {'text': submitted.trim()},
+        space: '_messages',
+        audience: [recipient],
+        via: messageHelpers(recipient),
+      );
+    } catch (error) {
+      update(() => messageErrors[recipient] = 'Could not save message: $error');
+      return;
+    } finally {
+      update(() => sendingMessages.remove(recipient));
+    }
+    // A draft persistence failure must never offer to publish this message twice.
+    try {
+      await finishDraft(draftKey, submitted);
+    } catch (error) {
+      notice('Message saved; could not update draft: $error');
+    }
+  }
+
   Widget messageDetail(BuildContext context) {
     if (contact == null || !people.contains(contact)) {
       return empty(
@@ -365,14 +498,15 @@ extension _SocialPages on _OurNetAppState {
         Icons.chat_bubble_outline,
       );
     }
-    final objects = messageObjects()
-        .where(
-          (o) =>
-              !o.isPublic &&
-              ((o.author == node.person && o.audience.contains(contact)) ||
-                  (o.author == contact && o.audience.contains(node.person))),
-        )
-        .toList();
+    final scroll = conversationScroll.putIfAbsent(
+      contact!,
+      ScrollController.new,
+    );
+    final objects = conversationOlder.putIfAbsent(contact!, () {
+      final page = node.store.conversation(node.person, contact!);
+      if (page.length < 50) conversationEnd.add(contact!);
+      return page;
+    });
     return Column(
       children: [
         Row(
@@ -381,6 +515,17 @@ extension _SocialPages on _OurNetAppState {
               child: Text(
                 name(contact!),
                 style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            IconButton(
+              tooltip: messageHelpers(contact!).isEmpty
+                  ? 'Optional text forwarding'
+                  : 'Text forwarding helper enabled',
+              onPressed: () => chooseMessageHelper(context),
+              icon: Icon(
+                messageHelpers(contact!).isEmpty
+                    ? Icons.cloud_outlined
+                    : Icons.cloud_done_outlined,
               ),
             ),
             IconButton(
@@ -400,6 +545,12 @@ extension _SocialPages on _OurNetAppState {
             ),
           ],
         ),
+        ConversationDelivery(
+          key: ValueKey('delivery/$contact'),
+          network: network,
+          person: contact!,
+          helpers: messageHelpers(contact!),
+        ),
         Align(
           alignment: Alignment.centerRight,
           child: TextButton.icon(
@@ -416,24 +567,65 @@ extension _SocialPages on _OurNetAppState {
                     refresh();
                   }),
             icon: const Icon(Icons.done_all),
-            label: const Text('Mark conversation read'),
+            label: const Text('Mark loaded messages read'),
           ),
         ),
-        Expanded(child: objectList(context, objects)),
+        SizedBox(
+          height: 40,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: conversationPending.contains(contact)
+                ? TextButton.icon(
+                    icon: const Icon(Icons.update),
+                    label: const Text('Show latest messages'),
+                    onPressed: () {
+                      update(() {
+                        final page = node.store.conversation(
+                          node.person,
+                          contact!,
+                        );
+                        conversationOlder[contact!] = page;
+                        conversationPending.remove(contact);
+                        if (page.length < 50) {
+                          conversationEnd.add(contact!);
+                        } else {
+                          conversationEnd.remove(contact);
+                        }
+                      });
+                      if (scroll.hasClients) scroll.jumpTo(0);
+                    },
+                  )
+                : const SizedBox.shrink(),
+          ),
+        ),
+        if (objects.isNotEmpty && !conversationEnd.contains(contact))
+          TextButton(
+            onPressed: () => update(() {
+              final page = node.store.conversation(
+                node.person,
+                contact!,
+                before: objects.last,
+              );
+              conversationOlder[contact!] = [...objects, ...page];
+              if (page.length < 50) conversationEnd.add(contact!);
+            }),
+            child: const Text('Load older messages'),
+          ),
+        Expanded(child: objectList(context, objects, controller: scroll)),
+        if (messageErrors[contact] case final error?)
+          Row(
+            children: [
+              Expanded(child: Text(error)),
+              TextButton(
+                onPressed: sendConversationMessage,
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
         compose(
           context,
-          () => act(() async {
-            final draftKey = composerContext;
-            final submitted = composer.text;
-            if (submitted.trim().isEmpty) return;
-            await node.publish(
-              'message',
-              {'text': submitted.trim()},
-              space: '_messages',
-              audience: [contact!],
-            );
-            await finishDraft(draftKey, submitted);
-          }),
+          sendConversationMessage,
+          sending: sendingMessages.contains(contact),
           attach: () => pickFile([contact!]),
         ),
       ],
@@ -451,7 +643,9 @@ extension _SocialPages on _OurNetAppState {
     BuildContext context,
     VoidCallback send, {
     VoidCallback? attach,
+    bool sending = false,
   }) {
+    final sendDisabled = tab == 2 ? sending : busy;
     final key = tab == 2
         ? 'message/$contact'
         : 'community/$space/$selectedThread';
@@ -540,7 +734,7 @@ extension _SocialPages on _OurNetAppState {
                       }
                       return KeyEventResult.handled;
                     }
-                    if (event is KeyDownEvent && !busy) send();
+                    if (event is KeyDownEvent && !sendDisabled) send();
                     return KeyEventResult.handled;
                   },
                   child: TextField(
@@ -563,7 +757,7 @@ extension _SocialPages on _OurNetAppState {
               ),
               const SizedBox(width: 8),
               FilledButton(
-                onPressed: busy ? null : send,
+                onPressed: sendDisabled ? null : send,
                 child: const Icon(Icons.send),
               ),
             ],

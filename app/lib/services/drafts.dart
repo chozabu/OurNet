@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:isolate';
 import 'package:ournet_core/ournet_core.dart';
 
 /// Local-only drafts, encrypted for this device and written after typing pauses.
@@ -46,9 +47,9 @@ class DraftStore {
       };
       _changed.clear();
       try {
-        final encrypted = await encryptFor(snapshot, [
-          node.identity.certificate,
-        ]);
+        final encrypted = node.store.path == null
+            ? await encryptFor(snapshot, [node.identity.certificate])
+            : await _encryptDraft(snapshot, node.identity.certificate);
         node.store.set('drafts/v1', encrypted);
       } catch (_) {
         _changed.addAll(values.keys);
@@ -58,3 +59,11 @@ class DraftStore {
     return _writes;
   }
 }
+
+// Lifecycle flushes must not encrypt the draft collection on Flutter's UI
+// isolate. _writes serializes snapshots; only a public certificate is sent.
+Future<Json> _encryptDraft(Json snapshot, DeviceCertificate certificate) =>
+    Isolate.run(
+      () => encryptFor(snapshot, [certificate]),
+      debugName: 'ournet-draft-save',
+    );

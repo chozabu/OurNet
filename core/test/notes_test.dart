@@ -455,4 +455,14 @@ void main() {
       false,
     );
   });
+
+  test('removed notes do not count towards the note limit', () async {
+    for (var i = 0; i < Notes.maxNotes; i++) {
+      final note = await alice.create(text: 'note $i');
+      if (i > 0) await alice.edit(note.id, note.epoch, 'deleted', true, []);
+    }
+    expect(await alice.list(), hasLength(1));
+    await alice.create(text: 'after removing others');
+    expect(await alice.list(), hasLength(2));
+  }, timeout: const Timeout(Duration(minutes: 2)));
 }

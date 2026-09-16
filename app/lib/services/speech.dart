@@ -10,6 +10,8 @@ import 'package:ournet_speech/ournet_speech.dart';
 import 'package:ournet_transport/ournet_transport.dart' show Files;
 import 'package:path_provider/path_provider.dart';
 
+import 'live_speech.dart';
+
 /// A whisper.cpp model that can be downloaded once and used offline.
 class SpeechModel {
   final String id, label, file, sha256;
@@ -47,11 +49,17 @@ class TranscriptionStatus {
   const TranscriptionStatus(this.state, {this.progress = 0, this.error});
 }
 
-/// Voice-note transcription on this device. Whisper runs locally by default;
-/// on Android 13 and later a person may instead choose the system speech
-/// service, which can send audio to its provider. Jobs are durable settings,
-/// so a transcription interrupted by the app closing resumes on next start.
-/// Only the device that recorded a note transcribes it automatically.
+/// Voice-note transcription on this device.
+///
+/// The system speech engine writes the transcript live while recording
+/// (Windows, Android 13+), so a note is ready the moment recording stops. It
+/// is the default only where audio stays private or the person has already
+/// agreed to the provider: the phone's on-device recognizer, or Windows with
+/// online speech recognition turned on. Otherwise Whisper runs locally after
+/// recording, and the system engine is an explicit choice. Jobs are durable
+/// settings, so a transcription interrupted by the app closing resumes on
+/// next start. Only the device that recorded a note transcribes it
+/// automatically.
 class Speech extends ChangeNotifier {
   final Notes notes;
   final Files files;
@@ -72,9 +80,15 @@ class Speech extends ChangeNotifier {
   HttpClient? _http;
   Directory? _models;
 
-  /// `whisper` (default), `system` (Android 13+ opt-in) or `off`.
+  /// `system`, `whisper` or `off`. Unchosen, [defaultEngine] applies.
   String get engine =>
-      node.store.setting('speech/engine') as String? ?? 'whisper';
+      node.store.setting('speech/engine') as String? ?? defaultEngine;
+
+  /// System speech when it is private or already agreed to, else Whisper.
+  String get defaultEngine => liveDefault ? 'system' : 'whisper';
+
+  /// Whether a person has picked an engine, rather than the default.
+  bool get engineChosen => node.store.setting('speech/engine') != null;
   set engine(String value) {
     node.store.set('speech/engine', value);
     notifyListeners();
@@ -93,6 +107,7 @@ class Speech extends ChangeNotifier {
   set language(String value) {
     node.store.set('speech/language', value);
     notifyListeners();
+    unawaited(checkLive());
   }
 
   SpeechModel get model => speechModels.firstWhere(
@@ -114,10 +129,43 @@ class Speech extends ChangeNotifier {
       node.store.setting('speech/verified/${model.id}') == true &&
       await (await modelFile(model)).exists();
 
+  /// Whether the system service can transcribe an existing recording.
   bool get systemAvailable => _systemAvailable ?? false;
   bool? _systemAvailable;
 
-  /// Checks platform support for the optional system speech engine.
+  /// Whether the system service can transcribe while recording.
+  bool get liveAvailable => _live?['available'] == true;
+
+  /// Whether live audio stays on this device (Android's on-device recognizer).
+  bool get liveOnDevice => _live?['onDevice'] == true;
+
+  /// Whether Windows online speech recognition is turned on, which dictation
+  /// needs and which means the person has agreed to Microsoft's terms.
+  bool get liveAllowed => _live?['allowed'] == true;
+
+  /// Whether live system speech may be used without asking first.
+  bool get liveDefault =>
+      liveAvailable && (Platform.isWindows ? liveAllowed : liveOnDevice);
+  Map<Object?, Object?>? _live;
+
+  /// For tests: audio that live recordings use in place of the microphone.
+  @visibleForTesting
+  String? liveSource;
+
+  /// Rechecks live system speech, e.g. after settings changed outside the app.
+  Future<void> checkLive() async {
+    if (!Platform.isAndroid && !Platform.isWindows) return;
+    try {
+      _live = await channel.invokeMapMethod('liveStatus', {
+        'language': language,
+      });
+    } catch (_) {
+      _live = null;
+    }
+    notifyListeners();
+  }
+
+  /// Checks platform support for the system speech engine.
   Future<void> start() async {
     if (Platform.isAndroid) {
       try {
@@ -127,6 +175,7 @@ class Speech extends ChangeNotifier {
         _systemAvailable = false;
       }
     }
+    await checkLive();
     for (final job
         in (node.store.setting('speech/jobs') as List? ?? const [])) {
       final [note, file, ...rest] = (job as List).cast<Object>();
@@ -142,7 +191,30 @@ class Speech extends ChangeNotifier {
     _pump();
   }
 
-  bool get ready => engine == 'system' ? systemAvailable : engine == 'whisper';
+  bool get ready => engine != 'off';
+
+  /// Whether queued transcriptions use Whisper. The system engine falls back
+  /// to it where the platform only offers live recognition (Windows).
+  bool get usesWhisper =>
+      engine == 'whisper' || (engine == 'system' && !systemAvailable);
+
+  /// A live transcription for the next recording, when the system engine is
+  /// in use and can listen live here. On Android the on-device recognizer is
+  /// used when it has the language; otherwise the speech service, which the
+  /// person chose knowingly.
+  LiveSpeech? live() => engine == 'system' && liveAvailable
+      ? LiveSpeech(
+          language: _live?['locale'] as String? ?? language,
+          engine: liveOnDevice ? 'device' : 'cloud',
+          source: liveSource,
+          channel: channel,
+        )
+      : null;
+
+  /// Saves text recognised live while recording, keeping any writing already
+  /// in the transcript.
+  Future<void> saveTranscript(String note, String file, String text) =>
+      _save(note, file, text, replace: false);
 
   /// Downloads and verifies the selected model. Cancels with [cancelDownload].
   Future<void> download(SpeechModel model) async {
@@ -241,7 +313,7 @@ class Speech extends ChangeNotifier {
 
   Future<void> _pump() async {
     if (_running || _closed || _queue.isEmpty || !ready) return;
-    if (engine == 'whisper' && !await installed(model)) return;
+    if (usesWhisper && !await installed(model)) return;
     _running = true;
     try {
       while (_queue.isNotEmpty && !_closed && ready) {
@@ -285,7 +357,7 @@ class Speech extends ChangeNotifier {
     // and any left behind by an interrupted run is removed at start-up.
     await audio.writeAsBytes(bytes, flush: true);
     try {
-      if (engine == 'system') {
+      if (!usesWhisper) {
         final pcm = File('${audio.path}.pcm');
         try {
           await Whisper.decodePcm16(audio.path, pcm.path);

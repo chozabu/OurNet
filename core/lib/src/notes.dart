@@ -526,13 +526,15 @@ class Notes {
       throw StateError(
         'Use a title up to 100 characters and text up to 16,384 characters.',
       );
-    await refresh();
-    if (_rooms.length >= maxNotes)
-      throw StateError('Up to $maxNotes notes can be shown.');
     final key = stableId ?? randomId();
     final id = 'room2:${node.person}:$key';
     final existing = await get(id);
     if (existing != null) return existing;
+    // Only notes that are shown count; removed and left notes do not.
+    if ((await summaries()).length >= maxNotes)
+      throw StateError(
+        'Up to $maxNotes notes can be shown. Remove a note to add another.',
+      );
     final room = await Everyday(node).createRoom(
       title.trim().isEmpty
           ? 'Note'
