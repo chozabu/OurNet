@@ -1,7 +1,38 @@
 # OurNet
 
-A friend-to-friend application with persistent person identities, independent
-devices, selective encrypted sharing, and signed records of origin and handoff.
+OurNet is a serverless app for messaging and notes. It shares your data directly
+between your own devices and the people you trust, with no central platform in
+between.
+
+Most communication tools depend on a company's servers: they hold your data,
+decide who can reach you, and give you little way to tell where information came
+from. OurNet is an alternative built on a **friend-to-friend** (F2F) network,
+inspired by RetroShare. Devices connect peer-to-peer, and data only travels
+between people who have chosen to connect.
+
+The focus is on **identity, accountability and trust**:
+
+- **Persistent identity.** You have one identity that your friends recognise. It
+  works across your phone and PC, and it isn't tied to any device or provider.
+- **Accountability.** Content is signed and carries a record of who wrote it and
+  which people passed it along, so you can judge what you receive and trace
+  misuse.
+- **Trust in context.** Being someone's friend doesn't grant access to
+  everything. Folders, groups and lists are encrypted and shared only with the
+  people you pick.
+
+Today it covers Keep-style notes and checklists (including voice notes with
+on-device transcription), 1:1 and group conversations, file sharing, private
+groups with shared lists, and private drive sync across your own devices. It
+runs on Windows and Android. The longer-term vision, which includes communities,
+wikis, maps and calls, is described in [CORE_IDEA.md](CORE_IDEA.md).
+
+> **Status:** early prototype. The encryption scheme has not been audited, and
+> the protocol may change without migration. Don't rely on it yet for sensitive
+> data.
+
+## About this prototype
+
 This is the second prototype; it intentionally does not interoperate with the
 old Rust prototype (`ournetcc`).
 
