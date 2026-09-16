@@ -108,3 +108,10 @@ about recorded actions, not truth, real-world identity, or off-protocol copying.
 The current encryption is a prototype device-envelope scheme; forward secrecy,
 identity recovery and encrypted history migration remain separate work.
 
+
+## License
+
+OurNet is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+If you run a modified version as a network service, you must offer its source to
+the people who use it. Vendored third-party code under `vendor/` keeps its own
+licenses (Apache-2.0 for `iroh_mobile`, MIT for `whisper_cpp`).
