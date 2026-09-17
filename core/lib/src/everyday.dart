@@ -50,11 +50,29 @@ class Everyday {
       return false;
     if (!o.audience.toSet().containsAll((p['members'] as List).cast<String>()))
       return false;
+    // A self-certifying ID belongs to the person it names, whatever the
+    // record's shape: otherwise anyone could publish a room over someone
+    // else's note or group and claim to own it.
+    final room = p['room'] as String;
+    if (room.startsWith('room2:') &&
+        !room.startsWith('room2:${o.author}:'))
+      return false;
     if (p['generation'] == null)
       return o.audience.length == (p['members'] as List).length;
-    return (p['room'] as String).startsWith('room2:${o.author}:') &&
-        p['generation'] is int &&
-        p['generation'] >= 0;
+    return p['generation'] is int && p['generation'] >= 0;
+  }
+
+  /// Which of two records for one room is current. A newer generation always
+  /// wins; archiving settles rooms of the same generation. Never depends on
+  /// the order records are read in, so every device agrees.
+  static int _supersedes(EverydayItem a, EverydayItem b) {
+    int archived(EverydayItem r) => r.data['archived'] == true ? 1 : 0;
+    final generation = (a.data['generation'] as int? ?? 0).compareTo(
+      b.data['generation'] as int? ?? 0,
+    );
+    if (generation != 0) return generation;
+    final order = archived(a).compareTo(archived(b));
+    return order != 0 ? order : a.object.id.compareTo(b.object.id);
   }
 
   Future<List<EverydayItem>> rooms({
@@ -65,15 +83,7 @@ class Everyday {
     final latest = <String, EverydayItem>{};
     for (final room in records.where(_roomValid)) {
       final old = latest[room.object.space];
-      final order = (room.data['generation'] as int? ?? 0).compareTo(
-        old?.data['generation'] as int? ?? 0,
-      );
-      if (old == null ||
-          (room.data['archived'] == true && old.data['archived'] != true) ||
-          order > 0 ||
-          (order == 0 &&
-              room.data['archived'] == old.data['archived'] &&
-              room.object.id.compareTo(old.object.id) > 0))
+      if (old == null || _supersedes(room, old) > 0)
         latest[room.object.space] = room;
     }
     return latest.values

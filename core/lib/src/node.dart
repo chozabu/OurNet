@@ -229,6 +229,8 @@ class Node {
     final object = await publish('revoke', {
       'proof': proof,
       'signature': await sign(proof, identity.root!),
+      // Binds the device to this person for peers that do not hold it.
+      'certificate': target.toJson(),
     }, space: '_identity');
     await applyRevocation(object);
     return object;
@@ -242,9 +244,31 @@ class Node {
         proof['person'] != object.author ||
         !await verify(proof, p['signature'], object.author))
       throw StateError('Invalid revocation');
+    // A person revokes only their own devices. A device this node cannot bind
+    // to the author is left alone rather than rejected, so an honest
+    // revocation still travels to the devices that hold the certificate.
+    if (!await _ownsDevice(object.author, proof['device'], p['certificate']))
+      return;
     if (!revoked.add(proof['device'])) return;
     store.set('revoked', revoked.toList()..sort());
     _withdrawRevokedEvidence();
+  }
+
+  /// Whether [device] is certified as [person]'s, by a certificate this node
+  /// already admitted or by [wire], the one the revocation carries.
+  Future<bool> _ownsDevice(String person, Object? device, Object? wire) async {
+    if (device is! String) return false;
+    if (contacts[device] case final known?) return known.person == person;
+    if (device == identity.device) return person == this.person;
+    if (wire is! Json) return false;
+    try {
+      final certificate = DeviceCertificate.fromJson(wire);
+      return certificate.device == device &&
+          certificate.person == person &&
+          await certificate.valid();
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Evidence signed by a revoked device, and handoffs or receipts that
@@ -286,17 +310,40 @@ class Node {
     return withdrawn;
   }
 
-  Json inventory({String? peerDevice}) {
+  /// Objects one inventory reconciles. History beyond it is covered by later
+  /// windows, so an inventory stays a bounded message however much a device
+  /// holds. Tests narrow it to walk several windows over a small profile.
+  static int inventoryWindow = 2000;
+
+  /// What this device holds, for the [window]th page of history, newest
+  /// first. `from` and `until` are the creation times the entries cover:
+  /// window 0 reaches above the newest object this device holds, and the last
+  /// window reaches below the oldest, so successive windows tile all of
+  /// history with no gap. `more` says whether an older window follows.
+  Json inventory({String? peerDevice, int window = 0}) {
     final peer = peerDevice == null ? null : contacts[peerDevice];
+    final offerable =
+        [
+          for (final route in store.routes)
+            if (peerDevice == null ||
+                (peer != null && _offerable(route, peer, {route.space})))
+              route,
+        ]..sort((a, b) {
+          final order = b.created.compareTo(a.created);
+          return order != 0 ? order : a.id.compareTo(b.id);
+        });
+    final start = (window * inventoryWindow).clamp(0, offerable.length);
+    final page = offerable.skip(start).take(inventoryWindow).toList();
+    final more = start + page.length < offerable.length;
     return {
       'version': 2,
       'subscriptions': subscriptions.toList()..sort(),
-      'have': {
-        for (final route in store.routes)
-          if (peerDevice == null ||
-              (peer != null && _offerable(route, peer, {route.space})))
-            route.id: store.evidenceDigest(route.id),
-      },
+      'have': {for (final r in page) r.id: store.evidenceDigest(r.id)},
+      // Bounds overlap by an object at each edge, so entries sharing a
+      // creation time across a boundary are still covered.
+      'from': more ? page.last.created : 0,
+      if (start > 0) 'until': offerable[start - 1].created,
+      'more': more,
       'revoked': revoked.toList()..sort(),
       if (peer != null) 'devices': sharedCertificates(peer),
     };
@@ -402,7 +449,14 @@ class Node {
     final page = <SignedObject>[];
     final handoffs = <Json>[];
     final slice = TimeSlice();
-    for (final id in store.recentIds(limit: maxObjects)) {
+    // Only the window the inventory covers: outside it, an absent entry says
+    // nothing about what the peer holds. Inventories without a window (older
+    // builds) cover everything, as before.
+    for (final id in store.recentIds(
+      limit: maxObjects,
+      from: inventory['from'] as int? ?? 0,
+      until: inventory['until'] as int?,
+    )) {
       if (page.length >= 32) break;
       // Already reconciled: skip before parsing the object or its evidence.
       if (have[id] == store.evidenceDigest(id)) continue;
@@ -737,24 +791,25 @@ Future<List<(bool, List<bool>)>> _verifySignatures(List<dynamic> items) =>
 
 /// Deterministic integration harness. No sockets, UI or native iroh needed.
 Future<int> syncPair(Node a, Node b, {int rounds = 8}) async {
-  var total = 0;
+  var total = 0, window = 0;
   for (var i = 0; i < rounds; i++) {
+    final forB = b.inventory(peerDevice: a.identity.device, window: window);
     var changed = await b.receive(
       a.identity.device,
-      await a.offer(
-        b.identity.device,
-        b.inventory(peerDevice: a.identity.device),
-      ),
+      await a.offer(b.identity.device, forB),
     );
+    final forA = a.inventory(peerDevice: b.identity.device, window: window);
     changed += await a.receive(
       b.identity.device,
-      await b.offer(
-        a.identity.device,
-        a.inventory(peerDevice: b.identity.device),
-      ),
+      await b.offer(a.identity.device, forA),
     );
     total += changed;
-    if (changed == 0) break;
+    // A quiet window means this slice of history agrees; older windows still
+    // need reconciling before the pair is done.
+    if (changed == 0) {
+      if (forA['more'] != true && forB['more'] != true) break;
+      window++;
+    }
   }
   return total;
 }

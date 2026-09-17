@@ -143,7 +143,9 @@ bool validContent(String kind, Json p) {
 final _fieldName = RegExp(
   r'^[a-z][a-zA-Z0-9]{0,31}(:[a-zA-Z0-9_-]{1,80}:[a-z][a-zA-Z0-9]{0,31})?$',
 );
-final _orderKey = RegExp(r'^[0-9A-Za-z]{1,64}$');
+// Order keys never end in '0', so a later key can always be placed before
+// one: see `orderBetween`. Keys that do are rejected rather than stored.
+final _orderKey = RegExp(r'^[0-9A-Za-z]{0,63}[1-9A-Za-z]$');
 final _colorName = RegExp(r'^[a-z]{1,16}$');
 
 bool _register(Json p) =>

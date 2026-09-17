@@ -216,15 +216,18 @@ class PeerNetwork {
     return addresses;
   }
 
-  /// Stores address hints for admitted devices that have none yet.
-  Future<void> _learnAddresses(Object? shared) async {
+  /// Stores address hints for admitted devices, from [peer]'s exchange. A
+  /// device's own address replaces what is stored, so a device that moves
+  /// stays reachable; hints about other devices only fill a gap, so no peer
+  /// can redirect the rest.
+  Future<void> _learnAddresses(String peer, Object? shared) async {
     if (shared is! Map || shared.length > Node.maxSharedCertificates) return;
     for (final MapEntry(:key, :value) in shared.entries) {
       if (key is! String ||
           value is! String ||
           value.length > 4096 ||
           !node.contacts.containsKey(key) ||
-          node.store.setting('address/$key') != null) {
+          (key != peer && node.store.setting('address/$key') != null)) {
         continue;
       }
       try {
@@ -304,17 +307,22 @@ class PeerNetwork {
     try {
       // Bounded work per session; exhausted pages schedule a continuation.
       var exhausted = true;
+      // Both sides reconcile the same window of history per page, then walk
+      // back through older ones once the current window agrees.
+      var window = 0;
       for (var page = 0; page < 16; page++) {
+        final inventory = node.inventory(peerDevice: device, window: window);
         final reply = await request(device, {
           'type': 'pull',
-          'inventory': node.inventory(peerDevice: device),
+          'inventory': inventory,
+          'window': window,
           'addresses': _sharedAddresses(device),
           if (build.isNotEmpty) 'build': build,
         });
         _noteBuild(device, reply['build']);
         final incoming = await node.receive(device, reply['items']);
         final outgoing = await node.offer(device, reply['inventory']);
-        await _learnAddresses(reply['addresses']);
+        await _learnAddresses(device, reply['addresses']);
         final pushed = await request(device, {
           'type': 'push',
           'items': outgoing,
@@ -322,10 +330,13 @@ class PeerNetwork {
         _progress[device] = _progress[device]! + incoming + outgoing.length;
         _activity();
         // Without changes on either side the next page would be identical,
-        // e.g. items the peer ignores; stop rather than resend them.
+        // e.g. items the peer ignores; move on rather than resend them.
         if (incoming == 0 && pushed['changed'] == 0) {
-          exhausted = false;
-          break;
+          if (inventory['more'] != true) {
+            exhausted = false;
+            break;
+          }
+          window++;
         }
       }
       syncErrors.remove(device);
@@ -410,6 +421,7 @@ class PeerNetwork {
           throw StateError('Invitation unavailable');
         reply = await friendInvitation!.approve(peer, j);
       } else if (j['type'] == 'pair') {
+        if (pairing == null) throw StateError('Pairing unavailable');
         reply = await pairing!.approve(peer, j);
       } else {
         if (!node.allowedPeer(peer)) throw StateError('Device not admitted');
@@ -418,10 +430,17 @@ class PeerNetwork {
           case 'pull':
             _noteBuild(peer, j['build']);
             final items = await node.offer(peer, j['inventory']);
-            await _learnAddresses(j['addresses']);
+            await _learnAddresses(peer, j['addresses']);
             reply = {
               'items': items,
-              'inventory': node.inventory(peerDevice: peer),
+              // The window the caller is on, so both sides walk together.
+              'inventory': node.inventory(
+                peerDevice: peer,
+                window: switch (j['window']) {
+                  final int w when w >= 0 => w,
+                  _ => 0,
+                },
+              ),
               'addresses': _sharedAddresses(peer),
               if (build.isNotEmpty) 'build': build,
             };

@@ -65,6 +65,9 @@ class _SetupPageState extends State<SetupPage> {
 
   Future<Node> fresh() async {
     if (device.text.trim().isEmpty) throw StateError('Give this device a name');
+    // The setup node is replaced, not closed: it shares this store. Closing
+    // its change stream leaves no listeners attached to the discarded node.
+    await widget.node.changes.close();
     return Node(
       await LocalIdentity.create(label: device.text.trim()),
       widget.node.store,
@@ -115,6 +118,8 @@ class _SetupPageState extends State<SetupPage> {
       });
       final identity = await PairingSession.join(net, invitation.text.trim());
       await net.stop();
+      // Enrolment replaces this node's identity; the store carries over.
+      await node.changes.close();
       await finish(Node(identity, node.store));
     } finally {
       await net.stop();
@@ -168,6 +173,23 @@ class _SetupPageState extends State<SetupPage> {
                 ),
                 const SizedBox(height: 24),
                 if (page == 'welcome') ...[
+                  if (identityLost) ...[
+                    Card(
+                      color: Theme.of(context).colorScheme.errorContainer,
+                      child: const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Text(
+                          'This profile already holds notes and messages, but '
+                          'the keys that can read them are missing from this '
+                          'device’s secure storage. Nothing here can recover '
+                          'them: restore the device backup that holds those '
+                          'keys, or carry on and start fresh, which leaves '
+                          'that history unreadable on this device.',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   FilledButton.icon(
                     onPressed: () => setState(() => page = 'create'),
                     icon: const Icon(Icons.person_add_outlined),

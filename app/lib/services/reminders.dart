@@ -44,6 +44,11 @@ class NoteReminders {
   Future<void> start() async {
     if (_started) return;
     _started = true;
+    // Earlier builds kept one row per occurrence shown; drop them once.
+    if (node.store.setting('reminderKeysCompacted') != true) {
+      node.store.removeSettingsUnder('reminderShown/');
+      node.store.set('reminderKeysCompacted', true);
+    }
     zones.initializeTimeZones();
     try {
       final zone = await FlutterTimezone.getLocalTimezone();
@@ -184,9 +189,12 @@ class NoteReminders {
         now.subtract(const Duration(minutes: 2)),
       );
       if (previous == null || previous.isAfter(now)) continue;
-      final key = 'reminderShown/$id/${previous.millisecondsSinceEpoch}';
-      if (node.store.setting(key) == true) continue;
-      node.store.set(key, true);
+      // One key per note holding the occurrence last shown: a repeating
+      // reminder would otherwise leave a settings row behind every time.
+      final key = 'reminderShown/$id';
+      final at = previous.millisecondsSinceEpoch;
+      if (node.store.setting(key) == at) continue;
+      node.store.set(key, at);
       final note = await notes.get(id);
       if (note == null || note.deleted) continue;
       await notifications.plugin.show(

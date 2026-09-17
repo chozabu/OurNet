@@ -263,9 +263,10 @@ class KeepImport {
     final skipped = <(KeepNote, String)>[];
     final editTimes = <KeepNote>[];
     final candidates = <KeepNote>[];
+    final planned = <String>{};
     var existing = 0;
     for (final note in source) {
-      final reason = note.trashed
+      var reason = note.trashed
           ? 'In Keep’s trash'
           : note.text.length > 16384 ||
                 note.items.any((i) => i.text.length > 16384)
@@ -273,6 +274,10 @@ class KeepImport {
           : note.items.length > Notes.maxChecks
           ? 'More than ${Notes.maxChecks} list items'
           : null;
+      // Two notes created in the same millisecond with the same title share an
+      // ID; importing both would merge them into one note.
+      if (reason == null && !planned.add(note.stableId))
+        reason = 'Another note in this export has the same title and time';
       if (reason != null) {
         skipped.add((note, reason));
       } else if (await notes.get(_id(note), includeUnavailable: true)

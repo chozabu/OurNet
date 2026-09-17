@@ -358,4 +358,61 @@ void main() {
       isEmpty,
     );
   });
+  test('history syncs a window at a time, over bounded inventories', () async {
+    var clock = 1000000;
+    final a = Node(
+      await LocalIdentity.create(),
+      Store(),
+      clock: () => clock += 1000,
+    );
+    final b = await node();
+    addTearDown(() async {
+      await a.close();
+      await b.close();
+      Node.inventoryWindow = 2000;
+    });
+    await friend(a, b);
+    Node.inventoryWindow = 2;
+    for (var i = 0; i < 7; i++) {
+      await a.publish('post', {'text': 'entry $i'});
+    }
+    final first = a.inventory(peerDevice: b.identity.device);
+    expect((first['have'] as Json).length, 2);
+    expect(first['more'], isTrue);
+    expect(first['until'], isNull, reason: 'window 0 is open at the newest end');
+    final last = a.inventory(peerDevice: b.identity.device, window: 3);
+    expect(last['more'], isFalse);
+    expect(last['from'], 0, reason: 'the last window is open at the oldest end');
+    // Every window is walked, so all of history arrives.
+    await syncPair(a, b, rounds: 40);
+    expect(b.store.count, a.store.count);
+    // An inventory stays bounded however much history a device holds.
+    expect(
+      (b.inventory(peerDevice: a.identity.device)['have'] as Json).length,
+      2,
+    );
+    // Nothing is offered twice once both sides agree.
+    expect(await syncPair(a, b, rounds: 40), 0);
+  });
+
+  test('a windowed inventory still reconciles with an older build', () async {
+    final a = await node(), b = await node();
+    addTearDown(() async {
+      await a.close();
+      await b.close();
+      Node.inventoryWindow = 2000;
+    });
+    await friend(a, b);
+    for (var i = 0; i < 5; i++) {
+      await a.publish('post', {'text': 'entry $i'});
+    }
+    Node.inventoryWindow = 2;
+    // An older build sends every entry it holds and no window at all.
+    final legacy = b.inventory(peerDevice: a.identity.device)
+      ..remove('from')
+      ..remove('until')
+      ..remove('more');
+    final page = await a.offer(b.identity.device, legacy);
+    expect(await b.receive(a.identity.device, page), greaterThan(0));
+  });
 }

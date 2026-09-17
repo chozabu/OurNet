@@ -8,6 +8,9 @@ String activeProfile = 'main';
 RandomAccessFile? _profileLock;
 bool needsSetup = false;
 
+/// Whether this profile holds history that no key on this device can read.
+bool identityLost = false;
+
 Future<Node> openNode({String profile = 'main'}) async {
   if (!RegExp(r'^[a-zA-Z0-9_-]{1,40}$').hasMatch(profile)) {
     throw ArgumentError('Invalid profile name');
@@ -31,11 +34,20 @@ Future<Node> openNode({String profile = 'main'}) async {
   const vault = FlutterSecureStorage();
   final saved = await vault.read(key: 'ournet/v2/$profile');
   needsSetup = saved == null;
-  final identity = saved == null
-      ? await LocalIdentity.create(label: Platform.localHostname)
-      : await LocalIdentity.restore(jsonDecode(saved));
-  assert(_profileLock != null);
-  return Node(identity, Store(path: '${directory.path}/ournet-$profile.db'));
+  final store = Store(path: '${directory.path}/ournet-$profile.db');
+  // History with no vault entry: the keys that can read it are gone, for
+  // example after restoring a backup without the platform key store.
+  identityLost = needsSetup && store.count > 0;
+  try {
+    final identity = saved == null
+        ? await LocalIdentity.create(label: Platform.localHostname)
+        : await LocalIdentity.restore(jsonDecode(saved));
+    assert(_profileLock != null);
+    return Node(identity, store);
+  } catch (_) {
+    store.close();
+    rethrow;
+  }
 }
 
 Future<void> saveIdentity(LocalIdentity identity) async {

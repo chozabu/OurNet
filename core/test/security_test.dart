@@ -192,4 +192,84 @@ void main() {
       );
     },
   );
+  test('a person cannot revoke another person\'s device', () async {
+    final a = Node(await LocalIdentity.create(), Store()),
+        bad = Node(await LocalIdentity.create(), Store()),
+        c = Node(await LocalIdentity.create(), Store());
+    addTearDown(() async {
+      await a.close();
+      await bad.close();
+      await c.close();
+    });
+    for (final x in [a, bad, c]) {
+      for (final y in [a, bad, c]) {
+        if (x != y) await x.addContact(y.identity.certificate);
+      }
+    }
+    final proof = <String, dynamic>{
+      'domain': 'ournet/revoke/2',
+      'person': bad.person,
+      'device': a.identity.device,
+    };
+    await bad.publish('revoke', {
+      'proof': proof,
+      'signature': await sign(proof, bad.identity.root!),
+      'certificate': a.identity.certificate.toJson(),
+    }, space: '_identity');
+    await syncPair(bad, c);
+    expect(c.revoked, isNot(contains(a.identity.device)));
+    expect(c.allowedPeer(a.identity.device), isTrue);
+    // The owner's own revocation still applies, for peers holding the
+    // certificate and for those learning it from the revocation itself.
+    final second = await LocalIdentity.create(root: a.identity.root);
+    await a.addContact(second.certificate);
+    expect(c.contacts, isNot(contains(second.device)));
+    await a.revoke(second.device);
+    await syncPair(a, c);
+    expect(c.revoked, contains(second.device));
+  });
+
+  test('a collaborator cannot publish a room over an owner\'s note', () async {
+    final a = Node(await LocalIdentity.create(), Store()),
+        bad = Node(await LocalIdentity.create(), Store());
+    addTearDown(() async {
+      await a.close();
+      await bad.close();
+    });
+    await a.addContact(bad.identity.certificate);
+    await bad.addContact(a.identity.certificate);
+    final alice = Notes(a);
+    var note = await alice.create(text: 'Alice text');
+    await alice.changeMembers(note.id, [bad.person]);
+    await syncPair(a, bad);
+    final members = [a.person, bad.person]..sort();
+    // Backdated so it is read before the owner's own record.
+    final forger = Node(bad.identity, bad.store, clock: () => 1);
+    await forger.publish('room', {
+      'room': note.id,
+      'note': true,
+      'owner': bad.person,
+      'name': 'taken',
+      'members': members,
+      'epoch': 'forged',
+      'archived': true,
+    }, space: note.id, audience: members);
+    await syncPair(bad, a);
+    note = (await Notes(a).get(note.id))!;
+    expect(note.room.data['owner'], a.person);
+    expect(note.text, 'Alice text');
+    expect((await Notes(a).list()).length, 1);
+  });
+
+  test('an order key that blocks insertion is refused and never hangs', () {
+    expect(validContent('note_op', {
+      'epoch': 'e',
+      'field': 'check:one:order',
+      'value': 'A0',
+      'parents': <String>[],
+      'clock': 1,
+    }), isFalse);
+    expect(orderBetween(null, '0').endsWith('0'), isFalse);
+    expect(orderBetween('A', 'A00').compareTo('A') > 0, isTrue);
+  });
 }

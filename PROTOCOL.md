@@ -59,6 +59,19 @@ Inventory exchanges both object IDs and digests of held evidence IDs. Peers can
 therefore reconcile new provenance even when both already have the content.
 Evidence is unioned after validation; exceeding resource bounds is rejected.
 
+One inventory covers a window of history rather than everything a device holds,
+so the message stays bounded as a profile grows. Entries are the newest 2,000
+objects offerable to that peer, and `from`/`until` give the creation times they
+cover: window 0 is open above the newest object, the last window is open below
+the oldest, and successive windows overlap by an entry so equal creation times
+are never split. `more` says whether an older window follows. An offer only
+considers objects inside the window it was given, because outside it a missing
+entry says nothing about what the peer holds. A pull request names the `window`
+it is on and the reply answers with the same one, so both sides walk history
+together; a page that changes nothing moves to the next window, and a sync ends
+when the last window is quiet. Inventories carrying no window (earlier builds)
+cover all history, as before.
+
 ## Transfers and limits
 
 The iroh ALPN is `ournet/2`. Requests use bounded JSON QUIC streams. Pull/push
@@ -71,7 +84,8 @@ characters) naming the sender's app build; peers ignore it, or show it when it
 differs from their own. A failed inbound handshake is logged and counted, and
 the endpoint keeps accepting further connections.
 
-Local limits: 10,000 objects, 256 KiB per signed object, 128 evidence records per
+Local limits: 10,000 objects (a store bound, no longer a sync-message bound),
+256 KiB per signed object, 128 evidence records per
 object, 64 MiB per file, 512 MiB total stored blob bytes, and four simultaneous
 inbound requests. These bounds are not a complete DoS resistance strategy.
 

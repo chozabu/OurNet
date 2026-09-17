@@ -362,6 +362,11 @@ class FolderSync {
       );
     }
     final remote = <String, DriveEntry>{};
+    final errors = <String>[];
+    void report(String message) {
+      if (errors.length < 8) errors.add(message);
+    }
+
     String? pathFor(DriveEntry e, Set<String> seen) {
       if (e.current.entry == root) return '';
       if (!seen.add(e.current.entry)) throw StateError('Folder cycle');
@@ -370,8 +375,12 @@ class FolderSync {
       final prefix = pathFor(parent, seen);
       if (prefix == null) return null;
       final name = e.current.data['name'] as String;
-      if (!safeFolderPath(name) || name.contains('/'))
-        throw StateError('Unsupported drive filename: $name');
+      // A name this device cannot write leaves that one entry in the drive,
+      // rather than stopping the whole folder from syncing.
+      if (!safeFolderPath(name) || name.contains('/')) {
+        report('Unsupported drive filename: $name');
+        return null;
+      }
       return prefix.isEmpty ? name : '$prefix/$name';
     }
 
@@ -382,19 +391,30 @@ class FolderSync {
       // Retained tombstones can share a path with a later new entry.
       if (entry.current.deleted && !state.containsKey(entry.current.entry))
         continue;
-      if (!folded.add(path.toLowerCase()))
-        throw StateError('Name collision: $path; resolve in drive history');
+      if (!folded.add(path.toLowerCase())) {
+        report('Name collision: $path; resolve in drive history');
+        continue;
+      }
       remote[path] = entry;
     }
-    for (final path in local.keys) {
-      if (!safeFolderPath(path))
+    final synced = {for (final v in state.values) v['path'] as String};
+    final unsupported = local.keys.where((p) => !safeFolderPath(p)).toSet();
+    for (final path in unsupported) {
+      // A name that was never synced is left out of this pass. One that was
+      // would look deleted here, so it still needs a person to resolve it.
+      if (synced.contains(path))
         throw StateError('Unsupported local filename: $path');
+      report('Unsupported local filename: $path');
     }
+    if (unsupported.isNotEmpty)
+      local = {
+        for (final e in local.entries)
+          if (!unsupported.contains(e.key)) e.key: e.value,
+      };
     final localFolded = <String>{};
     if (local.keys.any((p) => !localFolded.add(p.toLowerCase())))
       throw StateError('Local names differ only by case');
     var conflicts = 0;
-    final errors = <String>[];
     final stage = await Directory.systemTemp.createTemp('ournet-folder-');
     void persist(String id) {
       node.store.set('folder-sync/item/$root/$id', state[id]);
@@ -494,7 +514,7 @@ class FolderSync {
           }
           local = after;
         } catch (e) {
-          if (errors.length < 8) errors.add('$oldPath → ${moved.key}: $e');
+          report('$oldPath → ${moved.key}: $e');
         }
       }
       final mappedPaths = {
@@ -685,7 +705,7 @@ class FolderSync {
           }
           record(v.entry, path, v.data['revision'], v.isFolder, written);
         } catch (e) {
-          if (errors.length < 8) errors.add('$path: $e');
+          report('$path: $e');
         }
       }
       for (final path in paths.reversed) {
@@ -709,7 +729,7 @@ class FolderSync {
           };
           persist(v.entry);
         } catch (e) {
-          if (errors.length < 8) errors.add('$path: $e');
+          report('$path: $e');
         }
       }
       final remoteIds = {for (final e in remote.values) e.current.entry};
@@ -754,7 +774,7 @@ class FolderSync {
             persist(id);
             conflicts++;
           } catch (e) {
-            if (errors.length < 8) errors.add('$path: $e');
+            report('$path: $e');
           }
           continue;
         }
@@ -763,7 +783,7 @@ class FolderSync {
           state[id] = {...base, 'token': null};
           persist(id);
         } catch (e) {
-          if (errors.length < 8) errors.add('$path: $e');
+          report('$path: $e');
         }
       }
       status[root] = errors.isNotEmpty

@@ -178,8 +178,9 @@ class Calls extends ChangeNotifier {
     _media = media;
     if (desktop && audioInput == null && media.getAudioTracks().isNotEmpty) {
       final actual = media.getAudioTracks().first.getSettings()['deviceId'];
-      if (audioInputs.any((d) => d.deviceId == actual))
+      if (audioInputs.any((d) => d.deviceId == actual)) {
         audioInput = actual as String;
+      }
     }
     local.srcObject = _media;
     for (final track in _media!.getTracks()) {

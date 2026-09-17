@@ -184,6 +184,9 @@ String orderBetween(String? before, String? after) {
   if (high != null && high.compareTo(low) <= 0) high = null;
   final result = StringBuffer();
   for (var i = 0; ; i++) {
+    // Both bounds exhausted: [after] is [before] followed by '0's, so no key
+    // sorts strictly between them. Place this one after, as inverted bounds do.
+    if (high != null && i >= high.length && i >= low.length) high = null;
     final lo = i < low.length ? _orderDigits.indexOf(low[i]) : 0;
     final hi = high == null
         ? _orderDigits.length
@@ -236,6 +239,10 @@ class Notes {
   int _queued = 0;
   String _policy = '';
   static const maxChecks = 200;
+
+  /// [value] cut to at most [length] characters.
+  static String bounded(String value, int length) =>
+      value.substring(0, value.length.clamp(0, length));
 
   /// Serialize local mutation, including widget requests, and bound callers.
   Future<T> _serial<T>(Future<T> Function() action) {
@@ -329,8 +336,6 @@ class Notes {
             .map(note.transcript)
             .where((t) => t.isNotEmpty)
             .join('\n');
-        String bounded(String value, int length) =>
-            value.substring(0, value.length.clamp(0, length));
         summary = EverydayItem(note.room.object, {
           'entry': id,
           'type': 'shared_note',
@@ -532,8 +537,10 @@ class Notes {
       [],
       noteId: key,
     );
-    await _publish(room, 'title', title, [], 1);
-    await _publish(room, 'text', text, [], 1);
+    // An absent register reads as empty, so writing one costs an object for
+    // nothing. Imports of many short notes feel this most.
+    if (title.isNotEmpty) await _publish(room, 'title', title, [], 1);
+    if (text.isNotEmpty) await _publish(room, 'text', text, [], 1);
     if (color != null && color != 'default')
       await _publish(room, 'color', color, [], 1);
     if (background != null && background != 'none')
@@ -620,7 +627,8 @@ class Notes {
               r.object.author == node.person &&
               r.object.certificate.device == node.identity.device &&
               r.data['field'] == change.field &&
-              r.data['value'] == change.value,
+              // Compared by value: maps and lists are never identical.
+              canonical(r.data['value']) == canonical(change.value),
         );
     if (changes.every(applied)) return [for (final _ in changes) null];
     if (!note.available)
@@ -898,7 +906,9 @@ class Notes {
     final source = await get(id, includeUnavailable: true);
     if (source == null) throw StateError('This note is unavailable.');
     final copied = await create(
-      title: source.rawTitle,
+      // Titles written by older builds or other people can exceed the limit
+      // a new note accepts.
+      title: bounded(source.rawTitle, 100),
       text: source.text,
       items: [for (final c in source.checks) source.itemText(c)],
       color: source.color,

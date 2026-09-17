@@ -261,8 +261,11 @@ class NoteState {
     ],
   ]);
 
-  /// Live labels by ID, sorted by name.
+  /// Live labels by ID, sorted by name. Read for every note a list or an
+  /// import touches, so the result is kept until a personal value changes.
   Map<String, String> get labels {
+    if (_labels case final cached? when _labelsVersion == _version)
+      return cached;
     final result = <String, String>{};
     for (final key in _heads.keys) {
       if (!key.startsWith('labelName/')) continue;
@@ -270,12 +273,18 @@ class NoteState {
       if (value('labelDeleted', id) == true) continue;
       result[id] = value('labelName', id) as String;
     }
-    return Map.fromEntries(
-      result.entries.toList()..sort(
-        (a, b) => a.value.toLowerCase().compareTo(b.value.toLowerCase()),
+    _labelsVersion = _version;
+    return _labels = Map.unmodifiable(
+      Map.fromEntries(
+        result.entries.toList()..sort(
+          (a, b) => a.value.toLowerCase().compareTo(b.value.toLowerCase()),
+        ),
       ),
     );
   }
+
+  Map<String, String>? _labels;
+  int _labelsVersion = -1;
 
   /// Targets with a personal value for [field], e.g. every reminder.
   Iterable<String> targets(String field) => _heads.keys

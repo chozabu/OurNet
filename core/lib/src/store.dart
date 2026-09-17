@@ -294,11 +294,13 @@ class Store {
     ];
   }
 
-  /// IDs newest first, without reading or parsing the objects.
-  List<String> recentIds({int limit = 10000}) => [
+  /// IDs newest first, without reading or parsing the objects. [from] and
+  /// [until] bound the window of creation times a sync page reconciles.
+  List<String> recentIds({int limit = 10000, int from = 0, int? until}) => [
     for (final row in _select(
-      'SELECT id FROM objects ORDER BY created DESC,id LIMIT ?',
-      [limit],
+      'SELECT id FROM objects WHERE created>=? AND created<=? '
+      'ORDER BY created DESC,id LIMIT ?',
+      [from, until ?? 253402300799999, limit],
     ))
       row['id'] as String,
   ];
@@ -315,7 +317,7 @@ class Store {
   Iterable<ObjectRoute> get routes {
     while (true) {
       final rows = _select(
-        'SELECT rowid, id, kind, space, author, json_extract(wire, '
+        'SELECT rowid, id, kind, space, author, created, json_extract(wire, '
         "'\$.certificate.data.device', '\$.data.expires', '\$.data.audience', "
         "'\$.data.via') AS fields FROM objects WHERE rowid>? ORDER BY rowid "
         'LIMIT 2000',
@@ -329,6 +331,7 @@ class Store {
           kind: row['kind'] as String,
           space: row['space'] as String,
           author: row['author'] as String,
+          created: row['created'] as int,
           device: fields[0] as String,
           expires: fields[1] as int,
           audience: (fields[2] as List).cast<String>(),
@@ -469,7 +472,7 @@ class Store {
   Map<String, dynamic> settingsUnder(String prefix) => {
     for (final row in _select(
       'SELECT key,value FROM settings WHERE key>=? AND key<?',
-      [prefix, '$prefix\uffff'],
+      [prefix, '$prefix\u{10FFFF}'],
     ))
       (row['key'] as String).substring(prefix.length): jsonDecode(
         row['value'] as String,
@@ -478,7 +481,7 @@ class Store {
 
   void removeSettingsUnder(String prefix) => _execute(
     'DELETE FROM settings WHERE key>=? AND key<?',
-    [prefix, '$prefix\uffff'],
+    [prefix, '$prefix\u{10FFFF}'],
   );
 
   dynamic setting(String key) {
@@ -559,13 +562,14 @@ class Store {
 /// The fields that decide whether an object may be offered to a peer.
 class ObjectRoute {
   final String id, kind, space, author, device;
-  final int expires;
+  final int created, expires;
   final List<String> audience, via;
   const ObjectRoute({
     required this.id,
     required this.kind,
     required this.space,
     required this.author,
+    required this.created,
     required this.device,
     required this.expires,
     required this.audience,
@@ -577,6 +581,7 @@ class ObjectRoute {
         kind: o.kind,
         space: o.space,
         author: o.author,
+        created: o.created,
         device: o.certificate.device,
         expires: o.expires,
         audience: o.audience,
