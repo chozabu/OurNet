@@ -41,11 +41,12 @@ behaviour while editing and importing a photo.
 3. Availability: optional forwarding holders, device discovery and mobile
    wakeup. Explicitly distinguish local saving, helper acceptance and recipient
    acknowledgement. Keep direct-only operation usable.
-4. Audio: ring a person across eligible devices, arbitrate a single answer,
-   recover from connection changes, audio route controls, native incoming-call
+4. Audio: recover from connection changes, audio route controls, native incoming-call
    integration and optional TURN configuration that ordinary users can use.
 5. Video and chat polish: camera controls, quality adaptation, voice messages,
-   replies, reactions, edits and media navigation.
+   replies, reactions, edits and media navigation. (Ringing every device of a
+   person with a single answer, and voice messages with transcripts, are
+   implemented.)
 
 ## Acceptance
 

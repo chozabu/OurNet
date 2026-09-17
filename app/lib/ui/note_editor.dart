@@ -1758,7 +1758,8 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       padding: const EdgeInsets.only(bottom: 8),
       child: AudioClip(
         files: files,
-        op: current.file(file)!,
+        object: current.file(file)!.object,
+        payload: current.file(file)!.data,
         meta: current.fileMeta(file),
         transcript: transcript,
         status: speech?.status[file],

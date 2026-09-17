@@ -491,6 +491,63 @@ extension _SocialPages on _OurNetAppState {
     }
   }
 
+  /// Records a voice message and sends it with its transcript: the live one,
+  /// or one made on this device before sending. Without transcription set
+  /// up, the audio is sent alone.
+  Future<void> sendVoiceMessage(BuildContext context) async {
+    final recipient = contact;
+    if (recipient == null || voiceProgress.containsKey(recipient)) return;
+    final recording = await recordVoice(context, speech: speech, message: true);
+    if (recording == null) return;
+    update(() {
+      voiceProgress[recipient] = 'Preparing voice message…';
+      messageErrors.remove(recipient);
+    });
+    try {
+      var transcript = recording.transcript?.trim();
+      if (transcript == null || transcript.isEmpty) {
+        transcript = null;
+        if (await speech.canTranscribe()) {
+          update(() => voiceProgress[recipient] = 'Transcribing…');
+          try {
+            transcript = await speech.transcribeFile(
+              recording.path,
+              onProgress: (p) =>
+                  update(() => voiceProgress[recipient] = 'Transcribing… $p%'),
+            );
+          } catch (e) {
+            // The recording matters more than its text; send it anyway.
+            notice('Sending without a transcript: $e');
+          }
+        }
+      }
+      update(() => voiceProgress[recipient] = 'Sending voice message…');
+      final extension = recording.mime == 'audio/wav' ? 'wav' : 'm4a';
+      await files.publish(
+        recording.path,
+        name: 'Voice message.$extension',
+        audience: [recipient],
+        via: messageHelpers(recipient),
+        extra: {
+          'audio': {'mime': recording.mime, 'duration': recording.duration},
+          if (transcript != null && transcript.isNotEmpty)
+            'transcript': transcript,
+        },
+      );
+    } catch (error) {
+      update(
+        () => messageErrors[recipient] = 'Could not send voice message: $error',
+      );
+    } finally {
+      update(() => voiceProgress.remove(recipient));
+      unawaited(
+        File(
+          recording.path,
+        ).delete().then<void>((_) {}, onError: (Object _) {}),
+      );
+    }
+  }
+
   Widget messageDetail(BuildContext context, {VoidCallback? back}) {
     if (contact == null || !people.contains(contact)) {
       return empty(
@@ -695,6 +752,23 @@ extension _SocialPages on _OurNetAppState {
             ),
           ),
         ),
+        if (voiceProgress[contact] case final progress?)
+          Material(
+            color: scheme.secondaryContainer,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  const SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(progress)),
+                ],
+              ),
+            ),
+          ),
         if (messageErrors[contact] case final error?)
           Material(
             color: scheme.errorContainer,
@@ -725,6 +799,9 @@ extension _SocialPages on _OurNetAppState {
               sendConversationMessage,
               sending: sendingMessages.contains(contact),
               attach: () => pickFile([contact!]),
+              voice: voiceProgress.containsKey(contact)
+                  ? null
+                  : () => unawaited(sendVoiceMessage(context)),
             ),
           ),
         ),
@@ -733,16 +810,14 @@ extension _SocialPages on _OurNetAppState {
   }
 
   void startCall(bool video) => callAct(() async {
-    final device = node.contacts.values.firstWhere(
-      (c) => c.person == contact && !node.revoked.contains(c.device),
-    );
     if (!network.running) await network.start();
-    await calls.call(device.device, video: video);
+    await calls.callPerson(contact!, video: video);
   });
   Widget compose(
     BuildContext context,
     VoidCallback send, {
     VoidCallback? attach,
+    VoidCallback? voice,
     bool sending = false,
   }) {
     final chat = tab == Destination.messages;
@@ -866,6 +941,14 @@ extension _SocialPages on _OurNetAppState {
                   ),
                 ),
               ),
+              if (chat) ...[
+                const SizedBox(width: 2),
+                IconButton(
+                  tooltip: 'Record voice message',
+                  onPressed: voice,
+                  icon: const Icon(Icons.mic_none),
+                ),
+              ],
               const SizedBox(width: 6),
               chat
                   ? IconButton.filled(

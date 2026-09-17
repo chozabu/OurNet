@@ -311,6 +311,30 @@ class Speech extends ChangeNotifier {
 
   (String, String, bool)? _current;
 
+  /// Serialises transcriptions so two models never run at once.
+  Future<void> _exclusive = Future.value();
+  Future<T> _one<T>(Future<T> Function() run) {
+    final result = _exclusive.then((_) => run());
+    _exclusive = result.then<void>((_) {}, onError: (Object _) {});
+    return result;
+  }
+
+  /// Whether a recording can be transcribed now without downloading a model.
+  Future<bool> canTranscribe() async =>
+      ready && (!usesWhisper || await installed(model));
+
+  /// Transcribes an audio file outside any note, such as a voice message
+  /// before it is sent. [onProgress] reports Whisper's percentage.
+  Future<String> transcribeFile(
+    String path, {
+    void Function(int progress)? onProgress,
+  }) => _one(() async {
+    if (!await canTranscribe()) {
+      throw StateError('Transcription is not set up on this device.');
+    }
+    return (await _transcribe(path, onProgress: onProgress)).trim();
+  });
+
   Future<void> _pump() async {
     if (_running || _closed || _queue.isEmpty || !ready) return;
     if (usesWhisper && !await installed(model)) return;
@@ -324,7 +348,7 @@ class Speech extends ChangeNotifier {
         try {
           status[file] = const TranscriptionStatus('running');
           notifyListeners();
-          final text = await _run(note, file);
+          final text = await _one(() => _run(note, file));
           await _save(note, file, text, replace: replace);
           status.remove(file);
         } catch (e) {
@@ -357,6 +381,24 @@ class Speech extends ChangeNotifier {
     // and any left behind by an interrupted run is removed at start-up.
     await audio.writeAsBytes(bytes, flush: true);
     try {
+      return await _transcribe(
+        audio.path,
+        onProgress: (p) {
+          status[file] = TranscriptionStatus('running', progress: p);
+          notifyListeners();
+        },
+      );
+    } finally {
+      if (await audio.exists()) await audio.delete();
+    }
+  }
+
+  Future<String> _transcribe(
+    String path, {
+    void Function(int progress)? onProgress,
+  }) async {
+    final audio = File(path);
+    try {
       if (!usesWhisper) {
         final pcm = File('${audio.path}.pcm');
         try {
@@ -376,14 +418,10 @@ class Speech extends ChangeNotifier {
         modelPath: (await modelFile(model)).path,
         language: language,
         cancel: cancel,
-        onProgress: (p) {
-          status[file] = TranscriptionStatus('running', progress: p);
-          notifyListeners();
-        },
+        onProgress: onProgress,
       );
     } finally {
       _cancel = null;
-      if (await audio.exists()) await audio.delete();
     }
   }
 

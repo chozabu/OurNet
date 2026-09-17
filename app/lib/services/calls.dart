@@ -22,6 +22,9 @@ class Calls extends ChangeNotifier {
   bool speaker = false;
   bool video = false;
   String? peer;
+
+  /// Caller side: devices still ringing. Cleared once one of them answers.
+  final Set<String> _ringing = {};
   String phase = 'idle';
   String? error;
   Json? _offer;
@@ -72,23 +75,29 @@ class Calls extends ChangeNotifier {
           if (_outgoing.length < 64) _outgoing.add(candidate);
           return;
         }
-        unawaited(
-          network
-              .request(peer!, {
-                'type': 'signal',
-                'payload': {
-                  'type': 'ice',
-                  'session': _session,
-                  'candidate': candidate.toMap(),
-                },
-              })
-              .catchError((Object e) {
-                if (generation != _generation) return <String, dynamic>{};
-                error = '$e';
-                notifyListeners();
-                return <String, dynamic>{};
-              }),
-        );
+        final ringing = _ringing.isNotEmpty;
+        for (final device in _recipients) {
+          unawaited(
+            network
+                .request(device, {
+                  'type': 'signal',
+                  'payload': {
+                    'type': 'ice',
+                    'session': _session,
+                    'candidate': candidate.toMap(),
+                  },
+                })
+                .catchError((Object e) {
+                  // One unreachable ringing device must not fail the call.
+                  if (generation != _generation || ringing) {
+                    return <String, dynamic>{};
+                  }
+                  error = '$e';
+                  notifyListeners();
+                  return <String, dynamic>{};
+                }),
+          );
+        }
       }
     };
     _pc!.onTrack = (event) {
@@ -225,13 +234,42 @@ class Calls extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> call(String device, {bool video = false}) async {
+  /// Devices that should receive this call's signalling.
+  List<String> get _recipients =>
+      _ringing.isNotEmpty ? _ringing.toList() : [?peer];
+
+  /// Admitted devices of [person], excluding this one.
+  List<String> devicesOf(String person) => [
+    for (final c in network.node.contacts.values)
+      if (c.person == person &&
+          c.device != network.node.identity.device &&
+          network.node.allowedPeer(c.device))
+        c.device,
+  ]..sort();
+
+  /// Rings every admitted device of [person]; the first to answer takes it.
+  Future<void> callPerson(String person, {bool video = false}) async {
+    final devices = devicesOf(person);
+    if (devices.isEmpty) throw StateError('No devices to call');
+    await callDevices(devices, video: video);
+  }
+
+  Future<void> call(String device, {bool video = false}) =>
+      callDevices([device], video: video);
+
+  Future<void> callDevices(List<String> devices, {bool video = false}) async {
     if (phase != 'idle') throw StateError('A call is already active');
-    if (device == network.node.identity.device ||
-        !network.node.allowedPeer(device)) {
-      throw StateError('Device not admitted');
+    if (devices.isEmpty) throw StateError('No devices to call');
+    for (final device in devices) {
+      if (device == network.node.identity.device ||
+          !network.node.allowedPeer(device)) {
+        throw StateError('Device not admitted');
+      }
     }
-    peer = device;
+    peer = devices.first;
+    _ringing
+      ..clear()
+      ..addAll(devices);
     this.video = video;
     _session = randomId();
     final session = _session;
@@ -247,16 +285,33 @@ class Calls extends ChangeNotifier {
       if (_session != session) return;
       await pc.setLocalDescription(offer);
       if (_session != session) return;
-      await network.request(device, {
-        'type': 'signal',
-        'payload': {
-          'type': 'offer',
-          'session': _session,
-          'sdp': offer.sdp,
-          'video': video,
-        },
-      });
+      final failures = <Object>[];
+      await Future.wait([
+        for (final device in devices)
+          network
+              .request(device, {
+                'type': 'signal',
+                'payload': {
+                  'type': 'offer',
+                  'session': session,
+                  'sdp': offer.sdp,
+                  'video': video,
+                },
+              })
+              .then<void>(
+                (_) {},
+                onError: (Object e) {
+                  failures.add(e);
+                  if (_session == session) _ringing.remove(device);
+                },
+              ),
+      ]);
       if (_session != session) return;
+      if (failures.length == devices.length) throw failures.first;
+      if (_ringing.isNotEmpty && !_ringing.contains(peer)) {
+        peer = _ringing.first;
+        notifyListeners();
+      }
       await _flushOutgoing();
       if (_session != session) return;
       _ringTimeout = Timer(const Duration(seconds: 60), () {
@@ -281,7 +336,8 @@ class Calls extends ChangeNotifier {
       throw StateError('Invalid call session');
     }
     if (message['type'] != 'offer' &&
-        (device != peer || message['session'] != _session)) {
+        ((device != peer && !_ringing.contains(device)) ||
+            message['session'] != _session)) {
       return {'ignored': true};
     }
     switch (message['type']) {
@@ -304,18 +360,33 @@ class Calls extends ChangeNotifier {
           notifyListeners();
         }
       case 'answer':
-        _ringTimeout?.cancel();
-        if (device != peer || _pc == null) {
+        if (!_ringing.contains(device) || _pc == null) {
           throw StateError('Unexpected answer');
         }
+        _ringTimeout?.cancel();
         final session = _session;
+        peer = device;
+        final others = _ringing.where((d) => d != device).toList();
+        _ringing.clear();
+        // This device took the call; stop the others ringing.
+        for (final other in others) {
+          unawaited(
+            network
+                .request(other, {
+                  'type': 'signal',
+                  'payload': {'type': 'hangup', 'session': session},
+                })
+                .catchError((Object _) => <String, dynamic>{}),
+          );
+        }
+        notifyListeners();
         await _pc!.setRemoteDescription(
           RTCSessionDescription(message['sdp'], 'answer'),
         );
         if (_session != session) return {'ignored': true};
         await _flush();
       case 'ice':
-        if (device != peer) return {};
+        if (device != peer || _ringing.isNotEmpty) return {};
         final j = message['candidate'] as Json;
         final candidate = RTCIceCandidate(
           j['candidate'],
@@ -328,7 +399,10 @@ class Calls extends ChangeNotifier {
           _pending.add(candidate);
         }
       case 'hangup':
-        if (device == peer) await hangup(notifyPeer: false);
+        // A decline from any ringing device ends the call on all of them.
+        if (device == peer || _ringing.contains(device)) {
+          await hangup(except: device);
+        }
       default:
         throw StateError('Unknown call signal');
     }
@@ -350,22 +424,31 @@ class Calls extends ChangeNotifier {
 
   Future<void> _flushOutgoing() async {
     final session = _session;
-    final device = peer;
-    if (device == null) return;
+    final devices = _recipients;
+    if (devices.isEmpty) return;
+    final ringing = _ringing.isNotEmpty;
     _signallingReady = true;
     final candidates = _outgoing.toList();
     _outgoing.clear();
-    for (final candidate in candidates) {
-      if (_session != session) return;
-      await network.request(device, {
-        'type': 'signal',
-        'payload': {
-          'type': 'ice',
-          'session': session,
-          'candidate': candidate.toMap(),
-        },
-      });
+    Future<void> send(String device) async {
+      for (final candidate in candidates) {
+        if (_session != session) return;
+        await network.request(device, {
+          'type': 'signal',
+          'payload': {
+            'type': 'ice',
+            'session': session,
+            'candidate': candidate.toMap(),
+          },
+        });
+      }
     }
+
+    await Future.wait([
+      for (final device in devices)
+        // One unreachable ringing device must not fail the call.
+        ringing ? send(device).catchError((Object _) {}) : send(device),
+    ]);
   }
 
   Future<void> answer() async {
@@ -414,26 +497,33 @@ class Calls extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> hangup({bool notifyPeer = true}) => _ending ??= _hangup(
-    notifyPeer: notifyPeer,
-  ).whenComplete(() => _ending = null);
+  /// Ends the call, telling the peer and any still-ringing devices unless
+  /// [notifyPeer] is false. [except] is a device that already knows.
+  Future<void> hangup({bool notifyPeer = true, String? except}) =>
+      _ending ??= _hangup(
+        notifyPeer: notifyPeer,
+        except: except,
+      ).whenComplete(() => _ending = null);
 
-  Future<void> _hangup({required bool notifyPeer}) async {
+  Future<void> _hangup({required bool notifyPeer, String? except}) async {
     error = null;
     _generation++;
     _ringTimeout?.cancel();
     _outgoing.clear();
     _signallingReady = false;
-    final old = peer;
+    final notify = notifyPeer
+        ? ({?peer, ..._ringing}..remove(except))
+        : <String>{};
+    _ringing.clear();
     final session = _session;
     _session = null;
     peer = null;
     phase = 'ending';
     notifyListeners();
-    if (notifyPeer && old != null) {
+    for (final device in notify) {
       unawaited(
         network
-            .request(old, {
+            .request(device, {
               'type': 'signal',
               'payload': {'type': 'hangup', 'session': session},
             })

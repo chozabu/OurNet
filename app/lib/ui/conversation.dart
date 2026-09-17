@@ -188,7 +188,10 @@ extension _ConversationPages on _OurNetAppState {
                     ),
                   ),
                 ),
-              if (p['chunks'] != null && !isImagePayload(p))
+              if (p['audio'] case final Map<String, dynamic> audio
+                  when p['chunks'] != null)
+                voiceClip(context, o, p, audio)
+              else if (p['chunks'] != null && !isImagePayload(p))
                 attachmentChip(context, o, p),
               if (p['chunks'] != null && isImagePayload(p))
                 TextButton.icon(
@@ -261,6 +264,35 @@ extension _ConversationPages on _OurNetAppState {
           ),
         );
       },
+    );
+  }
+
+  /// A voice message: the notes player with its transcript beneath.
+  Widget voiceClip(BuildContext context, SignedObject o, Json p, Json audio) {
+    final transcript = (p['transcript'] as String? ?? '').trim();
+    final style = Theme.of(context).textTheme.bodyMedium;
+    return Padding(
+      padding: const EdgeInsets.only(top: 2, bottom: 4),
+      child: SizedBox(
+        width: 320,
+        child: AudioClip(
+          key: ValueKey('voice/${o.id}'),
+          files: files,
+          object: o,
+          payload: p,
+          meta: audio,
+          editable: false,
+          transcript: Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: transcript.isEmpty
+                ? Text(
+                    'No transcript',
+                    style: style?.copyWith(fontStyle: FontStyle.italic),
+                  )
+                : SelectableText(transcript, style: style),
+          ),
+        ),
+      ),
     );
   }
 

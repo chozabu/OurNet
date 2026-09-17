@@ -10,12 +10,16 @@ import 'package:ournet_core/ournet_core.dart';
 class CallNetwork extends Network {
   CallNetwork(super.node);
   final sent = <Json>[];
+  final to = <String>[];
+  final Set<String> unreachable = {};
   Future<void> Function(Json)? onRequest;
 
   @override
   Future<Json> request(String device, Json message) async {
+    if (unreachable.contains(device)) throw StateError('unreachable');
     final payload = message['payload'] as Json;
     sent.add(payload);
+    to.add(device);
     await onRequest?.call(payload);
     return {'ok': true};
   }
@@ -32,6 +36,7 @@ void main() {
   late Calls calls;
   late LocalIdentity own;
   late LocalIdentity friend;
+  late LocalIdentity friendPhone;
   final methods = <MethodCall>[];
   final eventChannels = <String>[];
   var texture = 0;
@@ -72,6 +77,9 @@ void main() {
     friend = await LocalIdentity.create();
     await node.addContact(own.certificate);
     await node.addContact(friend.certificate);
+    final phone = await LocalIdentity.create();
+    friendPhone = await phone.enrol(await friend.authorise(phone.certificate));
+    await node.addContact(friendPhone.certificate);
     network = CallNetwork(node);
     calls = Calls(network);
     void registerEvents(String name) {
@@ -200,25 +208,38 @@ void main() {
     await calls.hangup();
     methods.clear();
     await calls.call(friend.device);
-    expect(methods.singleWhere((m) => m.method == 'getUserMedia')
-        .arguments['constraints']['audio'], {
-      'optional': [{'sourceId': 'physical-mic'}],
-    });
+    expect(
+      methods
+          .singleWhere((m) => m.method == 'getUserMedia')
+          .arguments['constraints']['audio'],
+      {
+        'optional': [
+          {'sourceId': 'physical-mic'},
+        ],
+      },
+    );
     expect(methods.where((m) => m.method == 'selectAudioOutput'), hasLength(1));
     expect(calls.audioInput, 'physical-mic');
     expect(calls.audioOutput, 'speakers');
   });
 
-  test('missing saved audio devices fall back without breaking the call', () async {
-    node.store.set('callAudioInput', 'unplugged');
-    node.store.set('callAudioOutput', 'unplugged');
-    await calls.call(friend.device);
-    expect(calls.error, isNull);
-    expect(calls.audioInput, isNull);
-    expect(calls.audioOutput, isNull);
-    expect(methods.singleWhere((m) => m.method == 'getUserMedia')
-        .arguments['constraints']['audio'], true);
-  });
+  test(
+    'missing saved audio devices fall back without breaking the call',
+    () async {
+      node.store.set('callAudioInput', 'unplugged');
+      node.store.set('callAudioOutput', 'unplugged');
+      await calls.call(friend.device);
+      expect(calls.error, isNull);
+      expect(calls.audioInput, isNull);
+      expect(calls.audioOutput, isNull);
+      expect(
+        methods
+            .singleWhere((m) => m.method == 'getUserMedia')
+            .arguments['constraints']['audio'],
+        true,
+      );
+    },
+  );
 
   test(
     'streamless and separate remote tracks use registered native stream',
@@ -347,4 +368,68 @@ void main() {
       expect(calls.peer, isNull);
     },
   );
+
+  List<String> sentTo(String type) => [
+    for (var i = 0; i < network.sent.length; i++)
+      if (network.sent[i]['type'] == type) network.to[i],
+  ];
+
+  test('calling a person rings all their devices', () async {
+    expect(calls.devicesOf(friend.person), hasLength(2));
+    await calls.callPerson(friend.person);
+    expect(
+      sentTo('offer'),
+      unorderedEquals([friend.device, friendPhone.device]),
+    );
+    expect(calls.phase, 'calling');
+  });
+
+  test('first device to answer takes the call; others stop ringing', () async {
+    await calls.callPerson(friend.person);
+    final session = network.sent.first['session'];
+    await network.signal!(friendPhone.device, {
+      'type': 'answer',
+      'session': session,
+      'sdp': 'answer-sdp',
+    });
+    expect(calls.peer, friendPhone.device);
+    expect(sentTo('hangup'), [friend.device]);
+    await expectLater(
+      network.signal!(friend.device, {
+        'type': 'answer',
+        'session': session,
+        'sdp': 'answer-sdp',
+      }),
+      completion({'ignored': true}),
+    );
+    await network.signal!(friend.device, {
+      'type': 'hangup',
+      'session': session,
+    });
+    expect(calls.phase, isNot('idle'));
+    await calls.hangup();
+    expect(sentTo('hangup'), [friend.device, friendPhone.device]);
+  });
+
+  test('declining on one device ends the call on the others', () async {
+    await calls.callPerson(friend.person);
+    final session = network.sent.first['session'];
+    await network.signal!(friend.device, {
+      'type': 'hangup',
+      'session': session,
+    });
+    expect(calls.phase, 'idle');
+    expect(sentTo('hangup'), [friendPhone.device]);
+  });
+
+  test('an unreachable device does not stop the others ringing', () async {
+    network.unreachable.add(friend.device);
+    await calls.callPerson(friend.person);
+    expect(calls.phase, 'calling');
+    expect(calls.peer, friendPhone.device);
+    network.unreachable.add(friendPhone.device);
+    await calls.hangup();
+    await expectLater(calls.callPerson(friend.person), throwsStateError);
+    expect(calls.phase, 'idle');
+  });
 }

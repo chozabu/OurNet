@@ -90,5 +90,14 @@ There is no application account server. Media uses WebRTC, with signalling over
 admitted iroh connections. Media uses direct candidates or user-configured
 STUN/TURN and does not inherit the iroh relay path.
 
+A call to a person sends the same offer (one session id) to each of their
+admitted devices. The first `answer` binds the call to that device; the caller
+sends `hangup` for the session to the others and ignores their later signals.
+A `hangup` from any still-ringing device ends the call for all of them.
+
+Voice messages are ordinary encrypted `message` attachments whose payload also
+carries `audio: {mime, duration}` (milliseconds) and an optional `transcript`,
+made on the sending device before the message is signed.
+
 Plugin permissions, moderation/governance, real-world ID hooks, identity backup,
 forward-secret messaging and cross-version migrations require subsequent designs.

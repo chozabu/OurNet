@@ -25,6 +25,10 @@ class Files {
     String? room,
     String? postSpace,
     Json? post,
+
+    /// Extra payload fields, such as a voice message's duration and transcript.
+    Json? extra,
+    List<String> via = const [],
     void Function(int completed, int total)? onProgress,
   }) async {
     final trace = TimelineTask()..start('attachment.import');
@@ -73,6 +77,7 @@ class Files {
           if (drive != null) ...drive,
           if (everyday != null) ...everyday,
           if (post != null) ...post,
+          ...?extra,
         },
         space:
             postSpace ??
@@ -84,6 +89,7 @@ class Files {
                 ? 'files'
                 : '_messages'),
         audience: audience,
+        via: via,
       );
     } finally {
       trace.finish();

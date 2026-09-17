@@ -41,7 +41,11 @@ extension _HomePages on _OurNetAppState {
       future: node.content(latest),
       builder: (context, snapshot) {
         final content = snapshot.data;
-        final body = (content?['text'] ?? '').toString();
+        final body = (content?['text'] ?? '').toString().isNotEmpty
+            ? content!['text'].toString()
+            : content?['audio'] != null
+            ? '🎤 ${content?['transcript'] ?? 'Voice message'}'
+            : '';
         final preview =
             content?['title'] ??
             (body.isNotEmpty ? body : content?['name'] ?? fallback);

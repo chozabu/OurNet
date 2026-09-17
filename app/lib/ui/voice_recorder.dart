@@ -36,19 +36,25 @@ const maxRecording = Duration(minutes: 30);
 /// With [save], stopping stores the recording and the recorder turns
 /// straight into the page [save] returns, and this returns null. Otherwise
 /// it returns the recording. Null also means cancelled or no microphone.
+/// [message] labels the recorder for a voice message rather than a note.
 Future<VoiceRecording?> recordVoice(
   BuildContext context, {
   AudioRecorder Function()? recorder,
   Speech? speech,
   SaveRecording? save,
+  bool message = false,
 }) async {
   if (speech != null) await chooseSpeechEngine(context, speech);
   if (!context.mounted) return null;
   return Navigator.of(context).push<VoiceRecording>(
     MaterialPageRoute(
       fullscreenDialog: true,
-      builder: (_) =>
-          VoiceRecorder(recorder: recorder, live: speech?.live(), save: save),
+      builder: (_) => VoiceRecorder(
+        recorder: recorder,
+        live: speech?.live(),
+        save: save,
+        message: message,
+      ),
     ),
   );
 }
@@ -59,7 +65,14 @@ class VoiceRecorder extends StatefulWidget {
   /// Live transcription, owned and disposed of by the recorder.
   final LiveSpeech? live;
   final SaveRecording? save;
-  const VoiceRecorder({super.key, this.recorder, this.live, this.save});
+  final bool message;
+  const VoiceRecorder({
+    super.key,
+    this.recorder,
+    this.live,
+    this.save,
+    this.message = false,
+  });
   @override
   State<VoiceRecorder> createState() => _VoiceRecorderState();
 }
@@ -322,7 +335,7 @@ class _VoiceRecorderState extends State<VoiceRecorder> {
                 onPressed: saving ? null : cancel,
                 icon: const Icon(Icons.close),
               ),
-              title: const Text('Voice note'),
+              title: Text(widget.message ? 'Voice message' : 'Voice note'),
             ),
             body: SafeArea(
               child: Center(
@@ -368,10 +381,12 @@ class _VoiceRecorderState extends State<VoiceRecorder> {
                             ),
                             const SizedBox(height: 8),
                             if (live case final live?)
-                              _LiveText(live: live)
+                              _LiveText(live: live, message: widget.message)
                             else
                               Text(
-                                'Audio and its transcript are saved in the note. Transcription runs on this device.',
+                                widget.message
+                                    ? 'The audio is sent with its transcript. Transcription runs on this device.'
+                                    : 'Audio and its transcript are saved in the note. Transcription runs on this device.',
                                 textAlign: TextAlign.center,
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
@@ -400,7 +415,9 @@ class _VoiceRecorderState extends State<VoiceRecorder> {
                               ),
                             ),
                             const SizedBox(height: 12),
-                            const Text('Tap to save'),
+                            Text(
+                              widget.message ? 'Tap to send' : 'Tap to save',
+                            ),
                           ],
                         ),
                 ),
@@ -416,7 +433,8 @@ class _VoiceRecorderState extends State<VoiceRecorder> {
 /// The words recognised so far, newest in view, or why live text stopped.
 class _LiveText extends StatelessWidget {
   final LiveSpeech live;
-  const _LiveText({required this.live});
+  final bool message;
+  const _LiveText({required this.live, this.message = false});
 
   @override
   Widget build(BuildContext context) {
@@ -444,7 +462,9 @@ class _LiveText extends StatelessWidget {
                 )
               else if (error == null)
                 Text(
-                  'Your words will appear here. The audio is saved in the note too.',
+                  message
+                      ? 'Your words will appear here. The audio is sent too.'
+                      : 'Your words will appear here. The audio is saved in the note too.',
                   textAlign: TextAlign.center,
                   style: theme.textTheme.bodySmall,
                 ),

@@ -10,11 +10,13 @@ import '../services/speech.dart';
 import 'inline_image.dart';
 import 'voice_recorder.dart' show formatDuration;
 
-/// Plays an encrypted audio attachment. The original is decrypted into
-/// memory only while the clip is loaded for playback.
+/// Plays an encrypted audio attachment in a note or a voice message. The
+/// original is decrypted into memory only while the clip is loaded for
+/// playback. [object] holds the attachment described by [payload].
 class AudioClip extends StatefulWidget {
   final Files files;
-  final EverydayItem op;
+  final SignedObject object;
+  final Json payload;
   final Json meta;
   final Widget transcript;
   final TranscriptionStatus? status;
@@ -25,7 +27,8 @@ class AudioClip extends StatefulWidget {
   const AudioClip({
     super.key,
     required this.files,
-    required this.op,
+    required this.object,
+    required this.payload,
     required this.meta,
     required this.transcript,
     this.status,
@@ -64,7 +67,7 @@ class _AudioClipState extends State<AudioClip> {
     });
     try {
       final Uint8List bytes = await widget.files.readBytes(
-        widget.op.object,
+        widget.object,
         limit: Notes.maxFileSize,
       );
       final created = AudioPlayer();
@@ -93,7 +96,7 @@ class _AudioClipState extends State<AudioClip> {
     } catch (e) {
       if (mounted) {
         setState(
-          () => error = widget.files.cached(widget.op.data)
+          () => error = widget.files.cached(widget.payload)
               ? 'This recording cannot be played here.'
               : 'Waiting for a device that has this recording.',
         );
@@ -170,32 +173,37 @@ class _AudioClipState extends State<AudioClip> {
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
-                PopupMenuButton<String>(
-                  tooltip: 'Recording options',
-                  onSelected: (value) => switch (value) {
-                    'transcribe' => widget.onTranscribe?.call(),
-                    'cancel' => widget.onCancelTranscription?.call(),
-                    'remove' => widget.onRemove?.call(),
-                    _ => null,
-                  },
-                  itemBuilder: (_) => [
-                    if (widget.onTranscribe != null && widget.editable)
-                      const PopupMenuItem(
-                        value: 'transcribe',
-                        child: Text('Transcribe again'),
-                      ),
-                    if (status != null && widget.onCancelTranscription != null)
-                      const PopupMenuItem(
-                        value: 'cancel',
-                        child: Text('Stop transcribing'),
-                      ),
-                    if (widget.editable && widget.onRemove != null)
-                      const PopupMenuItem(
-                        value: 'remove',
-                        child: Text('Remove recording'),
-                      ),
-                  ],
-                ),
+                if ((widget.editable &&
+                        (widget.onTranscribe != null ||
+                            widget.onRemove != null)) ||
+                    (status != null && widget.onCancelTranscription != null))
+                  PopupMenuButton<String>(
+                    tooltip: 'Recording options',
+                    onSelected: (value) => switch (value) {
+                      'transcribe' => widget.onTranscribe?.call(),
+                      'cancel' => widget.onCancelTranscription?.call(),
+                      'remove' => widget.onRemove?.call(),
+                      _ => null,
+                    },
+                    itemBuilder: (_) => [
+                      if (widget.onTranscribe != null && widget.editable)
+                        const PopupMenuItem(
+                          value: 'transcribe',
+                          child: Text('Transcribe again'),
+                        ),
+                      if (status != null &&
+                          widget.onCancelTranscription != null)
+                        const PopupMenuItem(
+                          value: 'cancel',
+                          child: Text('Stop transcribing'),
+                        ),
+                      if (widget.editable && widget.onRemove != null)
+                        const PopupMenuItem(
+                          value: 'remove',
+                          child: Text('Remove recording'),
+                        ),
+                    ],
+                  ),
               ],
             ),
             if (error != null)

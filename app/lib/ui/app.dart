@@ -47,6 +47,7 @@ import 'note_markup.dart';
 import 'note_organise.dart';
 import 'speech_settings.dart';
 import 'voice_recorder.dart';
+import 'note_attachments.dart' show AudioClip;
 import 'package:image_picker/image_picker.dart';
 
 part 'home.dart';
@@ -192,6 +193,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   int conversationCursor = 0;
   final sendingMessages = <String>{};
   final messageErrors = <String, String>{};
+
+  /// Per conversation: what a voice message being prepared is doing.
+  final voiceProgress = <String, String>{};
   final fileProgress = <String, double>{};
   final fileErrors = <String, String>{};
   final search = TextEditingController();

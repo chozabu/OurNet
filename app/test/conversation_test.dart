@@ -93,4 +93,45 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await node.close();
   });
+
+  testWidgets('voice messages play inline with their transcript', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final node = Node(await LocalIdentity.create(), Store());
+    final friend = await LocalIdentity.create(label: 'Friend');
+    await node.addContact(friend.certificate);
+    await node.publish(
+      'message',
+      {
+        'text': '',
+        'name': 'Voice message.m4a',
+        'size': 0,
+        'chunks': <String>[],
+        'key': null,
+        'audio': {'mime': 'audio/mp4', 'duration': 65000},
+        'transcript': 'See you at the station',
+      },
+      audience: [friend.person],
+      space: '_messages',
+    );
+    await tester.pumpWidget(
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.messages,
+      ),
+    );
+    await settled(tester);
+    expect(find.text('See you at the station'), findsOneWidget);
+    expect(find.text('1:05'), findsOneWidget);
+    expect(find.byTooltip('Play'), findsOneWidget);
+    expect(find.text('Voice message.m4a'), findsNothing);
+    expect(find.byTooltip('Record voice message'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await node.close();
+  });
 }
