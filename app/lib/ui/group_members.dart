@@ -116,7 +116,7 @@ extension _GroupMemberPages on _OurNetAppState {
       await everyday.leave(room);
       update(() {
         activeRoom = null;
-        tab = 10;
+        tab = Destination.groups;
       });
     }
     if (action == 'save') {
@@ -136,7 +136,7 @@ extension _GroupMemberPages on _OurNetAppState {
       );
       update(() {
         activeRoom = next;
-        tab = 10;
+        tab = Destination.groups;
         everydaySection = 'Conversation';
       });
       notice('Membership updated. Changes sync when devices reconnect.');

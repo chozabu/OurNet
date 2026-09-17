@@ -75,7 +75,12 @@ class _SetupPageState extends State<SetupPage> {
     await saveIdentity(node.identity);
     node.store.set('autoConnect', true);
     if (!mounted) return;
-    runApp(OurNetApp(node: node, initialTab: page == 'create' ? 7 : 0));
+    runApp(
+      OurNetApp(
+        node: node,
+        initialTab: page == 'create' ? Destination.profile : Destination.notes,
+      ),
+    );
   }
 
   /// Looks for an open Add device screen on this network while joining.

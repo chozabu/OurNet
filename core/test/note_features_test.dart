@@ -140,6 +140,45 @@ void main() {
     },
   );
 
+  test('attachment helpers name, type and replace attachments', () async {
+    var note = await alice.create(title: 'Scraps');
+    final photo = await alice.attachImage(note, bytesOf([1, 2]), 'scan');
+    final bitmap = await alice.attachImage(note, bytesOf([3]), 'old.BMP');
+    note = (await alice.get(note.id))!;
+    expect(note.file(photo)!.data['name'], 'scan.jpg');
+    expect(note.fileMeta(photo)['mime'], 'image/jpeg');
+    expect(note.fileMeta(bitmap)['mime'], 'image/bmp');
+
+    final drawing = await alice.attachDrawing(
+      note,
+      png: [4],
+      strokes: [5],
+      width: 10,
+      height: 20,
+    );
+    note = (await alice.get(note.id))!;
+    await alice.attachDrawing(
+      note,
+      png: [6],
+      strokes: [7],
+      width: 30,
+      height: 40,
+      existing: drawing,
+    );
+    note = (await alice.get(note.id))!;
+    // A redrawn drawing replaces both registers rather than branching.
+    expect(note.heads['file:$drawing:meta'], hasLength(1));
+    expect(note.fileMeta(drawing)['width'], 30);
+    expect(await read(a, note.strokes(drawing)!), [7]);
+
+    await alice.set(note, 'color', 'mint');
+    await alice.set((await alice.get(note.id))!, 'color', 'sage');
+    note = (await alice.get(note.id))!;
+    expect(note.color, 'sage');
+    expect(note.hasConflicts, false);
+    expect(note.heads['color'], hasLength(1));
+  });
+
   test('copies keep checked state, nesting, colour and labels', () async {
     final note = await alice.create(
       title: 'Trip',

@@ -56,7 +56,11 @@ void main() {
       await tester.pumpWidget(
         RepaintBoundary(
           key: const ValueKey('capture'),
-          child: OurNetApp(node: node, enablePlatform: false, initialTab: 9),
+          child: OurNetApp(
+            node: node,
+            enablePlatform: false,
+            initialTab: Destination.notes,
+          ),
         ),
       );
       await settled(tester);

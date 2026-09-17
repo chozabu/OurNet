@@ -530,7 +530,7 @@ extension _SocialPages on _OurNetAppState {
             ),
             IconButton(
               tooltip: 'Shared places',
-              onPressed: () => update(() => tab = 5),
+              onPressed: () => update(() => tab = Destination.locations),
               icon: const Icon(Icons.place_outlined),
             ),
             IconButton(
@@ -645,8 +645,8 @@ extension _SocialPages on _OurNetAppState {
     VoidCallback? attach,
     bool sending = false,
   }) {
-    final sendDisabled = tab == 2 ? sending : busy;
-    final key = tab == 2
+    final sendDisabled = tab == Destination.messages ? sending : busy;
+    final key = tab == Destination.messages
         ? 'message/$contact'
         : 'community/$space/$selectedThread';
     if (composerContext != key) {
@@ -748,7 +748,7 @@ extension _SocialPages on _OurNetAppState {
                               Platform.isMacOS
                           ? 'Enter sends · Shift+Enter adds a line'
                           : null,
-                      hintText: tab == 2
+                      hintText: tab == Destination.messages
                           ? 'Write a private message…'
                           : 'Start a discussion in this forum…',
                     ),

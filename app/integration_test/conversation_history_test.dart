@@ -40,7 +40,11 @@ void main() {
         binding.testTextInput.register();
         addTearDown(binding.testTextInput.unregister);
         await tester.pumpWidget(
-          OurNetApp(node: local, enablePlatform: false, initialTab: 2),
+          OurNetApp(
+            node: local,
+            enablePlatform: false,
+            initialTab: Destination.messages,
+          ),
         );
         await tester.pump(const Duration(seconds: 1));
         // Narrow Android layouts open a conversation explicitly.

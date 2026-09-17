@@ -171,7 +171,11 @@ void main() {
     }
     log('history: ${node.store.count} objects');
     await tester.pumpWidget(
-      OurNetApp(node: node, enablePlatform: false, initialTab: 9),
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.notes,
+      ),
     );
     final speech =
         (tester.state(find.byType(OurNetApp)) as dynamic).speech as Speech;

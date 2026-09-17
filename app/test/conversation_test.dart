@@ -24,7 +24,11 @@ void main() {
       );
     }
     await tester.pumpWidget(
-      OurNetApp(node: node, enablePlatform: false, initialTab: 2),
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.messages,
+      ),
     );
     await settled(tester);
     expect(find.text('Load older messages'), findsOneWidget);

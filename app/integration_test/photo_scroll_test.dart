@@ -230,7 +230,7 @@ void main() {
           OurNetApp(
             node: node,
             enablePlatform: false,
-            initialTab: 9,
+            initialTab: Destination.notes,
             pickAttachment: () async {
               final source = sources[picks++ % sources.length];
               return (path: source.path, name: 'imported-$picks.jpg');

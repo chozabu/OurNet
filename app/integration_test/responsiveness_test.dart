@@ -59,7 +59,7 @@ void main() {
         OurNetApp(
           node: node,
           enablePlatform: false,
-          initialTab: 9,
+          initialTab: Destination.notes,
           pickAttachment: () async =>
               (path: source.path, name: 'test-image.png'),
         ),

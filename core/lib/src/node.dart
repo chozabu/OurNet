@@ -97,34 +97,21 @@ class Node {
         ),
       );
     }
-    if (store.path == null) {
-      return _publish(
-        kind,
-        content,
-        space: space,
-        audience: audience,
-        via: via,
-        expires: expires,
-      );
-    }
-    _pendingPublications++;
-    final result = _publications.then(
-      (_) => _publish(
-        kind,
-        content,
-        space: space,
-        audience: audience,
-        via: via,
-        expires: expires,
-      ),
+    Future<SignedObject> run() => _publish(
+      kind,
+      content,
+      space: space,
+      audience: audience,
+      via: via,
+      expires: expires,
     );
+    if (store.path == null) return run();
+    _pendingPublications++;
+    final result = _publications.then((_) => run());
+    void settled() => _pendingPublications--;
     _publications = result.then<void>(
-      (_) {
-        _pendingPublications--;
-      },
-      onError: (Object _, StackTrace __) {
-        _pendingPublications--;
-      },
+      (_) => settled(),
+      onError: (Object _, StackTrace _) => settled(),
     );
     return result;
   }

@@ -30,7 +30,11 @@ void main() {
     await tester.pumpWidget(
       RepaintBoundary(
         key: const ValueKey('shot'),
-        child: OurNetApp(node: node, enablePlatform: false, initialTab: 9),
+        child: OurNetApp(
+          node: node,
+          enablePlatform: false,
+          initialTab: Destination.notes,
+        ),
       ),
     );
     await tester.runAsync(
@@ -67,7 +71,11 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.runAsync(() => Everyday(node).createRoom('Weekend trip', []));
     await tester.pumpWidget(
-      OurNetApp(node: node, enablePlatform: false, initialTab: 10),
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.groups,
+      ),
     );
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 150)),

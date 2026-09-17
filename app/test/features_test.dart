@@ -151,7 +151,11 @@ void main() {
       await node.publish('profile', {'name': 'Me'}, space: '_identity');
       await Everyday(node).createRoom('Family', []);
       await tester.pumpWidget(
-        OurNetApp(node: node, enablePlatform: false, initialTab: 10),
+        OurNetApp(
+          node: node,
+          enablePlatform: false,
+          initialTab: Destination.groups,
+        ),
       );
       await settled(tester);
       await tester.tap(find.text('Family').first);
@@ -222,7 +226,12 @@ void main() {
         },
       );
     });
-    for (final tab in [10, 2, 1, 3]) {
+    for (final tab in [
+      Destination.groups,
+      Destination.messages,
+      Destination.forums,
+      Destination.files,
+    ]) {
       await tester.pumpWidget(
         RepaintBoundary(
           key: const ValueKey('capture'),
@@ -230,7 +239,7 @@ void main() {
         ),
       );
       await settled(tester);
-      if (tab == 10) {
+      if (tab == Destination.groups) {
         await tester.tap(find.text('Photo club').first);
         await settled(tester);
       }
@@ -240,8 +249,8 @@ void main() {
         reason: 'Destination $tab',
       );
       expect(find.byIcon(Icons.broken_image_outlined), findsNothing);
-      await snapshot(tester, 'desktop-image-$tab');
-      if (tab == 3) {
+      await snapshot(tester, 'desktop-image-${tab.id}');
+      if (tab == Destination.files) {
         await tester.tap(find.text('preview.png').first);
         await settled(tester);
         expect(find.text('Drive history'), findsOneWidget);

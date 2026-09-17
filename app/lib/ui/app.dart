@@ -12,6 +12,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:app_badge_plus/app_badge_plus.dart';
@@ -61,10 +62,40 @@ part 'group_members.dart';
 part 'forum_features.dart';
 part 'notes_home.dart';
 
+/// Places in the app. [id] is saved as the last destination; keep it stable.
+enum Destination {
+  forums(1, 'Forums', Icons.forum_outlined),
+  messages(2, 'Direct messages', Icons.chat_bubble_outline),
+  files(3, 'Files', Icons.folder_outlined),
+  network(4, 'Network', Icons.hub_outlined),
+  locations(5, 'Locations', Icons.map_outlined),
+  voting(6, 'Voting', Icons.how_to_vote_outlined),
+  profile(7, 'Profile', Icons.person_outline),
+  settings(8, 'Settings', Icons.settings_outlined),
+  notes(9, 'Notes', Icons.note_alt_outlined),
+  groups(10, 'Private groups', Icons.people_outline),
+  search(11, 'Search', Icons.search);
+
+  final int id;
+  final String title;
+  final IconData icon;
+  const Destination(this.id, this.title, this.icon);
+
+  /// The main navigation list, in order.
+  static const navigation = [notes, messages, groups, forums, files];
+
+  /// Where back leads from a sub-page, which is also what is remembered.
+  Destination? get parent => switch (this) {
+    network || profile => settings,
+    locations => messages,
+    _ => null,
+  };
+}
+
 class OurNetApp extends StatefulWidget {
   final Node node;
   final bool enablePlatform;
-  final int? initialTab;
+  final Destination? initialTab;
   final Future<({String path, String name})?> Function()? pickAttachment;
 
   /// Replaces the platform image picker in note editors (tests).
@@ -111,7 +142,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   Timer? _pausedStop;
   final messenger = GlobalKey<ScaffoldMessengerState>();
   final noteNavigator = GlobalKey<NavigatorState>();
-  int tab = 9;
+  Destination tab = Destination.notes;
   bool showConversation = false;
   bool showForum = false;
   bool attachmentFiles = false;
@@ -163,34 +194,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   final fileProgress = <String, double>{};
   final fileErrors = <String, String>{};
   final search = TextEditingController();
-  static const titles = [
-    'Home',
-    'Forums',
-    'Direct messages',
-    'Files',
-    'Network',
-    'Locations',
-    'Voting',
-    'Profile',
-    'Settings',
-    'Notes',
-    'Private groups',
-    'Search',
-  ];
-  static const icons = [
-    Icons.home_outlined,
-    Icons.forum_outlined,
-    Icons.chat_bubble_outline,
-    Icons.folder_outlined,
-    Icons.hub_outlined,
-    Icons.map_outlined,
-    Icons.how_to_vote_outlined,
-    Icons.person_outline,
-    Icons.settings_outlined,
-    Icons.note_alt_outlined,
-    Icons.people_outline,
-    Icons.search,
-  ];
 
   @override
   void initState() {
@@ -227,8 +230,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     final saved = node.store.setting('lastDestination');
     tab =
         widget.initialTab ??
-        (saved is int && [9, 2, 10, 1, 3, 8].contains(saved) ? saved : 9);
-    if (tab == 0) tab = 9;
+        [
+          ...Destination.navigation,
+          Destination.settings,
+        ].where((d) => d.id == saved).firstOrNull ??
+        Destination.notes;
     dark = node.store.setting('dark') == true;
     compact = node.store.setting('compact') == true;
     notesGrid = node.store.setting('notesGrid') != false;
@@ -258,7 +264,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       ..onCallOpen = () {
         if (mounted) {
           update(() {
-            tab = 2;
+            tab = Destination.messages;
             showConversation = true;
           });
         }
@@ -267,7 +273,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         final object = node.store.get(id);
         if (object == null) return;
         setState(() {
-          tab = object.kind == 'message' ? 2 : 1;
+          tab = object.kind == 'message'
+              ? Destination.messages
+              : Destination.forums;
           showConversation = true;
           showForum = true;
           contact = object.author;
@@ -299,10 +307,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       if (Platform.isAndroid) {
         noteWidgets = NoteWidgets(notes, (id, mode) async {
           if (!mounted) return;
-          update(() {
-            tab = 9;
-            activeRoom = null;
-          });
+          update(showNotes);
           if (id != null && await notes.get(id) == null) {
             notice('This note is unavailable for this profile.');
             return;
@@ -320,10 +325,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           node,
           (path, name) => addEverydayFile(path, name: name),
           (error) {
-            update(() {
-              tab = 9;
-              activeRoom = null;
-            });
+            update(showNotes);
             notice(error ?? 'Saved to Notes');
           },
         );
@@ -337,10 +339,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       reminders = NoteReminders(notes, notifications);
       notifications.onOpenNote = (id) {
         if (!mounted) return;
-        update(() {
-          tab = 9;
-          activeRoom = null;
-        });
+        update(showNotes);
         unawaited(openNote(id));
       };
       unawaited(
@@ -403,21 +402,21 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   void update(VoidCallback action) {
     if (mounted) {
       setState(() {
-        final previousRoom = activeRoom?.object.id;
+        final previousRoom = activeRoom?.object.id, previousTab = tab;
         action();
         // Filters, drag feedback and delivery labels do not change the data.
         // Keep the loaded items when only presentation state changes.
         if (previousRoom != activeRoom?.object.id) everydayView = null;
-        node.store.set(
-          'lastDestination',
-          [4, 7].contains(tab)
-              ? 8
-              : tab == 5
-              ? 2
-              : tab,
-        );
+        if (tab != previousTab) {
+          node.store.set('lastDestination', (tab.parent ?? tab).id);
+        }
       });
     }
+  }
+
+  void showNotes() {
+    tab = Destination.notes;
+    activeRoom = null;
   }
 
   void redraw() {
@@ -690,22 +689,23 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                       padding: EdgeInsets.fromLTRB(24, 0, 24, 24),
                       child: Text('Your things. Your people.'),
                     ),
-                    for (final i in [9, 2, 10, 1, 3])
+                    for (final d in Destination.navigation)
                       ListTile(
-                        leading: Icon(icons[i]),
-                        title: Text(titles[i]),
-                        trailing: i == 1 || i == 2
-                            ? Badge.count(
-                                count: unread(i == 1 ? 'post' : 'message'),
-                                isLabelVisible:
-                                    unread(i == 1 ? 'post' : 'message') > 0,
-                              )
-                            : null,
-                        selected: tab == i,
+                        leading: Icon(d.icon),
+                        title: Text(d.title),
+                        trailing: switch (d) {
+                          Destination.forums => navBadge('post'),
+                          Destination.messages => navBadge('message'),
+                          _ => null,
+                        },
+                        selected: tab == d,
                         onTap: () {
                           update(() {
-                            tab = i;
-                            if (i == 9 || i == 10) activeRoom = null;
+                            tab = d;
+                            if (d == Destination.notes ||
+                                d == Destination.groups) {
+                              activeRoom = null;
+                            }
                             showConversation = false;
                             showForum = false;
                             everydayView = null;
@@ -721,15 +721,22 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
               ListTile(
                 leading: const Icon(Icons.settings_outlined),
                 title: const Text('Settings'),
-                selected: [8, 4, 7].contains(tab),
+                selected: (tab.parent ?? tab) == Destination.settings,
                 onTap: () {
-                  update(() => tab = 8);
+                  update(() => tab = Destination.settings);
                   if (!wide) Navigator.pop(context);
                 },
               ),
             ],
           );
           final back = backDestination();
+          final syncLabel = network.running ? 'Sync now' : 'Connect';
+          final syncIcon = Icon(
+            network.running ? Icons.sync : Icons.power_settings_new,
+          );
+          final VoidCallback? sync = busy
+              ? null
+              : () => act(network.running ? network.syncAll : network.start);
           return PopScope(
             canPop: back == null,
             onPopInvokedWithResult: (didPop, _) {
@@ -737,15 +744,15 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
             },
             child: Scaffold(
               appBar: AppBar(
-                leading: [4, 5, 7].contains(tab)
-                    ? BackButton(
-                        onPressed: () => update(() => tab = tab == 5 ? 2 : 8),
-                      )
-                    : null,
+                leading: tab.parent == null
+                    ? null
+                    : BackButton(
+                        onPressed: () => update(() => tab = tab.parent!),
+                      ),
                 title: Text(
                   activeProfile == 'main'
-                      ? titles[tab]
-                      : '${titles[tab]} · $activeProfile',
+                      ? tab.title
+                      : '${tab.title} · $activeProfile',
                 ),
                 actions: [
                   if (busy)
@@ -759,31 +766,15 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                     ),
                   if (wide)
                     TextButton.icon(
-                      onPressed: busy
-                          ? null
-                          : () => act(() async {
-                              if (network.running) {
-                                await network.syncAll();
-                              } else {
-                                await network.start();
-                              }
-                            }),
-                      icon: Icon(
-                        network.running ? Icons.sync : Icons.power_settings_new,
-                      ),
-                      label: Text(network.running ? 'Sync now' : 'Connect'),
-                    ),
-                  if (!wide)
+                      onPressed: sync,
+                      icon: syncIcon,
+                      label: Text(syncLabel),
+                    )
+                  else
                     IconButton(
-                      tooltip: network.running ? 'Sync now' : 'Connect',
-                      onPressed: busy
-                          ? null
-                          : () => act(
-                              network.running ? network.syncAll : network.start,
-                            ),
-                      icon: Icon(
-                        network.running ? Icons.sync : Icons.power_settings_new,
-                      ),
+                      tooltip: syncLabel,
+                      onPressed: sync,
+                      icon: syncIcon,
                     ),
                   if (wide)
                     IconButton(
@@ -796,13 +787,13 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                     ),
                   IconButton(
                     tooltip: 'Search everything',
-                    onPressed: () => update(() => tab = 11),
+                    onPressed: () => update(() => tab = Destination.search),
                     icon: const Icon(Icons.search),
                   ),
                   if (wide)
                     IconButton(
                       tooltip: 'Your profile',
-                      onPressed: () => update(() => tab = 7),
+                      onPressed: () => update(() => tab = Destination.profile),
                       icon: const Icon(Icons.account_circle_outlined),
                     ),
                   const SizedBox(width: 12),
@@ -853,7 +844,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                         Padding(
                           padding: const EdgeInsets.all(8),
                           child: InkWell(
-                            onTap: () => update(() => tab = 4),
+                            onTap: () =>
+                                update(() => tab = Destination.network),
                             child: Row(
                               children: [
                                 Expanded(
@@ -882,33 +874,36 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
 
   /// Where Android back goes inside the app, or null to leave it from Notes.
   VoidCallback? backDestination() {
-    if ([4, 5, 7].contains(tab)) return () => tab = tab == 5 ? 2 : 8;
-    if (tab == 10 && activeRoom != null) return () => activeRoom = null;
-    if (tab == 2 && showConversation) return () => showConversation = false;
-    if (tab == 1 && showForum) return () => showForum = false;
-    if (tab != 9) {
-      return () {
-        tab = 9;
-        activeRoom = null;
-      };
-    }
-    return null;
+    if (tab.parent case final parent?) return () => tab = parent;
+    return switch (tab) {
+      Destination.groups when activeRoom != null => () => activeRoom = null,
+      Destination.messages when showConversation =>
+        () => showConversation = false,
+      Destination.forums when showForum => () => showForum = false,
+      Destination.notes => null,
+      _ => showNotes,
+    };
   }
 
   Widget page(BuildContext context) => switch (tab) {
-    0 => everydayPage(context),
-    1 => communities(context),
-    2 => messages(context),
-    3 => filePage(context),
-    4 => networkPage(context),
-    5 => locations(context),
-    6 => voting(context),
-    7 => profile(context),
-    9 => everydayPage(context),
-    10 => groupsPage(context),
-    11 => searchPage(context),
-    _ => settings(context),
+    Destination.forums => communities(context),
+    Destination.messages => messages(context),
+    Destination.files => filePage(context),
+    Destination.network => networkPage(context),
+    Destination.locations => locations(context),
+    Destination.voting => voting(context),
+    Destination.profile => profile(context),
+    Destination.settings => settings(context),
+    Destination.notes => everydayPage(context),
+    Destination.groups => groupsPage(context),
+    Destination.search => searchPage(context),
   };
+
+  Widget navBadge(String kind) {
+    final count = unread(kind);
+    return Badge.count(count: count, isLabelVisible: count > 0);
+  }
+
   Widget empty(String title, String detail, IconData icon) => Center(
     child: Column(
       mainAxisSize: MainAxisSize.min,
@@ -1004,5 +999,7 @@ class NetworkPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant NetworkPainter oldDelegate) => true;
+  bool shouldRepaint(covariant NetworkPainter oldDelegate) =>
+      oldDelegate.person != person ||
+      !listEquals(oldDelegate.contacts, contacts);
 }

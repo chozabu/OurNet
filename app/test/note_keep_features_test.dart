@@ -23,10 +23,7 @@ void main() {
     Node? node,
     bool checklist = false,
     void Function(String, bool)? onArchived,
-    Future<VoiceRecording?> Function(
-      BuildContext,
-    )?
-    recordVoice,
+    Future<VoiceRecording?> Function(BuildContext)? recordVoice,
   }) async {
     final a = node ?? Node(await LocalIdentity.create(), Store());
     final notes = existing ?? Notes(a);
@@ -216,6 +213,24 @@ void main() {
     await flush(tester);
     expect((await notes.get(note.id))!.text, 'Hello world');
 
+    // Formatting shortcuts only apply while writing the body.
+    Future<void> controlB() async {
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+    }
+
+    await tester.tap(find.byKey(const ValueKey('note-title')));
+    await tester.pump();
+    await controlB();
+    expect(controller.text, 'Hello world');
+    await tester.tap(body);
+    await tester.pump();
+    controller.selection = const TextSelection(baseOffset: 0, extentOffset: 5);
+    await controlB();
+    expect(controller.text, '**Hello** world');
+
     await tester.tap(find.byTooltip('Archive'));
     await settleNotes(tester);
     expect(archived, note.id);
@@ -284,12 +299,40 @@ void main() {
       final label = await notes.state.createLabel('Travel');
       await notes.state.label([plans.id], label, true);
       await tester.pumpWidget(
-        OurNetApp(node: node, enablePlatform: false, initialTab: 9),
+        OurNetApp(
+          node: node,
+          enablePlatform: false,
+          initialTab: Destination.notes,
+        ),
       );
       await settled(tester);
       expect(find.byType(NoteCard), findsNWidgets(2));
       expect(find.text('Old receipts'), findsNothing);
       expect(find.text('Travel'), findsWidgets);
+
+      // Single-key shortcuts work, but never take keys from the search field.
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+      await settled(tester);
+      expect(find.byType(NoteEditor), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await settled(tester);
+      expect(find.byType(NoteEditor), findsNothing);
+      await tester.tap(
+        find.byWidgetPredicate(
+          (w) =>
+              w is TextField && w.decoration?.hintText == 'Search your notes',
+        ),
+      );
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await settled(tester);
+      expect(find.byType(NoteEditor), findsNothing);
+      expect(find.textContaining('selected'), findsNothing);
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump();
 
       await tester.tap(find.widgetWithText(ChoiceChip, 'Archive'));
       await settled(tester);

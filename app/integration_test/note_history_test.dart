@@ -101,7 +101,7 @@ void main() {
         OurNetApp(
           node: phone,
           enablePlatform: false,
-          initialTab: 9,
+          initialTab: Destination.notes,
           pickImage: (_) => picker.future,
         ),
       );

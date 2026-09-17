@@ -103,28 +103,28 @@ extension _DiscoveryPages on _OurNetAppState {
             : item.data['type'] == 'check'
             ? 'Lists'
             : 'All';
-        tab = 9;
+        tab = Destination.notes;
       } else if (o.kind == 'room_item' && room != null) {
         activeRoom = room;
-        tab = 10;
+        tab = Destination.groups;
         everydaySection = item.data['type'] == 'file'
             ? 'Files'
             : item.data['type'] == 'check'
             ? 'Lists'
             : 'Conversation';
       } else if (o.kind == 'message') {
-        tab = 2;
+        tab = Destination.messages;
         showConversation = true;
         contact = o.author == node.person
             ? o.audience.where((p) => p != node.person).firstOrNull
             : o.author;
       } else if (o.kind == 'post') {
-        tab = 1;
+        tab = Destination.forums;
         space = o.space;
         selectedThread = item.data['parent'] ?? o.id;
         showForum = true;
       } else {
-        tab = 3;
+        tab = Destination.files;
         attachmentFiles = false;
         publicFiles = o.isPublic;
         driveFolder = item.data['folder'];

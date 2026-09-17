@@ -21,7 +21,11 @@ void main() {
     addTearDown(node.close);
     await Everyday(node).write({'type': 'note', 'text': 'First note'});
     await tester.pumpWidget(
-      OurNetApp(node: node, enablePlatform: false, initialTab: 9),
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.notes,
+      ),
     );
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 200)),

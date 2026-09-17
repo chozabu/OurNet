@@ -23,10 +23,7 @@ extension _HomePages on _OurNetAppState {
       try {
         final note = await notes.create();
         await notes.changeMembers(note.id, [added!.person]);
-        update(() {
-          tab = 9;
-          activeRoom = null;
-        });
+        update(showNotes);
         await openNote(note.id);
       } catch (e) {
         notice('$e');

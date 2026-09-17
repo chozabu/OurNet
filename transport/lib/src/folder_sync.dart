@@ -255,13 +255,12 @@ class FolderSync {
         'Disconnect this folder before choosing another location',
       );
     // A tree cannot have two competing writers, including nested connections.
-    final normalized = Uri.decodeFull(
+    String normalize(String location) => Uri.decodeFull(
       location,
     ).replaceAll('\\', '/').toLowerCase().replaceAll(RegExp(r'/+$'), '');
+    final normalized = normalize(location);
     for (final config in configs.values) {
-      final other = Uri.decodeFull(
-        config['location'] as String,
-      ).replaceAll('\\', '/').toLowerCase().replaceAll(RegExp(r'/+$'), '');
+      final other = normalize(config['location'] as String);
       if (normalized == other ||
           normalized.startsWith('$other/') ||
           other.startsWith('$normalized/')) {
@@ -417,6 +416,37 @@ class FolderSync {
       persist(id);
     }
 
+    final drive = Drive(node);
+    // Publishes [data] after [parents]: the local file at [path] for files,
+    // a metadata-only revision for folders and deletions. Returns its revision.
+    Future<String> revise(
+      Json data,
+      List<String> parents,
+      String path,
+      FolderItem? item,
+    ) async {
+      final SignedObject object;
+      if (item == null || item.directory) {
+        object = await drive.write(data, parents: parents);
+      } else {
+        if (item.size > Files.maxSize)
+          throw StateError('$path exceeds the 64 MiB file limit');
+        final input = '${stage.path}/input';
+        await fs.readTo(path, input, item.token);
+        object = await files.publish(
+          input,
+          audience: [node.person],
+          name: data['name'],
+          drive: {
+            ..._metadata(data),
+            'revision': randomId(),
+            'parents': parents,
+          },
+        );
+      }
+      return (await node.content(object))!['revision'];
+    }
+
     try {
       // Apply drive moves parent-first. Moving a directory carries unknown
       // local children too; their edits retain their original baseline tokens.
@@ -498,7 +528,7 @@ class FolderSync {
           continue;
         final base = state[entry.current.entry];
         if (base == null) continue;
-        final object = await Drive(node).write(
+        final object = await drive.write(
           {...entry.current.data, 'deleted': false},
           parents: [base['revision'] as String],
         );
@@ -556,30 +586,14 @@ class FolderSync {
               'type': item.directory ? 'folder' : 'file',
               'deleted': false,
             };
-            SignedObject object;
-            if (item.directory) {
-              object = await Drive(node).write(data);
-            } else {
-              if (item.size > Files.maxSize)
-                throw StateError('$path exceeds the 64 MiB file limit');
-              final input = '${stage.path}/input';
-              await fs.readTo(path, input, item.token);
-              object = await files.publish(
-                input,
-                audience: [node.person],
-                name: data['name'],
-                drive: {...data, 'revision': randomId(), 'parents': []},
-              );
-            }
-            final payload = (await node.content(object))!;
             // Preserve the snapshot token, not a newer edit made during import.
-            state[data['entry']] = {
-              'path': path,
-              'revision': payload['revision'],
-              'token': item.token,
-              'directory': item.directory,
-            };
-            persist(data['entry']);
+            record(
+              data['entry'],
+              path,
+              await revise(data, const [], path, item),
+              item.directory,
+              item,
+            );
             if (item.directory) folderIds[path] = data['entry'];
             continue;
           }
@@ -597,29 +611,14 @@ class FolderSync {
                   .firstOrNull;
               if (ancestor == null)
                 throw StateError('Local revision is unavailable');
-              final data = {...ancestor.data, 'deleted': old == null};
-              SignedObject object;
-              if (old == null || old.directory) {
-                object = await Drive(
-                  node,
-                ).write(data, parents: [base['revision'] as String]);
-              } else {
-                final input = '${stage.path}/input';
-                await fs.readTo(oldPath, input, old.token);
-                object = await files.publish(
-                  input,
-                  audience: [node.person],
-                  name: data['name'],
-                  drive: {
-                    ..._metadata(data),
-                    'revision': randomId(),
-                    'parents': [base['revision']],
-                  },
-                );
-              }
               state[v.entry] = {
                 ...base,
-                'revision': (await node.content(object))!['revision'],
+                'revision': await revise(
+                  {...ancestor.data, 'deleted': old == null},
+                  [base['revision'] as String],
+                  oldPath,
+                  old,
+                ),
                 'token': old?.token,
               };
               persist(v.entry);
@@ -634,30 +633,14 @@ class FolderSync {
               continue;
             }
             final baseRevision = base['revision'] as String;
-            final data = {...v.data, 'deleted': item == null};
-            SignedObject object;
-            if (item == null || item.directory) {
-              object = await Drive(node).write(data, parents: [baseRevision]);
-            } else {
-              if (item.size > Files.maxSize)
-                throw StateError('$path exceeds the 64 MiB file limit');
-              final input = '${stage.path}/input';
-              await fs.readTo(path, input, item.token);
-              object = await files.publish(
-                input,
-                audience: [node.person],
-                name: data['name'],
-                drive: {
-                  ..._metadata(data),
-                  'revision': randomId(),
-                  'parents': [baseRevision],
-                },
-              );
-            }
-            final payload = (await node.content(object))!;
             state[v.entry] = {
               'path': path,
-              'revision': payload['revision'],
+              'revision': await revise(
+                {...v.data, 'deleted': item == null},
+                [baseRevision],
+                path,
+                item,
+              ),
               'token': item?.token,
               'directory': v.isFolder,
             };
@@ -678,26 +661,13 @@ class FolderSync {
               conflicts++;
               continue;
             }
-            final input = '${stage.path}/input';
-            await fs.readTo(path, input, item.token);
-            final object = await files.publish(
-              input,
-              audience: [node.person],
-              name: v.data['name'],
-              drive: {
-                ..._metadata(v.data),
-                'deleted': false,
-                'revision': randomId(),
-                'parents': [],
-              },
+            record(
+              v.entry,
+              path,
+              await revise({...v.data, 'deleted': false}, const [], path, item),
+              false,
+              item,
             );
-            state[v.entry] = {
-              'path': path,
-              'revision': (await node.content(object))!['revision'],
-              'token': item.token,
-              'directory': false,
-            };
-            persist(v.entry);
             conflicts++;
             continue;
           }
@@ -771,29 +741,14 @@ class FolderSync {
             continue;
           }
           try {
-            final data = {...ancestor.data, 'deleted': item == null};
-            SignedObject object;
-            if (item == null || item.directory) {
-              object = await Drive(
-                node,
-              ).write(data, parents: [base['revision'] as String]);
-            } else {
-              final input = '${stage.path}/input';
-              await fs.readTo(path, input, item.token);
-              object = await files.publish(
-                input,
-                audience: [node.person],
-                name: data['name'],
-                drive: {
-                  ..._metadata(data),
-                  'revision': randomId(),
-                  'parents': [base['revision']],
-                },
-              );
-            }
             state[id] = {
               ...base,
-              'revision': (await node.content(object))!['revision'],
+              'revision': await revise(
+                {...ancestor.data, 'deleted': item == null},
+                [base['revision'] as String],
+                path,
+                item,
+              ),
               'token': item?.token,
             };
             persist(id);

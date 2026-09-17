@@ -140,7 +140,11 @@ void main() {
         audience: [friend.person],
       );
       await tester.pumpWidget(
-        OurNetApp(node: node, enablePlatform: false, initialTab: 3),
+        OurNetApp(
+          node: node,
+          enablePlatform: false,
+          initialTab: Destination.files,
+        ),
       );
       await settle(tester);
       await tester.tap(find.text('Attachments'));

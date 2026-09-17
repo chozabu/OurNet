@@ -234,7 +234,7 @@ extension _EverydayPages on _OurNetAppState {
       update(() {
         activeRoom = room;
         everydaySection = 'Conversation';
-        tab = 10;
+        tab = Destination.groups;
       });
     }
   }

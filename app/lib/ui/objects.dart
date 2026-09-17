@@ -301,7 +301,7 @@ extension _ObjectsPages on _OurNetAppState {
   }) => act(() async {
     final draftKey = composerContext;
     final submitted = composer.text;
-    final isMessage = tab == 2;
+    final isMessage = tab == Destination.messages;
     final result = await FilePicker.pickFile();
     if (result == null) return;
     if ((result.lengthSync() ?? 0) > Files.maxSize) {

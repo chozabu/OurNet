@@ -72,29 +72,7 @@ class NoteDocument {
   int indent(String id) => (value('check:$id:indent') as int?) ?? 0;
 
   /// Live attachments (audio, images, drawings) in display order.
-  late final List<String> files = () {
-    final first = <String, int>{};
-    for (final op in history) {
-      final field = op.data['field'] as String;
-      if (!field.startsWith('file:') || !field.endsWith(':meta')) continue;
-      final id = field.split(':')[1];
-      final clock = op.data['clock'] as int;
-      if (clock < (first[id] ?? clock + 1)) first[id] = clock;
-    }
-    return heads.keys
-        .where((k) => k.startsWith('file:') && k.endsWith(':meta'))
-        .map((k) => k.split(':')[1])
-        .where((id) => value('file:$id:deleted') != true)
-        .toList()
-      ..sort((a, b) {
-        final byOrder = (value('file:$a:order') as String? ?? '').compareTo(
-          value('file:$b:order') as String? ?? '',
-        );
-        if (byOrder != 0) return byOrder;
-        final byClock = (first[a] ?? 0).compareTo(first[b] ?? 0);
-        return byClock != 0 ? byClock : a.compareTo(b);
-      });
-  }();
+  late final List<String> files = _live('file', 'meta');
 
   /// The signed operation holding an attachment's encrypted chunks.
   EverydayItem? file(String id) => heads['file:$id:meta']?.firstOrNull;
@@ -131,27 +109,34 @@ class NoteDocument {
 
   /// Live items in display order: an explicit order key, then (for items
   /// written before ordering existed) first-write clock and item ID.
-  late final List<String> checks = () {
-    final created = <String, int>{};
+  late final List<String> checks = _live('check', 'text');
+
+  /// Live `<kind>:<id>:<field>` registers, ordered by `<kind>:<id>:order`,
+  /// then first-write clock and ID.
+  List<String> _live(String kind, String field) {
+    bool matches(String k) => k.startsWith('$kind:') && k.endsWith(':$field');
+    final first = <String, int>{};
     for (final op in history) {
-      final field = op.data['field'] as String;
-      if (!field.startsWith('check:') || !field.endsWith(':text')) continue;
-      final id = field.split(':')[1];
+      final key = op.data['field'] as String;
+      if (!matches(key)) continue;
+      final id = key.split(':')[1];
       final clock = op.data['clock'] as int;
-      if (clock < (created[id] ?? clock + 1)) created[id] = clock;
+      if (clock < (first[id] ?? clock + 1)) first[id] = clock;
     }
+    String orderOf(String id) => value('$kind:$id:order') as String? ?? '';
     return heads.keys
-        .where((k) => k.startsWith('check:') && k.endsWith(':text'))
+        .where(matches)
         .map((k) => k.split(':')[1])
-        .where((id) => value('check:$id:deleted') != true)
+        .where((id) => value('$kind:$id:deleted') != true)
         .toList()
       ..sort((a, b) {
-        final byOrder = (order(a) ?? '').compareTo(order(b) ?? '');
+        final byOrder = orderOf(a).compareTo(orderOf(b));
         if (byOrder != 0) return byOrder;
-        final byClock = (created[a] ?? 0).compareTo(created[b] ?? 0);
+        final byClock = (first[a] ?? 0).compareTo(first[b] ?? 0);
         return byClock != 0 ? byClock : a.compareTo(b);
       });
-  }();
+  }
+
   bool get hasConflicts => heads.entries.any(
     (e) =>
         (e.key == 'text' ||
@@ -232,6 +217,7 @@ class Notes {
   /// Pins, archive, labels, reminders and manual order: personal, synced
   /// between this person's own devices, never visible to collaborators.
   late final state = NoteState(node);
+  late final _everyday = Everyday(node);
   final _rooms = <String, EverydayItem>{};
   final _cache = LinkedHashMap<String, NoteDocument>();
   final _summaries = <String, EverydayItem>{};
@@ -286,9 +272,9 @@ class Notes {
         if (object.kind == 'room') {
           final data = await node.content(object);
           if (data != null && data['note'] == true) {
-            final rooms = await Everyday(node).rooms(
+            final rooms = await _everyday.rooms(
               includeLeft: true,
-              records: await Everyday(node).records(space: object.space),
+              records: await _everyday.records(space: object.space),
             );
             if (rooms.isNotEmpty) _rooms[object.space] = rooms.single;
           }
@@ -412,13 +398,11 @@ class Notes {
       _cache[id] = cached;
       return cached.available || includeUnavailable ? cached : null;
     }
-    final records = await Everyday(node).records(space: id);
-    final rooms = await Everyday(
-      node,
-    ).rooms(includeLeft: true, records: records);
+    final records = await _everyday.records(space: id);
+    final rooms = await _everyday.rooms(includeLeft: true, records: records);
     final room = rooms.firstOrNull;
     if (room == null || room.data['note'] != true) return null;
-    final members = Everyday(node).effectiveMembers(room, records);
+    final members = _everyday.effectiveMembers(room, records);
     final available =
         members.contains(node.person) && room.data['archived'] != true;
     if (!available && !includeUnavailable) return null;
@@ -535,7 +519,7 @@ class Notes {
       throw StateError(
         'Up to $maxNotes notes can be shown. Remove a note to add another.',
       );
-    final room = await Everyday(node).createRoom(
+    final room = await _everyday.createRoom(
       title.trim().isEmpty
           ? 'Note'
           : title.trim().substring(0, title.trim().length.clamp(0, 100)),
@@ -585,7 +569,7 @@ class Notes {
         if (request != null) 'request': request,
       },
       space: room.object.space,
-      audience: audience ?? await Everyday(node).members(room),
+      audience: audience ?? await _everyday.members(room),
     );
   }
 
@@ -603,6 +587,11 @@ class Notes {
   }) async => (await apply(id, epoch, [
     (field: field, value: value, parents: parents),
   ], request: request)).single;
+
+  /// Replaces every current version of [field] in [note]. For choices such
+  /// as removal or colour; typed text passes its observed parents to [edit].
+  Future<String?> set(NoteDocument note, String field, Object value) =>
+      edit(note.id, note.epoch, field, value, note.parents(field));
 
   /// Validates every change against one document state, then publishes them
   /// in order. Earlier changes remain published if a later publication fails.
@@ -656,11 +645,8 @@ class Notes {
           note.checks.length + ++added > maxChecks)
         throw StateError('A checklist supports $maxChecks items.');
     }
-    await Everyday(node).prepare(note.room);
-    var clock = 0;
-    for (final r in note.history) {
-      if (r.data['clock'] > clock) clock = r.data['clock'];
-    }
+    await _everyday.prepare(note.room);
+    final clock = _clock(note);
     return [
       for (final change in changes)
         applied(change)
@@ -687,7 +673,7 @@ class Notes {
     final heads = note.heads.values.expand((v) => v).toList();
     if (node.store.count + heads.length + 2 > Node.maxObjects)
       throw StateError('Not enough local storage to update collaborators.');
-    await Everyday(node).changeMembers(
+    await _everyday.changeMembers(
       note.room,
       people,
       shareHistory: false,
@@ -817,6 +803,89 @@ class Notes {
     return file;
   }
 
+  static final _imageName = RegExp(
+    r'\.(png|jpe?g|webp|gif|bmp)$',
+    caseSensitive: false,
+  );
+
+  static String imageMime(String name) =>
+      switch (name.split('.').last.toLowerCase()) {
+        'png' => 'image/png',
+        'webp' => 'image/webp',
+        'gif' => 'image/gif',
+        'bmp' => 'image/bmp',
+        _ => 'image/jpeg',
+      };
+
+  /// Attaches a photo; names without an image extension are saved as JPEG.
+  Future<String> attachImage(
+    NoteDocument note,
+    Stream<List<int>> source,
+    String name,
+  ) {
+    final saved = _imageName.hasMatch(name) ? name : '$name.jpg';
+    return attach(
+      note.id,
+      note.epoch,
+      source,
+      name: saved,
+      meta: {'kind': 'image', 'mime': imageMime(saved)},
+    );
+  }
+
+  /// Attaches a recording of [duration] milliseconds.
+  Future<String> attachAudio(
+    NoteDocument note,
+    Stream<List<int>> source, {
+    required String name,
+    required String mime,
+    required int duration,
+  }) => attach(
+    note.id,
+    note.epoch,
+    source,
+    name: name,
+    meta: {'kind': 'audio', 'mime': mime, 'duration': duration},
+  );
+
+  /// Attaches a drawing's image and editable strokes, replacing [existing].
+  Future<String> attachDrawing(
+    NoteDocument note, {
+    required List<int> png,
+    required List<int> strokes,
+    required int width,
+    required int height,
+    String? existing,
+  }) async {
+    List<String> parents(String field) =>
+        existing == null ? const [] : note.parents('file:$existing:$field');
+    final file = await attach(
+      note.id,
+      note.epoch,
+      Stream.value(png),
+      name: 'Drawing.png',
+      fileId: existing,
+      parents: parents('meta'),
+      meta: {
+        'kind': 'drawing',
+        'mime': 'image/png',
+        'width': width,
+        'height': height,
+      },
+    );
+    await attach(
+      note.id,
+      note.epoch,
+      Stream.value(strokes),
+      name: 'Drawing.json',
+      fileId: file,
+      field: 'strokes',
+      parents: parents('strokes'),
+      meta: {'version': 1},
+    );
+    return file;
+  }
+
   /// An independent copy with this person's labels. Attachments reuse their
   /// encrypted chunks. Collaborators and personal pins are not copied.
   Future<NoteDocument> copy(String id) async {
@@ -880,7 +949,7 @@ class Notes {
     if (note.deleted) {
       throw StateError('This note was removed. Restore it first.');
     }
-    await Everyday(node).prepare(note.room);
+    await _everyday.prepare(note.room);
     return note;
   }
 

@@ -1,7 +1,5 @@
 part of 'app.dart';
 
-const _removedDaysText = '7 days';
-
 const notesFilters = {
   'All': 'All notes',
   'Text': 'Text notes',
@@ -31,7 +29,7 @@ extension _NotesHome on _OurNetAppState {
       if (context != null) await addFriend(context);
       return {for (final person in people) person: name(person)};
     },
-    onRemoved: noteRemoved,
+    onRemoved: (id) => notesRemoved([id]),
     onArchived: (id, pinned) => noteArchived([id], pinned: {if (pinned) id}),
     onOpenNote: (id) => unawaited(openNote(id)),
     onReminderSet: () async => reminders?.requestPermission(),
@@ -70,16 +68,12 @@ extension _NotesHome on _OurNetAppState {
         final file = File(recording.path);
         try {
           final note = await notes.create();
-          final attached = await notes.attach(
-            note.id,
-            note.epoch,
+          final attached = await notes.attachAudio(
+            note,
             file.openRead(),
             name: recording.name,
-            meta: {
-              'kind': 'audio',
-              'mime': recording.mime,
-              'duration': recording.duration,
-            },
+            mime: recording.mime,
+            duration: recording.duration,
           );
           if (recording.transcript case final text?) {
             await speech.saveTranscript(note.id, attached, text);
@@ -113,26 +107,12 @@ extension _NotesHome on _OurNetAppState {
     if (result == null || !mounted) return;
     try {
       final note = await notes.create();
-      final file = await notes.attach(
-        note.id,
-        note.epoch,
-        Stream.value(result.png),
-        name: 'Drawing.png',
-        meta: {
-          'kind': 'drawing',
-          'mime': 'image/png',
-          'width': result.width,
-          'height': result.height,
-        },
-      );
-      await notes.attach(
-        note.id,
-        note.epoch,
-        Stream.value(result.strokes),
-        name: 'Drawing.json',
-        fileId: file,
-        field: 'strokes',
-        meta: {'version': 1},
+      await notes.attachDrawing(
+        note,
+        png: result.png,
+        strokes: result.strokes,
+        width: result.width,
+        height: result.height,
       );
       await openNote(note.id);
     } catch (e) {
@@ -152,53 +132,41 @@ extension _NotesHome on _OurNetAppState {
     if (picked == null || !mounted) return;
     try {
       final note = await notes.create();
-      final extension = picked.name.split('.').last.toLowerCase();
-      await notes.attach(
-        note.id,
-        note.epoch,
-        picked.openRead(),
-        name: picked.name,
-        meta: {
-          'kind': 'image',
-          'mime': switch (extension) {
-            'png' => 'image/png',
-            'webp' => 'image/webp',
-            'gif' => 'image/gif',
-            _ => 'image/jpeg',
-          },
-        },
-      );
+      await notes.attachImage(note, picked.openRead(), picked.name);
       await openNote(note.id);
     } catch (e) {
       notice('Could not add the image: $e');
     }
   }
 
-  void noteRemoved(String id) => notesRemoved([id]);
+  /// Replaces the current snackbar with "Note [done]" / "N notes [done]".
+  void notesNotice(List<String> ids, String done, {VoidCallback? onUndo}) {
+    messenger.currentState
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          // Action snackbars persist by default; these should time out.
+          persist: false,
+          content: Text(
+            ids.length == 1 ? 'Note $done' : '${ids.length} notes $done',
+          ),
+          action: onUndo == null
+              ? null
+              : SnackBarAction(label: 'Undo', onPressed: onUndo),
+        ),
+      );
+  }
 
   /// One Undo snackbar for a whole removal, however many notes it covers.
   void notesRemoved(List<String> ids) {
     if (ids.isEmpty) return;
     update(() => hiddenNotes.addAll(ids));
-    messenger.currentState
-      ?..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          // Action snackbars persist by default; this one should time out.
-          persist: false,
-          content: Text(
-            ids.length == 1 ? 'Note removed' : '${ids.length} notes removed',
-          ),
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: () => unawaited(setNotesRemoved(ids, false)),
-          ),
-        ),
-      );
+    notesNotice(
+      ids,
+      'removed',
+      onUndo: () => unawaited(setNotesRemoved(ids, false)),
+    );
   }
-
-  Future<void> setNoteRemoved(String id, bool removed) =>
-      setNotesRemoved([id], removed);
 
   Future<void> setNotesRemoved(List<String> ids, bool removed) async {
     update(() {
@@ -212,13 +180,7 @@ extension _NotesHome on _OurNetAppState {
       try {
         final note = await notes.get(id, includeUnavailable: true);
         if (note == null) throw StateError('This note is unavailable.');
-        await notes.edit(
-          id,
-          note.epoch,
-          'deleted',
-          removed,
-          note.parents('deleted'),
-        );
+        await notes.set(note, 'deleted', removed);
         done.add(id);
       } catch (e) {
         error ??= e;
@@ -232,28 +194,19 @@ extension _NotesHome on _OurNetAppState {
   /// Offers Undo for an archive, restoring any pins archiving cleared.
   void noteArchived(List<String> ids, {Set<String> pinned = const {}}) {
     update(() {});
-    messenger.currentState
-      ?..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          persist: false,
-          content: Text(
-            ids.length == 1 ? 'Note archived' : '${ids.length} notes archived',
-          ),
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: () => unawaited(
-              notes.state
-                  .setAll([
-                    for (final id in ids) ('archive', id, false),
-                    for (final id in pinned) ('pin', id, true),
-                  ])
-                  .then((_) => update(() {}))
-                  .catchError((Object e) => notice('$e')),
-            ),
-          ),
-        ),
-      );
+    notesNotice(
+      ids,
+      'archived',
+      onUndo: () => unawaited(
+        notes.state
+            .setAll([
+              for (final id in ids) ('archive', id, false),
+              for (final id in pinned) ('pin', id, true),
+            ])
+            .then((_) => update(() {}))
+            .catchError((Object e) => notice('$e')),
+      ),
+    );
   }
 
   Future<void> setArchived(List<String> ids, bool archived) async {
@@ -267,17 +220,7 @@ extension _NotesHome on _OurNetAppState {
         noteArchived(ids, pinned: pinned);
       } else {
         update(() {});
-        messenger.currentState
-          ?..hideCurrentSnackBar()
-          ..showSnackBar(
-            SnackBar(
-              content: Text(
-                ids.length == 1
-                    ? 'Note unarchived'
-                    : '${ids.length} notes unarchived',
-              ),
-            ),
-          );
+        notesNotice(ids, 'unarchived');
       }
     } catch (e) {
       notice('$e');
@@ -306,21 +249,13 @@ extension _NotesHome on _OurNetAppState {
   }
 
   Future<void> setNoteColor(Iterable<String> ids, String chosen) async {
+    final background = chosen.startsWith('background:');
+    final field = background ? 'background' : 'color';
+    final value = background ? chosen.substring('background:'.length) : chosen;
     try {
       for (final id in ids) {
         final note = await notes.get(id);
-        if (note == null) continue;
-        final field = chosen.startsWith('background:') ? 'background' : 'color';
-        final value = chosen.startsWith('background:')
-            ? chosen.substring('background:'.length)
-            : chosen;
-        await notes.edit(
-          note.id,
-          note.epoch,
-          field,
-          value,
-          note.parents(field),
-        );
+        if (note != null) await notes.set(note, field, value);
       }
     } catch (e) {
       notice('$e');
@@ -352,6 +287,12 @@ extension _NotesHome on _OurNetAppState {
     }
   }
 
+  /// A note summary that can still be edited: not removed or left.
+  static bool isLiveNote(Json p) =>
+      p['type'] == 'shared_note' &&
+      p['available'] == true &&
+      p['removed'] != true;
+
   Future<void> noteMenu(
     BuildContext context,
     EverydayItem item,
@@ -361,7 +302,7 @@ extension _NotesHome on _OurNetAppState {
     final p = item.data;
     final shared = p['type'] == 'shared_note';
     final pinned = pins.contains(p['entry']);
-    final live = shared && p['available'] == true && p['removed'] != true;
+    final live = isLiveNote(p);
     final archived = shared && notes.state.archived(p['entry']);
     final actions = <String, (IconData, String)>{
       if (!shared || live)
@@ -476,9 +417,9 @@ extension _NotesHome on _OurNetAppState {
         await Clipboard.setData(ClipboardData(text: plainNote(note)));
         notice('Copied');
       case 'delete':
-        await setNoteRemoved(id, true);
+        await setNotesRemoved([id], true);
       case 'restore':
-        await setNoteRemoved(id, false);
+        await setNotesRemoved([id], false);
     }
   }
 
@@ -495,6 +436,7 @@ extension _NotesHome on _OurNetAppState {
   /// Removed notes leave Removed after [removedDays] days, or when emptied.
   /// Their encrypted history stays on the device; Recovery is not offered.
   static const removedDays = 7;
+  static const removedDaysText = '$removedDays days';
   bool emptied(Json p) {
     final at = p['removedAt'] as int?;
     return notes.state.purged(p['entry'], p['removal'] as String?) ||
@@ -524,7 +466,7 @@ extension _NotesHome on _OurNetAppState {
     }
   }
 
-  bool notesMatch(EverydayItem item, Set<dynamic> pins, String query) {
+  bool notesMatch(EverydayItem item, String query) {
     final p = item.data;
     final type = p['type'];
     if (type == 'pin') return false;
@@ -688,9 +630,10 @@ extension _NotesHome on _OurNetAppState {
     if (p['type'] != 'shared_note') return legacyCard(context, item, pins);
     final id = p['entry'] as String;
     final colors = Theme.of(context).colorScheme;
+    final color = noteColor(context, p['color']) ?? colors.surface;
     final overrides = noteChecks[id] ?? const <String, bool>{};
     final state = notes.state;
-    final live = p['available'] == true && p['removed'] != true;
+    final live = isLiveNote(p);
     final labelNames = state.labels;
     Widget card(VoidCallback open) => NoteCard(
       item: item,
@@ -714,9 +657,9 @@ extension _NotesHome on _OurNetAppState {
       closedElevation: 0,
       openElevation: 0,
       transitionDuration: const Duration(milliseconds: 320),
-      closedColor: noteColor(context, p['color']) ?? colors.surface,
-      openColor: noteColor(context, p['color']) ?? colors.surface,
-      middleColor: noteColor(context, p['color']) ?? colors.surface,
+      closedColor: color,
+      openColor: color,
+      middleColor: color,
       closedShape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
       ),
@@ -802,7 +745,7 @@ extension _NotesHome on _OurNetAppState {
     }
   }
 
-  Widget captureBar(BuildContext context, {required bool top}) {
+  Widget captureBar(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return Material(
       color: colors.surfaceContainerHigh,
@@ -985,9 +928,7 @@ extension _NotesHome on _OurNetAppState {
                   case 'all':
                     update(() {
                       for (final item in all) {
-                        if (item.data['type'] == 'shared_note' &&
-                            item.data['available'] == true &&
-                            item.data['removed'] != true) {
+                        if (isLiveNote(item.data)) {
                           selectedNotes.add(item.data['entry']);
                         }
                       }
@@ -1211,26 +1152,25 @@ extension _NotesHome on _OurNetAppState {
             String? position(EverydayItem i) => i.data['type'] == 'shared_note'
                 ? state.order(i.data['entry'])
                 : null;
-            final visible =
-                all.where((i) => notesMatch(i, pins, query)).toList()
-                  ..sort((a, b) {
-                    if (notesFilter == 'Reminders') {
-                      final at =
-                          state.reminder(a.data['entry'])?['at'] as int? ?? 0;
-                      final bt =
-                          state.reminder(b.data['entry'])?['at'] as int? ?? 0;
-                      return at.compareTo(bt);
-                    }
-                    // Notes never moved come first, newest edit first; moved
-                    // notes keep their personal position.
-                    final pa = position(a), pb = position(b);
-                    if (pa == null && pb == null) {
-                      return time(b).compareTo(time(a));
-                    }
-                    if (pa == null) return -1;
-                    if (pb == null) return 1;
-                    return pa.compareTo(pb);
-                  });
+            final visible = all.where((i) => notesMatch(i, query)).toList()
+              ..sort((a, b) {
+                if (notesFilter == 'Reminders') {
+                  final at =
+                      state.reminder(a.data['entry'])?['at'] as int? ?? 0;
+                  final bt =
+                      state.reminder(b.data['entry'])?['at'] as int? ?? 0;
+                  return at.compareTo(bt);
+                }
+                // Notes never moved come first, newest edit first; moved
+                // notes keep their personal position.
+                final pa = position(a), pb = position(b);
+                if (pa == null && pb == null) {
+                  return time(b).compareTo(time(a));
+                }
+                if (pa == null) return -1;
+                if (pb == null) return 1;
+                return pa.compareTo(pb);
+              });
             // Drop optimistic checks the summaries now reflect.
             for (final item in visible) {
               final overrides = noteChecks[item.data['entry']];
@@ -1248,31 +1188,33 @@ extension _NotesHome on _OurNetAppState {
                 : visible.where((i) => pins.contains(i.data['entry'])).toList();
             final others = visible.where((i) => !pinned.contains(i)).toList();
             if (visible.isEmpty) {
+              final (title, detail) = query.isNotEmpty
+                  ? ('No matching notes', 'Try other words, or show all notes.')
+                  : switch (notesFilter) {
+                      'Removed' => (
+                        'Nothing removed',
+                        'Removed notes stay here, and can be restored.',
+                      ),
+                      'Archive' => (
+                        'Nothing archived',
+                        'Archived notes stay searchable. Swipe a note to archive it.',
+                      ),
+                      'Reminders' => (
+                        'No upcoming reminders',
+                        'Notes with a reminder appear here, soonest first.',
+                      ),
+                      _ when notesFilter.startsWith('label:') => (
+                        'No notes with this label',
+                        'Add labels from a note\'s menu.',
+                      ),
+                      _ => (
+                        'Your next small habit starts here',
+                        'Take a note, start a list, record your voice or draw. Drop a file, or paste a screenshot.',
+                      ),
+                    };
               return empty(
-                query.isNotEmpty
-                    ? 'No matching notes'
-                    : switch (notesFilter) {
-                        'Removed' => 'Nothing removed',
-                        'Archive' => 'Nothing archived',
-                        'Reminders' => 'No upcoming reminders',
-                        _ when notesFilter.startsWith('label:') =>
-                          'No notes with this label',
-                        _ => 'Your next small habit starts here',
-                      },
-                query.isNotEmpty
-                    ? 'Try other words, or show all notes.'
-                    : switch (notesFilter) {
-                        'Removed' =>
-                          'Removed notes stay here, and can be restored.',
-                        'Archive' =>
-                          'Archived notes stay searchable. Swipe a note to archive it.',
-                        'Reminders' =>
-                          'Notes with a reminder appear here, soonest first.',
-                        _ when notesFilter.startsWith('label:') =>
-                          'Add labels from a note\'s menu.',
-                        _ =>
-                          'Take a note, start a list, record your voice or draw. Drop a file, or paste a screenshot.',
-                      },
+                title,
+                detail,
                 query.isNotEmpty ? Icons.search_off : Icons.lightbulb_outline,
               );
             }
@@ -1327,7 +1269,7 @@ extension _NotesHome on _OurNetAppState {
           },
         );
         final addDisabled = notesFilter == 'Removed';
-        return CallbackShortcuts(
+        return _UnlessTypingShortcuts(
           bindings: {
             const SingleActivator(LogicalKeyboardKey.keyC): () {
               if (!addDisabled) unawaited(openNote(null));
@@ -1366,10 +1308,7 @@ extension _NotesHome on _OurNetAppState {
             const SingleActivator(LogicalKeyboardKey.keyA, control: true): () =>
                 update(() {
                   for (final item in loaded) {
-                    if (item.data['type'] == 'shared_note' &&
-                        item.data['available'] == true &&
-                        item.data['removed'] != true &&
-                        notesMatch(item, const {}, query)) {
+                    if (isLiveNote(item.data) && notesMatch(item, query)) {
                       selectedNotes.add(item.data['entry']);
                     }
                   }
@@ -1408,7 +1347,7 @@ extension _NotesHome on _OurNetAppState {
                             children: [
                               const Expanded(
                                 child: Text(
-                                  'Removed notes leave this list after $_removedDaysText. Collaborators keep their own copies.',
+                                  'Removed notes leave this list after $removedDaysText. Collaborators keep their own copies.',
                                 ),
                               ),
                               TextButton(
@@ -1441,7 +1380,7 @@ extension _NotesHome on _OurNetAppState {
                         Center(
                           child: ConstrainedBox(
                             constraints: const BoxConstraints(maxWidth: 640),
-                            child: captureBar(context, top: true),
+                            child: captureBar(context),
                           ),
                         ),
                       ],
@@ -1450,7 +1389,7 @@ extension _NotesHome on _OurNetAppState {
                       if (!wide && !addDisabled)
                         Padding(
                           padding: const EdgeInsets.only(top: 8),
-                          child: captureBar(context, top: false),
+                          child: captureBar(context),
                         ),
                     ],
                   ),
@@ -1479,5 +1418,40 @@ extension _NotesHome on _OurNetAppState {
         );
       },
     );
+  }
+}
+
+class _KeyIntent extends Intent {
+  final VoidCallback callback;
+  const _KeyIntent(this.callback);
+}
+
+/// Like [CallbackShortcuts], but disabled while a text field has focus, so
+/// single-key shortcuts never take characters (or Delete, Ctrl+A) from it.
+class _UnlessTypingShortcuts extends StatelessWidget {
+  final Map<ShortcutActivator, VoidCallback> bindings;
+  final Widget child;
+  const _UnlessTypingShortcuts({required this.bindings, required this.child});
+
+  @override
+  Widget build(BuildContext context) => Shortcuts(
+    shortcuts: {
+      for (final entry in bindings.entries) entry.key: _KeyIntent(entry.value),
+    },
+    child: Actions(actions: {_KeyIntent: _UnlessTypingAction()}, child: child),
+  );
+}
+
+class _UnlessTypingAction extends Action<_KeyIntent> {
+  @override
+  bool isEnabled(_KeyIntent intent) =>
+      FocusManager.instance.primaryFocus?.context
+          ?.findAncestorWidgetOfExactType<EditableText>() ==
+      null;
+
+  @override
+  Object? invoke(_KeyIntent intent) {
+    intent.callback();
+    return null;
   }
 }

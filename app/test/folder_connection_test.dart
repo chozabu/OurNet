@@ -22,7 +22,11 @@ void main() {
         },
       });
       await tester.pumpWidget(
-        OurNetApp(node: node, enablePlatform: false, initialTab: 3),
+        OurNetApp(
+          node: node,
+          enablePlatform: false,
+          initialTab: Destination.files,
+        ),
       );
       await tester.pumpAndSettle();
       await tester.runAsync(

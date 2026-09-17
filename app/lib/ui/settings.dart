@@ -106,14 +106,14 @@ extension _SettingsPages on _OurNetAppState {
         title: const Text('Profile and devices'),
         subtitle: const Text('Your name, linked devices and device access'),
         trailing: const Icon(Icons.chevron_right),
-        onTap: () => update(() => tab = 7),
+        onTap: () => update(() => tab = Destination.profile),
       ),
       ListTile(
         leading: const Icon(Icons.hub_outlined),
         title: const Text('Network and connections'),
         subtitle: const Text('Connection status, contacts and sync controls'),
         trailing: const Icon(Icons.chevron_right),
-        onTap: () => update(() => tab = 4),
+        onTap: () => update(() => tab = Destination.network),
       ),
       ListTile(
         title: const Text('OurNet $appVersion'),

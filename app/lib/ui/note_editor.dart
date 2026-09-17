@@ -28,6 +28,12 @@ typedef EditorSnapshot = ({
   String? background,
 });
 
+/// The text register of checklist [item].
+String _itemField(String item) => 'check:$item:text';
+
+/// The item or attachment ID in a `check:<id>:…` or `file:<id>:…` field.
+String _itemOf(String field) => field.split(':')[1];
+
 /// Keep-style editor. Writing autosaves after a pause and when leaving; list
 /// changes (checks, order, nesting, removal, colour) apply immediately on
 /// screen and are published in one batch. Typed text always names the
@@ -105,6 +111,14 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
   final pendingIndent = <String, int>{};
   final pendingDeleted = <String>{};
 
+  /// Item registers changed on screen: field suffix, changes, saved value.
+  late final itemRegisters =
+      <(String, Map<String, Object>, Object? Function(NoteDocument, String))>[
+        ('order', pendingOrder, (n, item) => n.order(item)),
+        ('indent', pendingIndent, (n, item) => n.indent(item)),
+        ('done', pendingDone, (n, item) => n.done(item)),
+      ];
+
   /// Removed items brought back by undo, published as an explicit restore.
   final pendingRestored = <String>{};
   String? pendingColor, pendingBackground, pendingFormat;
@@ -117,7 +131,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
   late Map<String, String> friends = widget.friends;
   String? error;
   bool loading = true, applying = false, showChecked = true;
-  bool formatting = false, attaching = false;
+  bool formatting = false, attaching = false, pickingImage = false;
   String? focusedItem;
   late bool checklistMode = widget.checklist;
 
@@ -171,7 +185,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     final node = FocusNode();
     if (field.startsWith('check:')) {
       node.addListener(() {
-        final item = field.split(':')[1];
+        final item = _itemOf(field);
         if (node.hasFocus && focusedItem != item) {
           setState(() => focusedItem = item);
         } else if (!node.hasFocus && focusedItem == item) {
@@ -218,7 +232,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     lastUndoField = field;
     lastUndoAt = now;
     if (field.startsWith('check:') && controller.text.contains('\n')) {
-      splitItem(field.split(':')[1], controller);
+      splitItem(_itemOf(field), controller);
       return;
     }
     known[field] = controller.text;
@@ -240,8 +254,9 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       jsonEncode({
         'text': inputs[field]!.text,
         if (base != null) ...{'epoch': base.$1, 'parents': base.$2},
-        if (localItems.containsKey(field.split(':').elementAtOrNull(1)))
-          'order': localItems[field.split(':')[1]],
+        if (field.startsWith('check:') &&
+            localItems.containsKey(_itemOf(field)))
+          'order': localItems[_itemOf(field)],
         if (base == null) 'epoch': note?.epoch,
       }),
       (e) {
@@ -265,7 +280,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     final items = <String, (bool, String?, int)>{};
     for (final item in allItems()) {
       items[item] = (isDone(item), keyOf(item), indentOf(item));
-      texts['check:$item:text'] = inputs['check:$item:text']?.text ?? '';
+      texts[_itemField(item)] = inputs[_itemField(item)]?.text ?? '';
     }
     if (field != null) texts[field] = previous ?? '';
     return (
@@ -299,15 +314,10 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
   void restore(EditorSnapshot target) {
     lastUndoField = null;
     final current = allItems().toSet();
-    for (final item in current.difference(target.items.keys.toSet())) {
-      if (localItems.remove(item) == null) {
-        if (!pendingRestored.remove(item)) pendingDeleted.add(item);
-      }
-      dirty.remove('check:$item:text');
-    }
+    current.difference(target.items.keys.toSet()).forEach(discard);
     for (final entry in target.items.entries) {
       final item = entry.key;
-      final field = 'check:$item:text';
+      final field = _itemField(item);
       if (!current.contains(item)) {
         if (note?.checks.contains(item) ?? false) {
           pendingDeleted.remove(item);
@@ -332,7 +342,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       }
       setText(entry.key, entry.value, cursor: entry.value.length);
       if (entry.key.startsWith('check:') &&
-          localItems.containsKey(entry.key.split(':')[1])) {
+          localItems.containsKey(_itemOf(entry.key))) {
         dirty.add(entry.key);
       } else {
         markDirty(entry.key);
@@ -427,7 +437,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     localItems[item] = orderBetween(before, next);
     final level = indent ?? (after == null ? 0 : indentOf(after));
     if (level > 0) pendingIndent[item] = level;
-    final field = 'check:$item:text';
+    final field = _itemField(item);
     setText(field, text, cursor: text.length);
     if (text.isNotEmpty) dirty.add(field);
     if (focusIt) {
@@ -442,7 +452,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
 
   void splitItem(String item, TextEditingController controller) {
     final parts = controller.text.split('\n');
-    final field = 'check:$item:text';
+    final field = _itemField(item);
     setText(field, parts.first, cursor: parts.first.length);
     markDirty(field);
     var after = item;
@@ -453,7 +463,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       after = last = added;
     }
     if (last == null) return;
-    final lastField = 'check:$last:text';
+    final lastField = _itemField(last);
     // Enter continues at the start of the new item; a paste ends after it.
     inputs[lastField]!.selection = TextSelection.collapsed(
       offset: parts.length == 2 ? 0 : inputs[lastField]!.text.length,
@@ -461,6 +471,14 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) focusFor(lastField).requestFocus();
     });
+  }
+
+  /// Drops [item]: unsaved items vanish and saved ones are marked removed.
+  void discard(String item) {
+    if (localItems.remove(item) == null && !pendingRestored.remove(item)) {
+      pendingDeleted.add(item);
+    }
+    dirty.remove(_itemField(item));
   }
 
   void removeItem(
@@ -471,14 +489,11 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     if (remember) this.remember();
     final order = allItems();
     final index = order.indexOf(item);
-    if (localItems.remove(item) == null && !pendingRestored.remove(item)) {
-      pendingDeleted.add(item);
-    }
+    discard(item);
     pendingIndent.remove(item);
-    dirty.remove('check:$item:text');
-    if (id != null) widget.drafts.put(draftKey('check:$item:text'), '', (_) {});
+    if (id != null) widget.drafts.put(draftKey(_itemField(item)), '', (_) {});
     if (focusPrevious && index > 0) {
-      final previous = 'check:${order[index - 1]}:text';
+      final previous = _itemField(order[index - 1]);
       focusFor(previous).requestFocus();
       inputs[previous]!.selection = TextSelection.collapsed(
         offset: inputs[previous]!.text.length,
@@ -620,7 +635,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     for (final field in [
       'title',
       'text',
-      ...next.checks.map((c) => 'check:$c:text'),
+      ...next.checks.map(_itemField),
       for (final f in next.files)
         if (next.fileMeta(f)['kind'] == 'audio') 'file:$f:transcript',
     ]) {
@@ -647,35 +662,29 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     for (final entry in widget.drafts.values.entries) {
       if (!entry.key.startsWith(prefix) || entry.value.isEmpty) continue;
       final item = entry.key.substring(prefix.length).split(':').first;
-      if (next.heads.containsKey('check:$item:text') ||
+      if (next.heads.containsKey(_itemField(item)) ||
           localItems.containsKey(item)) {
         continue;
       }
       final data = jsonDecode(entry.value) as Map;
       if (data['order'] is! String) continue;
       localItems[item] = data['order'];
-      setText('check:$item:text', data['text']);
-      dirty.add('check:$item:text');
+      setText(_itemField(item), data['text']);
+      dirty.add(_itemField(item));
       checklistMode = true;
     }
     localItems.removeWhere(
       (item, _) =>
-          next.heads.containsKey('check:$item:text') &&
-          !flushing.contains('check:$item:text'),
+          next.heads.containsKey(_itemField(item)) &&
+          !flushing.contains(_itemField(item)),
     );
-    pendingDone.removeWhere(
-      (item, value) =>
-          next.done(item) == value && !flushing.contains('check:$item:done'),
-    );
-    pendingOrder.removeWhere(
-      (item, value) =>
-          next.order(item) == value && !flushing.contains('check:$item:order'),
-    );
-    pendingIndent.removeWhere(
-      (item, value) =>
-          next.indent(item) == value &&
-          !flushing.contains('check:$item:indent'),
-    );
+    for (final (suffix, pending, saved) in itemRegisters) {
+      pending.removeWhere(
+        (item, value) =>
+            saved(next, item) == value &&
+            !flushing.contains('check:$item:$suffix'),
+      );
+    }
     pendingDeleted.removeWhere(
       (item) =>
           !next.checks.contains(item) &&
@@ -703,9 +712,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
   bool get hasChanges =>
       dirty.isNotEmpty ||
       localItems.isNotEmpty ||
-      pendingDone.isNotEmpty ||
-      pendingOrder.isNotEmpty ||
-      pendingIndent.isNotEmpty ||
+      itemRegisters.any((r) => r.$2.isNotEmpty) ||
       pendingDeleted.isNotEmpty ||
       pendingRestored.isNotEmpty ||
       pendingColor != null ||
@@ -747,7 +754,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     try {
       if (id == null) {
         final title = inputs['title']!.text, text = inputs['text']!.text;
-        final items = allItems().map((i) => inputs['check:$i:text']!.text);
+        final items = allItems().map((i) => inputs[_itemField(i)]!.text);
         if (!create && '$title$text${items.join()}'.trim().isEmpty) {
           status.value = '';
           return;
@@ -784,14 +791,14 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       for (final field in dirty) {
         final base = bases[field];
         if (base == null || base.$1 != epoch) continue;
-        if (field.startsWith('check:') && waiting(field.split(':')[1])) {
+        if (field.startsWith('check:') && waiting(_itemOf(field))) {
           continue;
         }
         written[field] = inputs[field]!.text;
         changes.add((field: field, value: written[field]!, parents: base.$2));
       }
       for (final entry in localItems.entries) {
-        final field = 'check:${entry.key}:text';
+        final field = _itemField(entry.key);
         written[field] = inputs[field]?.text ?? '';
         changes
           ..add((field: field, value: written[field]!, parents: const []))
@@ -814,19 +821,9 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
         value: value,
         parents: current.parents(field),
       ));
-      for (final entry in pendingOrder.entries) {
-        if (!waiting(entry.key)) {
-          register('check:${entry.key}:order', entry.value);
-        }
-      }
-      for (final entry in pendingIndent.entries) {
-        if (!waiting(entry.key)) {
-          register('check:${entry.key}:indent', entry.value);
-        }
-      }
-      for (final entry in pendingDone.entries) {
-        if (!waiting(entry.key)) {
-          register('check:${entry.key}:done', entry.value);
+      for (final (suffix, pending, _) in itemRegisters) {
+        for (final MapEntry(key: item, :value) in pending.entries) {
+          if (!waiting(item)) register('check:$item:$suffix', value);
         }
       }
       for (final item in pendingDeleted) {
@@ -882,12 +879,9 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       dirty.any((f) => bases[f]?.$1 == note?.epoch) ||
       localItems.isNotEmpty ||
       pendingRestored.isNotEmpty ||
-      pendingDone.entries.any((e) => saved['check:${e.key}:done'] != e.value) ||
-      pendingOrder.entries.any(
-        (e) => saved['check:${e.key}:order'] != e.value,
-      ) ||
-      pendingIndent.entries.any(
-        (e) => saved['check:${e.key}:indent'] != e.value,
+      itemRegisters.any(
+        (r) =>
+            r.$2.entries.any((e) => saved['check:${e.key}:${r.$1}'] != e.value),
       ) ||
       pendingDeleted.any((i) => !saved.containsKey('check:$i:deleted')) ||
       (pendingColor != null && saved['color'] != pendingColor) ||
@@ -1079,19 +1073,11 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
                 TextButton(
                   onPressed: () {
                     Navigator.pop(context);
-                    run(
-                      () => widget.notes.edit(
-                        current.id,
-                        current.epoch,
-                        field,
-                        false,
-                        current.parents(field),
-                      ),
-                    );
+                    run(() => widget.notes.set(current, field, false));
                   },
                   child: Text(
                     field.startsWith('file:')
-                        ? 'Restore ${current.file(field.split(':')[1])?.data['name'] ?? 'attachment'}'
+                        ? 'Restore ${current.file(_itemOf(field))?.data['name'] ?? 'attachment'}'
                         : 'Restore ${current.value(field.replaceAll(':deleted', ':text')) ?? 'checklist item'}',
                   ),
                 ),
@@ -1153,13 +1139,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       return;
     }
     try {
-      await widget.notes.edit(
-        noteId,
-        current.epoch,
-        'deleted',
-        true,
-        current.parents('deleted'),
-      );
+      await widget.notes.set(current, 'deleted', true);
     } catch (e) {
       report(e);
       return;
@@ -1266,7 +1246,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       if (inputs['title']!.text.trim().isNotEmpty) inputs['title']!.text,
       if (inputs['text']!.text.isNotEmpty) plain(inputs['text']!.text),
       for (final item in allItems())
-        '${'    ' * indentOf(item)}${isDone(item) ? '☑' : '☐'} ${inputs['check:$item:text']!.text}',
+        '${'    ' * indentOf(item)}${isDone(item) ? '☑' : '☐'} ${inputs[_itemField(item)]!.text}',
       for (final f in audioFiles)
         if ((inputs['file:$f:transcript']?.text ?? '').trim().isNotEmpty)
           inputs['file:$f:transcript']!.text,
@@ -1280,14 +1260,9 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       final items = allItems();
       final text = [
         if (inputs['text']!.text.isNotEmpty) inputs['text']!.text,
-        ...items.map((i) => inputs['check:$i:text']!.text),
+        ...items.map((i) => inputs[_itemField(i)]!.text),
       ].join('\n');
-      for (final item in items) {
-        if (localItems.remove(item) == null && !pendingRestored.remove(item)) {
-          pendingDeleted.add(item);
-        }
-        dirty.remove('check:$item:text');
-      }
+      items.forEach(discard);
       setText('text', text, cursor: text.length);
       markDirty('text');
       setState(() => checklistMode = false);
@@ -1364,16 +1339,12 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     await withNote(() async {
       final file = File(recording.path);
       try {
-        final attached = await widget.notes.attach(
-          id!,
-          note!.epoch,
+        final attached = await widget.notes.attachAudio(
+          note!,
           file.openRead(),
           name: recording.name,
-          meta: {
-            'kind': 'audio',
-            'mime': recording.mime,
-            'duration': recording.duration,
-          },
+          mime: recording.mime,
+          duration: recording.duration,
         );
         final speech = widget.speech;
         if (speech != null && mounted) {
@@ -1419,34 +1390,10 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       pickingImage = false;
     }
     if (picked == null || !mounted) return;
-    await withNote(() async {
-      final name = picked!.name;
-      final extension = name.split('.').last.toLowerCase();
-      await widget.notes.attach(
-        id!,
-        note!.epoch,
-        picked.openRead(),
-        name:
-            RegExp(
-              r'\.(png|jpe?g|webp|gif|bmp)$',
-              caseSensitive: false,
-            ).hasMatch(name)
-            ? name
-            : '$name.jpg',
-        meta: {
-          'kind': 'image',
-          'mime': switch (extension) {
-            'png' => 'image/png',
-            'webp' => 'image/webp',
-            'gif' => 'image/gif',
-            _ => 'image/jpeg',
-          },
-        },
-      );
-    });
+    await withNote(
+      () => widget.notes.attachImage(note!, picked!.openRead(), picked.name),
+    );
   }
-
-  bool pickingImage = false;
 
   Future<void> addDrawing({String? existing}) async {
     final files = widget.files;
@@ -1468,37 +1415,16 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     if (!mounted) return;
     final result = await editDrawing(context, strokes: strokes);
     if (result == null) return;
-    await withNote(() async {
-      final latest = note!;
-      final file = await widget.notes.attach(
-        id!,
-        latest.epoch,
-        Stream.value(result.png),
-        name: 'Drawing.png',
-        fileId: existing,
-        parents: existing == null
-            ? const []
-            : latest.parents('file:$existing:meta'),
-        meta: {
-          'kind': 'drawing',
-          'mime': 'image/png',
-          'width': result.width,
-          'height': result.height,
-        },
-      );
-      await widget.notes.attach(
-        id!,
-        latest.epoch,
-        Stream.value(result.strokes),
-        name: 'Drawing.json',
-        fileId: file,
-        field: 'strokes',
-        parents: existing == null
-            ? const []
-            : latest.parents('file:$existing:strokes'),
-        meta: {'version': 1},
-      );
-    });
+    await withNote(
+      () => widget.notes.attachDrawing(
+        note!,
+        png: result.png,
+        strokes: result.strokes,
+        width: result.width,
+        height: result.height,
+        existing: existing,
+      ),
+    );
   }
 
   Future<void> removeFile(String file) async {
@@ -1506,13 +1432,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     if (current == null || !editable) return;
     final field = 'file:$file:deleted';
     try {
-      await widget.notes.edit(
-        current.id,
-        current.epoch,
-        field,
-        true,
-        current.parents(field),
-      );
+      await widget.notes.set(current, field, true);
       widget.speech?.cancel(file);
       await load();
     } catch (e) {
@@ -1531,15 +1451,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
             onPressed: () async {
               final latest = await widget.notes.get(current.id);
               if (latest == null) return;
-              await run(
-                () => widget.notes.edit(
-                  latest.id,
-                  latest.epoch,
-                  field,
-                  false,
-                  latest.parents(field),
-                ),
-              );
+              await run(() => widget.notes.set(latest, field, false));
             },
           ),
         ),
@@ -1637,11 +1549,10 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
         images: images,
         initial: index,
         onRemove: editable
-            ? (image) =>
-                  removeFile((image.data['field'] as String).split(':')[1])
+            ? (image) => removeFile(_itemOf(image.data['field'] as String))
             : null,
         actions: (image) {
-          final file = (image.data['field'] as String).split(':')[1];
+          final file = _itemOf(image.data['field'] as String);
           return [
             if (editable &&
                 current.fileMeta(file)['kind'] == 'drawing' &&
@@ -1686,12 +1597,11 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       }
       final controller = inputs['text']!;
       final existing = controller.text.trimRight();
-      final combined = existing.isEmpty ? text : '$existing\n\n$text';
+      var combined = existing.isEmpty ? text : '$existing\n\n$text';
+      combined = combined.substring(0, combined.length.clamp(0, 16384));
       controller.value = TextEditingValue(
-        text: combined.substring(0, combined.length.clamp(0, 16384)),
-        selection: TextSelection.collapsed(
-          offset: combined.length.clamp(0, 16384),
-        ),
+        text: combined,
+        selection: TextSelection.collapsed(offset: combined.length),
       );
     } catch (e) {
       report('Could not read text from the image: $e');
@@ -1712,7 +1622,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
   }
 
   Widget itemRow(String item, int index, {required bool checked}) {
-    final field = 'check:$item:text';
+    final field = _itemField(item);
     final controller = input(field), node = focusFor(field);
     final theme = Theme.of(context);
     final nested = !checked && indentOf(item) > 0;
@@ -1908,12 +1818,17 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
         ): redo,
         const SingleActivator(LogicalKeyboardKey.keyY, control: true): redo,
         const SingleActivator(LogicalKeyboardKey.keyZ, control: true): undo,
-        const SingleActivator(LogicalKeyboardKey.keyB, control: true): () =>
-            format((v) => NoteMarkup.wrap(v, '**')),
-        const SingleActivator(LogicalKeyboardKey.keyI, control: true): () =>
-            format((v) => NoteMarkup.wrap(v, '*')),
-        const SingleActivator(LogicalKeyboardKey.keyU, control: true): () =>
-            format((v) => NoteMarkup.wrap(v, '__')),
+        for (final (key, marker) in [
+          (LogicalKeyboardKey.keyB, '**'),
+          (LogicalKeyboardKey.keyI, '*'),
+          (LogicalKeyboardKey.keyU, '__'),
+        ])
+          SingleActivator(key, control: true): () {
+            // Only while writing the body, not the title or list items.
+            if (focus['text']?.hasFocus ?? false) {
+              format((v) => NoteMarkup.wrap(v, marker));
+            }
+          },
       },
       child: Scaffold(
         backgroundColor: background,
@@ -2032,7 +1947,9 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxWidth: 760),
                           child: CustomScrollView(
-                            key: PageStorageKey('editor/${widget.id}'),
+                            key: PageStorageKey(
+                              'editor/${widget.id ?? stableId}',
+                            ),
                             slivers: [
                               if (images.isNotEmpty &&
                                   widget.files != null &&
@@ -2087,12 +2004,10 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
                                         'Removed · writing remains in Recovery.',
                                         action: 'Restore',
                                         onPressed: () => run(
-                                          () => widget.notes.edit(
-                                            current.id,
-                                            current.epoch,
+                                          () => widget.notes.set(
+                                            current,
                                             'deleted',
                                             false,
-                                            current.parents('deleted'),
                                           ),
                                         ),
                                       ),
@@ -2138,7 +2053,9 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
                                                   : unchecked.isEmpty
                                                   ? focusFor('title')
                                                   : focusFor(
-                                                      'check:${unchecked.first}:text',
+                                                      _itemField(
+                                                        unchecked.first,
+                                                      ),
                                                     ))
                                               .requestFocus(),
                                       style: theme.textTheme.titleLarge,

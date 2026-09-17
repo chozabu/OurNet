@@ -401,12 +401,11 @@ class Speech extends ChangeNotifier {
   }) async {
     final note = await notes.get(noteId);
     if (note == null) return;
-    final field = 'file:$file:transcript';
     final existing = note.transcript(file).trim();
     final value = text.trim();
     if (value.isEmpty || existing == value) return;
     if (existing.isNotEmpty && !replace) return;
-    await notes.edit(noteId, note.epoch, field, value, note.parents(field));
+    await notes.set(note, 'file:$file:transcript', value);
   }
 
   Future<void> _cleanTemporary() async {
