@@ -5,6 +5,12 @@ param(
   [switch]$SkipUpload
 )
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell turns native stderr (e.g. Gradle/Kotlin warnings) into
+# terminating errors under 'Stop'; native tools report failure via exit code.
+function Invoke-Native([scriptblock]$Command) {
+  $ErrorActionPreference = 'Continue'
+  & $Command
+}
 $taskRoot = Split-Path $PSScriptRoot -Parent
 if (!(Test-Path -LiteralPath (Join-Path $taskRoot 'app/android/key.properties'))) {
   throw 'app/android/key.properties is missing; Play rejects debug-signed bundles.'
@@ -20,7 +26,7 @@ $taskVersionCode = [int][Math]::Floor(([DateTime]::UtcNow - [DateTime]::new(2026
 $taskBuild = Get-Date -Format 'yyyyMMdd-HHmmss'
 Push-Location (Join-Path $taskRoot 'app')
 try {
-  flutter build appbundle --release --build-number $taskVersionCode "--dart-define=OURNET_BUILD=$taskBuild"
+  Invoke-Native { flutter build appbundle --release --build-number $taskVersionCode "--dart-define=OURNET_BUILD=$taskBuild" }
   if ($LASTEXITCODE -ne 0) { throw 'Android release build failed.' }
 } finally { Pop-Location }
 $taskBundle = Join-Path $taskRoot 'app/build/app/outputs/bundle/release/app-release.aab'
@@ -30,6 +36,6 @@ Push-Location (Join-Path $PSScriptRoot 'play_upload')
 try {
   $taskArgs = @('run', 'bin/play_upload.dart', '--key', $Key, '--bundle', $taskBundle, '--track', $Track)
   if ($Notes) { $taskArgs += @('--notes', $Notes) }
-  dart @taskArgs
+  Invoke-Native { dart @taskArgs }
   if ($LASTEXITCODE -ne 0) { throw 'Upload to Google Play failed.' }
 } finally { Pop-Location }
