@@ -217,6 +217,69 @@ void main() {
       expect(plan.notes.map((n) => n.name), ['1.json', '2.json', '3.json']);
     });
 
+    test('Keep edit times are kept until the note is edited', () async {
+      var clock = 1800000000000;
+      final timed = Node(
+        await LocalIdentity.create(),
+        Store(),
+        clock: () => clock,
+      );
+      addTearDown(timed.close);
+      final notes = Notes(timed);
+      final importer = KeepImport(notes);
+      Map<String, Object?> edited(String text, int usec) => {
+        ...keep(
+          text: text,
+          created: 1600000000000000 + text.codeUnitAt(0) * 1000,
+        ),
+        'userEditedTimestampUsec': usec,
+      };
+      final fresh = KeepNote.parse('a.json', edited('a', 1700000000000000))!;
+      final undated = KeepNote.parse('b.json', edited('b', 0))!;
+      expect(undated.edited, undated.created);
+      // Imported before edit times were kept: one untouched, one edited.
+      final older = KeepNote.parse('c.json', edited('c', 1650000000000000))!;
+      final changed = KeepNote.parse('d.json', edited('d', 1660000000000000))!;
+      for (final k in [older, changed]) {
+        await notes.create(
+          text: k.text,
+          created: k.created,
+          stableId: k.stableId,
+        );
+      }
+      clock += 60 * 60 * 1000;
+      final d = (await notes.get('room2:${timed.person}:${changed.stableId}'))!;
+      await notes.set(d, 'text', 'd, later');
+
+      clock += 1000;
+      final plan = await importer.plan([fresh, undated, older, changed]);
+      expect(plan.notes, [fresh, undated]);
+      expect(plan.editTimes, [older]);
+      final result = await importer.run(plan, (_) async => null);
+      expect((result.imported, result.editTimes), (2, 1));
+
+      Future<int> updated(KeepNote k) async =>
+          (await notes.get('room2:${timed.person}:${k.stableId}'))!.updated;
+      expect(await updated(fresh), 1700000000000);
+      expect(await updated(undated), undated.created);
+      expect(await updated(older), 1650000000000);
+      expect(await updated(changed), 1800000000000 + 60 * 60 * 1000);
+      final summary = (await notes.summaries()).firstWhere(
+        (s) => (s.data['entry'] as String).endsWith(fresh.stableId),
+      );
+      expect(summary.data['updated'], 1700000000000);
+
+      // Editing after the import counts, and importing again changes nothing.
+      clock += 5000;
+      final a = (await notes.get('room2:${timed.person}:${fresh.stableId}'))!;
+      await notes.set(a, 'text', 'a, edited');
+      expect(await updated(fresh), clock);
+      final again = await importer.plan([fresh, undated, older, changed]);
+      expect(again.notes, isEmpty);
+      expect(again.editTimes, isEmpty);
+      expect(again.existing, 4);
+    });
+
     final export = Platform.environment['OURNET_KEEP_EXPORT'];
     test(
       'a real Takeout export plans and imports',

@@ -181,7 +181,7 @@ bool _noteValue(String field, Object? v, Json p) {
       'color' ||
       'background' ||
       'format' => v is String && _colorName.hasMatch(v),
-      'created' => v is int && v >= 0 && v < 253402300799999,
+      'created' || 'edited' => v is int && v >= 0 && v < 253402300799999,
       _ => _bounded(v),
     };
   }

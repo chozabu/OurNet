@@ -84,7 +84,8 @@ Implemented 14–15 September 2026. Extends [NOTES_WIDGETS.md](NOTES_WIDGETS.md)
   change still reject the new registers below; update every participating
   device.
 - New shared registers: `check:<id>:indent` (0 or 1), `format` (`markup`),
-  `background`, `created` (an original creation time, for imports), and per
+  `background`, `created` and `edited` (original creation and edit times, for
+  imports; `edited` is written last and stands until a later edit), and per
   attachment `file:<id>:meta` (kind `audio`/`image`/`drawing`, MIME type,
   duration or size; the encrypted chunk list and key travel in the same signed
   payload), `file:<id>:transcript`, `file:<id>:strokes` (a drawing's editable
@@ -169,7 +170,10 @@ import. `KeepImport` in `core/lib/src/keep_import.dart` does the work:
 
 - Trashed notes are left out. Notes are matched by creation time and title, so
   importing again adds only new notes and never duplicates or restores one.
-- Notes are created oldest first, so the newest is at the top of the list.
+- Notes are created oldest first. They keep Keep's edit times, so the list
+  shows them as in Keep, most recently edited first. Importing again gives
+  notes imported by earlier builds their edit time, unless they were changed
+  after importing.
   There is no limit on the number of notes; the list loads in pages.
 - Formatting is kept only when a note uses it; otherwise the plain text is
   used, so a literal `*` stays a character. Titles over 100 characters are
@@ -191,7 +195,7 @@ import. `KeepImport` in `core/lib/src/keep_import.dart` does the work:
 | `labels[].name` | personal `labelName` + `labels` (matched by name, ignoring case) |
 | `attachments[]` (images, drawings, audio) | `file:<id>:meta` with chunks; drawings import as images |
 | `createdTimestampUsec` | `created` |
-| `userEditedTimestampUsec` | not stored; edit times come from signed objects |
+| `userEditedTimestampUsec` | `edited`, used for ordering and "Edited" until the note is edited again (0 falls back to the creation time) |
 | `sharees[]` | not imported (collaborators must be OurNet friends) |
 | `annotations[]` (web links) | URL appended to the text when missing; no link previews are fetched |
 | list nesting | not in the export; items import unnested |

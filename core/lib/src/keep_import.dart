@@ -17,8 +17,8 @@ class KeepNote {
   final String? color;
   final bool pinned, archived, trashed;
 
-  /// Original creation time in milliseconds.
-  final int created;
+  /// Original creation and last edit times in milliseconds.
+  final int created, edited;
   final List<String> labels;
   final List<({String path, String mime})> attachments;
 
@@ -33,9 +33,10 @@ class KeepNote {
     this.archived = false,
     this.trashed = false,
     this.created = 0,
+    int? edited,
     this.labels = const [],
     this.attachments = const [],
-  });
+  }) : edited = edited ?? created;
 
   /// Keep's palette names; OurNet uses the names Keep shows.
   static const colors = {
@@ -87,6 +88,11 @@ class KeepNote {
       archived: json['isArchived'] == true,
       trashed: json['isTrashed'] == true,
       created: (json['createdTimestampUsec'] as int) ~/ 1000,
+      // Old notes may have no edit time.
+      edited: switch (json['userEditedTimestampUsec']) {
+        final int usec when usec > 0 => usec ~/ 1000,
+        _ => null,
+      },
       labels: [
         for (final l in json['labels'] is List ? json['labels'] : [])
           if (l is Map && str(l['name']).trim().isNotEmpty) str(l['name']),
@@ -223,11 +229,20 @@ class KeepPlan {
   final List<KeepNote> notes;
   final int existing;
   final List<(KeepNote, String)> skipped;
-  KeepPlan(this.notes, this.existing, this.skipped);
+
+  /// Notes imported before edit times were kept, and not changed since:
+  /// importing again records their Keep edit time.
+  final List<KeepNote> editTimes;
+  KeepPlan(
+    this.notes,
+    this.existing,
+    this.skipped, [
+    this.editTimes = const [],
+  ]);
 }
 
 class KeepResult {
-  int imported = 0;
+  int imported = 0, editTimes = 0;
 
   /// Note or attachment names with the reason each was not imported.
   final problems = <(String, String)>[];
@@ -246,6 +261,7 @@ class KeepImport {
   /// large for a note.
   Future<KeepPlan> plan(Iterable<KeepNote> source) async {
     final skipped = <(KeepNote, String)>[];
+    final editTimes = <KeepNote>[];
     final candidates = <KeepNote>[];
     var existing = 0;
     for (final note in source) {
@@ -259,14 +275,16 @@ class KeepImport {
           : null;
       if (reason != null) {
         skipped.add((note, reason));
-      } else if (await notes.get(_id(note), includeUnavailable: true) != null) {
+      } else if (await notes.get(_id(note), includeUnavailable: true)
+          case final imported?) {
         existing++;
+        if (_untouched(imported)) editTimes.add(note);
       } else {
         candidates.add(note);
       }
     }
     candidates.sort((a, b) => a.created.compareTo(b.created));
-    return KeepPlan(candidates, existing, skipped);
+    return KeepPlan(candidates, existing, skipped, editTimes);
   }
 
   /// Imports [plan]. [read] returns an attachment's bytes by its Takeout
@@ -278,6 +296,18 @@ class KeepImport {
     bool Function()? cancelled,
   }) async {
     final result = KeepResult();
+    for (final k in plan.editTimes) {
+      if (cancelled?.call() ?? false) return result;
+      try {
+        final note = (await notes.get(_id(k)))!;
+        await notes.apply(note.id, note.epoch, [
+          (field: 'edited', value: k.edited, parents: note.parents('edited')),
+        ]);
+        result.editTimes++;
+      } catch (e) {
+        result.problems.add((_label(k), '$e'));
+      }
+    }
     final labels = <String, String>{};
     for (final (i, k) in plan.notes.indexed) {
       if (cancelled?.call() ?? false) break;
@@ -292,6 +322,17 @@ class KeepImport {
     progress?.call(plan.notes.length, plan.notes.length);
     return result;
   }
+
+  /// An earlier import with no edit time, whose writes all happened within
+  /// the import (which takes seconds), so recording the Keep edit time hides
+  /// no later edit.
+  static bool _untouched(NoteDocument note) =>
+      !note.deleted &&
+      note.available &&
+      !note.heads.containsKey('edited') &&
+      note.history.every(
+        (r) => r.object.created - note.room.object.created < 10 * 60 * 1000,
+      );
 
   static String _label(KeepNote k) => k.title.trim().isNotEmpty
       ? k.title.trim()
@@ -365,6 +406,11 @@ class KeepImport {
       }
       note = (await notes.get(note.id))!;
     }
+
+    // Last, so the import's own writes do not count as later edits.
+    await notes.apply(note.id, note.epoch, [
+      (field: 'edited', value: k.edited, parents: const <String>[]),
+    ]);
 
     for (final label in k.labels) {
       final id = labels[label.toLowerCase()] ??= await notes.state.createLabel(

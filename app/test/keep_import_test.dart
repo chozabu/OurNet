@@ -84,7 +84,8 @@ void main() {
         'isArchived': false,
         'title': title,
         'textContent': 'Body of $title',
-        'createdTimestampUsec': 1700000000000000 + title.hashCode,
+        'createdTimestampUsec': 1700000000000000,
+        'userEditedTimestampUsec': 1710000000000000,
       };
       add('Groceries.json', utf8.encode(jsonEncode(note('Groceries'))));
       add('Old.json', utf8.encode(jsonEncode(note('Old', trashed: true))));
@@ -124,6 +125,8 @@ void main() {
       final summaries = await notes.summaries();
       expect(summaries.single.data['title'], 'Groceries');
       expect(summaries.single.data['color'], 'sand');
+      // Sorted and shown by the time it was last edited in Keep.
+      expect(summaries.single.data['updated'], 1710000000000);
       await node.close();
       await directory.delete(recursive: true);
     });

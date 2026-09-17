@@ -87,11 +87,20 @@ class NoteDocument {
   String transcript(String id) =>
       (value('file:$id:transcript') as String?) ?? '';
 
-  /// Newest locally accepted edit time, for most-recently-edited ordering.
-  int get updated => history.fold(
-    room.object.created,
-    (latest, r) => r.object.created > latest ? r.object.created : latest,
-  );
+  /// Newest accepted edit time, for most-recently-edited ordering. An import
+  /// writes the original edit time (`edited`) last; its own earlier writes
+  /// are not edits, later ones are.
+  int get updated {
+    final mark = heads['edited']?.firstOrNull;
+    final since = mark?.object.created;
+    var latest = mark?.data['value'] as int? ?? room.object.created;
+    for (final r in history) {
+      final at = r.object.created;
+      if (at > latest && (since == null || at > since)) latest = at;
+    }
+    return latest;
+  }
+
   String itemText(String id) => (value('check:$id:text') as String?) ?? '';
   bool done(String id) => value('check:$id:done') == true;
   String? order(String id) => value('check:$id:order') as String?;

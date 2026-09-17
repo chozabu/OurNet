@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:ournet_core/ournet_core.dart';
 
 /// Imports notes from Google Takeout zips (Takeout → Keep). Returns the
-/// number of notes imported.
+/// number of notes imported or given their Keep edit time.
 Future<int> importKeepNotes(BuildContext context, Notes notes) async {
   final picked = await FilePicker.pickFiles(
     dialogTitle: 'Choose your Google Takeout zip',
@@ -88,7 +88,7 @@ Future<int> importKeepNotes(BuildContext context, Notes notes) async {
       done.dispose();
     }
     if (context.mounted) await _report(context, plan, result, cancelled);
-    return result.imported;
+    return result.imported + result.editTimes;
   } finally {
     for (final s in streams) {
       await s.close();
@@ -129,9 +129,13 @@ Future<bool> _confirm(BuildContext context, KeepPlan plan) async {
                       : '${_count(plan.notes.length, 'note')} will be added'
                             '${archived > 0 ? ', $archived of them to Archive' : ''}.',
                 ),
-                if (plan.existing > 0)
+                if (plan.editTimes.isNotEmpty)
                   Text(
-                    '${_count(plan.existing, 'note')} imported earlier will be left as they are.',
+                    '${_count(plan.editTimes.length, 'note')} imported earlier will get their Keep edit times.',
+                  ),
+                if (plan.existing > plan.editTimes.length)
+                  Text(
+                    '${_count(plan.existing - plan.editTimes.length, 'note')} imported earlier will be left as they are.',
                   ),
                 for (final e in reasons.entries)
                   Text('Not imported: ${e.value} · ${e.key}'),
@@ -147,7 +151,7 @@ Future<bool> _confirm(BuildContext context, KeepPlan plan) async {
               onPressed: () => Navigator.pop(context, false),
               child: const Text('Cancel'),
             ),
-            if (plan.notes.isNotEmpty)
+            if (plan.notes.isNotEmpty || plan.editTimes.isNotEmpty)
               FilledButton(
                 onPressed: () => Navigator.pop(context, true),
                 child: const Text('Import'),
@@ -174,6 +178,7 @@ Future<void> _report(
         children: [
           Text(
             '${_count(result.imported, 'note')} imported'
+            '${result.editTimes > 0 ? ', and edit times kept for ${_count(result.editTimes, 'earlier note')}' : ''}'
             '${cancelled ? ' of ${plan.notes.length}. Import again to continue.' : '.'}',
           ),
           if (result.problems.isNotEmpty) ...[
