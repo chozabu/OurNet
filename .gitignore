@@ -16,3 +16,6 @@ ournet-play-*.json
 play-service-account.json
 *-service-account.json
 .ournet-signing/
+
+# Personal data exports used for local testing - never commit
+PrivateData/

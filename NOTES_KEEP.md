@@ -155,26 +155,41 @@ Implemented 14–15 September 2026. Extends [NOTES_WIDGETS.md](NOTES_WIDGETS.md)
   background from a widget is not offered: Android restricts starting the
   microphone without a visible activity.
 
-## Takeout readiness
+## Importing from Keep
 
-Google Takeout exports one JSON file per Keep note. Import and export are a later
-stage; the model now has a place for each field:
+Google Takeout (takeout.google.com, Keep only) exports one JSON file per note.
+The add menu on the notes screen has **Import from Google Keep**: choose the
+Takeout zip (or several, for a split export), review what will be added, then
+import. `KeepImport` in `core/lib/src/keep_import.dart` does the work:
+
+- Trashed notes are left out. Notes are matched by creation time and title, so
+  importing again adds only new notes and never duplicates or restores one.
+- Imports stay within the 200-note limit (archived notes count): active notes
+  come first, pinned first, then newest; the rest are listed as not imported.
+- Formatting is kept only when a note uses it; otherwise the plain text is
+  used, so a literal `*` stays a character. Titles over 100 characters are
+  shortened and repeated in full at the top of the text.
+- Keep's `.3gp` voice recordings are raw AMR-NB: they are saved as
+  `audio/amr` with a duration read from the frames. Keep's transcript is
+  already in the note text.
+- `OURNET_KEEP_EXPORT=<Takeout/Keep folder> dart test test/keep_import_test.dart`
+  in `core` imports a real export into a temporary node.
 
 | Takeout field | OurNet |
 |---|---|
 | `title`, `textContent` | `title`, `text` |
 | `textContentHtml` | `text` with `format: markup` (bold, italic, underline, headings) |
 | `listContent[].text/isChecked` | `check:<id>:text`, `check:<id>:done`, order from position |
-| nested list items | `check:<id>:indent` |
 | `color` | `color` (palette names map to the nearest OurNet colour) |
 | `isPinned`, `isArchived` | personal `pin`, `archive` |
-| `isTrashed` | `deleted` |
+| `isTrashed` | not imported |
 | `labels[].name` | personal `labelName` + `labels` (matched by name, ignoring case) |
 | `attachments[]` (images, drawings, audio) | `file:<id>:meta` with chunks; drawings import as images |
 | `createdTimestampUsec` | `created` |
 | `userEditedTimestampUsec` | not stored; edit times come from signed objects |
 | `sharees[]` | not imported (collaborators must be OurNet friends) |
-| `annotations[]` (web links) | kept in text; no link previews are fetched |
+| `annotations[]` (web links) | URL appended to the text when missing; no link previews are fetched |
+| list nesting | not in the export; items import unnested |
 
 ## Validation record — 15 September 2026
 

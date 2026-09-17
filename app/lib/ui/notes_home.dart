@@ -801,6 +801,11 @@ extension _NotesHome on _OurNetAppState {
             icon: const Icon(Icons.image_outlined),
             onSelected: (value) => switch (value) {
               'image' => captureImage(),
+              'keep' => attachmentAct(() async {
+                if (await importKeepNotes(context, notes) > 0) {
+                  update(() => everydayView = null);
+                }
+              }),
               'paste' => attachmentAct(pasteInbox),
               _ => attachmentAct(() async {
                 final picker = widget.pickAttachment;
@@ -840,6 +845,15 @@ extension _NotesHome on _OurNetAppState {
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(Icons.content_paste),
                   title: Text('Paste text or screenshot'),
+                ),
+              ),
+              PopupMenuDivider(),
+              PopupMenuItem(
+                value: 'keep',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.move_to_inbox_outlined),
+                  title: Text('Import from Google Keep'),
                 ),
               ),
             ],
