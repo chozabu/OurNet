@@ -12,6 +12,16 @@ const notesFilters = {
   'Removed': 'Removed',
 };
 
+/// Notes added to the list each time scrolling nears its end.
+const notesPage = 60;
+
+typedef NotesView = ({
+  Set<Object?> pins,
+  List<EverydayItem> visible,
+  List<EverydayItem> pinned,
+  List<EverydayItem> others,
+});
+
 extension _NotesHome on _OurNetAppState {
   Widget noteEditor({String? id, bool checklist = false}) => NoteEditor(
     key: ValueKey('editor/${id ?? 'new'}'),
@@ -635,6 +645,11 @@ extension _NotesHome on _OurNetAppState {
     final state = notes.state;
     final live = isLiveNote(p);
     final labelNames = state.labels;
+    final draggable =
+        notesFilter != 'Removed' &&
+        live &&
+        notesSearch.text.trim().isEmpty &&
+        section.length > 1;
     Widget card(VoidCallback open) => NoteCard(
       item: item,
       pinned: pins.contains(id),
@@ -648,6 +663,7 @@ extension _NotesHome on _OurNetAppState {
       selected: selectedNotes.contains(id),
       selecting: selectedNotes.isNotEmpty,
       onSelect: live ? () => toggleSelected(id) : null,
+      longPress: !draggable,
       files: files,
       objectOf: cachedObject,
       online: network.running,
@@ -667,7 +683,6 @@ extension _NotesHome on _OurNetAppState {
       closedBuilder: (context, open) => card(open),
     );
     if (notesFilter == 'Removed' || !live) return container;
-    final draggable = notesSearch.text.trim().isEmpty && section.length > 1;
     final dismissible = Dismissible(
       key: ValueKey('dismiss/$id'),
       onDismissed: (_) => unawaited(setArchived([id], !state.archived(id))),
@@ -710,39 +725,115 @@ extension _NotesHome on _OurNetAppState {
   }
 
   /// Places [moved] just before [target] in the shown order of [section].
-  /// Notes keep a personal position once moved; the first move gives every
-  /// note in the section a position so the order stays as shown.
+  /// Usually only the moved note's position is written (see
+  /// `NoteState.move`), however long the section.
   Future<void> moveNote(
     String moved,
     String target,
     List<EverydayItem> section,
   ) async {
-    final state = notes.state;
-    final order = [for (final s in section) s.data['entry'] as String];
-    order.remove(moved);
-    final at = order.indexOf(target);
-    if (at < 0) return;
-    order.insert(at, moved);
     try {
-      final before = at > 0 ? state.order(order[at - 1]) : null;
-      final after = state.order(target);
-      final keyed = order.every((id) => state.order(id) != null);
-      if (keyed &&
-          (at == 0 || before != null) &&
-          after != null &&
-          (before == null || before.compareTo(after) < 0)) {
-        await state.set('order', moved, orderBetween(before, after));
-      } else {
-        final keys = orderSequence(order.length);
-        await state.setAll([
-          for (var i = 0; i < order.length; i++)
-            if (state.order(order[i]) != keys[i]) ('order', order[i], keys[i]),
-        ]);
-      }
+      await notes.state.move(
+        [
+          for (final s in section)
+            (id: s.data['entry'] as String, key: noteListKey(s)),
+        ],
+        moved,
+        target,
+      );
       update(() {});
     } catch (e) {
       notice('$e');
     }
+  }
+
+  /// Where [item] sorts in the notes list (see `NoteState.listKey`); only
+  /// notes can be moved, other saved items sort by time.
+  String noteListKey(EverydayItem item) {
+    final id = '${item.data['entry']}';
+    final time = item.data['updated'] as int? ?? item.object.created;
+    return item.data['type'] == 'shared_note'
+        ? notes.state.listKey(id, time)
+        : NoteState.timeKey(time, id);
+  }
+
+  /// Filtered and sorted notes. Rebuilding the app for other reasons reuses
+  /// the last result; new notes, personal state, the filter, the search and
+  /// optimistic hides recompute it. A new filter or search starts again at
+  /// the first page.
+  NotesView notesViewOf(List<EverydayItem> all, String query) {
+    final state = notes.state;
+    if (!identical(all, notesViewSource)) {
+      notesViewSource = all;
+      final byId = <Object?, EverydayItem>{
+        for (final i in all)
+          if (i.data['type'] == 'shared_note') i.data['entry']: i,
+      };
+      // Removals the summaries now reflect no longer need hiding.
+      hiddenNotes.removeWhere((id) => byId[id]?.data['deleted'] == true);
+      selectedNotes.removeWhere((id) => byId[id]?.data['deleted'] != false);
+      // Drop optimistic checks the summaries now reflect.
+      for (final MapEntry(key: id, value: overrides) in noteChecks.entries) {
+        final item = byId[id];
+        if (item == null) continue;
+        final unchecked = {
+          for (final c in (item.data['checks'] as List? ?? const [])) c['id'],
+        };
+        overrides.removeWhere((id, done) => done != unchecked.contains(id));
+      }
+    }
+    final key = (
+      all,
+      state.version,
+      notesFilter,
+      query,
+      hiddenNotes.join('\n'),
+    );
+    final previous = notesViewKey;
+    final view = notesView;
+    if (previous == key && view != null) return view;
+    if (previous is! (Object, int, String, String, String) ||
+        previous.$3 != notesFilter ||
+        previous.$4 != query) {
+      notesShown = notesPage;
+    }
+    notesViewKey = key;
+    final pins = <Object?>{
+      for (final i in all)
+        if (i.data['type'] == 'pin' && i.data['pinned'] == true)
+          i.data['target'],
+      for (final i in all)
+        if (i.data['type'] == 'shared_note' && state.pinned(i.data['entry']))
+          i.data['entry'],
+    };
+    final visible = all.where((i) => notesMatch(i, query)).toList();
+    if (notesFilter == 'Reminders') {
+      int at(EverydayItem i) =>
+          state.reminder(i.data['entry'])?['at'] as int? ?? 0;
+      visible.sort((a, b) => at(a).compareTo(at(b)));
+    } else {
+      // Newest edit first, with moved notes where they were placed.
+      final keys = {for (final i in visible) i: noteListKey(i)};
+      visible.sort((a, b) {
+        final order = keys[a]!.compareTo(keys[b]!);
+        return order == 0
+            ? '${a.data['entry']}'.compareTo('${b.data['entry']}')
+            : order;
+      });
+    }
+    final pinned = ['Removed', 'Archive'].contains(notesFilter)
+        ? <EverydayItem>[]
+        : visible.where((i) => pins.contains(i.data['entry'])).toList();
+    final pinnedSet = pinned.toSet();
+    return notesView = (
+      pins: pins,
+      visible: visible,
+      pinned: pinned,
+      others: [
+        for (final i in visible)
+          if (!pinnedSet.contains(i)) i,
+      ],
+    );
   }
 
   Widget captureBar(BuildContext context) {
@@ -1136,71 +1227,7 @@ extension _NotesHome on _OurNetAppState {
               return const Center(child: CircularProgressIndicator());
             }
             final all = loaded = snapshot.data!;
-            final state = notes.state;
-            final pins = <dynamic>{
-              for (final i in all)
-                if (i.data['type'] == 'pin' && i.data['pinned'] == true)
-                  i.data['target'],
-              for (final i in all)
-                if (i.data['type'] == 'shared_note' &&
-                    state.pinned(i.data['entry']))
-                  i.data['entry'],
-            };
-            // Removals the summaries now reflect no longer need hiding.
-            for (final i in all) {
-              if (i.data['type'] == 'shared_note' &&
-                  i.data['deleted'] == true) {
-                hiddenNotes.remove(i.data['entry']);
-              }
-            }
-            selectedNotes.removeWhere(
-              (id) => !all.any(
-                (i) =>
-                    i.data['entry'] == id &&
-                    i.data['type'] == 'shared_note' &&
-                    i.data['deleted'] != true,
-              ),
-            );
-            int time(EverydayItem i) =>
-                i.data['updated'] as int? ?? i.object.created;
-            String? position(EverydayItem i) => i.data['type'] == 'shared_note'
-                ? state.order(i.data['entry'])
-                : null;
-            final visible = all.where((i) => notesMatch(i, query)).toList()
-              ..sort((a, b) {
-                if (notesFilter == 'Reminders') {
-                  final at =
-                      state.reminder(a.data['entry'])?['at'] as int? ?? 0;
-                  final bt =
-                      state.reminder(b.data['entry'])?['at'] as int? ?? 0;
-                  return at.compareTo(bt);
-                }
-                // Notes never moved come first, newest edit first; moved
-                // notes keep their personal position.
-                final pa = position(a), pb = position(b);
-                if (pa == null && pb == null) {
-                  return time(b).compareTo(time(a));
-                }
-                if (pa == null) return -1;
-                if (pb == null) return 1;
-                return pa.compareTo(pb);
-              });
-            // Drop optimistic checks the summaries now reflect.
-            for (final item in visible) {
-              final overrides = noteChecks[item.data['entry']];
-              if (overrides == null) continue;
-              final unchecked = {
-                for (final c in (item.data['checks'] as List? ?? const []))
-                  c['id'],
-              };
-              overrides.removeWhere(
-                (id, done) => done != unchecked.contains(id),
-              );
-            }
-            final pinned = ['Removed', 'Archive'].contains(notesFilter)
-                ? <EverydayItem>[]
-                : visible.where((i) => pins.contains(i.data['entry'])).toList();
-            final others = visible.where((i) => !pinned.contains(i)).toList();
+            final (:pins, :visible, :pinned, :others) = notesViewOf(all, query);
             if (visible.isEmpty) {
               final (title, detail) = query.isNotEmpty
                   ? ('No matching notes', 'Try other words, or show all notes.')
@@ -1244,39 +1271,62 @@ extension _NotesHome on _OurNetAppState {
                 ),
               ),
             );
-            Widget grid(List<EverydayItem> items) => SliverMasonryGrid.count(
-              crossAxisCount: columns,
-              mainAxisSpacing: 10,
-              crossAxisSpacing: 10,
-              childCount: items.length,
-              itemBuilder: (context, index) => KeyedSubtree(
-                key: ValueKey(items[index].data['entry']),
-                child: noteTile(
-                  context,
-                  items[index],
-                  pins,
-                  section: items,
-                  width: tileWidth,
-                ),
-              ),
-            );
+            // [items] is the whole section, so moving a note orders it
+            // among every note, not only the ones shown so far.
+            Widget grid(List<EverydayItem> items, {int? shown}) =>
+                SliverMasonryGrid.count(
+                  crossAxisCount: columns,
+                  mainAxisSpacing: 10,
+                  crossAxisSpacing: 10,
+                  childCount: shown == null
+                      ? items.length
+                      : items.length.clamp(0, shown),
+                  itemBuilder: (context, index) => KeyedSubtree(
+                    key: ValueKey(items[index].data['entry']),
+                    child: noteTile(
+                      context,
+                      items[index],
+                      pins,
+                      section: items,
+                      width: tileWidth,
+                    ),
+                  ),
+                );
+            final more = notesShown < others.length;
+            // Grow before the end is reached, and again after layout while
+            // the shown notes do not yet fill the view.
+            bool showMore(ScrollMetrics metrics) {
+              if (more &&
+                  metrics.axis == Axis.vertical &&
+                  metrics.extentAfter < 1500) {
+                update(() => notesShown += notesPage);
+              }
+              return false;
+            }
+
             return Center(
               child: ConstrainedBox(
                 constraints: BoxConstraints(
                   maxWidth: notesGrid ? double.infinity : 640,
                 ),
-                child: CustomScrollView(
-                  key: PageStorageKey('everyday/self/$notesFilter'),
-                  slivers: [
-                    if (pinned.isNotEmpty) ...[
-                      header('Pinned'),
-                      grid(pinned),
-                      if (others.isNotEmpty) header('Others'),
-                    ] else
-                      const SliverToBoxAdapter(child: SizedBox(height: 8)),
-                    grid(others),
-                    const SliverToBoxAdapter(child: SizedBox(height: 16)),
-                  ],
+                child: NotificationListener<ScrollMetricsNotification>(
+                  onNotification: (n) => showMore(n.metrics),
+                  child: NotificationListener<ScrollUpdateNotification>(
+                    onNotification: (n) => showMore(n.metrics),
+                    child: CustomScrollView(
+                      key: PageStorageKey('everyday/self/$notesFilter'),
+                      slivers: [
+                        if (pinned.isNotEmpty) ...[
+                          header('Pinned'),
+                          grid(pinned),
+                          if (others.isNotEmpty) header('Others'),
+                        ] else
+                          const SliverToBoxAdapter(child: SizedBox(height: 8)),
+                        grid(others, shown: notesShown),
+                        const SliverToBoxAdapter(child: SizedBox(height: 16)),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             );

@@ -1,6 +1,8 @@
 import 'dart:io';
+import 'package:flutter/gestures.dart' show kLongPressTimeout;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ournet/ui/app.dart';
 import 'package:ournet/ui/note_card.dart';
@@ -139,4 +141,133 @@ void main() {
       await node.close();
     },
   );
+
+  testWidgets('long note lists load in pages while scrolling', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final node = Node(await LocalIdentity.create(), Store());
+    final notes = Notes(node);
+    const count = notesPage * 2 + 10;
+    await tester.runAsync(() async {
+      for (var i = 0; i < count; i++) {
+        await notes.create(title: 'Note $i', text: 'Body of note $i');
+      }
+    });
+    await tester.pumpWidget(
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.notes,
+      ),
+    );
+    await settled(tester);
+    int? shown() =>
+        (tester
+                    .widgetList<SliverMasonryGrid>(
+                      find.byType(SliverMasonryGrid),
+                    )
+                    .last
+                    .delegate
+                as SliverChildBuilderDelegate)
+            .childCount;
+    expect(find.text('Note ${count - 1}'), findsOneWidget);
+    expect(shown(), lessThan(count));
+
+    // A search covers every note, not only the pages shown.
+    await tester.enterText(find.byType(TextField).first, 'body of note 0');
+    await settled(tester);
+    expect(find.text('Note 0'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).first, '');
+    await settled(tester);
+
+    // The oldest note is on the last page; scrolling reaches it.
+    final list = find.byType(CustomScrollView).last;
+    for (var i = 0; i < 40 && find.text('Note 0').evaluate().isEmpty; i++) {
+      await tester.drag(list, const Offset(0, -2000));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Note 0'), findsOneWidget);
+    expect(shown(), count);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await settled(tester);
+    await node.close();
+  });
+
+  testWidgets('dragging a note in a long list writes only its position', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final node = Node(await LocalIdentity.create(), Store());
+    final notes = Notes(node);
+    const count = notesPage * 2 + 30;
+    await tester.runAsync(() async {
+      for (var i = 0; i < count; i++) {
+        await notes.create(title: 'Note $i');
+      }
+    });
+    await tester.pumpWidget(
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.notes,
+      ),
+    );
+    await settled(tester);
+    await tester.tap(find.byTooltip('List view'));
+    await settled(tester);
+    List<String> shown() {
+      final titles = [
+        for (var i = count - 1; i >= count - 5; i--)
+          if (find.text('Note $i').evaluate().isNotEmpty) 'Note $i',
+      ];
+      return titles..sort(
+        (a, b) => tester
+            .getTopLeft(find.text(a))
+            .dy
+            .compareTo(tester.getTopLeft(find.text(b)).dy),
+      );
+    }
+
+    final top = 'Note ${count - 1}', third = 'Note ${count - 3}';
+    expect(shown().take(3), [top, 'Note ${count - 2}', third]);
+    final version = notes.state.version;
+    final from = tester.getCenter(find.widgetWithText(NoteCard, top));
+    final to = tester.getCenter(find.widgetWithText(NoteCard, third));
+    final drag = await tester.startGesture(from);
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 100));
+    for (var step = 1; step <= 5; step++) {
+      await drag.moveTo(Offset.lerp(from, to, step / 5)!);
+      await tester.pump();
+    }
+    // The floating copy follows the pointer while the note is selected.
+    expect(find.text(top), findsNWidgets(2));
+    expect(find.text('1 selected'), findsOneWidget);
+    await drag.up();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 300)),
+    );
+    await settled(tester);
+    expect(shown().take(3), ['Note ${count - 2}', top, third]);
+    // The app has its own view of the store; read what was written.
+    await tester.runAsync(notes.state.refresh);
+    expect(notes.state.version - version, 1);
+
+    // A note written later still appears above the moved note.
+    await tester.runAsync(() => notes.create(title: 'Newest'));
+    await settled(tester);
+    expect(
+      tester.getTopLeft(find.text('Newest')).dy,
+      lessThan(tester.getTopLeft(find.text(top)).dy),
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await settled(tester);
+    await node.close();
+  });
 }

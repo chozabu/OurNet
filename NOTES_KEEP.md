@@ -58,7 +58,10 @@ Implemented 14–15 September 2026. Extends [NOTES_WIDGETS.md](NOTES_WIDGETS.md)
     appears on hover. The selection bar pins, sets reminders, colours, archives,
     labels, copies or removes them together.
 11. **Rearrange** by long-pressing a card and dragging it onto another in the
-    same section. Moved notes keep their position; new notes appear at the top.
+    same section. Long-pressing also selects the card. Moved notes keep their
+    position; new notes and notes edited later appear above them. A move writes
+    only the moved note's position (a few neighbours are respaced when many
+    moves narrow one gap), however many notes there are.
 12. **Removed** notes leave the Removed list after 7 days, or at once with
     **Empty Removed**. This hides them on your devices only; their encrypted
     history stays in local storage (no remote erasure) and restoring a note
@@ -96,8 +99,10 @@ Implemented 14–15 September 2026. Extends [NOTES_WIDGETS.md](NOTES_WIDGETS.md)
   merges and recovery are unchanged. Builds without formatting show the markers.
 - **Personal state** (`note_self` objects in space `_noteself`, encrypted to the
   person's own devices only): `pin`, `archive`, `labels`, `labelName`,
-  `labelDeleted`, `reminder` (`{at, repeat}`), `order` (grid position) and
-  `purged`. Registers name the versions they replace, so two of a person's
+  `labelDeleted`, `reminder` (`{at, repeat}`), `rank` (list position) and
+  `purged`. `rank` keys sort together with keys made from each unmoved note's
+  newest edit time (`NoteState.listKey`). `order`, the grid position of
+  earlier builds, is still read and sorts after all other notes. Registers name the versions they replace, so two of a person's
   devices converge. Collaborators never see them. Device-local pins from earlier
   builds migrate once. Each change is one signed object and counts toward the
   10,000-object quota.
@@ -164,8 +169,8 @@ import. `KeepImport` in `core/lib/src/keep_import.dart` does the work:
 
 - Trashed notes are left out. Notes are matched by creation time and title, so
   importing again adds only new notes and never duplicates or restores one.
-- Imports stay within the 200-note limit (archived notes count): active notes
-  come first, pinned first, then newest; the rest are listed as not imported.
+- Notes are created oldest first, so the newest is at the top of the list.
+  There is no limit on the number of notes; the list loads in pages.
 - Formatting is kept only when a note uses it; otherwise the plain text is
   used, so a literal `*` stays a character. Titles over 100 characters are
   shortened and repeated in full at the top of the text.

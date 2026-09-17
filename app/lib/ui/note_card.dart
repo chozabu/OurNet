@@ -28,6 +28,10 @@ class NoteCard extends StatefulWidget {
   final bool selecting;
   final VoidCallback? onSelect;
 
+  /// False when a surrounding drag owns the long press (starting a drag
+  /// selects the note instead).
+  final bool longPress;
+
   /// Needed to show the first photo or drawing.
   final Files? files;
   final SignedObject? Function(String id)? objectOf;
@@ -46,6 +50,7 @@ class NoteCard extends StatefulWidget {
     this.selected = false,
     this.selecting = false,
     this.onSelect,
+    this.longPress = true,
     this.files,
     this.objectOf,
     this.online = false,
@@ -105,7 +110,11 @@ class _NoteCardState extends State<NoteCard> {
           onTap: widget.selecting && selectable
               ? widget.onSelect
               : widget.onOpen,
-          onLongPress: selectable ? widget.onSelect : () => widget.onMenu(null),
+          onLongPress: !widget.longPress
+              ? null
+              : selectable
+              ? widget.onSelect
+              : () => widget.onMenu(null),
           onSecondaryTapUp: (details) => widget.onMenu(details.globalPosition),
           child: NoteBackground(
             name: p['background'] as String?,

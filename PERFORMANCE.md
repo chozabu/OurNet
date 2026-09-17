@@ -17,6 +17,9 @@ This adds a **profile-mode Flutter integration test**. It creates a temporary di
 profile with 60 notes and a deterministic 1024×1024 noisy PNG, then imports the
 image while typing, saving, filtering and scrolling. It checks that the image and
 typed note were actually saved. No personal profile or user image is used.
+Add `--dart-define=SHARED_NOTES=1000` to run the same journey with 1,000 more
+notes, as after a large Keep import; the notes list loads in pages, so the
+budgets are the same.
 Results are written by the integration driver to
 `app/build/integration_response_data.json`, including results from failed timing
 gates. Startup frame callbacks are flushed before the interaction and pending

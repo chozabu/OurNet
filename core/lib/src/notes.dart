@@ -226,7 +226,7 @@ class Notes {
   Future<void> _tail = Future.value();
   int _queued = 0;
   String _policy = '';
-  static const maxNotes = 200, maxChecks = 200;
+  static const maxChecks = 200;
 
   /// Serialize local mutation, including widget requests, and bound callers.
   Future<T> _serial<T>(Future<T> Function() action) {
@@ -291,19 +291,22 @@ class Notes {
     for (final id in _rooms.keys.toList().reversed) {
       final note = await get(id);
       if (note != null && (includeDeleted || !note.deleted)) result.add(note);
-      if (result.length >= maxNotes) break;
     }
     return result;
   }
 
   /// Small list projection: unchanged notes do not reread operation history.
   /// Text shown in a list is bounded; the editor loads the full document.
+  /// Notes not yet projected are read with pauses, so a first load of many
+  /// notes does not hold up the UI.
   Future<List<EverydayItem>> summaries({bool includeDeleted = false}) async {
     await refresh();
     final result = <EverydayItem>[];
+    final slice = TimeSlice();
     for (final id in _rooms.keys.toList().reversed) {
       var summary = _summaries[id];
       if (summary == null) {
+        await slice.pause();
         final note = await get(id, includeUnavailable: true);
         if (note == null) continue;
         final text = note.text.isEmpty && note.checks.isNotEmpty
@@ -383,7 +386,6 @@ class Notes {
       }
       if (includeDeleted || summary.data['deleted'] != true)
         result.add(summary);
-      if (result.length >= maxNotes) break;
     }
     return result;
   }
@@ -514,11 +516,6 @@ class Notes {
     final id = 'room2:${node.person}:$key';
     final existing = await get(id);
     if (existing != null) return existing;
-    // Only notes that are shown count; removed and left notes do not.
-    if ((await summaries()).length >= maxNotes)
-      throw StateError(
-        'Up to $maxNotes notes can be shown. Remove a note to add another.',
-      );
     final room = await _everyday.createRoom(
       title.trim().isEmpty
           ? 'Note'

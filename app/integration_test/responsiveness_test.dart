@@ -55,6 +55,15 @@ void main() {
           node,
         ).write({'type': 'note', 'text': 'Existing note $i'});
       }
+      // Optional notes, as after a large Keep import
+      // (--dart-define=SHARED_NOTES=1000).
+      final notes = Notes(node);
+      for (var i = 0; i < const int.fromEnvironment('SHARED_NOTES'); i++) {
+        await notes.create(
+          title: 'Imported $i',
+          text: 'Imported note body $i ' * 8,
+        );
+      }
       await tester.pumpWidget(
         OurNetApp(
           node: node,

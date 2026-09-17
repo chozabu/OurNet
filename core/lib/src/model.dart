@@ -217,7 +217,7 @@ bool _selfValue(String field, Object? v) => switch (field) {
   'pin' || 'archive' || 'labelDeleted' => v is bool,
   // The removal (operation ID) this person emptied from Removed.
   'purged' => v is String && v.length <= 128,
-  'order' => v is String && _orderKey.hasMatch(v),
+  'order' || 'rank' => v is String && _orderKey.hasMatch(v),
   'labelName' => v is String && v.trim().isNotEmpty && v.length <= 50,
   'labels' =>
     v is List &&

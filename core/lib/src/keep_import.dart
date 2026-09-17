@@ -242,8 +242,8 @@ class KeepImport {
 
   String _id(KeepNote note) => 'room2:${notes.node.person}:${note.stableId}';
 
-  /// Chooses what fits: trashed notes are left out, then active notes are
-  /// preferred over archived ones, newest first, within [Notes.maxNotes].
+  /// Chooses what to import: new notes, except those in Keep's trash or too
+  /// large for a note.
   Future<KeepPlan> plan(Iterable<KeepNote> source) async {
     final skipped = <(KeepNote, String)>[];
     final candidates = <KeepNote>[];
@@ -265,21 +265,8 @@ class KeepImport {
         candidates.add(note);
       }
     }
-    candidates.sort((a, b) {
-      if (a.archived != b.archived) return a.archived ? 1 : -1;
-      if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
-      return b.created.compareTo(a.created);
-    });
-    final space = (Notes.maxNotes - (await notes.summaries()).length).clamp(
-      0,
-      Notes.maxNotes,
-    );
-    for (final note in candidates.skip(space)) {
-      skipped.add((note, 'No room: up to ${Notes.maxNotes} notes'));
-    }
-    final chosen = candidates.take(space).toList()
-      ..sort((a, b) => a.created.compareTo(b.created));
-    return KeepPlan(chosen, existing, skipped);
+    candidates.sort((a, b) => a.created.compareTo(b.created));
+    return KeepPlan(candidates, existing, skipped);
   }
 
   /// Imports [plan]. [read] returns an attachment's bytes by its Takeout

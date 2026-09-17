@@ -208,21 +208,13 @@ void main() {
       expect(note.text, '${title.trim()}\n\nbody');
     });
 
-    test('prefers active notes, newest first, when space runs out', () async {
-      final many = [
-        for (var i = 0; i < Notes.maxNotes + 3; i++)
-          KeepNote.parse(
-            '$i.json',
-            keep(text: '$i', archived: i < 5, created: (i + 1) * 1000000),
-          )!,
+    test('imports oldest first, so the newest note is on top', () async {
+      final source = [
+        for (final i in [3, 1, 2])
+          KeepNote.parse('$i.json', keep(text: '$i', created: i * 1000000))!,
       ];
-      final plan = await KeepImport(notes).plan(many);
-      expect(plan.notes.length, Notes.maxNotes);
-      final names = plan.skipped.map((s) => s.$1.name).toSet();
-      expect(names, {'2.json', '1.json', '0.json'});
-      // Oldest first, so the newest note is created last.
-      expect(plan.notes.first.name, '3.json');
-      expect(plan.notes.last.name, '${Notes.maxNotes + 2}.json');
+      final plan = await KeepImport(notes).plan(source);
+      expect(plan.notes.map((n) => n.name), ['1.json', '2.json', '3.json']);
     });
 
     final export = Platform.environment['OURNET_KEEP_EXPORT'];

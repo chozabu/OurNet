@@ -1,6 +1,7 @@
 import 'everyday.dart';
 import 'model.dart';
 import 'node.dart';
+import 'notes.dart' show orderBetween;
 
 /// Personal note state: pins, archive, labels, reminders and manual order.
 /// It is encrypted to this person's own devices and syncs between them, but
@@ -41,6 +42,10 @@ class NoteState {
     await _migrate();
   }
 
+  /// Changes whenever a personal value changes, so views can skip rework.
+  int get version => _version;
+  int _version = 0;
+
   void _add(EverydayItem op) {
     final key = '${op.data['field']}/${op.data['target']}';
     final heads = _heads[key] ??= [];
@@ -50,6 +55,7 @@ class NoteState {
     if (clock > _clock) _clock = clock;
     consumed.addAll((op.data['parents'] as List).cast<String>());
     if (consumed.contains(op.object.id)) return;
+    _version++;
     heads
       ..removeWhere((h) => consumed.contains(h.object.id))
       ..add(op)
@@ -112,8 +118,109 @@ class NoteState {
   bool purged(String note, String? removal) =>
       removal != null && value('purged', note) == removal;
 
-  /// A manual grid position (see `orderBetween`), or null when never moved.
+  /// A grid position from builds before [rank], or null.
   String? order(String note) => value('order', note) as String?;
+
+  /// The list position this person moved [note] to, or null when never
+  /// moved: a key among [listKey]s.
+  String? rank(String note) => value('rank', note) as String?;
+
+  /// Where [note] sorts in the notes list; smaller keys are shown first.
+  /// Notes never moved sort by [updated], newest first. A moved note keeps
+  /// the key it was given between its neighbours, so notes edited later still
+  /// rise above it. Positions from older builds (`order`) keep their order
+  /// after all others.
+  String listKey(String note, int updated) {
+    if (rank(note) case final rank?) return rank;
+    if (order(note) case final order?) return '2$order';
+    return timeKey(updated, note);
+  }
+
+  static const _digits =
+      '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+  /// '1', eight digits that fall as [time] rises, and three from [id] that
+  /// separate equal times and never end in '0'.
+  static String timeKey(int time, String id) {
+    const width = 8;
+    var span = 1;
+    for (var i = 0; i < width; i++) {
+      span *= _digits.length;
+    }
+    var rest = span - 1 - time.clamp(0, span - 1);
+    final key = List.filled(width, '0');
+    for (var i = width - 1; i >= 0; i--) {
+      key[i] = _digits[rest % _digits.length];
+      rest ~/= _digits.length;
+    }
+    var hash = 0x811c9dc5;
+    for (final unit in id.codeUnits) {
+      hash = ((hash ^ unit) * 0x01000193) & 0xffffffff;
+    }
+    final tag = [
+      _digits[hash % 62],
+      _digits[(hash ~/ 62) % 62],
+      _digits[1 + (hash ~/ 3844) % 61],
+    ];
+    return '1${key.join()}${tag.join()}';
+  }
+
+  /// Moves [note] to just before [target] in [section], the notes in their
+  /// shown order with their [listKey]s. Usually one key is written; when the
+  /// gap is too narrow for a short key, a few neighbours are respaced.
+  Future<void> move(
+    List<({String id, String key})> section,
+    String note,
+    String target, {
+    int? now,
+  }) async {
+    final rest = [
+      for (final s in section)
+        if (s.id != note) s,
+    ];
+    final at = rest.indexWhere((s) => s.id == target);
+    if (at < 0) return;
+    final ids = [for (final s in rest) s.id]..insert(at, note);
+    final keys = <String?>[for (final s in rest) s.key]..insert(at, null);
+    // Above the first note, stay below notes written from now on.
+    final top = timeKey((now ?? DateTime.now().millisecondsSinceEpoch) + 1, '');
+    var (a, b) = (at, at + 1);
+    while (true) {
+      final high = b < keys.length ? keys[b]! : null;
+      final low = a > 0 ? keys[a - 1]! : null;
+      final fresh = spread(
+        low ?? (high == null || top.compareTo(high) < 0 ? top : null),
+        // The end of a section stays before older builds' positions.
+        high ?? (low == null || low.compareTo('2') < 0 ? '2' : null),
+        b - a,
+      );
+      if (fresh != null) {
+        await setAll([
+          for (var i = a; i < b; i++)
+            if (keys[i] != fresh[i - a]) ('rank', ids[i], fresh[i - a]),
+        ]);
+        return;
+      }
+      if (a == 0 && b == keys.length) {
+        throw StateError('This note cannot be moved there.');
+      }
+      final width = b - a;
+      (a, b) = ((a - width).clamp(0, a), (b + width).clamp(b, keys.length));
+    }
+  }
+
+  /// [count] ascending keys between [low] and [high] (null is unbounded), or
+  /// null when one would be longer than a stored key allows.
+  static List<String>? spread(String? low, String? high, int count) {
+    if (count == 0) return [];
+    final mid = orderBetween(low, high);
+    if (mid.length > 64) return null;
+    final left = (count - 1) ~/ 2;
+    final before = spread(low, mid, left);
+    final after = spread(mid, high, count - 1 - left);
+    if (before == null || after == null) return null;
+    return [...before, mid, ...after];
+  }
 
   /// Live label IDs on [note].
   List<String> labelsOf(String note) {

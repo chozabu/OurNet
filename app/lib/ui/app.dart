@@ -159,6 +159,14 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   final noteObjects = <String, SignedObject?>{};
   final notesSearchFocus = FocusNode();
   final noteChecks = <String, Map<String, bool>>{};
+
+  /// The filtered, sorted notes list and what it was computed from.
+  NotesView? notesView;
+  Object? notesViewKey;
+  List<EverydayItem>? notesViewSource;
+
+  /// Notes shown in Others; grows a page at a time while scrolling.
+  int notesShown = notesPage;
   final roomChecks = <String, bool>{};
   String fileQuery = '';
   final fileSearch = TextEditingController();
