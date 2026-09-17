@@ -200,6 +200,42 @@ class PeerNetwork {
     log('Contact device added: ${certificate.label}');
   }
 
+  /// Known addresses for the certificates [Node.sharedCertificates] offers.
+  Map<String, String> _sharedAddresses(String device) {
+    final peer = node.contacts[device];
+    if (peer == null) return const {};
+    final self = _endpoint;
+    final addresses = <String, String>{};
+    for (final wire in node.sharedCertificates(peer)) {
+      final id = DeviceCertificate.fromJson(wire).device;
+      final address = id == node.identity.device
+          ? (self == null ? null : b64(self.addr.encode()))
+          : node.store.setting('address/$id');
+      if (address is String) addresses[id] = address;
+    }
+    return addresses;
+  }
+
+  /// Stores address hints for admitted devices that have none yet.
+  Future<void> _learnAddresses(Object? shared) async {
+    if (shared is! Map || shared.length > Node.maxSharedCertificates) return;
+    for (final MapEntry(:key, :value) in shared.entries) {
+      if (key is! String ||
+          value is! String ||
+          value.length > 4096 ||
+          !node.contacts.containsKey(key) ||
+          node.store.setting('address/$key') != null) {
+        continue;
+      }
+      try {
+        final address = iroh.EndpointAddr.decode(unb64(value));
+        if (b64(address.id.asBytes()) == key) {
+          node.store.set('address/$key', value);
+        }
+      } catch (_) {}
+    }
+  }
+
   Future<iroh.Connection> _connect(String device) async {
     if (!node.allowedPeer(device)) throw StateError('Device not admitted');
     final ep = _endpoint;
@@ -272,11 +308,13 @@ class PeerNetwork {
         final reply = await request(device, {
           'type': 'pull',
           'inventory': node.inventory(peerDevice: device),
+          'addresses': _sharedAddresses(device),
           if (build.isNotEmpty) 'build': build,
         });
         _noteBuild(device, reply['build']);
         final incoming = await node.receive(device, reply['items']);
         final outgoing = await node.offer(device, reply['inventory']);
+        await _learnAddresses(reply['addresses']);
         final pushed = await request(device, {
           'type': 'push',
           'items': outgoing,
@@ -379,9 +417,12 @@ class PeerNetwork {
         switch (j['type']) {
           case 'pull':
             _noteBuild(peer, j['build']);
+            final items = await node.offer(peer, j['inventory']);
+            await _learnAddresses(j['addresses']);
             reply = {
-              'items': await node.offer(peer, j['inventory']),
+              'items': items,
               'inventory': node.inventory(peerDevice: peer),
+              'addresses': _sharedAddresses(peer),
               if (build.isNotEmpty) 'build': build,
             };
           case 'push':

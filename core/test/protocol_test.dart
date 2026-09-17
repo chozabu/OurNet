@@ -277,4 +277,85 @@ void main() {
     expect(rest, hasLength(1));
     expect(itemsSize(all) + itemsSize(rest), Node.maxPageBytes);
   });
+
+  test('linked devices share contacts and conversations', () async {
+    final laptop = await node(), friendNode = await node();
+    final stranger = await node();
+    final phone = Node(
+      await LocalIdentity.create(root: laptop.identity.root, label: 'Phone'),
+      Store(),
+    );
+    addTearDown(() async {
+      await laptop.close();
+      await friendNode.close();
+      await stranger.close();
+      await phone.close();
+    });
+    await friend(laptop, phone);
+    await friend(laptop, friendNode);
+    await friend(laptop, stranger);
+    // Only the laptop added the friend; sync spreads both certificates.
+    await syncPair(laptop, friendNode);
+    await syncPair(laptop, phone);
+    expect(phone.contacts, contains(friendNode.identity.device));
+    expect(friendNode.contacts, contains(phone.identity.device));
+    expect(friendNode.contacts, isNot(contains(stranger.identity.device)));
+
+    final incoming = await friendNode.publish(
+      'message',
+      {'text': 'hello'},
+      audience: [laptop.person],
+    );
+    final sent = await laptop.publish(
+      'message',
+      {'text': 'from laptop'},
+      audience: [friendNode.person],
+    );
+    await syncPair(friendNode, laptop);
+    await syncPair(laptop, phone);
+    expect(
+      (await phone.content(phone.store.get(incoming.id)!))?['text'],
+      'hello',
+    );
+    expect(
+      (await phone.content(phone.store.get(sent.id)!))?['text'],
+      'from laptop',
+    );
+    expect(
+      phone.store
+          .conversation(phone.person, friendNode.person)
+          .map((o) => o.id),
+      containsAll([incoming.id, sent.id]),
+    );
+
+    // The phone can reply directly, and the laptop sees the reply.
+    final reply = await phone.publish(
+      'message',
+      {'text': 'from phone'},
+      audience: [friendNode.person],
+    );
+    await syncPair(phone, friendNode);
+    await syncPair(phone, laptop);
+    expect(
+      (await friendNode.content(friendNode.store.get(reply.id)!))?['text'],
+      'from phone',
+    );
+    expect(
+      (await laptop.content(laptop.store.get(reply.id)!))?['text'],
+      'from phone',
+    );
+
+    // A friend cannot introduce other people's devices.
+    final spoof = await friendNode.learnCertificates(
+      laptop.identity.device,
+      null,
+    );
+    expect(spoof, isEmpty);
+    expect(
+      await friendNode.learnCertificates(laptop.identity.device, [
+        stranger.identity.certificate.toJson(),
+      ]),
+      isEmpty,
+    );
+  });
 }

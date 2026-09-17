@@ -298,7 +298,54 @@ class Node {
             route.id: store.evidenceDigest(route.id),
       },
       'revoked': revoked.toList()..sort(),
+      if (peer != null) 'devices': sharedCertificates(peer),
     };
+  }
+
+  static const maxSharedCertificates = 256;
+
+  /// Root-signed certificates a peer may learn: a person's own devices learn
+  /// every admitted contact, and friends learn this person's other devices,
+  /// so linked devices can read and send the same conversations.
+  List<Json> sharedCertificates(DeviceCertificate peer) => [
+    for (final c in [identity.certificate, ...contacts.values])
+      if (c.device != peer.device &&
+          !revoked.contains(c.device) &&
+          (peer.person == person ||
+              (c.person == person && !blocked.contains(peer.person))))
+        c.toJson(),
+  ].take(maxSharedCertificates).toList();
+
+  /// Admits certificates shared by [peerDevice] under [sharedCertificates]'
+  /// policy. Returns the newly admitted devices.
+  Future<List<DeviceCertificate>> learnCertificates(
+    String peerDevice,
+    Object? shared,
+  ) async {
+    final peer = contacts[peerDevice];
+    if (peer == null || shared is! List) return const [];
+    final added = <DeviceCertificate>[];
+    for (final wire in shared.take(maxSharedCertificates)) {
+      try {
+        final c = DeviceCertificate.fromJson(wire as Json);
+        final known = contacts[c.device];
+        if (c.device == identity.device ||
+            revoked.contains(c.device) ||
+            (known != null && known.signature == c.signature) ||
+            (peer.person != person && c.person != peer.person) ||
+            // Keep an existing binding unless the owner re-certified it.
+            (known != null && known.person != c.person) ||
+            !await c.valid())
+          continue;
+        contacts[c.device] = c;
+        added.add(c);
+      } catch (_) {}
+    }
+    if (added.isNotEmpty) {
+      store.set('contacts', contacts.values.map((c) => c.toJson()).toList());
+      notify();
+    }
+    return added;
   }
 
   bool canOffer(SignedObject o, DeviceCertificate peer, Set<String> wanted) =>
@@ -344,6 +391,7 @@ class Node {
     if (!allowedPeer(peerDevice))
       throw StateError('Peer is not an admitted device');
     if (inventory['version'] != 2) throw StateError('Unsupported protocol');
+    await learnCertificates(peerDevice, inventory['devices']);
     final peer = contacts[peerDevice]!;
     final wanted = (inventory['subscriptions'] as List).cast<String>().toSet();
     final have = inventory['have'] as Json;
@@ -693,11 +741,17 @@ Future<int> syncPair(Node a, Node b, {int rounds = 8}) async {
   for (var i = 0; i < rounds; i++) {
     var changed = await b.receive(
       a.identity.device,
-      await a.offer(b.identity.device, b.inventory()),
+      await a.offer(
+        b.identity.device,
+        b.inventory(peerDevice: a.identity.device),
+      ),
     );
     changed += await a.receive(
       b.identity.device,
-      await b.offer(a.identity.device, a.inventory()),
+      await b.offer(
+        a.identity.device,
+        a.inventory(peerDevice: b.identity.device),
+      ),
     );
     total += changed;
     if (changed == 0) break;

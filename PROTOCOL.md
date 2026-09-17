@@ -16,6 +16,13 @@ forwarding locally once received. This prototype conservatively excludes revoked
 devices' evidence, including historical evidence; nuanced historical validity
 and recovery policy are not implemented.
 
+Sync inventories carry root-signed device certificates with address hints.
+A person's own devices receive all admitted contacts; friends receive only
+that person's other devices, and a friend's certificate for any other person
+is ignored. Linked devices therefore list, send and decrypt the same
+conversations. Messages encrypted before a device was learned stay unreadable
+there.
+
 ## Independent objects
 
 Canonical JSON sorts map keys and admits integer numbers, strings, booleans,
