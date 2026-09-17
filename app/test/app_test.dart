@@ -101,13 +101,17 @@ void main() {
         await tester.tap(
           title == 'Forums'
               ? find.text('general').first
-              : find.byIcon(Icons.person_outline).first,
+              : find.byType(CircleAvatar).first,
         );
         await tester.pumpAndSettle();
-        expect(find.text('Back to list'), findsOneWidget);
+        // Conversations show a WhatsApp-style back arrow in their header.
+        final back = title == 'Forums'
+            ? find.text('Back to list')
+            : find.byTooltip('Back to list');
+        expect(back, findsOneWidget);
         expect(tester.takeException(), isNull, reason: '$title detail');
         await snapshot(tester, 'phone-${title.toLowerCase()}-detail');
-        await tester.tap(find.text('Back to list'));
+        await tester.tap(back);
         await tester.pumpAndSettle();
       }
     }

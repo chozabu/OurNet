@@ -133,7 +133,7 @@ extension _SocialPages on _OurNetAppState {
                     children: [
                       for (final person in people)
                         ListTile(
-                          leading: const Icon(Icons.person_outline),
+                          leading: conversationAvatar(person, radius: 20),
                           title: Text(name(person)),
                           subtitle: recentActivity(
                             node.store.conversation(
@@ -157,6 +157,7 @@ extension _SocialPages on _OurNetAppState {
         ],
       ),
       detail: messageDetail(context),
+      detailBuilder: (back) => messageDetail(context, back: back),
     );
   }
 
@@ -490,7 +491,7 @@ extension _SocialPages on _OurNetAppState {
     }
   }
 
-  Widget messageDetail(BuildContext context) {
+  Widget messageDetail(BuildContext context, {VoidCallback? back}) {
     if (contact == null || !people.contains(contact)) {
       return empty(
         'Choose a conversation',
@@ -498,6 +499,7 @@ extension _SocialPages on _OurNetAppState {
         Icons.chat_bubble_outline,
       );
     }
+    final scheme = Theme.of(context).colorScheme;
     final scroll = conversationScroll.putIfAbsent(
       contact!,
       ScrollController.new,
@@ -507,126 +509,224 @@ extension _SocialPages on _OurNetAppState {
       if (page.length < 50) conversationEnd.add(contact!);
       return page;
     });
+    final helpers = messageHelpers(contact!);
+    final unreadLoaded = objects
+        .where(
+          (o) =>
+              o.author != node.person &&
+              node.store.setting('read/${o.id}') != true,
+        )
+        .toList();
     return Column(
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                name(contact!),
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-            ),
-            IconButton(
-              tooltip: messageHelpers(contact!).isEmpty
-                  ? 'Optional text forwarding'
-                  : 'Text forwarding helper enabled',
-              onPressed: () => chooseMessageHelper(context),
-              icon: Icon(
-                messageHelpers(contact!).isEmpty
-                    ? Icons.cloud_outlined
-                    : Icons.cloud_done_outlined,
-              ),
-            ),
-            IconButton(
-              tooltip: 'Shared places',
-              onPressed: () => update(() => tab = Destination.locations),
-              icon: const Icon(Icons.place_outlined),
-            ),
-            IconButton(
-              tooltip: 'Voice call',
-              onPressed: () => startCall(false),
-              icon: const Icon(Icons.call_outlined),
-            ),
-            IconButton(
-              tooltip: 'Video call',
-              onPressed: () => startCall(true),
-              icon: const Icon(Icons.videocam_outlined),
-            ),
-          ],
-        ),
-        ConversationDelivery(
-          key: ValueKey('delivery/$contact'),
-          network: network,
-          person: contact!,
-          helpers: messageHelpers(contact!),
-        ),
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton.icon(
-            onPressed: busy
-                ? null
-                : () => act(() async {
-                    for (final object in objects.where(
-                      (o) =>
-                          o.author != node.person &&
-                          node.store.setting('read/${o.id}') != true,
-                    )) {
-                      await node.markRead(object.id);
-                    }
-                    refresh();
-                  }),
-            icon: const Icon(Icons.done_all),
-            label: const Text('Mark loaded messages read'),
-          ),
-        ),
-        SizedBox(
-          height: 40,
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: conversationPending.contains(contact)
-                ? TextButton.icon(
-                    icon: const Icon(Icons.update),
-                    label: const Text('Show latest messages'),
-                    onPressed: () {
-                      update(() {
-                        final page = node.store.conversation(
-                          node.person,
-                          contact!,
-                        );
-                        conversationOlder[contact!] = page;
-                        conversationPending.remove(contact);
-                        if (page.length < 50) {
-                          conversationEnd.add(contact!);
-                        } else {
-                          conversationEnd.remove(contact);
-                        }
-                      });
-                      if (scroll.hasClients) scroll.jumpTo(0);
-                    },
+        Material(
+          color: scheme.surfaceContainer,
+          borderRadius: back == null
+              ? const BorderRadius.vertical(top: Radius.circular(12))
+              : null,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(4, 6, 4, 6),
+            child: Row(
+              children: [
+                if (back != null)
+                  IconButton(
+                    tooltip: 'Back to list',
+                    onPressed: back,
+                    icon: const Icon(Icons.arrow_back),
                   )
-                : const SizedBox.shrink(),
+                else
+                  const SizedBox(width: 8),
+                conversationAvatar(contact!),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        name(contact!),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      ConversationDelivery(
+                        key: ValueKey('delivery/$contact'),
+                        network: network,
+                        person: contact!,
+                        helpers: helpers,
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: 'Video call',
+                  onPressed: () => startCall(true),
+                  icon: const Icon(Icons.videocam_outlined),
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: 'Voice call',
+                  onPressed: () => startCall(false),
+                  icon: const Icon(Icons.call_outlined),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: 'Conversation options',
+                  onSelected: (action) {
+                    switch (action) {
+                      case 'read':
+                        act(() async {
+                          for (final object in unreadLoaded) {
+                            await node.markRead(object.id);
+                          }
+                          refresh();
+                        });
+                      case 'helper':
+                        chooseMessageHelper(context);
+                      case 'places':
+                        update(() => tab = Destination.locations);
+                    }
+                  },
+                  itemBuilder: (_) => [
+                    PopupMenuItem(
+                      value: 'read',
+                      enabled: !busy && unreadLoaded.isNotEmpty,
+                      child: const ListTile(
+                        leading: Icon(Icons.done_all),
+                        title: Text('Mark loaded messages read'),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'helper',
+                      child: ListTile(
+                        leading: Icon(
+                          helpers.isEmpty
+                              ? Icons.cloud_outlined
+                              : Icons.cloud_done_outlined,
+                        ),
+                        title: Text(
+                          helpers.isEmpty
+                              ? 'Optional text forwarding'
+                              : 'Text forwarding · ${name(helpers.first)}',
+                        ),
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'places',
+                      child: ListTile(
+                        leading: Icon(Icons.place_outlined),
+                        title: Text('Shared places'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
-        if (objects.isNotEmpty && !conversationEnd.contains(contact))
-          TextButton(
-            onPressed: () => update(() {
-              final page = node.store.conversation(
-                node.person,
-                contact!,
-                before: objects.last,
-              );
-              conversationOlder[contact!] = [...objects, ...page];
-              if (page.length < 50) conversationEnd.add(contact!);
-            }),
-            child: const Text('Load older messages'),
+        Expanded(
+          child: ColoredBox(
+            color: Color.alphaBlend(
+              scheme.primary.withValues(alpha: 0.05),
+              scheme.surfaceContainerLow,
+            ),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: RepaintBoundary(
+                    child: CustomPaint(
+                      painter: ChatWallpaper(
+                        scheme.onSurface.withValues(alpha: 0.05),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  child: conversationList(context, objects, controller: scroll),
+                ),
+                if (objects.isNotEmpty && !conversationEnd.contains(contact))
+                  Align(
+                    alignment: Alignment.topCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: ActionChip(
+                        avatar: const Icon(Icons.history, size: 18),
+                        label: const Text('Load older messages'),
+                        onPressed: () => update(() {
+                          final page = node.store.conversation(
+                            node.person,
+                            contact!,
+                            before: objects.last,
+                          );
+                          conversationOlder[contact!] = [...objects, ...page];
+                          if (page.length < 50) conversationEnd.add(contact!);
+                        }),
+                      ),
+                    ),
+                  ),
+                if (conversationPending.contains(contact))
+                  Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: FilledButton.tonalIcon(
+                        icon: const Icon(Icons.keyboard_double_arrow_down),
+                        label: const Text('Show latest messages'),
+                        onPressed: () {
+                          update(() {
+                            final page = node.store.conversation(
+                              node.person,
+                              contact!,
+                            );
+                            conversationOlder[contact!] = page;
+                            conversationPending.remove(contact);
+                            if (page.length < 50) {
+                              conversationEnd.add(contact!);
+                            } else {
+                              conversationEnd.remove(contact);
+                            }
+                          });
+                          if (scroll.hasClients) scroll.jumpTo(0);
+                        },
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
-        Expanded(child: objectList(context, objects, controller: scroll)),
+        ),
         if (messageErrors[contact] case final error?)
-          Row(
-            children: [
-              Expanded(child: Text(error)),
-              TextButton(
-                onPressed: sendConversationMessage,
-                child: const Text('Retry'),
+          Material(
+            color: scheme.errorContainer,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      error,
+                      style: TextStyle(color: scheme.onErrorContainer),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: sendConversationMessage,
+                    child: const Text('Retry'),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
-        compose(
-          context,
-          sendConversationMessage,
-          sending: sendingMessages.contains(contact),
-          attach: () => pickFile([contact!]),
+        ColoredBox(
+          color: scheme.surfaceContainer,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+            child: compose(
+              context,
+              sendConversationMessage,
+              sending: sendingMessages.contains(contact),
+              attach: () => pickFile([contact!]),
+            ),
+          ),
         ),
       ],
     );
@@ -645,7 +745,10 @@ extension _SocialPages on _OurNetAppState {
     VoidCallback? attach,
     bool sending = false,
   }) {
-    final sendDisabled = tab == Destination.messages ? sending : busy;
+    final chat = tab == Destination.messages;
+    final desktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+    const sendHint = 'Enter sends · Shift+Enter adds a line';
+    final sendDisabled = chat ? sending : busy;
     final key = tab == Destination.messages
         ? 'message/$contact'
         : 'community/$space/$selectedThread';
@@ -657,7 +760,7 @@ extension _SocialPages on _OurNetAppState {
       switchingDraft = false;
     }
     return Padding(
-      padding: const EdgeInsets.only(top: 12),
+      padding: EdgeInsets.only(top: chat ? 6 : 12),
       child: Column(
         children: [
           if (replyTo != null)
@@ -741,25 +844,42 @@ extension _SocialPages on _OurNetAppState {
                     controller: composer,
                     minLines: 1,
                     maxLines: 5,
-                    decoration: InputDecoration(
-                      helperText:
-                          Platform.isWindows ||
-                              Platform.isLinux ||
-                              Platform.isMacOS
-                          ? 'Enter sends · Shift+Enter adds a line'
-                          : null,
-                      hintText: tab == Destination.messages
-                          ? 'Write a private message…'
-                          : 'Start a discussion in this forum…',
-                    ),
+                    decoration: chat
+                        ? InputDecoration(
+                            hintText: 'Message',
+                            filled: true,
+                            fillColor: Theme.of(context).colorScheme.surface,
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(24),
+                              borderSide: BorderSide.none,
+                            ),
+                          )
+                        : InputDecoration(
+                            helperText: desktop ? sendHint : null,
+                            hintText: 'Start a discussion in this forum…',
+                          ),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
-              FilledButton(
-                onPressed: sendDisabled ? null : send,
-                child: const Icon(Icons.send),
-              ),
+              const SizedBox(width: 6),
+              chat
+                  ? IconButton.filled(
+                      tooltip: desktop ? 'Send · $sendHint' : 'Send',
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size.square(46),
+                      ),
+                      onPressed: sendDisabled ? null : send,
+                      icon: const Icon(Icons.send),
+                    )
+                  : FilledButton(
+                      onPressed: sendDisabled ? null : send,
+                      child: const Icon(Icons.send),
+                    ),
             ],
           ),
         ],

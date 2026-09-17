@@ -52,6 +52,7 @@ import 'package:image_picker/image_picker.dart';
 part 'home.dart';
 part 'everyday.dart';
 part 'social.dart';
+part 'conversation.dart';
 part 'objects.dart';
 part 'network.dart';
 part 'voting.dart';

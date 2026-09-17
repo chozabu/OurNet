@@ -63,6 +63,8 @@ extension _HomePages on _OurNetAppState {
     required Widget detail,
     required bool selected,
     required VoidCallback back,
+    // Builds a detail that shows its own back control when stacked.
+    Widget Function(VoidCallback? back)? detailBuilder,
   }) => LayoutBuilder(
     builder: (context, constraints) {
       if (constraints.maxWidth >= 760) {
@@ -71,10 +73,11 @@ extension _HomePages on _OurNetAppState {
           children: [
             SizedBox(width: 260, child: list),
             const VerticalDivider(width: 25),
-            Expanded(child: detail),
+            Expanded(child: detailBuilder?.call(null) ?? detail),
           ],
         );
       }
+      if (selected && detailBuilder != null) return detailBuilder(back);
       return selected
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,

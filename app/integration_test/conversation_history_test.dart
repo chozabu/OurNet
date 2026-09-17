@@ -58,7 +58,7 @@ void main() {
         final history = find.byWidgetPredicate(
           (w) => w is ListView && w.controller != null,
         );
-        await tester.drag(history, const Offset(0, -450));
+        await tester.drag(history, const Offset(0, 450));
         await tester.pump(const Duration(milliseconds: 500));
         final controller = tester.widget<ListView>(history).controller!;
         final offset = controller.offset;

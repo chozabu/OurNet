@@ -17,7 +17,10 @@ if (!$Debug) {
 if(($Debug -and $Build) -or !(Test-Path -LiteralPath $taskExe)) {
   Push-Location (Join-Path $taskRoot 'app')
   try {
+    # Native stderr (build warnings) must not trip 'Stop'; the exit code decides.
+    $ErrorActionPreference='Continue'
     if ($Debug) { flutter build windows --debug } else { flutter build windows --release }
+    $ErrorActionPreference='Stop'
     if($LASTEXITCODE -ne 0){throw 'Build failed'}
   }
   finally {Pop-Location}

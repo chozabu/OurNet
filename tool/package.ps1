@@ -1,5 +1,8 @@
 param([switch]$Android)
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell turns native stderr (build warnings) into terminating
+# errors under 'Stop'; flutter/robocopy failures are caught via exit codes.
+function flutter { $ErrorActionPreference = 'Continue'; & (Get-Command flutter -CommandType Application | Select-Object -First 1) @args }
 $taskRoot=Split-Path $PSScriptRoot -Parent
 $taskBuild=Get-Date -Format 'yyyyMMdd-HHmmss'
 $taskOutput=Join-Path $taskRoot "dist/OurNet-0.2.0-$taskBuild"

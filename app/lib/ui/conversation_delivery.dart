@@ -74,33 +74,56 @@ class _ConversationDeliveryState extends State<ConversationDelivery> {
     final targets = devices;
     final delayed = targets.any(widget.network.syncErrors.containsKey);
     final active = retrying || targets.any(widget.network.syncing.containsKey);
-    final status =
-        error ??
-        (active
-            ? 'Checking delivery devices…'
-            : !widget.network.running
-            ? 'Saved here · networking is off'
-            : delayed
-            ? 'A delivery device is unavailable · automatic retry is scheduled'
-            : 'Direct delivery needs an available recipient device');
-    return SizedBox(
-      height: 56,
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(status, maxLines: 2, overflow: TextOverflow.ellipsis),
+    // Short header label; the tooltip carries the full explanation.
+    final (status, detail) = error != null
+        ? (error!, error!)
+        : active
+        ? ('Checking…', 'Checking delivery devices…')
+        : !widget.network.running
+        ? ('Offline', 'Saved here · networking is off')
+        : delayed
+        ? (
+            'Retrying soon',
+            'A delivery device is unavailable · automatic retry is scheduled',
+          )
+        : ('Encrypted', 'Direct delivery needs an available recipient device');
+    final style = Theme.of(context).textTheme.bodySmall;
+    return Row(
+      children: [
+        if (active)
+          const Padding(
+            padding: EdgeInsets.only(right: 6),
+            child: SizedBox.square(
+              dimension: 10,
+              child: CircularProgressIndicator(strokeWidth: 1.5),
+            ),
           ),
-          TextButton(
-            onPressed: active ? null : retry,
-            child: const Text('Retry delivery'),
-          ),
-          Tooltip(
+        Flexible(
+          child: Tooltip(
             message:
-                'A sleeping phone may not receive messages or calls until OurNet resumes. Without an online forwarding holder, your device must be online when the recipient connects.',
-            child: const Icon(Icons.info_outline, size: 18),
+                '$detail\n\nA sleeping phone may not receive messages or calls until OurNet resumes. Without an online forwarding holder, your device must be online when the recipient connects.',
+            child: Text(
+              status,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: style?.copyWith(
+                color: error != null
+                    ? Theme.of(context).colorScheme.error
+                    : null,
+              ),
+            ),
           ),
-        ],
-      ),
+        ),
+        IconButton(
+          tooltip: 'Retry delivery',
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints.tightFor(width: 28, height: 24),
+          iconSize: 16,
+          onPressed: active ? null : retry,
+          icon: const Icon(Icons.refresh),
+        ),
+      ],
     );
   }
 }
