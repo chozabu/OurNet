@@ -89,6 +89,35 @@ The core test loop does not load iroh or Flutter. Transport tests run actual
 local QUIC endpoints, including unadmitted caller rejection and private file
 access checks. Flutter tests cover navigation, phone layouts and the UI adapter.
 
+### Calls and linked devices
+
+Open **Settings → Profile and devices** to voice or video call another linked
+device. Calls from an admitted, non-revoked device belonging to the same person
+answer automatically while OurNet is running. A voice call opens the microphone;
+a video call opens the microphone and camera. Calls from friends still require
+acceptance. The receiving device needs operating-system media permissions.
+
+The call panel includes microphone mute and hangup, a mobile speaker toggle,
+and desktop microphone/output selectors whose choices are remembered locally.
+If Windows selects a virtual VR/streaming microphone, choose your physical microphone
+in the call panel. Video and own-device calls on mobile prefer speakerphone unless
+Bluetooth is available. Signalling uses the authenticated device link;
+media uses WebRTC and the configured ICE servers, so direct-only connections can
+still require STUN/TURN when devices are on different networks.
+
+For a native media smoke test, run from `app`:
+
+```powershell
+flutter drive --profile -d windows --driver=test_driver/performance.dart --target=integration_test/calls_media_test.dart
+# Substitute a physical Android device ID to test Android. Profile builds use
+# org.chozabu.ournet.profile and do not replace the everyday app.
+```
+
+This uses temporary identities and a local loopback connection with the real
+camera/microphone. It checks rendered remote frames and bidirectional audio RTP
+packets, not speaker audibility. Test phone-to-laptop calls in both directions
+as well, including voice-only, video, mute, hangup, and audio-output selection.
+
 For an interactive headless personal node, run from `transport`:
 
 ```powershell

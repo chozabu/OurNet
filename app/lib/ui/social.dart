@@ -732,7 +732,7 @@ extension _SocialPages on _OurNetAppState {
     );
   }
 
-  void startCall(bool video) => act(() async {
+  void startCall(bool video) => callAct(() async {
     final device = node.contacts.values.firstWhere(
       (c) => c.person == contact && !node.revoked.contains(c.device),
     );

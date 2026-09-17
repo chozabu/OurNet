@@ -30,6 +30,10 @@ extension _SettingsPages on _OurNetAppState {
       ),
       const SizedBox(height: 24),
       Text('Devices', style: Theme.of(context).textTheme.titleLarge),
+      const Text(
+        'Calls from your linked devices answer automatically while OurNet is running. '
+        'Video calls turn on the camera and microphone; voice calls turn on the microphone.',
+      ),
       if (node.store.count == 0 && node.identity.root != null)
         TextButton(
           onPressed: () => runApp(SetupApp(node: node)),
@@ -66,10 +70,34 @@ extension _SettingsPages on _OurNetAppState {
               subtitle: node.revoked.contains(c.device)
                   ? const Text('Access removed')
                   : DeviceHealthText(network: network, device: c.device),
-              trailing:
-                  node.identity.root == null || node.revoked.contains(c.device)
-                  ? null
-                  : IconButton(
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (calls.isOwnDevice(c.device)) ...[
+                    IconButton(
+                      tooltip: 'Call device (auto-answer)',
+                      icon: const Icon(Icons.call),
+                      onPressed: calls.phase != 'idle'
+                          ? null
+                          : () => callAct(() async {
+                              if (!network.running) await network.start();
+                              await calls.call(c.device);
+                            }),
+                    ),
+                    IconButton(
+                      tooltip: 'Video call device (auto-answer)',
+                      icon: const Icon(Icons.videocam),
+                      onPressed: calls.phase != 'idle'
+                          ? null
+                          : () => callAct(() async {
+                              if (!network.running) await network.start();
+                              await calls.call(c.device, video: true);
+                            }),
+                    ),
+                  ],
+                  if (node.identity.root != null &&
+                      !node.revoked.contains(c.device))
+                    IconButton(
                       tooltip: 'Remove device access',
                       icon: const Icon(Icons.phonelink_erase),
                       onPressed: () => act(() async {
@@ -95,6 +123,8 @@ extension _SettingsPages on _OurNetAppState {
                         if (allow == true) await node.revoke(c.device);
                       }),
                     ),
+                ],
+              ),
             ),
           ),
     ],

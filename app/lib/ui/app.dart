@@ -460,6 +460,14 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> callAct(Future<void> Function() action) async {
+    try {
+      await action();
+    } catch (e) {
+      if (mounted) notice('Call: $e');
+    }
+  }
+
   Future<void> attachmentAct(Future<void> Function() action) async {
     if (addingAttachment) return;
     setState(() => addingAttachment = true);
@@ -808,7 +816,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                   Expanded(
                     child: Column(
                       children: [
-                        if (calls.phase != 'idle') callPanel(),
+                        if (calls.phase != 'idle' || calls.error != null)
+                          callPanel(),
                         ValueListenableBuilder(
                           valueListenable: imports,
                           builder: (context, jobs, _) {
@@ -929,12 +938,16 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
             children: [
               Expanded(
                 child: Text(
-                  '${calls.phase} · ${calls.peer == null ? '' : name(node.contacts[calls.peer]?.person ?? calls.peer!)}',
+                  '${calls.phase} · ${calls.peer == null
+                      ? ''
+                      : calls.isOwnDevice(calls.peer!)
+                      ? node.contacts[calls.peer]!.label
+                      : name(node.contacts[calls.peer]?.person ?? calls.peer!)}',
                 ),
               ),
               if (calls.phase == 'ringing')
                 FilledButton(
-                  onPressed: () => act(calls.answer),
+                  onPressed: () => callAct(calls.answer),
                   child: const Text('Answer'),
                 ),
               IconButton(
@@ -944,13 +957,59 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
               ),
               IconButton(
                 tooltip: 'Hang up',
-                onPressed: () => act(calls.hangup),
+                onPressed: () => callAct(calls.hangup),
                 icon: const Icon(Icons.call_end, color: Colors.red),
               ),
             ],
           ),
           if (calls.error != null) Text(calls.error!),
-          if (calls.phase == 'connected')
+          if (calls.phase != 'idle' && (Platform.isAndroid || Platform.isIOS))
+            TextButton.icon(
+              onPressed: () => callAct(calls.toggleSpeaker),
+              icon: Icon(calls.speaker ? Icons.volume_up : Icons.hearing),
+              label: Text(calls.speaker ? 'Speaker on' : 'Speaker off'),
+            ),
+          if (calls.audioOutputs.isNotEmpty)
+            DropdownButton<String>(
+              isExpanded: true,
+              hint: const Text('Audio output'),
+              value: calls.audioOutput,
+              items: [
+                for (final output in calls.audioOutputs)
+                  DropdownMenuItem(
+                    value: output.deviceId,
+                    child: Text(
+                      output.label.isEmpty ? output.deviceId : output.label,
+                    ),
+                  ),
+              ],
+              onChanged: (device) {
+                if (device != null) {
+                  callAct(() => calls.selectAudioOutput(device));
+                }
+              },
+            ),
+          if (calls.audioInputs.isNotEmpty)
+            DropdownButton<String>(
+              isExpanded: true,
+              hint: const Text('Microphone'),
+              value: calls.audioInput,
+              items: [
+                for (final input in calls.audioInputs)
+                  DropdownMenuItem(
+                    value: input.deviceId,
+                    child: Text(
+                      input.label.isEmpty ? input.deviceId : input.label,
+                    ),
+                  ),
+              ],
+              onChanged: (device) {
+                if (device != null) {
+                  callAct(() => calls.selectAudioInput(device));
+                }
+              },
+            ),
+          if (calls.video && calls.local.srcObject != null)
             SizedBox(
               height: 180,
               child: Row(

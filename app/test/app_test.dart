@@ -118,6 +118,36 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await node.close();
   });
+  testWidgets('own-device call controls fit a narrow phone', (tester) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final node = Node(await LocalIdentity.create(), Store());
+    final fresh = await LocalIdentity.create(label: 'My other laptop');
+    final linked = await fresh.enrol(
+      await node.identity.authorise(fresh.certificate),
+    );
+    await node.addContact(linked.certificate);
+    await tester.pumpWidget(
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.profile,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byTooltip('Video call device (auto-answer)'),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.byTooltip('Call device (auto-answer)'), findsOneWidget);
+    expect(find.byTooltip('Remove device access'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await node.close();
+  });
   testWidgets('desktop navigation and public post creation', (tester) async {
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1;
