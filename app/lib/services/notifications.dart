@@ -5,7 +5,11 @@ import 'package:ournet_core/ournet_core.dart';
 class Notifications {
   final Node node;
   final plugin = FlutterLocalNotificationsPlugin();
-  final Set<String> seen = {};
+
+  /// Everything already stored when this started is not new activity. An
+  /// insertion cursor says that in one number, where remembering every
+  /// stored ID grew with history and missed anything past its read limit.
+  int cursor = 0;
   StreamSubscription<void>? subscription;
   bool enabled = false, ready = false;
   void Function(String)? onOpen;
@@ -21,7 +25,7 @@ class Notifications {
   Future<void> initialise() => _initialising ??= _initialise();
 
   Future<void> _initialise() async {
-    seen.addAll(node.store.ids());
+    cursor = node.store.insertionCursor;
     enabled = node.store.setting('notifications') == true;
     await plugin.initialize(
       settings: const InitializationSettings(
@@ -76,14 +80,18 @@ class Notifications {
   }
 
   Future<void> check() async {
-    for (final o in node.store.objects(limit: 100)) {
-      if (!seen.add(o.id) ||
-          !enabled ||
-          o.author == node.person ||
-          !node.visible(o) ||
-          !['message', 'post'].contains(o.kind)) {
-        continue;
-      }
+    // Arrival order, not signed wall clocks: a burst of synced history cannot
+    // push a genuinely new message out of view, and a sender cannot promote
+    // one by dating it forward.
+    const page = 128;
+    final target = node.store.insertionCursor;
+    final arrived = node.store.insertedAfter(cursor, [
+      'message',
+      'post',
+    ], limit: page);
+    for (final (sequence, o) in arrived) {
+      cursor = sequence;
+      if (!enabled || o.author == node.person || !node.visible(o)) continue;
       await plugin.show(
         id: int.parse(o.id.substring(0, 7), radix: 16),
         title: o.kind == 'message' ? 'New private message' : 'New forum post',
@@ -102,6 +110,11 @@ class Notifications {
         ),
       );
     }
+    // A short page means the scan reached the end without finding more, so
+    // the cursor moves past everything it walked rather than past the last
+    // match. Looking for a kind walks the rows in between, and a profile with
+    // no messages at all would otherwise rescan it on every change.
+    if (arrived.length < page && cursor < target) cursor = target;
   }
 
   Future<void> close() async {

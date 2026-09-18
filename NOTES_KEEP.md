@@ -105,8 +105,8 @@ Implemented 14–15 September 2026. Extends [NOTES_WIDGETS.md](NOTES_WIDGETS.md)
   newest edit time (`NoteState.listKey`). `order`, the grid position of
   earlier builds, is still read and sorts after all other notes. Registers name the versions they replace, so two of a person's
   devices converge. Collaborators never see them. Device-local pins from earlier
-  builds migrate once. Each change is one signed object and counts toward the
-  10,000-object quota.
+  builds migrate once. Each change is one signed object; how many a profile
+  holds is not capped.
 
 ## Voice notes: how it works
 

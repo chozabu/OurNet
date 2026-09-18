@@ -67,30 +67,49 @@ extension _EverydayPages on _OurNetAppState {
     await openNote(note.id);
   }
 
+  /// Which of this person's other devices have received each item.
+  ///
+  /// Receipts are immutable and only ever add a device, so a pass consumes
+  /// the ones that have arrived since the last and keeps the running totals
+  /// rather than rebuilding them from every receipt ever stored.
   Future<void> loadDeliveryLabels() async {
-    final labels = <String, String>{};
-    final received = <String, Set<String>>{};
-    for (final o in node.store.objects(
-      kind: 'delivery',
-      limit: Node.maxObjects,
-    )) {
-      final p = await node.content(o);
-      if (p == null) continue;
-      final original = node.store.get(p['object']);
-      if (original == null ||
-          o.certificate.device == node.identity.device ||
-          !original.audience.contains(o.author)) {
-        continue;
+    // Where the store had reached before this pass. Looking for a kind walks
+    // the rows in between whether or not any of them are of that kind, so the
+    // cursor has to move past everything scanned. Most profiles hold no
+    // receipts at all, and this runs on every change.
+    final target = node.store.insertionCursor;
+    final slice = TimeSlice();
+    var changed = false;
+    while (true) {
+      final page = node.store.insertedAfter(deliveryCursor, ['delivery']);
+      if (page.isEmpty) break;
+      for (final (cursor, o) in page) {
+        deliveryCursor = cursor;
+        await slice.pause();
+        final p = await node.content(o);
+        if (p == null) continue;
+        final original = node.store.get(p['object']);
+        if (original == null ||
+            o.certificate.device == node.identity.device ||
+            !original.audience.contains(o.author)) {
+          continue;
+        }
+        if ((deliveryDevices[p['object']] ??= <String>{}).add(
+          o.certificate.device,
+        )) {
+          changed = true;
+        }
       }
-      (received[p['object']] ??= <String>{}).add(o.certificate.device);
-      labels[p['object']] =
-          'Received on ${received[p['object']]!.length} other device(s)';
     }
-    if (mounted && labels.toString() != deliveryLabels.toString()) {
+    if (deliveryCursor < target) deliveryCursor = target;
+    if (mounted && changed) {
       update(() {
         deliveryLabels
           ..clear()
-          ..addAll(labels);
+          ..addAll({
+            for (final entry in deliveryDevices.entries)
+              entry.key: 'Received on ${entry.value.length} other device(s)',
+          });
       });
     }
   }

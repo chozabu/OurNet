@@ -21,8 +21,33 @@ class Node {
   int _pendingPublications = 0;
   bool _closing = false;
   Future<void>? _closeFuture;
-  static const maxObjects = 10000;
+
+  /// Objects a peer may drive this device into storing, in bytes. There is no
+  /// limit on how many objects a person's own devices hold: a count cap
+  /// bounded nothing real (an object runs up to [maxObjectBytes], so a row
+  /// total says little about disk) while it did bound the product. What is
+  /// left is the one place an outside party controls growth, measured in the
+  /// resource that matters. Reading a view never costs more than the window
+  /// it shows, so history beyond this is only ever disk.
+  ///
+  /// Own writes are never refused by it: a quota on your own data protects
+  /// nobody. A device that fills this with its own objects would stop
+  /// accepting new ones from peers; objects are metadata and text, with
+  /// attachments in blobs, so that is on the order of a million notes, and
+  /// `receivedBudget` in settings raises or disables it.
+  static const maxReceivedBytes = 512 * 1024 * 1024;
   static const maxObjectBytes = 256 * 1024;
+
+  /// Entries one peer may list in a single inventory page. Bounds a peer's
+  /// message, not this device's storage: it never grows with local history.
+  static const maxInventoryEntries = 10000;
+
+  /// How much history an unindexed scanning view reads. Distinct from any
+  /// storage budget: these are the remaining views that have no cursor.
+  static const maxScan = 10000;
+
+  int get _receivedBudget =>
+      store.setting('receivedBudget') as int? ?? maxReceivedBytes;
   static const maxEvidence = 128;
   static const maxPageBytes = 1024 * 1024;
   Node(this.identity, this.store, {int Function()? clock})
@@ -159,9 +184,6 @@ class Node {
     // Policy may change while cryptography runs on the worker.
     if (revoked.contains(identity.device)) {
       throw StateError('This device has been revoked');
-    }
-    if (store.count >= maxObjects) {
-      throw StateError('Local object quota reached');
     }
     store.put(object);
     notify();
@@ -322,19 +344,34 @@ class Node {
   /// history with no gap. `more` says whether an older window follows.
   Json inventory({String? peerDevice, int window = 0}) {
     final peer = peerDevice == null ? null : contacts[peerDevice];
-    final offerable =
-        [
-          for (final route in store.routes)
-            if (peerDevice == null ||
-                (peer != null && _offerable(route, peer, {route.space})))
-              route,
-        ]..sort((a, b) {
-          final order = b.created.compareTo(a.created);
-          return order != 0 ? order : a.id.compareTo(b.id);
-        });
-    final start = (window * inventoryWindow).clamp(0, offerable.length);
-    final page = offerable.skip(start).take(inventoryWindow).toList();
-    final more = start + page.length < offerable.length;
+    // Routes stream out of the store already in this order, so only the
+    // window being described is ever held, however much history there is.
+    final skip = window * inventoryWindow;
+    final page = <ObjectRoute>[];
+    ObjectRoute? preceding;
+    var offerable = 0;
+    var more = false;
+    (int, String)? cursor;
+    walk:
+    while (true) {
+      final batch = store.routesAfter(after: cursor);
+      if (batch.isEmpty) break;
+      for (final route in batch) {
+        cursor = (route.created, route.id);
+        if (peerDevice != null &&
+            !(peer != null && _offerable(route, peer, {route.space})))
+          continue;
+        if (offerable < skip) {
+          preceding = route;
+        } else if (page.length < inventoryWindow) {
+          page.add(route);
+        } else {
+          more = true;
+          break walk;
+        }
+        offerable++;
+      }
+    }
     return {
       'version': 2,
       'subscriptions': subscriptions.toList()..sort(),
@@ -342,7 +379,7 @@ class Node {
       // Bounds overlap by an object at each edge, so entries sharing a
       // creation time across a boundary are still covered.
       'from': more ? page.last.created : 0,
-      if (start > 0) 'until': offerable[start - 1].created,
+      if (preceding != null) 'until': preceding.created,
       'more': more,
       'revoked': revoked.toList()..sort(),
       if (peer != null) 'devices': sharedCertificates(peer),
@@ -442,7 +479,7 @@ class Node {
     final peer = contacts[peerDevice]!;
     final wanted = (inventory['subscriptions'] as List).cast<String>().toSet();
     final have = inventory['have'] as Json;
-    if (have.length > maxObjects || wanted.length > 256)
+    if (have.length > maxInventoryEntries || wanted.length > 256)
       throw StateError('Inventory too large');
     // Choose a page first, then sign its new handoffs together off the UI
     // isolate. Handoffs minted for objects that miss this page are reused.
@@ -451,46 +488,60 @@ class Node {
     final slice = TimeSlice();
     // Only the window the inventory covers: outside it, an absent entry says
     // nothing about what the peer holds. Inventories without a window (older
-    // builds) cover everything, as before.
-    for (final id in store.recentIds(
-      limit: maxObjects,
-      from: inventory['from'] as int? ?? 0,
-      until: inventory['until'] as int?,
-    )) {
-      if (page.length >= 32) break;
-      // Already reconciled: skip before parsing the object or its evidence.
-      if (have[id] == store.evidenceDigest(id)) continue;
-      await slice.pause();
-      final object = store.get(id);
-      if (object == null || !canOffer(object, peer, wanted)) continue;
-      final evidence = store.evidence(id);
-      // Mint once per target, never on each repeated sync.
-      final minted = evidence.any(
-        (e) =>
-            e.data['domain'] == 'ournet/handoff/2' &&
-            e.certificate.device == identity.device &&
-            e.data['to'] == peerDevice,
+    // builds) cover everything, as before. The window is walked in bounded
+    // pages, so a page is chosen without materialising the whole of it, and
+    // all the way to the end of the window: stopping short of it would strand
+    // whatever lay beyond, since the next window starts below this one.
+    (int, String)? cursor;
+    walk:
+    while (true) {
+      final entries = store.recentEntries(
+        from: inventory['from'] as int? ?? 0,
+        until: inventory['until'] as int?,
+        after: cursor,
       );
-      if (!minted && !have.containsKey(id)) {
-        final parents = evidence
-            .where(
-              (e) =>
-                  e.data['domain'] == 'ournet/receipt/2' &&
-                  e.certificate.device == identity.device,
-            )
-            .map((e) => e.id)
-            .toList();
-        if (object.author != person && parents.isEmpty) continue;
-        if (evidence.length >= maxEvidence - 2) continue;
-        handoffs.add({
-          'domain': 'ournet/handoff/2',
-          'object': id,
-          'to': peerDevice,
-          'parents': parents.take(1).toList(),
-          'created': now(),
-        });
+      if (entries.isEmpty) break;
+      // One query for the page's digests: skipping a reconciled object must
+      // not cost a lookup, or walking a window the peer already holds would.
+      store.primeEvidence([for (final (_, id) in entries) id]);
+      await slice.pause();
+      for (final (created, id) in entries) {
+        cursor = (created, id);
+        if (page.length >= 32) break walk;
+        // Already reconciled: skip before parsing the object or its evidence.
+        if (have[id] == store.evidenceDigest(id)) continue;
+        await slice.pause();
+        final object = store.get(id);
+        if (object == null || !canOffer(object, peer, wanted)) continue;
+        final evidence = store.evidence(id);
+        // Mint once per target, never on each repeated sync.
+        final minted = evidence.any(
+          (e) =>
+              e.data['domain'] == 'ournet/handoff/2' &&
+              e.certificate.device == identity.device &&
+              e.data['to'] == peerDevice,
+        );
+        if (!minted && !have.containsKey(id)) {
+          final parents = evidence
+              .where(
+                (e) =>
+                    e.data['domain'] == 'ournet/receipt/2' &&
+                    e.certificate.device == identity.device,
+              )
+              .map((e) => e.id)
+              .toList();
+          if (object.author != person && parents.isEmpty) continue;
+          if (evidence.length >= maxEvidence - 2) continue;
+          handoffs.add({
+            'domain': 'ournet/handoff/2',
+            'object': id,
+            'to': peerDevice,
+            'parents': parents.take(1).toList(),
+            'created': now(),
+          });
+        }
+        page.add(object);
       }
-      page.add(object);
     }
     final signed = await _makeEvidence(handoffs);
     store.batch(() => signed.forEach(store.putEvidence));
@@ -669,8 +720,8 @@ class Node {
         .toList();
     if (!held && handoffs.isEmpty)
       throw StateError('No handoff from authenticated peer');
-    if (!held && store.count >= maxObjects)
-      throw StateError('Storage quota exceeded');
+    if (!held && store.objectBytes >= _receivedBudget)
+      throw StateError('Storage budget for received objects reached');
     await applyRevocation(o);
     final changed = store.batch(
       () => [

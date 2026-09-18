@@ -20,6 +20,7 @@ class Store {
       author TEXT NOT NULL, created INTEGER NOT NULL, wire TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS objects_view ON objects(kind,space,created);
       CREATE INDEX IF NOT EXISTS objects_kind ON objects(kind);
+      CREATE INDEX IF NOT EXISTS objects_recent ON objects(created DESC,id);
       CREATE TABLE IF NOT EXISTS evidence(id TEXT PRIMARY KEY, object_id TEXT NOT NULL, wire TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS evidence_object ON evidence(object_id);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -113,6 +114,54 @@ class Store {
       ''');
     }
 
+    // Derived sharing index: the fields that decide whether an object may be
+    // offered to a peer, extracted once when it is stored rather than out of
+    // every object on every sync page. Contains no plaintext payloads.
+    if (db
+        .select("SELECT name FROM sqlite_master WHERE name='object_routes'")
+        .isEmpty) {
+      db.execute('''BEGIN IMMEDIATE;
+        CREATE TABLE object_routes(id TEXT PRIMARY KEY, kind TEXT NOT NULL,
+          space TEXT NOT NULL, author TEXT NOT NULL, created INTEGER NOT NULL,
+          device TEXT NOT NULL, expires INTEGER NOT NULL,
+          audience TEXT NOT NULL, via TEXT NOT NULL);
+        CREATE INDEX object_routes_order ON object_routes(created DESC,id);
+        INSERT OR IGNORE INTO object_routes SELECT o.id, o.kind, o.space,
+          o.author, o.created, json_extract(o.wire,'\$.certificate.data.device'),
+          json_extract(o.wire,'\$.data.expires'),
+          json_extract(o.wire,'\$.data.audience'),
+          json_extract(o.wire,'\$.data.via') FROM objects o;
+        COMMIT;
+      ''');
+    }
+    db.execute('''
+      CREATE TRIGGER IF NOT EXISTS object_route_added AFTER INSERT ON objects
+      BEGIN
+        INSERT OR IGNORE INTO object_routes VALUES(NEW.id, NEW.kind, NEW.space,
+          NEW.author, NEW.created,
+          json_extract(NEW.wire,'\$.certificate.data.device'),
+          json_extract(NEW.wire,'\$.data.expires'),
+          json_extract(NEW.wire,'\$.data.audience'),
+          json_extract(NEW.wire,'\$.data.via'));
+      END;
+      CREATE TRIGGER IF NOT EXISTS object_route_removed AFTER DELETE ON objects
+      BEGIN DELETE FROM object_routes WHERE id=OLD.id; END;
+    ''');
+
+    // Objects are bounded by the bytes they occupy, not by a count: one
+    // object ranges up to 256 KiB, so a row total says nothing about disk.
+    // Existing databases gain the accounting without rewriting content.
+    // Stored objects are immutable (the ID is their content hash), so there
+    // is no update trigger: only inserts and deletes can move the total.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS object_usage(id INTEGER PRIMARY KEY CHECK(id=1), bytes INTEGER NOT NULL);
+      INSERT OR IGNORE INTO object_usage SELECT 1, COALESCE(SUM(length(wire)),0) FROM objects;
+      CREATE TRIGGER IF NOT EXISTS object_added AFTER INSERT ON objects
+      BEGIN UPDATE object_usage SET bytes=bytes+length(NEW.wire) WHERE id=1; END;
+      CREATE TRIGGER IF NOT EXISTS object_removed AFTER DELETE ON objects
+      BEGIN UPDATE object_usage SET bytes=bytes-length(OLD.wire) WHERE id=1; END;
+    ''');
+
     db.execute('''CREATE TABLE IF NOT EXISTS previews(
       id TEXT PRIMARY KEY, bytes BLOB NOT NULL, size INTEGER NOT NULL, used INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS previews_used ON previews(used);
@@ -173,10 +222,8 @@ class Store {
     } catch (_) {
       db.execute('ROLLBACK');
       // Reload rather than trust rows that were rolled back.
-      _evidence = null;
+      _evidenceSets.clear();
       _evidenceRecords.clear();
-      _routes.clear();
-      _routesCursor = 0;
       rethrow;
     }
   }
@@ -250,10 +297,14 @@ class Store {
       (row['rowid'] as int, get(row['id'] as String)!),
   ];
 
+  /// Objects newest first. [after] resumes just past one already returned, so
+  /// a view that must look at every object of a kind reads it in pages
+  /// instead of choosing a limit and quietly stopping there.
   List<SignedObject> objects({
     String? kind,
     List<String>? kinds,
     String? space,
+    (int, String)? after,
     int limit = 1000,
   }) {
     var where = kind != null
@@ -261,10 +312,17 @@ class Store {
         : kinds != null
         ? 'WHERE kind IN (${List.filled(kinds.length, '?').join(',')})'
         : '';
-    final args = [if (kind != null) kind else if (kinds != null) ...kinds];
+    final args = <Object?>[
+      if (kind != null) kind else if (kinds != null) ...kinds,
+    ];
     if (space != null) {
       where += '${where.isEmpty ? 'WHERE' : ' AND'} space=?';
       args.add(space);
+    }
+    if (after != null) {
+      where +=
+          '${where.isEmpty ? 'WHERE' : ' AND'} (created<? OR (created=? AND id>?))';
+      args.addAll([after.$1, after.$1, after.$2]);
     }
     // Select IDs first; only objects not already parsed transfer their wire.
     final ids = db
@@ -294,15 +352,28 @@ class Store {
     ];
   }
 
-  /// IDs newest first, without reading or parsing the objects. [from] and
-  /// [until] bound the window of creation times a sync page reconciles.
-  List<String> recentIds({int limit = 10000, int from = 0, int? until}) => [
+  /// Creation times and IDs newest first, without reading or parsing the
+  /// objects. [from] and [until] bound the window of creation times a sync
+  /// page reconciles; [after] resumes just past an entry already examined, so
+  /// a window is walked in bounded pages however much history it spans.
+  List<(int, String)> recentEntries({
+    int limit = 512,
+    int from = 0,
+    int? until,
+    (int, String)? after,
+  }) => [
     for (final row in _select(
-      'SELECT id FROM objects WHERE created>=? AND created<=? '
+      'SELECT created, id FROM objects WHERE created>=? AND created<=? '
+      '${after == null ? '' : 'AND (created<? OR (created=? AND id>?)) '}'
       'ORDER BY created DESC,id LIMIT ?',
-      [from, until ?? 253402300799999, limit],
+      [
+        from,
+        until ?? 253402300799999,
+        if (after != null) ...[after.$1, after.$1, after.$2],
+        limit,
+      ],
     ))
-      row['id'] as String,
+      (row['created'] as int, row['id'] as String),
   ];
 
   List<String> ids({int limit = 10000}) => [
@@ -312,39 +383,69 @@ class Store {
       row['id'] as String,
   ];
 
-  /// Sharing fields of every stored object, for inventories. SQLite extracts
-  /// them without parsing objects in Dart; later calls read only new rows.
-  Iterable<ObjectRoute> get routes {
+  /// Sharing fields of stored objects, for inventories, newest first in the
+  /// order a sync page walks them. They come from the derived index, so a
+  /// page costs an index scan rather than reparsing objects. [after] resumes
+  /// just past an entry already examined, so a caller reads the pages it
+  /// needs instead of holding every object's route in memory for the life of
+  /// the process.
+  List<ObjectRoute> routesAfter({(int, String)? after, int limit = 512}) => [
+    for (final row in _select(
+      'SELECT id,kind,space,author,created,device,expires,audience,via '
+      'FROM object_routes '
+      '${after == null ? '' : 'WHERE created<? OR (created=? AND id>?) '}'
+      'ORDER BY created DESC,id LIMIT ?',
+      [
+        if (after != null) ...[after.$1, after.$1, after.$2],
+        limit,
+      ],
+    ))
+      ObjectRoute(
+        id: row['id'] as String,
+        kind: row['kind'] as String,
+        space: row['space'] as String,
+        author: row['author'] as String,
+        created: row['created'] as int,
+        device: row['device'] as String,
+        expires: row['expires'] as int,
+        audience: (jsonDecode(row['audience'] as String) as List)
+            .cast<String>(),
+        via: (jsonDecode(row['via'] as String) as List).cast<String>(),
+      ),
+  ];
+
+  /// Every stored object matching the filter, newest first, read in pages.
+  ///
+  /// For the reads whose correctness depends on seeing all of something —
+  /// one note's operations, one group's items — where a limit would not cut
+  /// off a view but silently drop records that are still live. Bounded by
+  /// what is asked for, so callers scope it to a kind and a space.
+  List<SignedObject> allOf({String? kind, List<String>? kinds, String? space}) {
+    final result = <SignedObject>[];
+    (int, String)? after;
     while (true) {
-      final rows = _select(
-        'SELECT rowid, id, kind, space, author, created, json_extract(wire, '
-        "'\$.certificate.data.device', '\$.data.expires', '\$.data.audience', "
-        "'\$.data.via') AS fields FROM objects WHERE rowid>? ORDER BY rowid "
-        'LIMIT 2000',
-        [_routesCursor],
+      final page = objects(
+        kind: kind,
+        kinds: kinds,
+        space: space,
+        after: after,
+        limit: 512,
       );
-      if (rows.isEmpty) break;
-      for (final row in rows) {
-        final fields = jsonDecode(row['fields'] as String) as List;
-        _routes[row['id'] as String] = ObjectRoute(
-          id: row['id'] as String,
-          kind: row['kind'] as String,
-          space: row['space'] as String,
-          author: row['author'] as String,
-          created: row['created'] as int,
-          device: fields[0] as String,
-          expires: fields[1] as int,
-          audience: (fields[2] as List).cast<String>(),
-          via: (fields[3] as List).cast<String>(),
-        );
-        _routesCursor = row['rowid'] as int;
-      }
+      if (page.isEmpty) return result;
+      result.addAll(page);
+      after = (page.last.created, page.last.id);
     }
-    return _routes.values;
   }
 
-  final _routes = <String, ObjectRoute>{};
-  int _routesCursor = 0;
+  /// Distinct spaces holding objects of [kinds].
+  List<String> spaces(List<String> kinds) => [
+    for (final row in _select(
+      'SELECT DISTINCT space FROM objects WHERE kind IN '
+      '(SELECT value FROM json_each(?))',
+      [jsonEncode(kinds)],
+    ))
+      row['space'] as String,
+  ];
 
   int get insertionCursor =>
       (_select('SELECT MAX(rowid) AS n FROM objects').first['n'] as int?) ?? 0;
@@ -372,6 +473,12 @@ class Store {
   ];
   int get count =>
       _select('SELECT COUNT(*) AS n FROM objects').first['n'] as int;
+
+  /// Bytes the stored objects occupy, maintained by trigger across
+  /// connections and transactions. What a storage budget is measured in.
+  int get objectBytes =>
+      _select('SELECT bytes FROM object_usage WHERE id=1').first['bytes']
+          as int;
   bool putEvidence(Evidence evidence) {
     _execute('INSERT OR IGNORE INTO evidence VALUES (?,?,?)', [
       evidence.id,
@@ -381,37 +488,75 @@ class Store {
     final added = db.updatedRows > 0;
     if (added) {
       _evidenceRecords.remove(evidence.objectId);
-      _evidence
-          ?.putIfAbsent(evidence.objectId, _EvidenceSet.new)
-          .add(evidence.id);
+      _evidenceSets.remove(evidence.objectId);
     }
     return added;
   }
 
-  /// Sorted evidence IDs per object, loaded with one query and then kept
-  /// current by [putEvidence], the only writer of evidence rows.
-  Map<String, _EvidenceSet> get _evidenceSets => _evidence ??= () {
-    final result = <String, _EvidenceSet>{};
+  /// Sorted evidence IDs for one object. Reading every object's evidence into
+  /// memory would grow with stored history without bound, so this is a
+  /// bounded cache over an indexed lookup: [putEvidence] and [removeEvidence]
+  /// are the only writers of evidence rows and drop what they change.
+  _EvidenceSet _evidenceSet(String objectId) {
+    final cached = _evidenceSets.remove(objectId);
+    final set = cached ?? _EvidenceSet();
+    if (cached == null) {
+      for (final row in _select(
+        'SELECT id FROM evidence WHERE object_id=? ORDER BY id',
+        [objectId],
+      )) {
+        set.add(row['id'] as String);
+      }
+    }
+    _evidenceSets[objectId] = set;
+    if (_evidenceSets.length > _evidenceLimit) {
+      _evidenceSets.remove(_evidenceSets.keys.first);
+    }
+    return set;
+  }
+
+  // Comfortably more than the objects one inventory page reconciles, so a
+  // sync page never evicts a digest it is still comparing.
+  static const _evidenceLimit = 4096;
+  final _evidenceSets = LinkedHashMap<String, _EvidenceSet>();
+
+  /// Loads evidence for a page of objects in one query.
+  ///
+  /// Sync compares a digest for every object it walks past, and most of them
+  /// are already reconciled. Asking per object would make skipping one cost a
+  /// query; this keeps the skip a map lookup without holding every object's
+  /// evidence at once.
+  void primeEvidence(List<String> objectIds) {
+    final missing = [
+      for (final id in objectIds)
+        if (!_evidenceSets.containsKey(id)) id,
+    ];
+    if (missing.isEmpty) return;
+    final found = <String, _EvidenceSet>{};
     for (final row in _select(
-      'SELECT object_id, id FROM evidence ORDER BY object_id, id',
+      'SELECT object_id, id FROM evidence WHERE object_id IN '
+      '(SELECT value FROM json_each(?)) ORDER BY object_id, id',
+      [jsonEncode(missing)],
     )) {
-      (result[row['object_id'] as String] ??= _EvidenceSet()).add(
+      (found[row['object_id'] as String] ??= _EvidenceSet()).add(
         row['id'] as String,
       );
     }
-    return result;
-  }();
-  Map<String, _EvidenceSet>? _evidence;
-  static final _noEvidence = hash(const <String>[]);
+    for (final id in missing) {
+      _evidenceSets[id] = found[id] ?? _EvidenceSet();
+      if (_evidenceSets.length > _evidenceLimit) {
+        _evidenceSets.remove(_evidenceSets.keys.first);
+      }
+    }
+  }
 
   /// Inventory digest of an object's evidence IDs. Sync compares these for
   /// every object on every page, so each digest is computed once per change.
-  String evidenceDigest(String objectId) =>
-      _evidenceSets[objectId]?.digestOf() ?? _noEvidence;
+  String evidenceDigest(String objectId) => _evidenceSet(objectId).digestOf();
 
   /// Whether evidence [id] for [objectId] is stored (and so was verified).
   bool hasEvidence(String objectId, String id) =>
-      _evidenceSets[objectId]?.ids.contains(id) ?? false;
+      _evidenceSet(objectId).ids.contains(id);
 
   /// Parsed evidence for an object, sorted by ID. Sync reads it for every
   /// offered or received item, so recent results are kept until it changes.
@@ -449,7 +594,7 @@ class Store {
     for (final id in ids) {
       _execute('DELETE FROM evidence WHERE id=?', [id]);
     }
-    _evidence = null;
+    _evidenceSets.clear();
     _evidenceRecords.clear();
   }
 

@@ -290,7 +290,7 @@ class Notes {
           if (data != null && data['note'] == true) {
             final rooms = await _everyday.rooms(
               includeLeft: true,
-              records: await _everyday.records(space: object.space),
+              records: await _everyday.membership(object.space),
             );
             if (rooms.isNotEmpty) _rooms[object.space] = rooms.single;
           }
@@ -414,7 +414,7 @@ class Notes {
       _cache[id] = cached;
       return cached.available || includeUnavailable ? cached : null;
     }
-    final records = await _everyday.records(space: id);
+    final records = await _everyday.membership(id);
     final rooms = await _everyday.rooms(includeLeft: true, records: records);
     final room = rooms.firstOrNull;
     if (room == null || room.data['note'] != true) return null;
@@ -424,11 +424,11 @@ class Notes {
     if (!available && !includeUnavailable) return null;
     final ops = <EverydayItem>[], earlier = <EverydayItem>[];
     final slice = TimeSlice();
-    for (final object in node.store.objects(
-      kind: 'note_op',
-      space: id,
-      limit: Node.maxObjects,
-    )) {
+    // Every operation on this note, read in pages. A document is folded from
+    // all of them, so a limit here would silently drop whatever was written
+    // once and never revised: the title, an early checklist item. It is
+    // bounded by the note, not by the profile.
+    for (final object in node.store.allOf(kind: 'note_op', space: id)) {
       final data = await node.content(object);
       if (data == null || object.isPublic) continue;
       final epochRooms = records.where(
@@ -685,8 +685,6 @@ class Notes {
     if (note.room.data['owner'] != node.person)
       throw StateError('Only the owner can change collaborators.');
     final heads = note.heads.values.expand((v) => v).toList();
-    if (node.store.count + heads.length + 2 > Node.maxObjects)
-      throw StateError('Not enough local storage to update collaborators.');
     await _everyday.changeMembers(
       note.room,
       people,

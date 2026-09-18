@@ -4,7 +4,7 @@ extension _ForumFeatures on _OurNetAppState {
   /// Latest owner-signed definition per forum, computed once per build.
   Json? forumInfo(String id) => memo('forums', () {
     final latest = <String, SignedObject>{};
-    for (final o in node.store.objects(kind: 'forum', limit: Node.maxObjects)) {
+    for (final o in node.store.objects(kind: 'forum', limit: Node.maxScan)) {
       if (!o.isPublic ||
           !o.space.startsWith('forum2:${o.author}:') ||
           !node.visible(o)) {
@@ -39,7 +39,7 @@ extension _ForumFeatures on _OurNetAppState {
       () => {
         for (final m in node.store.objects(
           kind: 'forum_hide',
-          limit: Node.maxObjects,
+          limit: Node.maxScan,
         ))
           if (m.isPublic && m.space.startsWith('forum2:${m.author}:'))
             '${m.space}/${m.data['payload']['object']}',

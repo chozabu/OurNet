@@ -46,8 +46,8 @@ notes no longer exists.
   `Notes.apply`. Each published text write becomes the editor's observed parent
   for the next save, so continued typing never creates a branch against this
   device's own writing. Unseen writing from others still becomes a branch.
-- Every autosave is a signed object and counts toward the 10,000-object local
-  quota. The pause keeps this to roughly one object per burst of typing.
+- Every autosave is a signed object. There is no cap on how many a profile
+  holds; the pause keeps this to roughly one object per burst of typing.
 - A brand-new note that is closed within the first pause is still saved on
   leaving. If the process is killed before then, that first unsaved moment
   is lost, because new notes have no draft until they exist. Existing notes
@@ -149,8 +149,7 @@ apps are subject to Android's launcher/broadcast restrictions until reopened.
 Notes refresh uses insertion-cursor pages of at most 128 relevant objects,
 per-note indexed queries, cached bounded list projections, and 32 ms coalescing.
 It does not scan unrelated inbox/file history to render widgets. Up to 200 note
-summaries and 200 checklist rows per note are exposed; the existing 10,000-object
-store quota still applies. Detailed document caching is limited to 16 documents
+summaries and 200 checklist rows per note are exposed. Detailed document caching is limited to 16 documents
 of less than 512 KiB each. Drafts use the existing encrypted, debounced DraftStore.
 
 ## Official design references

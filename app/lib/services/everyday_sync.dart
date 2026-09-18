@@ -19,6 +19,10 @@ class EverydaySync {
   /// found by an insertion cursor so passes never rescan note history.
   final _noteFiles = <String>{};
   int _noteCursor = 0;
+
+  /// Group and inbox items waiting to be acknowledged, found the same way.
+  final _items = <String>{};
+  int _itemCursor = 0;
   EverydaySync(this.network, this.onUpdate, {this.onCached}) {
     timer = Timer.periodic(const Duration(seconds: 15), (_) => sync());
   }
@@ -27,44 +31,76 @@ class EverydaySync {
     busy = true;
     var changed = false;
     try {
-      for (final item in await Everyday(network.node).records()) {
-        if (closed || !network.running) break;
-        if (!['inbox', 'room_item'].contains(item.object.kind)) continue;
-        if (_received.contains(item.object.id)) continue;
-        final key = 'everyday/received/${item.object.id}';
-        if (network.node.store.setting(key) == true) {
-          _received.add(item.object.id);
-          continue;
-        }
-        try {
-          if (item.data['type'] == 'file') {
-            await files.cache(item.object);
-            onCached?.call(item.object, item.data);
-          }
-          if (item.object.certificate.device != network.node.identity.device) {
-            await network.node.publish(
-              'delivery',
-              {'object': item.object.id},
-              space: '_delivery',
-              audience: item.object.audience,
-            );
-          }
-          network.node.store.set(key, true);
-          _received.add(item.object.id);
-          changed = true;
-          errors.remove(item.object.id);
-        } catch (error) {
-          final message = error.toString();
-          if (errors[item.object.id] != message) changed = true;
-          errors[item.object.id] = message;
-          /* Retry this item on the next foreground pass. */
-        }
-      }
+      changed = await _cacheEverydayItems() || changed;
       changed = await _cacheNoteFiles() || changed;
     } finally {
       busy = false;
       if (!closed && changed) onUpdate();
     }
+  }
+
+  /// Acknowledges group and inbox items, and caches the files they carry.
+  /// A pass reads only what has arrived since the last one; items that fail
+  /// stay pending and are retried, so nothing depends on rescanning history.
+  Future<bool> _cacheEverydayItems() async {
+    final node = network.node;
+    // Looking for a kind walks the rows in between whether or not any of them
+    // are of that kind, so the cursor moves past everything scanned. A profile
+    // of notes holds no group items at all, and this runs on a timer.
+    final target = node.store.insertionCursor;
+    final slice = TimeSlice();
+    while (true) {
+      final page = node.store.insertedAfter(_itemCursor, Everyday.itemKinds);
+      if (page.isEmpty || closed) break;
+      for (final (cursor, object) in page) {
+        _itemCursor = cursor;
+        await slice.pause();
+        if (object.isPublic || _received.contains(object.id)) continue;
+        if (node.store.setting('everyday/received/${object.id}') == true) {
+          _received.add(object.id);
+          continue;
+        }
+        _items.add(object.id);
+      }
+    }
+    if (_itemCursor < target) _itemCursor = target;
+    var changed = false;
+    for (final id in _items.toList()) {
+      if (closed || !network.running) break;
+      final object = node.store.get(id);
+      // Unreadable here means blocked, expired or not ours to decrypt. None
+      // of those should be acknowledged as delivered.
+      final payload = object == null ? null : await node.content(object);
+      if (object == null || payload == null) {
+        _items.remove(id);
+        continue;
+      }
+      try {
+        if (payload['type'] == 'file') {
+          await files.cache(object);
+          onCached?.call(object, payload);
+        }
+        if (object.certificate.device != node.identity.device) {
+          await node.publish(
+            'delivery',
+            {'object': object.id},
+            space: '_delivery',
+            audience: object.audience,
+          );
+        }
+        node.store.set('everyday/received/$id', true);
+        _received.add(id);
+        _items.remove(id);
+        changed = true;
+        errors.remove(id);
+      } catch (error) {
+        final message = error.toString();
+        if (errors[id] != message) changed = true;
+        errors[id] = message;
+        /* Retry this item on the next foreground pass. */
+      }
+    }
+    return changed;
   }
 
   Future<bool> _cacheNoteFiles() async {

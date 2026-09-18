@@ -39,8 +39,9 @@ It applies to drive history; old private chat history still has no migration UI.
   previously exported copies. Non-empty folders must be emptied first.
 - New files with the same name are separate entries. Names are not file IDs.
 
-The current limits remain 64 MiB per file, 512 MiB of stored chunks and 10,000
-signed objects. History resharing consumes additional objects. Cleanup/retention, large transfers and background Android delivery remain work.
+The current limits remain 64 MiB per file and 512 MiB of stored chunks. The
+number of signed objects a profile holds is not capped; 512 MiB of objects
+received from peers is. History resharing consumes additional objects. Cleanup/retention, large transfers and background Android delivery remain work.
 Use your own test files first; the protocol and recovery model are still evolving.
 
 
@@ -79,8 +80,8 @@ is local to this device and never dictates another device's location.
   Transfers run serially for folder connections using bounded temporary files;
   encryption and blob hashing continue to use the node's attachment worker.
 
-Current boundaries: the existing 64 MiB file, 512 MiB encrypted-chunk and 10,000
-record quotas still apply. Local filename changes are represented as delete/add.
+Current boundaries: the existing 64 MiB file and 512 MiB encrypted-chunk quotas
+still apply; the record count is not capped. Local filename changes are represented as delete/add.
 Drive-side renames and moves preserve entry identities and are applied to local
 paths, including nested directories and case-only Windows renames. Concurrent
 file edits still retain separate revision branches; name collisions never overwrite

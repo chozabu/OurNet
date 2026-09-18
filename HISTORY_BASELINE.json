@@ -1,0 +1,61 @@
+{
+  "utc": "2026-09-18T02:24:51.476594Z",
+  "platform": "windows",
+  "dart": "3.12.2 (stable) (Tue Jun 9 01:11:39 2026 -0700) on \"windows_x64\"",
+  "scales": [
+    {
+      "objects": 5000,
+      "groups": 25,
+      "itemsPerGroup": 192,
+      "buildMs": 80771,
+      "storedObjects": 5017,
+      "storedObjectMiB": 5.845093727111816,
+      "coldRoomsMs": 35.917,
+      "warmRoomsMs": 0.186,
+      "openBusyGroupMs": 214.306,
+      "reopenBusyGroupMs": 2.132,
+      "openInboxMs": 207.653,
+      "writeMs": 15.342,
+      "secondWriteMs": 15.837,
+      "membersMs": 2.585,
+      "inventoryMs": 32.455,
+      "rssMiB": 378.99609375
+    },
+    {
+      "objects": 20000,
+      "groups": 100,
+      "itemsPerGroup": 198,
+      "buildMs": 318321,
+      "storedObjects": 20098,
+      "storedObjectMiB": 23.52189064025879,
+      "coldRoomsMs": 147.139,
+      "warmRoomsMs": 0.239,
+      "openBusyGroupMs": 214.43,
+      "reopenBusyGroupMs": 1.728,
+      "openInboxMs": 213.779,
+      "writeMs": 55.228,
+      "secondWriteMs": 16.978,
+      "membersMs": 3.562,
+      "inventoryMs": 25.214,
+      "rssMiB": 420.67578125
+    },
+    {
+      "objects": 60000,
+      "groups": 300,
+      "itemsPerGroup": 199,
+      "buildMs": 1182087,
+      "storedObjects": 60199,
+      "storedObjectMiB": 70.60616970062256,
+      "coldRoomsMs": 370.738,
+      "warmRoomsMs": 0.551,
+      "openBusyGroupMs": 208.407,
+      "reopenBusyGroupMs": 2.398,
+      "openInboxMs": 206.758,
+      "writeMs": 56.062,
+      "secondWriteMs": 20.779,
+      "membersMs": 5.363,
+      "inventoryMs": 27.473,
+      "rssMiB": 437.8515625
+    }
+  ]
+}

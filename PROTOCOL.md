@@ -84,7 +84,9 @@ characters) naming the sender's app build; peers ignore it, or show it when it
 differs from their own. A failed inbound handshake is logged and counted, and
 the endpoint keeps accepting further connections.
 
-Local limits: 10,000 objects (a store bound, no longer a sync-message bound),
+Local limits: 512 MiB of stored objects once they are received from peers (a
+store bound, not a sync-message bound, and not applied to this device's own
+writes; the number of objects is not capped),
 256 KiB per signed object, 128 evidence records per
 object, 64 MiB per file, 512 MiB total stored blob bytes, and four simultaneous
 inbound requests. These bounds are not a complete DoS resistance strategy.

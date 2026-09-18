@@ -55,19 +55,29 @@ class Drive {
 
   /// Republish every readable revision with its original ancestry for newly
   /// enrolled devices. Equivalent copies are deduplicated in entries().
+  /// Republishing is deliberately a pass over everything, so it reads in
+  /// insertion-cursor pages rather than materialising the whole of it.
   Future<int> shareHistory() async {
-    final objects = node.store
-        .objects(kind: 'drive', limit: Node.maxObjects)
-        .reversed
-        .toList();
     final seen = <String>{};
-    var count = 0;
-    for (final o in objects) {
-      if (o.author != node.person || o.isPublic) continue;
-      final p = await node.content(o);
-      if (p == null || !seen.add(p['revision'])) continue;
-      await node.publish('drive', p, space: '_drive', audience: [node.person]);
-      count++;
+    var count = 0, cursor = 0;
+    final slice = TimeSlice();
+    while (true) {
+      final page = node.store.objectsAfter('drive', cursor);
+      if (page.isEmpty) break;
+      for (final (sequence, o) in page) {
+        cursor = sequence;
+        await slice.pause();
+        if (o.author != node.person || o.isPublic) continue;
+        final p = await node.content(o);
+        if (p == null || !seen.add(p['revision'])) continue;
+        await node.publish(
+          'drive',
+          p,
+          space: '_drive',
+          audience: [node.person],
+        );
+        count++;
+      }
     }
     return count;
   }

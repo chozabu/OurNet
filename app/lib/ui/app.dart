@@ -195,6 +195,31 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   String? composerContext;
   String? notesComposerContext;
   final deliveryLabels = <String, String>{};
+
+  /// Devices seen to have received each item, and how far the receipts have
+  /// been consumed. See `loadDeliveryLabels`.
+  final deliveryDevices = <String, Set<String>>{};
+  int deliveryCursor = 0;
+
+  /// Every stored object of [kinds], newest first, a page at a time.
+  ///
+  /// Search has no index to narrow it, so it does have to look at the whole
+  /// of history; what it must not do is read all of it at once, or read a
+  /// fixed slice and present the result as though it were everything.
+  Stream<SignedObject> scanHistory(List<String> kinds) async* {
+    final slice = TimeSlice();
+    (int, String)? after;
+    while (true) {
+      final page = node.store.objects(kinds: kinds, after: after, limit: 256);
+      if (page.isEmpty) return;
+      for (final object in page) {
+        after = (object.created, object.id);
+        await slice.pause();
+        yield object;
+      }
+    }
+  }
+
   final conversationOlder = <String, List<SignedObject>>{};
   final conversationEnd = <String>{};
   final conversationPending = <String>{};

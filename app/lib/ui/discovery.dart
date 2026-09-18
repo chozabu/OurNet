@@ -54,14 +54,10 @@ extension _DiscoveryPages on _OurNetAppState {
         );
       }
     }
-    for (final object
-        in node.store
-            .objects(limit: Node.maxObjects)
-            .where(
-              (o) =>
-                  ['message', 'post', 'file'].contains(o.kind) &&
-                  contentVisible(o),
-            )) {
+    // Newest first in pages: searching reads as much history as it needs
+    // rather than a fixed slice of it, and holds only the page.
+    await for (final object in scanHistory(const ['message', 'post', 'file'])) {
+      if (!contentVisible(object)) continue;
       final payload = await node.content(object);
       if (payload == null) continue;
       result.add(

@@ -206,12 +206,8 @@ extension _DrivePages on _OurNetAppState {
         }
       }
     }
-    for (final object
-        in node.store
-            .objects(limit: Node.maxObjects)
-            .where(
-              (o) => ['message', 'post'].contains(o.kind) && node.visible(o),
-            )) {
+    await for (final object in scanHistory(const ['message', 'post'])) {
+      if (!node.visible(object)) continue;
       final payload = await node.content(object);
       if (payload == null ||
           payload['chunks'] is! List ||

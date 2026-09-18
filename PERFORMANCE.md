@@ -102,6 +102,68 @@ the preview phase. It does not measure network transfer, image decoding or frame
 rendering. Compile it with `dart build cli -t bin/responsiveness.dart` for AOT
 comparisons; label JIT and AOT results separately.
 
+### History size
+
+`core/bin/history.dart` is the repeatable check that reading a view costs the
+window it shows rather than the whole profile. It builds temporary disk
+profiles at several sizes, through the real signing and encryption path, and
+times what a routine refresh does: list the groups, open one, write to it, read
+its members, and answer a peer's inventory. No personal profile is used.
+
+```powershell
+cd core
+dart run bin/history.dart ../HISTORY_BASELINE.json --scales=5000,20000,60000
+```
+
+The result worth reading is the shape across sizes, not any single number: a
+view whose cost is set by its window stays flat as the profile grows, and one
+that walks history does not. Building the profiles dominates the runtime
+(every object is really signed and encrypted), so expect tens of minutes for
+the larger scales. `HISTORY_BASELINE.json` records a run.
+
+`HISTORY_BASELINE.json` records a Windows Dart JIT run at three sizes, the
+largest six times the old cap:
+
+| Measurement | 5,017 objects | 20,098 objects | 60,199 objects |
+|---|---:|---:|---:|
+| Groups in the profile | 25 | 100 | 300 |
+| Stored object MiB | 5.8 | 23.5 | 70.6 |
+| Open the busy group, cold (ms) | 214 | 214 | 208 |
+| Reopen it (ms) | 2.1 | 1.7 | 2.4 |
+| Open the inbox (ms) | 208 | 214 | 207 |
+| Write to the busy group (ms) | 15.8 | 17.0 | 20.8 |
+| Read its members (ms) | 2.6 | 3.6 | 5.4 |
+| Answer a sync inventory (ms) | 32 | 25 | 27 |
+| List the groups, projected (ms) | 0.19 | 0.24 | 0.55 |
+| List the groups, first load (ms) | 36 | 147 | 371 |
+| RSS (MiB) | 379 | 421 | 438 |
+
+Opening a group, opening the inbox, writing, and answering an inventory are
+flat across a twelve-fold change in stored objects: they cost what they show.
+Listing the groups grows with the number of **groups** (25, 100, 300), not
+with history — which is the intended shape, and the first load of that list
+also decrypts each group's record once per process, so it is the one figure
+that a profile with very many groups should be judged on.
+
+These are one machine's measurements, not a speedup claim: the same journeys
+could not be run past 10,000 objects at all before, so there is no before
+column to compare against. Building the profiles dominates the run — the
+60,000-object profile takes about twenty minutes to write, because every
+object is really signed and encrypted.
+
+The Flutter journeys can also be run with a profile past the old cap, which
+was previously impossible: building one failed on the quota rather than on
+time, so the app was never measured there.
+
+```powershell
+cd app
+flutter drive --profile -d DEVICE_ID --driver=test_driver/performance.dart --target=integration_test/note_history_test.dart --dart-define=NOTES=200 --dart-define=EDITS=60
+```
+
+That builds roughly 12,000 note objects before the measured camera return.
+Setup dominates the run; the budgets are the same, because the interaction is
+supposed to cost what it shows rather than what is stored.
+
 ## Performance architecture and review rules
 
 - Each node lazily owns one attachment isolate. It serializes chunk encryption,
@@ -144,9 +206,65 @@ comparisons; label JIT and AOT results separately.
   objects without hashing or parsing them. Only records not already stored are
   verified, in an isolate. Handoffs and receipts are signed in batches off the
   UI isolate, and a page's writes commit in transactions.
+- **No view reads more than it shows, and no structure grows with the stored
+  object count.** This is what replaced the 10,000-object cap: the cap bounded
+  rows rather than bytes, so it bounded nothing real (an object runs to 256 KiB)
+  while it did bound the product. A person's own writes are no longer limited;
+  what a peer can drive this device into storing is, in bytes, with object
+  usage maintained by trigger exactly as blob usage is. `receivedBudget` in
+  settings raises or disables that, and own writes are never refused by it.
+- Group and note views are per-space. `Everyday` keeps one projection per node,
+  fed by an insertion cursor: rooms and leaves are held (membership is derived
+  from them and there are few), while items are read from the space being
+  shown and never retained. Listing groups, opening one, reading its members
+  and writing to it each cost that space, not all of history. A write used to
+  walk every room, leave, inbox and group item several times over.
+- A read of an incremental projection must be free when nothing has changed,
+  and must not be asynchronous either. Views read these several times per
+  rebuild, so queueing a pass per read leaves a view rescheduling itself for
+  as long as reads keep arriving — which is a hang, not a slowdown. The gate
+  is the store's insertion cursor, plus the blocked set, because blocking
+  stores no object and so does not move the cursor.
+- When a pass is needed, callers **join the one in flight** rather than queue
+  behind each other, as the notes and drive projections do. A chain of passes
+  fills faster than it drains while a view is rebuilding, and a write then
+  waits behind every queued one; under a widget test's fake clock it never
+  drains at all. Joining means a caller can observe a pass that began just
+  before its own write, which is what a Lamport counter tolerates — a repeated
+  value breaks the tie by object ID, and every write notifies.
+- A cursor must move past everything it **scanned**, not past the last record
+  it wanted. Asking for a kind walks the rows in between, so a cursor left at
+  the last match rewalks everything written after it on the next pass — and a
+  profile holding none of that kind rewalks all of it, on every change. This
+  is the one that turns an incremental view back into a quadratic one, and it
+  does not show up in a profile that happens to hold the kind being sought.
+- Visibility is applied when a record is read, never baked into a projection:
+  `Node.visible` depends on the clock, because objects expire. Blocking gives
+  visibility back rather than taking it away, and no cursor walks backwards, so
+  a change of who is blocked reprojects instead.
+- The Lamport counter a write numbers itself with is only found inside item
+  payloads. Decrypting all of them to learn one number is done once per device
+  and the result is stored with its cursor, rather than repeated on each start.
+- Sharing fields are a trigger-maintained derived index (`object_routes`), like
+  the message routing index, so an inventory page is an index scan instead of
+  re-extracting JSON from every stored object. No route is held in memory
+  between calls, and a sync page no longer re-sorts every object it holds.
+- Evidence digests are a bounded cache over an indexed lookup rather than every
+  object's evidence held at once, and offers walk a creation-time window in
+  keyset pages rather than materialising it.
+- Search has no index to narrow it, so it does read all of history; it does so
+  in pages, with pauses, and does not present a fixed slice as though it were
+  everything.
+- Reads whose correctness depends on seeing all of something read all of it,
+  in pages: one note's operations and one group's items. A limit there would
+  not shorten a view, it would drop live records — whatever was written once
+  and never revised, or the entries last written about longest ago. Showing a
+  very long group lazily is separate work; the notes list is already paged
+  that way, a group's item list is not yet.
 - UI lists share per-build derived data (profile names, unread objects, forum
   definitions and moderation, reply counts) instead of rescanning history per
-  row. File presence is one query per file and positive results are remembered.
+  row. Delivery receipts and new-activity notifications are consumed by
+  insertion cursor, not by rescanning or by remembering every stored ID. File presence is one query per file and positive results are remembered.
 - Notes imports show local-save progress and use a separate action state, keeping
   note submission and navigation available. Text paste/import captures its
   destination before awaiting platform work.
@@ -168,10 +286,15 @@ spans.
 
 This is an initial performance foundation. Metadata SQL, signature
 verification and first-time record decryption still run on the main isolate
-(time-sliced), and broad history processing remains for first loads.
-Windows first-use rendering, large-history pagination/incremental projections, sync-under-load scenarios,
+(time-sliced). Group, note and drive views are now incremental projections
+over per-space reads, so a refresh no longer processes broad history; what
+remains for a first load is decrypting the records a view actually shows, and
+one migration pass per device to record the counter described above.
+Windows first-use rendering, sync-under-load scenarios,
 direct input-to-paint measurement, cancellation and physical Android validation
-remain follow-up work. The new measurements should guide that work.
+remain follow-up work, as does the cost of an inventory for a peer that can see
+very little of a large profile: the sharing index makes that an index scan, but
+it is still a scan. The new measurements should guide that work.
 
 ## Recorded validation of the foundation
 
