@@ -42,6 +42,7 @@ class PeerNetwork {
   Timer? _debounce;
   final Map<String, Timer> _retry = {};
   final Map<String, int> _failures = {};
+  final Map<String, int> _resume = {};
   final Set<String> _busy = {};
   final Set<iroh.Connection> _connections = {};
   final Set<Future<void>> _jobs = {};
@@ -308,8 +309,11 @@ class PeerNetwork {
       // Bounded work per session; exhausted pages schedule a continuation.
       var exhausted = true;
       // Both sides reconcile the same window of history per page, then walk
-      // back through older ones once the current window agrees.
+      // back through older ones once the current window agrees. A
+      // continuation checks the newest window, then resumes where the last
+      // session stopped, so history beyond one session's pages is reached.
       var window = 0;
+      final resume = _resume.remove(device) ?? 0;
       for (var page = 0; page < 16; page++) {
         final inventory = node.inventory(peerDevice: device, window: window);
         final reply = await request(device, {
@@ -336,9 +340,10 @@ class PeerNetwork {
             exhausted = false;
             break;
           }
-          window++;
+          window = window == 0 && resume > 0 ? resume : window + 1;
         }
       }
+      if (exhausted) _resume[device] = window;
       syncErrors.remove(device);
       lastSync[device] = DateTime.now();
       _remember(device);
@@ -407,10 +412,12 @@ class PeerNetwork {
   }
 
   Future<void> _serve(iroh.Connection connection, String peer) async {
+    iroh.SendStream? replyStream;
     try {
       final (send, recv) = await connection.acceptBi().timeout(
         const Duration(seconds: 10),
       );
+      replyStream = send;
       final raw = await recv
           .readToEnd(2 * 1024 * 1024)
           .timeout(const Duration(seconds: 20));
@@ -476,6 +483,18 @@ class PeerNetwork {
       );
     } catch (e) {
       log('Rejected request: $e');
+      // Tell the caller why, so it can show the reason rather than a
+      // transport failure. Only policy refusals carry their message.
+      try {
+        await replyStream?.writeAll(
+          bytes({'error': e is StateError ? e.message : 'Request failed'}),
+        );
+        await replyStream?.finish();
+        await connection.closed().timeout(
+          const Duration(seconds: 3),
+          onTimeout: () => 'done',
+        );
+      } catch (_) {}
     } finally {
       connection.close();
     }

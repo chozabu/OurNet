@@ -158,12 +158,18 @@ class Files {
     var size = 0;
     onProgress?.call(0, payload['size'] as int);
     final key = payload['key'] == null ? null : unb64(payload['key']);
+    // A peer that failed once is not retried for every later chunk: each
+    // attempt can wait out a connection timeout.
+    final failed = <String>{};
     for (final id in (payload['chunks'] as List).cast<String>()) {
       var plain = await node.blobs.decode(id, key);
       if (plain == null) {
         final sources =
             node.contacts.values
-                .where((p) => node.allowedPeer(p.device))
+                .where(
+                  (p) =>
+                      node.allowedPeer(p.device) && !failed.contains(p.device),
+                )
                 .toList()
               ..sort(
                 (a, b) => (a.person == object.author ? 0 : 1).compareTo(
@@ -185,6 +191,7 @@ class Files {
               }
             }
           } catch (_) {
+            failed.add(peer.device);
             /* Another admitted source may be available. */
           }
         }

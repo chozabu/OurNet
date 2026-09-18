@@ -417,16 +417,25 @@ class KeepImport {
       (field: 'edited', value: k.edited, parents: const <String>[]),
     ]);
 
+    // The note exists from here on, and a later import counts it as done, so
+    // a label or placement that fails is reported without failing the note.
     for (final label in k.labels) {
-      final id = labels[label.toLowerCase()] ??= await notes.state.createLabel(
-        label.trim(),
-      );
-      await notes.state.label([note.id], id, true);
+      try {
+        final id = labels[label.toLowerCase()] ??= await notes.state
+            .createLabel(Notes.bounded(label.trim(), 50));
+        await notes.state.label([note.id], id, true);
+      } catch (e) {
+        result.problems.add((label, '$e'));
+      }
     }
-    if (k.archived) {
-      await notes.state.archive([note.id], true);
-    } else if (k.pinned) {
-      await notes.pin(note.id, true);
+    try {
+      if (k.archived) {
+        await notes.state.archive([note.id], true);
+      } else if (k.pinned) {
+        await notes.pin(note.id, true);
+      }
+    } catch (e) {
+      result.problems.add((_label(k), '$e'));
     }
   }
 }

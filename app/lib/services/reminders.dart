@@ -62,6 +62,20 @@ class NoteReminders {
           AndroidFlutterLocalNotificationsPlugin
         >();
     _exact = await android?.canScheduleExactNotifications() ?? false;
+    // Notifications scheduled by an earlier run outlive the process. Treat
+    // them as scheduled, so the first pass cancels any whose reminder was
+    // cleared (or whose note was removed) while this app was closed.
+    try {
+      for (final pending
+          in await notifications.plugin.pendingNotificationRequests()) {
+        final payload = pending.payload;
+        if (payload != null && payload.startsWith('note:')) {
+          _scheduled[payload.substring(5)] = '';
+        }
+      }
+    } catch (_) {
+      /* Platforms that cannot list pending notifications. */
+    }
     _changes = node.changes.stream.listen((_) => _task.schedule());
     _timer = Timer.periodic(const Duration(minutes: 1), (_) => _due());
     _task.schedule();

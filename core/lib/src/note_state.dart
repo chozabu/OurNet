@@ -73,7 +73,7 @@ class NoteState {
     node.store.set('noteStateMigrated', true);
     final pins = node.store.trueSettings('notePin/');
     if (pins.isEmpty) return;
-    await setAll([
+    await _setAll([
       for (final id in pins)
         if (value('pin', id) == null) ('pin', id, true),
     ]);
@@ -82,8 +82,16 @@ class NoteState {
   Object? value(String field, String target) =>
       _heads['$field/$target']?.firstOrNull?.data['value'];
 
-  /// Writes several personal values; each observes the current heads.
+  /// Writes several personal values; each observes the current heads,
+  /// including writes from this person's other devices that have arrived.
   Future<void> setAll(List<(String, String, Object)> values) async {
+    if (values.isEmpty) return;
+    await refresh();
+    await _setAll(values);
+  }
+
+  // Also used by the migration, which runs inside [refresh].
+  Future<void> _setAll(List<(String, String, Object)> values) async {
     if (values.isEmpty) return;
     final clock = ++_clock;
     for (final (field, target, value) in values) {

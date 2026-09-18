@@ -41,7 +41,8 @@ class ShareInbox {
           node.store.set(key, true);
         }
         await channel.invokeMethod<void>('ack', {'id': id});
-        onResult((share['error'] as String).isEmpty ? null : share['error']);
+        final error = share['error'] as String? ?? '';
+        onResult(error.isEmpty ? null : error);
       }
     } catch (e) {
       onResult('Share is waiting to import: $e');

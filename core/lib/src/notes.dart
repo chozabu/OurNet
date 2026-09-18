@@ -751,6 +751,13 @@ class Notes {
     String field = 'meta',
     List<String> parents = const [],
   }) async {
+    // Refuse before storing chunks: blobs of a refused attachment stay behind.
+    final before = await _writable(id, epoch);
+    if (fileId == null &&
+        field == 'meta' &&
+        before.files.length >= maxFiles) {
+      throw StateError('A note holds up to $maxFiles attachments.');
+    }
     final key = List<int>.generate(32, (_) => Random.secure().nextInt(256));
     final chunks = <String>[];
     var pending = BytesBuilder(copy: false);

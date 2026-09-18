@@ -2202,17 +2202,15 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
                                       ],
                                       reminder: reminderValue,
                                       onReminder: reminder,
-                                      onRemoveReminder: () async {
-                                        await state.setReminder(id!, null);
-                                        if (mounted) setState(() {});
-                                      },
-                                      onRemoveLabel: (name) async {
+                                      onRemoveReminder: () => run(
+                                        () => state.setReminder(id!, null),
+                                      ),
+                                      onRemoveLabel: (name) => run(() {
                                         final label = labelNames.entries
                                             .firstWhere((e) => e.value == name)
                                             .key;
-                                        await state.label([id!], label, false);
-                                        if (mounted) setState(() {});
-                                      },
+                                        return state.label([id!], label, false);
+                                      }),
                                     ),
                                   ),
                                 ),

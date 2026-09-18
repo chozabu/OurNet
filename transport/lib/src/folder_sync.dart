@@ -255,9 +255,18 @@ class FolderSync {
         'Disconnect this folder before choosing another location',
       );
     // A tree cannot have two competing writers, including nested connections.
-    String normalize(String location) => Uri.decodeFull(
-      location,
-    ).replaceAll('\\', '/').toLowerCase().replaceAll(RegExp(r'/+$'), '');
+    String normalize(String location) {
+      String decoded;
+      try {
+        decoded = Uri.decodeFull(location);
+      } on ArgumentError {
+        decoded = location; // A plain path may hold a literal '%'.
+      }
+      return decoded
+          .replaceAll('\\', '/')
+          .toLowerCase()
+          .replaceAll(RegExp(r'/+$'), '');
+    }
     final normalized = normalize(location);
     for (final config in configs.values) {
       final other = normalize(config['location'] as String);
