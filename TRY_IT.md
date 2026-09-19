@@ -23,6 +23,16 @@ it does not overwrite running release binaries. Close a profile's old window
 before launching that same profile on the new build. For hot reload instead:
 `cd app; flutter run -d windows`.
 
+To package for other people, `.\tool\package.ps1` builds the dated zip (with the
+Visual C++ runtime, so it runs on a fresh Windows). Add `-Msix` for an MSIX
+package signed with a test certificate, or `-Store -IdentityName … -Publisher …
+-PublisherDisplayName …` (Partner Center's Product identity values) for an
+unsigned one to upload to the Microsoft Store. The package starts with Windows
+through a startup task rather than the Run key, and declares an inbound UDP
+firewall rule so Windows does not ask. Installed fresh, its profiles live inside
+the package and are deleted on uninstall; after the zip, it keeps using
+`%APPDATA%\org.ournet\ournet`.
+
 On a fresh checkout, run `.\tool\setup.ps1` first. It resolves packages and
 verifies the upstream signature of the pinned native networking library.
 

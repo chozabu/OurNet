@@ -35,3 +35,16 @@ transfer is in `transport`. Preserve the separation between these packages.
 - Follow `PERFORMANCE.md` for measurement boundaries, profile-mode runs and
   baselines. Do not compare debug timings to profile/release timings or collect
   benchmark results while other builds or test suites are running.
+
+## Microsoft Store
+
+- Store releases go through `tool/publish-store.ps1 -Build` (builds the Store
+  MSIX with the Partner Center identity, then uploads and submits it with the
+  `msstore` CLI). Bump the x.y.z part of `version:` in `app/pubspec.yaml` first:
+  the Store needs a higher version for every submission.
+- Store API credentials live in `%USERPROFILE%\.ournet-signing\msstore.json`,
+  never in the repo. The first submission of a product must be done by hand in
+  Partner Center; the CLI only updates after that.
+- Listing copy, age-rating answers and certification notes are in
+  `store/microsoft-store.md`; `store/submitted-version.txt` is the last version
+  the Store has.

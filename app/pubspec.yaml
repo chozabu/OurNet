@@ -50,8 +50,35 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   image: 4.5.4
+  msix: 3.18.0
 
 flutter:
   uses-material-design: true
   assets:
     - assets/maps/world_land.geojson
+
+# The Windows MSIX package, built by tool/package.ps1 -Msix. The identity is
+# Partner Center's Product identity page for the Store listing (9N6P4X13QG9M);
+# a test build keeps the name but is signed, and so published, by msix's test
+# certificate.
+msix_config:
+  display_name: OurNet
+  publisher_display_name: Chozabu
+  identity_name: Chozabu.OurNet
+  publisher: CN=30BA6359-7C85-4DB7-96B1-937D4F790B29
+  logo_path: ../store/ournet-icon-512.png
+  languages: en-gb, en-us
+  capabilities: internetClient,internetClientServer,privateNetworkClientServer,microphone,webcam
+  build_windows: false
+  install_certificate: false
+  # Off until chosen in Settings; SystemTray looks it up by this id.
+  startup_task:
+    task_id: OurNetStartup
+    enabled: false
+    parameters: --background
+  # Matches the guid in services/notifications.dart, so clicking a
+  # notification opens OurNet when it is not running.
+  toast_activator:
+    clsid: c8e1c95a-479c-4b2b-a99e-bb981344aa82
+    arguments: --toast
+    display_name: OurNet

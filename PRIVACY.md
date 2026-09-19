@@ -1,6 +1,7 @@
 # OurNet privacy declaration
 
-_Last updated: 16 September 2026. Applies to OurNet for Android (`org.chozabu.ournet`)._
+_Last updated: 19 September 2026. Applies to OurNet for Android (`org.chozabu.ournet`)
+and Windows (the Microsoft Store app `Chozabu.OurNet`, and the zip download)._
 
 ## The short version
 
@@ -32,14 +33,23 @@ IP address. Voice and video calls use WebRTC, which contacts STUN servers
 public address; those operators see your IP address when you place or answer a
 call, but not the call itself.
 
-This is the one category of information that reaches a third party, and we
+**To a speech service, if you choose one.** Voice notes can be transcribed by
+Whisper, which runs on your device; downloading a Whisper model fetches it from
+Hugging Face, which sees your IP address. If you choose the system speech
+engine instead, your recording goes to that engine: on Windows, Microsoft's
+online speech recognition (only while it is turned on in Windows privacy
+settings); on Android, your phone's speech service. Their own privacy terms
+apply to that audio.
+
+These are the only categories of information that reach a third party, and we
 would rather say so plainly than claim nothing ever leaves.
 
 **Nowhere else.** No content is sent to the developer.
 
 ## What stays on your device
 
-- Your private keys, held in the operating system's key store
+- Your private keys, held in Android's key store, or on Windows encrypted to your
+  Windows account
 - Your notes, files and message history, in a local database
 - Text recognised from images, which is processed on-device
 
@@ -51,7 +61,8 @@ would rather say so plainly than claim nothing ever leaves.
 | Camera | Taking photos for notes, scanning pairing QR codes, video calls |
 | Microphone | Voice notes and calls |
 | Notifications | Telling you about new messages, replies, calls and note reminders. By default a message notification shows the sender and text, which your phone can hide on the lock screen; Settings can limit it to the sender |
-| Run at startup / exact alarms | Re-scheduling note reminders after a restart |
+| Run at startup / exact alarms | Re-scheduling note reminders after a restart (Android); starting in the notification area when you sign in, only if you turn it on in Settings (Windows) |
+| Incoming network connections (Windows firewall) | Letting your friends' devices connect directly to yours |
 
 Camera and microphone are used only while you are actively using the feature
 that needs them.
@@ -65,7 +76,10 @@ that needs them.
 
 ## Deleting your data
 
-Uninstalling OurNet removes the local database and keys from that device.
+Uninstalling OurNet removes the local database and keys from that device. On
+Windows, the zip download keeps them in `%APPDATA%\org.ournet\ournet` until
+you delete that folder, and so does the Store app if that folder was there
+before it was installed.
 Content you have already shared exists on your friends' devices and is not
 recallable — the same as any message you have already sent someone.
 
