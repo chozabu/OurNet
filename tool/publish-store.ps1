@@ -31,7 +31,10 @@ $taskIdentityName = 'Chozabu.OurNet'
 $taskPublisher = 'CN=30BA6359-7C85-4DB7-96B1-937D4F790B29'
 $taskPublisherDisplayName = 'Chozabu'
 
-if(!(Get-Command msstore -ErrorAction SilentlyContinue)){throw 'msstore not found: winget install "Microsoft Store Developer CLI"'}
+# Installed from the Store, msstore may not be on PATH in an older shell.
+$taskCli = (Get-Command msstore -ErrorAction SilentlyContinue).Source
+if(!$taskCli){$taskCli = (Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Microsoft/WindowsApps/MSStore.exe') -ErrorAction SilentlyContinue).FullName}
+if(!$taskCli){throw 'msstore not found: winget install "Microsoft Store Developer CLI"'}
 
 # Version guard: the Store rejects a package whose version is not higher.
 $taskVersion = [version](((Select-String -Path (Join-Path $taskRoot 'app/pubspec.yaml') -Pattern '^version:\s*(\d+\.\d+\.\d+)').Matches[0].Groups[1].Value))
@@ -69,14 +72,14 @@ $taskSeller = if($env:MSSTORE_SELLER_ID){$env:MSSTORE_SELLER_ID}else{$taskCred.s
 $taskClient = if($env:MSSTORE_CLIENT_ID){$env:MSSTORE_CLIENT_ID}else{$taskCred.clientId}
 $taskSecret = if($env:MSSTORE_CLIENT_SECRET){$env:MSSTORE_CLIENT_SECRET}else{$taskCred.clientSecret}
 if(!$taskTenant -or !$taskSeller -or !$taskClient -or !$taskSecret){throw "Store credentials missing: fill in $taskCredFile or the MSSTORE_* environment variables"}
-msstore reconfigure --tenantId $taskTenant --sellerId $taskSeller --clientId $taskClient --clientSecret $taskSecret | Out-Null
+& $taskCli reconfigure --tenantId $taskTenant --sellerId $taskSeller --clientId $taskClient --clientSecret $taskSecret | Out-Null
 if($LASTEXITCODE -ne 0){throw 'msstore reconfigure failed'}
 
 # The positional argument is the project folder; --inputFile stops msstore
 # packaging it again, so the .msix checked above is what gets uploaded.
 $taskArgs = @('publish', (Join-Path $taskRoot 'app'), '--inputFile', $Msix, '--appId', $taskProductId)
 if($NoCommit){$taskArgs += '--noCommit'}
-msstore @taskArgs
+& $taskCli @taskArgs
 if($LASTEXITCODE -ne 0){throw 'msstore publish failed'}
 if(!$NoCommit){$taskVersion.ToString() | Set-Content $taskLastFile}
 "Published $Msix version $taskVersion to $taskProductId"
