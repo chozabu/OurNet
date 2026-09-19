@@ -2,7 +2,10 @@
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
 
+#include <algorithm>
+
 #include "flutter_window.h"
+#include "system_tray.h"
 #include "utils.h"
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
@@ -21,6 +24,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
+  // Started by the Store package's startup task, which may pass no arguments.
+  if (SystemTray::StartHidden() &&
+      std::find(command_line_arguments.begin(), command_line_arguments.end(),
+                "--background") == command_line_arguments.end()) {
+    command_line_arguments.push_back("--background");
+  }
 
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 

@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "system_speech.h"
+#include "system_tray.h"
 #include "win32_window.h"
 
 // A window that does nothing but host a Flutter view.
@@ -32,6 +33,9 @@ class FlutterWindow : public Win32Window {
 
   // Live dictation for voice notes.
   std::unique_ptr<SystemSpeech> speech_;
+
+  // The notification area icon, and closing into it.
+  std::unique_ptr<SystemTray> tray_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

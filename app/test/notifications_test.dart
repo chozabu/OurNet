@@ -125,6 +125,25 @@ void main() {
     expect((await b.content(replies.single))!['text'], 'Yes!');
   });
 
+  test('Windows buttons carry their action in the payload', () {
+    NotificationResponse button(String arguments, [String? text]) =>
+        NotificationResponse(
+          notificationResponseType:
+              NotificationResponseType.selectedNotification,
+          payload: arguments,
+          actionId: arguments,
+          data: {'message': ?text},
+        );
+    expect(notificationAction(button('reply:${b.person}', 'Yes!')), [
+      'reply',
+      b.person,
+      'Yes!',
+    ]);
+    expect(notificationAction(button('read:${b.person}')), ['read', b.person]);
+    // The toast itself opens the chat.
+    expect(notificationAction(button('chat:${b.person}')), isNull);
+  });
+
   test('forum replies to you alert; other posts are a quiet summary', () async {
     final mine = await a.publish('post', {'text': 'Question'});
     await syncPair(a, b);

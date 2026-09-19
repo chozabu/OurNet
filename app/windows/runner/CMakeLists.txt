@@ -10,6 +10,7 @@ add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
   "system_speech.cpp"
+  "system_tray.cpp"
   "voice_capture.cpp"
   "utils.cpp"
   "win32_window.cpp"
@@ -35,7 +36,7 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # Add dependency libraries and include directories. Add any application-specific
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
-target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib" "WindowsApp.lib" "mfplat.lib" "mfreadwrite.lib" "mfuuid.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib" "WindowsApp.lib" "mfplat.lib" "mfreadwrite.lib" "mfuuid.lib" "shell32.lib")
 # C++/WinRT (Windows speech recognition) needs C++20 coroutine support.
 target_compile_features(${BINARY_NAME} PRIVATE cxx_std_20)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")

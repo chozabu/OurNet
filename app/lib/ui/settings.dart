@@ -293,6 +293,31 @@ extension _SettingsPages on _OurNetAppState {
                   refresh();
                 }),
         ),
+      if (Platform.isWindows)
+        SwitchListTile(
+          title: const Text('Keep running in the notification area'),
+          subtitle: const Text(
+            'Closing the window leaves OurNet connected to friends, so messages arrive and notify straight away. Quit from its icon.',
+          ),
+          value: keepInTray,
+          onChanged: (v) => act(() async {
+            node.store.set('keepInTray', v);
+            await SystemTray.keep(v);
+            refresh();
+          }),
+        ),
+      if (Platform.isWindows && startsWithWindows != null)
+        SwitchListTile(
+          title: const Text('Start with Windows'),
+          subtitle: const Text(
+            'Open OurNet in the notification area when you sign in.',
+          ),
+          value: startsWithWindows!,
+          onChanged: (v) => act(() async {
+            await SystemTray.setStartsWithWindows(v);
+            update(() => startsWithWindows = v);
+          }),
+        ),
       ListTile(
         title: const Text('Call connectivity'),
         subtitle: const Text(

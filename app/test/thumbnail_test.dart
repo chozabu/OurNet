@@ -16,6 +16,7 @@ class CountingBlobWorker extends BlobWorker {
     if (bytes == null) chunkReads++;
     return super.decode(hash, key, bytes: bytes);
   }
+
   @override
   Future<Uint8List?> readLocal(List<String> hashes, List<int>? key) {
     // Whole-file reads on a disk profile bypass decode; count their chunks.

@@ -23,11 +23,18 @@ const _forumRange = 0x10000000, _callId = 1;
 const _recent = Duration(days: 2);
 
 /// What a button on a notification asks for, or null for a plain tap:
-/// `read <person>` or `reply <person> <text>`. Buttons run without the app's
-/// interface, possibly with no app running at all; see background_sync.dart.
+/// `read <person>` or `reply <person> <text>`. On Android buttons run without
+/// the app's interface, possibly with no app running at all; see
+/// background_sync.dart. Windows passes a button's arguments as the payload,
+/// to the running app.
 List<String>? notificationAction(NotificationResponse response) {
   final payload = response.payload;
-  if (payload == null || !payload.startsWith('chat:')) return null;
+  if (payload == null) return null;
+  if (payload.startsWith('reply:')) {
+    return ['reply', payload.substring(6), '${response.data['message'] ?? ''}'];
+  }
+  if (payload.startsWith('read:')) return ['read', payload.substring(5)];
+  if (!payload.startsWith('chat:')) return null;
   final peer = payload.substring(5);
   return switch (response.actionId) {
     'reply' => ['reply', peer, response.input ?? ''],
@@ -69,6 +76,9 @@ class Notifications {
   void Function()? onCallOpen;
   void Function(String)? onError;
 
+  /// Called first when a notification is tapped, to bring the app forward.
+  void Function()? onTap;
+
   /// Whether the user is already looking at what a notification with this
   /// payload would open, so it need not be shown.
   bool Function(String payload)? showing;
@@ -81,9 +91,11 @@ class Notifications {
   Notifications(this.node, {this.onAction});
   Future<void>? _initialising;
 
-  /// On by default on Android, where the system manages them per channel.
+  /// On by default on Android, where the system manages them per channel,
+  /// and on Windows, where OurNet keeps running in the tray to show them.
   bool get enabled =>
-      node.store.setting('notifications') as bool? ?? Platform.isAndroid;
+      node.store.setting('notifications') as bool? ??
+      (Platform.isAndroid || Platform.isWindows);
 
   /// Whether notifications show what was written, or only who wrote. Chats
   /// are private notifications, so a secure lock screen can hide them too.
@@ -146,6 +158,17 @@ class Notifications {
   }
 
   void _open(NotificationResponse response) {
+    final action = notificationAction(response);
+    if (action != null) {
+      unawaited(
+        runNotificationAction(
+          node,
+          action,
+        ).catchError((Object e) => onError?.call('$e')),
+      );
+      return;
+    }
+    onTap?.call();
     final payload = response.payload ?? '';
     final split = payload.indexOf(':');
     final key = payload.substring(split + 1);
@@ -317,7 +340,21 @@ class Notifications {
             AndroidNotificationAction('read', 'Mark read'),
           ],
         ),
-        windows: const WindowsNotificationDetails(),
+        windows: WindowsNotificationDetails(
+          timestamp: DateTime.fromMillisecondsSinceEpoch(unread.last.created),
+          subtitle: previews && count > 1 ? '$count unread' : null,
+          inputs: const [
+            WindowsTextInput(id: 'message', placeHolderContent: 'Reply'),
+          ],
+          actions: [
+            WindowsAction(
+              content: 'Send',
+              arguments: 'reply:$peer',
+              inputId: 'message',
+            ),
+            WindowsAction(content: 'Mark read', arguments: 'read:$peer'),
+          ],
+        ),
       ),
     );
     _chats.add(peer);
@@ -371,7 +408,10 @@ class Notifications {
                 onlyAlertOnce: true,
                 number: count,
               ),
-        windows: const WindowsNotificationDetails(),
+        // Replacing a toast shows it again; only replies make a sound.
+        windows: WindowsNotificationDetails(
+          audio: reply != null ? null : WindowsNotificationAudio.silent(),
+        ),
       ),
     );
   }

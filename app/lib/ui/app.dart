@@ -27,6 +27,7 @@ import '../services/calls.dart';
 import '../services/messaging.dart';
 import '../services/notifications.dart';
 import '../services/connection_service.dart';
+import '../services/system_tray.dart';
 import '../services/undelivered.dart';
 import '../services/session.dart';
 import 'world_map.dart';
@@ -142,6 +143,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   bool publicFiles = false;
   late final Calls calls;
   late final Notifications notifications;
+
+  /// Whether OurNet starts into the tray at sign-in (Windows, main profile).
+  bool? startsWithWindows;
   StreamSubscription<void>? _changes;
   late final CoalescedTask _dataRefresh;
   late final CoalescedTask _deliveryRefresh;
@@ -381,6 +385,23 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           ).catchError((Object e) => notice('Background sync unavailable: $e')),
         );
       }
+      if (Platform.isWindows) {
+        notifications.onTap = () =>
+            unawaited(SystemTray.show().catchError((Object _) {}));
+        SystemTray.onClosed = _closedToTray;
+        unawaited(
+          SystemTray.keep(
+            keepInTray,
+          ).catchError((Object e) => network.log('Tray unavailable: $e')),
+        );
+        if (activeProfile == 'main') {
+          unawaited(
+            SystemTray.startsWithWindows()
+                .then((on) => update(() => startsWithWindows = on))
+                .catchError((Object _) {}),
+          );
+        }
+      }
       unawaited(
         speech.start().catchError(
           (Object e) => notice('Voice transcription unavailable: $e'),
@@ -521,6 +542,25 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       node.store.setting('stayConnected') != false &&
       node.store.setting('autoConnect') != false;
 
+  /// Whether closing the window leaves OurNet running in the notification
+  /// area (Windows), online and showing notifications.
+  bool get keepInTray =>
+      Platform.isWindows &&
+      widget.enablePlatform &&
+      node.store.setting('keepInTray') != false;
+
+  /// Says once where OurNet went.
+  void _closedToTray() {
+    if (node.store.setting('trayHinted') == true) return;
+    node.store.set('trayHinted', true);
+    unawaited(
+      SystemTray.hint(
+        'OurNet is still running',
+        'Messages keep arriving and notifying. Quit from this icon’s menu.',
+      ).catchError((Object _) {}),
+    );
+  }
+
   void showNotes() {
     tab = Destination.notes;
     activeRoom = null;
@@ -550,6 +590,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       if (count != _badgeCount) {
         _badgeCount = count;
         unawaited(AppBadgePlus.updateBadge(count).catchError((Object _) {}));
+        if (Platform.isWindows) {
+          unawaited(SystemTray.unread(count).catchError((Object _) {}));
+        }
       }
     }
   }
@@ -664,7 +707,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _pausedStop?.cancel();
     if (state == AppLifecycleState.paused &&
         calls.phase == 'idle' &&
-        !stayConnected) {
+        !stayConnected &&
+        !keepInTray) {
       final open =
           network.friendInvitation?.available == true ||
           network.pairing?.available == true;
@@ -695,6 +739,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   void dispose() {
     unawaited(draftStore.flush().catchError((Object _) {}));
     WidgetsBinding.instance.removeObserver(this);
+    if (Platform.isWindows && widget.enablePlatform) SystemTray.onClosed = null;
     if (onBackgroundSync == _backgroundSync) onBackgroundSync = null;
     _pausedStop?.cancel();
     _changes?.cancel();

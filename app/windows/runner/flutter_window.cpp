@@ -28,11 +28,16 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   speech_ = std::make_unique<SystemSpeech>(
       flutter_controller_->engine()->messenger(), GetHandle());
+  tray_ = std::make_unique<SystemTray>(
+      flutter_controller_->engine()->messenger(), GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
-  flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
-  });
+  // Started with Windows, OurNet waits in the notification area.
+  if (!SystemTray::StartHidden()) {
+    flutter_controller_->engine()->SetNextFrameCallback([&]() {
+      this->Show();
+    });
+  }
 
   // Flutter can complete the first frame before the "show window" callback is
   // registered. The following call ensures a frame is pending to ensure the
@@ -44,6 +49,7 @@ bool FlutterWindow::OnCreate() {
 
 void FlutterWindow::OnDestroy() {
   speech_ = nullptr;
+  tray_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -55,6 +61,13 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  // Before Flutter, which would otherwise treat closing as quitting.
+  if (tray_) {
+    if (auto result = tray_->HandleMessage(hwnd, message, wparam, lparam)) {
+      return *result;
+    }
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =

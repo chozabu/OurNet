@@ -86,6 +86,7 @@ fact of friendship.
 | 2b | Stay online after sending | Recipient's wake-up finding the sender offline | Implemented |
 | 3 | Friend carriers (below) | Delivery when sender and recipient are never online together | Designed |
 | 4 | Stay connected (Android foreground service) | Fast delivery; ringing a sleeping phone | Implemented |
+| 4c | Windows notification area | The same on a desktop: closing the window no longer disconnects | Implemented |
 | 4b | Push wake-up (UnifiedPush) | The same with less battery, given a push server | Shelved (branch) |
 | 5 | Own relays, shared in contact cards | Dependence on number0's relays | Planned |
 | 6 | Call media over iroh when ICE fails | Calls behind carrier-grade NAT without TURN | Planned |
@@ -144,6 +145,21 @@ use (peer-to-peer messaging), which keeps network access in Doze.
 The cost is battery (an idle iroh connection to a relay) and a permanent,
 minimised notification. It can be turned off in Settings, which leaves
 background sync and staying online after sending.
+
+### Windows notification area (implemented)
+
+On Windows, closing the window hides it and OurNet keeps running from an icon
+in the notification area, online and showing notifications, until "Quit
+OurNet" in the icon's menu. A desktop that stays on is the friend most likely
+to be online when a phone wakes to sync. Chat notifications have a reply box
+and a Mark read button; notifications for forums without replies to you are
+silent. "Start with Windows" (off by default, main profile only) adds a
+per-user startup entry that opens OurNet straight into the notification area.
+
+Opening OurNet again while it runs shows the existing window rather than
+failing on the locked profile. Windows only delivers notification clicks to
+a running OurNet: a notification clicked after quitting does nothing. Both
+options are in Settings; turning off the icon makes closing quit again.
 
 ### Push wake-up (shelved)
 
