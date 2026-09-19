@@ -60,8 +60,8 @@ void main() {
   test('a background run hands its sync to the owning app', () async {
     await claimProfile();
     var synced = 0;
-    onBackgroundSync = (periodic) async {
-      expect(periodic, isTrue);
+    onBackgroundSync = (command) async {
+      expect(command, 'sync');
       synced++;
     };
     final owner = IsolateNameServer.lookupPortByName(profileOwner)!;

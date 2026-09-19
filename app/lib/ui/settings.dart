@@ -278,6 +278,21 @@ extension _SettingsPages on _OurNetAppState {
             refresh();
           }),
         ),
+      if (Platform.isAndroid && ownsProfile)
+        SwitchListTile(
+          title: const Text('Stay connected'),
+          subtitle: const Text(
+            'Keep a connection to friends open while OurNet is closed, so messages and calls arrive straight away. Android shows a notification while it is on, and it uses more battery.',
+          ),
+          value: stayConnected,
+          onChanged: node.store.setting('autoConnect') == false
+              ? null
+              : (v) => act(() async {
+                  node.store.set('stayConnected', v);
+                  await keepConnected(v);
+                  refresh();
+                }),
+        ),
       ListTile(
         title: const Text('Call connectivity'),
         subtitle: const Text(

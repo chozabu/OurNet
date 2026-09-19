@@ -83,8 +83,10 @@ fact of friendship.
 |---|---|---|---|
 | 1 | Default STUN for calls | Calls between two home networks | Implemented |
 | 2 | Android background sync | Collecting queued messages without opening the app | Implemented |
+| 2b | Stay online after sending | Recipient's wake-up finding the sender offline | Implemented |
 | 3 | Friend carriers (below) | Delivery when sender and recipient are never online together | Designed |
-| 4 | Push wake-up (UnifiedPush) | Fast delivery; ringing a sleeping phone | Planned |
+| 4 | Stay connected (Android foreground service) | Fast delivery; ringing a sleeping phone | Implemented |
+| 4b | Push wake-up (UnifiedPush) | The same with less battery, given a push server | Shelved (branch) |
 | 5 | Own relays, shared in contact cards | Dependence on number0's relays | Planned |
 | 6 | Call media over iroh when ICE fails | Calls behind carrier-grade NAT without TURN | Planned |
 | 7 | Packaged friend node (relay, carrier, push) | Making 3–5 one command to offer | Planned |
@@ -107,14 +109,50 @@ work the same way, opening the profile briefly if the app is not running.
 
 On its own this helps when the other side is online: a friend's desktop, or
 anyone with the app open. Combined with carriers, a phone collects waiting
-messages within roughly one period. Wake-ups (piece 4) are what make delivery
-fast.
+messages within roughly one period. Staying connected (piece 4) is what makes
+delivery fast.
 
 WorkManager usually runs in the app's own process, where the profile's file
 lock does not exclude it. So the profile has one owner at a time, registered
 in the isolate name server. A background run or notification button hands
 its work to a live app isolate instead of opening the profile a second time,
 and the app asks a background run to finish before opening the profile.
+
+### Stay online after sending (implemented)
+
+When OurNet goes to the background with messages that no recipient device
+has acknowledged yet (no receipt), it stays online instead of stopping the
+network, for up to 3 minutes or until the receipts arrive. Android freezes
+a backgrounded app within seconds, so the wait runs in a one-off WorkManager
+task, which Android lets run; it is handed to the app isolate like any other
+background work.
+
+### Stay connected (implemented)
+
+Android can keep an app running, and online, in a foreground service, as
+long as it shows a notification. With "Stay connected" (on by default on
+Android), OurNet runs one, so it stays reachable while in the background or
+swiped away: messages arrive within seconds, notifications appear, and calls
+can ring. Friends need nothing extra, and no third party is involved.
+
+The service keeps the app's own Flutter engine alive beyond its activity, so
+everything runs exactly as when the app is open; reopening attaches to the
+same engine. If Android restarts the process, or after a reboot or update,
+the service starts the engine itself. The service is declared as a special
+use (peer-to-peer messaging), which keeps network access in Doze.
+
+The cost is battery (an idle iroh connection to a relay) and a permanent,
+minimised notification. It can be turned off in Settings, which leaves
+background sync and staying online after sending.
+
+### Push wake-up (shelved)
+
+A UnifiedPush implementation exists on the `unifiedpush-wakeup` branch: peers
+exchange Web Push addresses in each sync, and a sender pushes encrypted sync
+items (object plus signed handoff) to recipient devices that have not
+acknowledged them. It needs the recipient to install a distributor app and
+depends on a push server, so it is parked in favour of staying connected. It
+remains the better option for battery if those become acceptable.
 
 ## Friend carriers
 
@@ -255,8 +293,8 @@ Whether carriers fetch chunks eagerly or only on request is open (see below).
   direct friends. Whether that is per message or a setting is open.
 - **Storage and bandwidth** for carriers, bounded by quotas they choose.
 - **Latency** grows with hops, and each carrier adds its own wake-up interval.
-  Push (piece 4) shortens this: a carrier that is online can wake the
-  recipient as soon as it holds something for them.
+  A recipient that stays connected (piece 4) collects from an online carrier
+  at once; push (4b) would let a carrier wake one that does not.
 - **Evidence size.** Each hop adds a handoff and a receipt, against the limit
   of 128 evidence records per object. Hop and `via` limits keep this small.
 

@@ -10,34 +10,41 @@ import 'notifications.dart';
 import 'session.dart';
 
 /// Work done while the app is in the background on Android: a periodic sync
-/// (WorkManager), and the reply and mark-read buttons on chat notifications.
+/// (WorkManager), a short stay online after sending (`linger`), and the
+/// buttons on chat notifications.
 ///
 /// Two friends' phones rarely have the app open at the same moment. A short
 /// periodic exchange lets either side collect what the other queued, and
 /// answers peers that are retrying at the time.
 ///
-/// WorkManager and notification buttons run their callbacks in other isolates,
-/// usually inside the app's own process, where the profile's file lock does
-/// not exclude them (POSIX locks are per process). The profile is therefore
-/// owned by whichever isolate holds [_owner] in the [IsolateNameServer]. Work
-/// is handed to a live owner as a command (`sync`, or a notification action
-/// such as `reply <person> <text>`); with no owner, the isolate opens the
-/// profile itself. The app asks such a run to `yield` before it opens the
-/// profile.
+/// WorkManager and notification buttons run their callbacks in other
+/// isolates, usually inside the app's own process, where
+/// the profile's file lock does not exclude them (POSIX locks are per
+/// process). The profile is therefore owned by whichever isolate holds
+/// [_owner] in the [IsolateNameServer]. Work is handed to a live owner as a
+/// command: `sync`, `linger`, or a notification action such as `reply`. With no owner, the isolate opens the profile itself. The
+/// app asks such a run to `yield` before it opens the profile.
 @visibleForTesting
 const profileOwner = 'ournet-profile-owner';
 const _owner = profileOwner;
 const _task = 'ournet-background-sync';
+const _lingerTask = 'ournet-linger';
+
+/// Commands that only ask for a sync.
+const _syncing = {'sync', 'linger'};
 
 /// How long a background run keeps answering peers after its own exchange.
 const _linger = Duration(seconds: 10);
 
-/// Run by the app isolate after it takes over background work: [periodic]
-/// for a WorkManager sync, false after a notification action. Null until the
-/// app can sync (for example during setup), in which case nothing is sent.
-Future<void> Function(bool periodic)? onBackgroundSync;
+/// Run by the app isolate after it takes over background work, with the
+/// command's name. Null until the app can sync (for example during setup),
+/// in which case nothing is sent.
+Future<void> Function(String command)? onBackgroundSync;
 
 final _opened = Completer<Node>();
+
+/// Whether this isolate is the profile owner, see [claimProfile].
+bool ownsProfile = false;
 
 /// The profile the app opened after [claimProfile]. Notification actions
 /// handed to the app are carried out on it.
@@ -71,28 +78,48 @@ Future<void> claimProfile() async {
       _release(owner);
     }
   }
+  ownsProfile = true;
   port.listen((message) async {
     final command = _command(message);
     if (command == null) return;
     final (action, reply) = command;
     reply.send('ack');
     try {
-      switch (action.first) {
-        case 'yield':
-          // The app never gives up the profile it holds.
-          break;
-        case 'sync':
-          await onBackgroundSync?.call(true);
-        default:
-          final node = await _opened.future.timeout(const Duration(minutes: 1));
-          await runNotificationAction(node, action);
-          await onBackgroundSync?.call(false);
+      // The app never gives up the profile it holds.
+      if (action.first != 'yield') {
+        if (!_syncing.contains(action.first)) {
+          await _perform(
+            await _opened.future.timeout(const Duration(minutes: 1)),
+            action,
+          );
+        }
+        await onBackgroundSync?.call(action.first);
       }
     } catch (e) {
       debugPrint('Background ${action.first} failed: $e');
     }
     reply.send('done');
   });
+}
+
+/// Carries out what [action] asks of an open profile, beyond syncing.
+Future<void> _perform(Node node, List<String> action) async {
+  switch (action) {
+    case [final command] when _syncing.contains(command):
+      break;
+    default:
+      await runNotificationAction(node, action);
+  }
+}
+
+/// Carries out [command] as, or through, the profile owner.
+Future<void> runBackgroundCommand(List<String> command) async {
+  DartPluginRegistrant.ensureInitialized();
+  try {
+    await _run(command);
+  } catch (e) {
+    debugPrint('Background ${command.first} failed: $e');
+  }
 }
 
 /// Removes [_owner] only while it still names [port].
@@ -126,10 +153,26 @@ Future<bool?> _ask(
   }
 }
 
-/// Schedules or cancels the periodic task. Android only.
-Future<void> scheduleBackgroundSync({required bool enabled}) async {
+Future<Workmanager> _workmanager() async {
   final manager = Workmanager();
   await manager.initialize(backgroundSyncDispatcher);
+  return manager;
+}
+
+/// Asks Android to keep the app running briefly while it stays online for
+/// messages that have not been delivered yet. Android only.
+Future<void> scheduleLinger() async {
+  await (await _workmanager()).registerOneOffTask(
+    _lingerTask,
+    _lingerTask,
+    constraints: Constraints(networkType: NetworkType.connected),
+    existingWorkPolicy: ExistingWorkPolicy.replace,
+  );
+}
+
+/// Schedules or cancels the periodic task. Android only.
+Future<void> scheduleBackgroundSync({required bool enabled}) async {
+  final manager = await _workmanager();
   if (!enabled) {
     await manager.cancelByUniqueName(_task);
     return;
@@ -147,12 +190,8 @@ Future<void> scheduleBackgroundSync({required bool enabled}) async {
 @pragma('vm:entry-point')
 void backgroundSyncDispatcher() {
   Workmanager().executeTask((task, input) async {
-    try {
-      await _run(const ['sync']);
-    } catch (e) {
-      debugPrint('Background sync failed: $e');
-    }
     // Failure is retried by the next period, not by WorkManager backoff.
+    await runBackgroundCommand([task == _lingerTask ? 'linger' : 'sync']);
     return true;
   });
 }
@@ -162,16 +201,9 @@ void backgroundSyncDispatcher() {
 @pragma('vm:entry-point')
 void notificationActionDispatcher(NotificationResponse response) {
   final action = notificationAction(response);
-  if (action == null) return;
-  DartPluginRegistrant.ensureInitialized();
-  unawaited(
-    _run(action).catchError(
-      (Object e) => debugPrint('Notification ${action.first} failed: $e'),
-    ),
-  );
+  if (action != null) unawaited(runBackgroundCommand(action));
 }
 
-/// Carries out [command] as, or through, the profile owner.
 Future<void> _run(List<String> command) async {
   while (true) {
     final existing = IsolateNameServer.lookupPortByName(_owner);
@@ -203,7 +235,7 @@ Future<void> _own(ReceivePort port, List<String> command) async {
       case 'yield':
         run.stop();
         unawaited(finished.future.then((_) => reply.send('done')));
-      case 'sync':
+      case final command when _syncing.contains(command):
         // Already syncing.
         reply.send('done');
       default:
@@ -222,9 +254,7 @@ Future<void> _own(ReceivePort port, List<String> command) async {
   // Actions that arrived as the profile was closing go to the next owner.
   for (final (action, reply) in run.late) {
     unawaited(
-      _run(action)
-          .catchError((Object e) => debugPrint('Background action failed: $e'))
-          .whenComplete(() => reply.send('done')),
+      runBackgroundCommand(action).whenComplete(() => reply.send('done')),
     );
   }
 }
@@ -254,7 +284,7 @@ class _HeadlessRun {
     }
     _actions = _actions.then((_) async {
       try {
-        await runNotificationAction(node, action);
+        await _perform(node, action);
         await _network?.syncAll();
       } catch (e) {
         debugPrint('Background ${action.first} failed: $e');
@@ -280,7 +310,7 @@ class _HeadlessRun {
         onAction: notificationActionDispatcher,
       );
       await notifications.initialise();
-      await runNotificationAction(node, command);
+      await _perform(node, command);
       _node = node;
       if (node.store.setting('autoConnect') == false ||
           (command.first == 'sync' &&

@@ -25,23 +25,33 @@ class MainActivity : FlutterActivity() {
     // would run main() a second time while the first is still opening the
     // identity, and concurrent flutter_secure_storage workers delete each
     // other's keystore keys. Hand the running engine to the new activity.
-    override fun provideFlutterEngine(context: Context): FlutterEngine? =
-        FlutterEngineCache.getInstance().get(RELAUNCH_ENGINE)?.also {
-            FlutterEngineCache.getInstance().remove(RELAUNCH_ENGINE)
-        }
+    // While OurNet stays connected, the engine outlives every activity (see
+    // ConnectionService), and each new activity attaches to it.
+    override fun provideFlutterEngine(context: Context): FlutterEngine? {
+        val cache = FlutterEngineCache.getInstance()
+        return cache.get(RELAUNCH_ENGINE)?.also { cache.remove(RELAUNCH_ENGINE) }
+            ?: cache.get(ConnectionService.ENGINE)
+    }
 
-    override fun shouldDestroyEngineWithHost() = !isChangingConfigurations
+    override fun shouldDestroyEngineWithHost() =
+        !isChangingConfigurations && !ConnectionService.enabled(this)
 
     override fun onDestroy() {
         folders?.close()
-        if (isChangingConfigurations) flutterEngine?.let {
-            FlutterEngineCache.getInstance().put(RELAUNCH_ENGINE, it)
+        val cache = FlutterEngineCache.getInstance()
+        if (isChangingConfigurations) flutterEngine?.let { cache.put(RELAUNCH_ENGINE, it) }
+        else if (shouldDestroyEngineWithHost() && cache.get(ConnectionService.ENGINE) === flutterEngine) {
+            cache.remove(ConnectionService.ENGINE)
         }
         super.onDestroy()
     }
 
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
+        ConnectionService.attach(applicationContext, engine)
+        if (ConnectionService.enabled(this)) {
+            FlutterEngineCache.getInstance().put(ConnectionService.ENGINE, engine)
+        }
         folders = FolderAccess(this, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/folders"))
         WidgetStore.attach(applicationContext, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/widgets"))
         WidgetStore.receiveLaunch(applicationContext, intent)

@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -72,12 +70,14 @@ void main() {
     final details = chat['platformSpecifics'] as Map<Object?, Object?>;
     expect(details['channelId'], 'messages');
     final style = details['styleInformation'] as Map<Object?, Object?>;
-    expect([
-      for (final m in style['messages'] as List) (m as Map)['text'],
-    ], ['Hello', 'Are you there?']);
-    expect([
-      for (final action in details['actions'] as List) (action as Map)['id'],
-    ], ['reply', 'read']);
+    expect(
+      [for (final m in style['messages'] as List) (m as Map)['text']],
+      ['Hello', 'Are you there?'],
+    );
+    expect(
+      [for (final action in details['actions'] as List) (action as Map)['id']],
+      ['reply', 'read'],
+    );
 
     // Reading the chat, here or on another device, clears it.
     calls.clear();

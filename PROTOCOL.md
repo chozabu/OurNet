@@ -78,7 +78,10 @@ The iroh ALPN is `ournet/2`. Requests use bounded JSON QUIC streams. Pull/push
 exchange up to 32 objects and about 1 MiB per page, with at most 16 rounds in one
 sync. Exhausted pages schedule a continuation after yielding. Changes trigger
 debounced sync; failed peers get exponential retry backoff.
-The UI exposes manual sync. A sleeping phone stops idle networking. On Android a
+The UI exposes manual sync. A backgrounded phone stops idle networking unless
+it stays connected (on Android, a foreground service, on by default). After
+sending, it stays online for up to 3 minutes while a recipient device has not
+returned a receipt. On Android a
 periodic task (about every 15 minutes, with network) syncs every admitted device
 and answers inbound requests for a further 10 seconds; it can be turned off.
 A pull request and its reply may carry an optional `build` string (at most 64

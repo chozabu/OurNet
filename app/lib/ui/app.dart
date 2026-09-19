@@ -26,6 +26,8 @@ import '../services/files.dart';
 import '../services/calls.dart';
 import '../services/messaging.dart';
 import '../services/notifications.dart';
+import '../services/connection_service.dart';
+import '../services/undelivered.dart';
 import '../services/session.dart';
 import 'world_map.dart';
 import 'inline_image.dart';
@@ -130,6 +132,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   NoteWidgets? noteWidgets;
   late final Speech speech;
   NoteReminders? reminders;
+
+  /// Sent messages without receipts; only where this isolate owns the
+  /// profile (Android).
+  Undelivered? undelivered;
   bool savingNote = false;
   Future<List<DriveEntry>>? driveView;
   String? driveFolder;
@@ -361,6 +367,14 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         unawaited(shareInbox!.start());
         onBackgroundSync = _backgroundSync;
         profileOpened(node);
+        if (ownsProfile) {
+          undelivered = Undelivered(node)..start();
+          unawaited(
+            keepConnected(stayConnected).catchError(
+              (Object e) => network.log('Could not stay connected: $e'),
+            ),
+          );
+        }
         unawaited(
           scheduleBackgroundSync(
             enabled: node.store.setting('backgroundSync') != false,
@@ -391,7 +405,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       unawaited(
         notifications
             .initialise()
-            .then((_) => notifications.requestPermissionOnce())
+            // Not when Android started OurNet to stay connected, with no
+            // screen to ask on; the first resume asks instead.
+            .then(
+              (_) => foreground ? notifications.requestPermissionOnce() : null,
+            )
             .catchError((Object e) => notice('Notifications unavailable: $e')),
       );
     }
@@ -494,6 +512,15 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     dismissShownNotification();
   }
 
+  /// Whether OurNet stays online while in the background (Android), in a
+  /// foreground service that keeps this app running with its notification.
+  bool get stayConnected =>
+      Platform.isAndroid &&
+      widget.enablePlatform &&
+      ownsProfile &&
+      node.store.setting('stayConnected') != false &&
+      node.store.setting('autoConnect') != false;
+
   void showNotes() {
     tab = Destination.notes;
     activeRoom = null;
@@ -566,22 +593,31 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   bool get foreground =>
       WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
 
-  /// Background work handed over while this isolate owns the profile: a
-  /// [periodic] sync, or sending what a notification button just did. The
-  /// foreground app already syncs, so only a paused app acts.
-  Future<void> _backgroundSync(bool periodic) async {
+  /// Background work handed over while this isolate owns the profile, after
+  /// its [command] was carried out: a periodic sync, staying online after
+  /// sending, or a notification button. The foreground app already syncs,
+  /// so only a paused app acts.
+  Future<void> _backgroundSync(String command) async {
     if (foreground ||
         node.store.setting('autoConnect') == false ||
-        (periodic && node.store.setting('backgroundSync') == false)) {
+        (command == 'sync' && node.store.setting('backgroundSync') == false)) {
       return;
     }
-    final started = !network.running;
-    if (started) await network.start();
+    if (!network.running) await network.start();
     await network.syncAll();
-    // Answer peers that are retrying now, as a headless run would.
-    await Future<void>.delayed(const Duration(seconds: 10));
-    if (started &&
-        mounted &&
+    // Answer peers that are retrying now, as a headless run would. After
+    // sending, stay while messages have not reached their recipients.
+    final until = DateTime.now().add(
+      command == 'linger'
+          ? const Duration(minutes: 3)
+          : const Duration(seconds: 10),
+    );
+    do {
+      await Future<void>.delayed(const Duration(seconds: 5));
+    } while (DateTime.now().isBefore(until) &&
+        (command != 'linger' || undelivered?.any == true));
+    if (mounted &&
+        !stayConnected &&
         !foreground &&
         calls.phase == 'idle' &&
         network.friendInvitation?.available != true &&
@@ -607,6 +643,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       );
     }
     if (state == AppLifecycleState.resumed && widget.enablePlatform) {
+      unawaited(
+        notifications.requestPermissionOnce().catchError((Object _) {}),
+      );
       dismissShownNotification();
       // Speech settings may have changed outside the app.
       folderSync.schedule();
@@ -623,12 +662,20 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     // be approved after sending the invitation from another app; networking
     // still stops once it expires.
     _pausedStop?.cancel();
-    if (state == AppLifecycleState.paused && calls.phase == 'idle') {
+    if (state == AppLifecycleState.paused &&
+        calls.phase == 'idle' &&
+        !stayConnected) {
       final open =
           network.friendInvitation?.available == true ||
           network.pairing?.available == true;
+      // Messages not yet delivered: stay online a little longer, in a task
+      // Android lets run, which stops the network when they arrive.
+      final sending = undelivered?.any == true;
+      if (sending) {
+        unawaited(scheduleLinger().catchError((Object e) => network.log('$e')));
+      }
       if (!open) {
-        unawaited(network.stop());
+        if (!sending) unawaited(network.stop());
       } else {
         final expires = [
           network.friendInvitation?.expires,
@@ -662,6 +709,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     shareInbox?.close();
     noteWidgets?.close();
     reminders?.close();
+    undelivered?.close();
     speech
       ..removeListener(refresh)
       ..close();
