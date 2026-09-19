@@ -40,20 +40,12 @@ extension _HomePages on _OurNetAppState {
     return FutureBuilder<Json?>(
       future: node.content(latest),
       builder: (context, snapshot) {
-        final content = snapshot.data;
-        final body = (content?['text'] ?? '').toString().isNotEmpty
-            ? content!['text'].toString()
-            : content?['audio'] != null
-            ? '🎤 ${content?['transcript'] ?? 'Voice message'}'
-            : '';
-        final preview =
-            content?['title'] ??
-            (body.isNotEmpty ? body : content?['name'] ?? fallback);
+        final preview = contentPreview(snapshot.data);
         final time = DateTime.fromMillisecondsSinceEpoch(
           latest.created,
         ).toLocal().toString().substring(0, 16);
         return Text(
-          '$preview\n$time',
+          '${preview.isEmpty ? fallback : preview}\n$time',
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         );

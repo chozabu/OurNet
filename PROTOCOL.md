@@ -78,7 +78,9 @@ The iroh ALPN is `ournet/2`. Requests use bounded JSON QUIC streams. Pull/push
 exchange up to 32 objects and about 1 MiB per page, with at most 16 rounds in one
 sync. Exhausted pages schedule a continuation after yielding. Changes trigger
 debounced sync; failed peers get exponential retry backoff.
-The UI exposes manual sync. A sleeping phone stops idle networking.
+The UI exposes manual sync. A sleeping phone stops idle networking. On Android a
+periodic task (about every 15 minutes, with network) syncs every admitted device
+and answers inbound requests for a further 10 seconds; it can be turned off.
 A pull request and its reply may carry an optional `build` string (at most 64
 characters) naming the sender's app build; peers ignore it, or show it when it
 differs from their own. A failed inbound handshake is logged and counted, and
@@ -103,8 +105,12 @@ garbage collection, retention controls and resumable large-file UX remain work.
 Local mode disables iroh relays. Internet mode uses iroh's default discovery and
 relay infrastructure; replacing those defaults needs operator configuration.
 There is no application account server. Media uses WebRTC, with signalling over
-admitted iroh connections. Media uses direct candidates or user-configured
-STUN/TURN and does not inherit the iroh relay path.
+admitted iroh connections. Media uses the user's configured
+STUN/TURN servers, or public STUN servers (Google, Cloudflare) when none are
+configured; local mode uses none by default. Media does not inherit the iroh
+relay path, so networks needing a relay still need TURN.
+Planned connectivity work (friend carriers, push wake-up, own relays) is
+designed in [CONNECTIVITY.md](CONNECTIVITY.md).
 
 A call to a person sends the same offer (one session id) to each of their
 admitted devices. The first `answer` binds the call to that device; the caller

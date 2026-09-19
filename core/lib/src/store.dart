@@ -266,6 +266,22 @@ class Store {
         as int;
   }
 
+  /// Unread messages from [peer] to [owner], newest first.
+  List<SignedObject> unreadMessages(
+    String owner,
+    String peer, {
+    int limit = 50,
+  }) => [
+    for (final row in _select(
+      'SELECT u.id FROM message_unread u JOIN message_peers p '
+      'ON p.owner=u.owner AND p.peer=u.peer AND p.id=u.id '
+      'WHERE u.owner=? AND u.peer=? AND (u.expires IS NULL OR u.expires<=0 '
+      'OR u.expires>?) ORDER BY p.created DESC,p.id LIMIT ?',
+      [owner, peer, DateTime.now().millisecondsSinceEpoch, limit.clamp(1, 200)],
+    ))
+      if (get(row['id'] as String) case final object?) object,
+  ];
+
   /// Stable newest-first keyset pagination, including timestamp ties.
   List<SignedObject> conversation(
     String owner,
@@ -304,6 +320,7 @@ class Store {
     String? kind,
     List<String>? kinds,
     String? space,
+    String? author,
     (int, String)? after,
     int limit = 1000,
   }) {
@@ -318,6 +335,10 @@ class Store {
     if (space != null) {
       where += '${where.isEmpty ? 'WHERE' : ' AND'} space=?';
       args.add(space);
+    }
+    if (author != null) {
+      where += '${where.isEmpty ? 'WHERE' : ' AND'} author=?';
+      args.add(author);
     }
     if (after != null) {
       where +=

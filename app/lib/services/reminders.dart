@@ -32,14 +32,8 @@ class NoteReminders {
 
   Node get node => notes.node;
 
-  /// A stable notification ID per note (FNV-1a), clear of other IDs.
-  static int notificationId(String note) {
-    var hash = 0x811c9dc5;
-    for (final unit in note.codeUnits) {
-      hash = ((hash ^ unit) * 0x01000193) & 0xffffffff;
-    }
-    return 0x40000000 | (hash & 0x3fffffff);
-  }
+  /// A stable notification ID per note, clear of other IDs.
+  static int reminderId(String note) => notificationId(note, reminderRange);
 
   Future<void> start() async {
     if (_started) return;
@@ -79,22 +73,6 @@ class NoteReminders {
     _changes = node.changes.stream.listen((_) => _task.schedule());
     _timer = Timer.periodic(const Duration(minutes: 1), (_) => _due());
     _task.schedule();
-    final launch = await notifications.plugin.getNotificationAppLaunchDetails();
-    final payload = launch?.notificationResponse?.payload;
-    if (launch?.didNotificationLaunchApp == true &&
-        payload != null &&
-        payload.startsWith('note:')) {
-      notifications.onOpenNote?.call(payload.substring(5));
-    }
-  }
-
-  /// Asks for notification permission when a reminder is first set.
-  Future<void> requestPermission() async {
-    await notifications.plugin
-        .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin
-        >()
-        ?.requestNotificationsPermission();
   }
 
   Future<void> sync() async {
@@ -159,7 +137,7 @@ class NoteReminders {
     if (!_scheduling) return false;
     try {
       await notifications.plugin.zonedSchedule(
-        id: notificationId(id),
+        id: reminderId(id),
         title: note.label,
         body: _body(note),
         payload: 'note:$id',
@@ -186,7 +164,7 @@ class NoteReminders {
 
   Future<void> _cancel(String id) async {
     try {
-      await notifications.plugin.cancel(id: notificationId(id));
+      await notifications.plugin.cancel(id: reminderId(id));
     } catch (_) {}
   }
 
@@ -212,7 +190,7 @@ class NoteReminders {
       final note = await notes.get(id);
       if (note == null || note.deleted) continue;
       await notifications.plugin.show(
-        id: notificationId(id),
+        id: reminderId(id),
         title: note.label,
         body: _body(note),
         payload: 'note:$id',

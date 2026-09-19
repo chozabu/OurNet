@@ -166,6 +166,17 @@ void main() {
     });
   }
 
+  test('ICE servers default to public STUN, except in local mode', () {
+    expect(iceServers(null, local: false), defaultIceServers);
+    expect(iceServers(null, local: true), isEmpty);
+    // An explicit empty list keeps direct candidates only.
+    expect(iceServers(<Object?>[], local: false), isEmpty);
+    final own = [
+      {'urls': 'turn:example.org', 'username': 'u', 'credential': 'c'},
+    ];
+    expect(iceServers(own, local: true), own);
+  });
+
   test('answer cannot overwrite connected during signalling', () async {
     await offer(friend.device);
     network.onRequest = (payload) async {

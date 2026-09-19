@@ -207,15 +207,27 @@ extension _SettingsPages on _OurNetAppState {
         ),
       ),
       SwitchListTile(
-        title: const Text('Activity notifications'),
-        subtitle: const Text(
-          'Private message contents are not shown in notifications.',
+        title: const Text('Notifications'),
+        subtitle: Text(
+          Platform.isAndroid
+              ? 'Messages, replies to you and forum activity. Choose which sound in Android settings.'
+              : 'Messages, replies to you and forum activity.',
         ),
         value: notifications.enabled,
         onChanged: (v) => act(() async {
           await notifications.setEnabled(v);
           refresh();
         }),
+      ),
+      SwitchListTile(
+        title: const Text('Show message text in notifications'),
+        subtitle: const Text(
+          'Off shows only who wrote. Android can also hide it on the lock screen.',
+        ),
+        value: notifications.previews,
+        onChanged: notifications.enabled
+            ? (v) => update(() => node.store.set('notificationPreviews', v))
+            : null,
       ),
       const Divider(),
       SpeechSettings(speech: speech, notice: notice),
@@ -253,17 +265,32 @@ extension _SettingsPages on _OurNetAppState {
           child: Text(network.running ? 'Disconnect' : 'Connect locally'),
         ),
       ),
+      if (Platform.isAndroid)
+        SwitchListTile(
+          title: const Text('Background sync'),
+          subtitle: const Text(
+            'Exchange with friends about every 15 minutes while OurNet is closed, so messages arrive without both of you having it open.',
+          ),
+          value: node.store.setting('backgroundSync') != false,
+          onChanged: (v) => act(() async {
+            await scheduleBackgroundSync(enabled: v);
+            node.store.set('backgroundSync', v);
+            refresh();
+          }),
+        ),
       ListTile(
         title: const Text('Call connectivity'),
         subtitle: const Text(
-          'Configure your own STUN/TURN servers as a JSON array. Empty uses direct candidates only.',
+          'STUN/TURN servers as a JSON array. Unset uses public STUN servers (none in local mode); an empty array uses direct candidates only.',
         ),
         trailing: TextButton(
           onPressed: () => act(() async {
             final text = await ask(
               context,
               'ICE servers',
-              initial: jsonEncode(node.store.setting('iceServers') ?? []),
+              initial: jsonEncode(
+                node.store.setting('iceServers') ?? defaultIceServers,
+              ),
               lines: 4,
             );
             if (text != null) {

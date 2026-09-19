@@ -50,6 +50,15 @@ Future<Node> openNode({String profile = 'main'}) async {
   }
 }
 
+/// Releases the profile lock taken by [openNode], after its node is closed.
+Future<void> closeProfile() async {
+  final lock = _profileLock;
+  _profileLock = null;
+  if (lock == null) return;
+  await lock.unlock();
+  await lock.close();
+}
+
 Future<void> saveIdentity(LocalIdentity identity) async {
   await const FlutterSecureStorage().write(
     key: 'ournet/v2/$activeProfile',

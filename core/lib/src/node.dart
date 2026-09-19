@@ -770,6 +770,17 @@ class Node {
     notify();
   }
 
+  /// Marks every unread message from [peer] read.
+  Future<void> markConversationRead(String peer) async {
+    while (true) {
+      final page = store.unreadMessages(person, peer, limit: 100);
+      if (!page.any(visible)) return;
+      for (final o in page.where(visible)) {
+        await markRead(o.id);
+      }
+    }
+  }
+
   Future<void> close() => _closeFuture ??= _close();
 
   Future<void> _close() async {

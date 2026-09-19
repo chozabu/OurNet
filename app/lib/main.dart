@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'services/background_sync.dart';
 import 'services/session.dart';
 import 'ui/app.dart';
 import 'ui/onboarding.dart';
@@ -12,6 +14,8 @@ Future<void> main(List<String> arguments) async {
             .firstOrNull
             ?.substring(10) ??
         'main';
+    // Background sync shares this process on Android; see claimProfile.
+    if (Platform.isAndroid && profile == 'main') await claimProfile();
     final node = await openNode(profile: profile);
     runApp(needsSetup ? SetupApp(node: node) : OurNetApp(node: node));
   } catch (e) {

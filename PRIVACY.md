@@ -27,8 +27,10 @@ NAT or a restrictive firewall — traffic may be routed through a public relay,
 by default one operated by [number 0](https://n0.computer). Relays forward
 encrypted packets and cannot read your content, but the relay operator can
 observe connection metadata: which nodes connect to which, when, and from what
-IP address. Voice and video calls use WebRTC, which may likewise contact STUN
-or TURN servers to negotiate a connection.
+IP address. Voice and video calls use WebRTC, which contacts STUN servers
+(by default Google's and Cloudflare's, or ones you configure) to learn your
+public address; those operators see your IP address when you place or answer a
+call, but not the call itself.
 
 This is the one category of information that reaches a third party, and we
 would rather say so plainly than claim nothing ever leaves.
@@ -48,7 +50,7 @@ would rather say so plainly than claim nothing ever leaves.
 | Internet | Connecting to your friends' devices |
 | Camera | Taking photos for notes, scanning pairing QR codes, video calls |
 | Microphone | Voice notes and calls |
-| Notifications | Telling you about new messages and note reminders |
+| Notifications | Telling you about new messages, replies, calls and note reminders. By default a message notification shows the sender and text, which your phone can hide on the lock screen; Settings can limit it to the sender |
 | Run at startup / exact alarms | Re-scheduling note reminders after a restart |
 
 Camera and microphone are used only while you are actively using the feature

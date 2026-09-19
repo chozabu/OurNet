@@ -130,4 +130,45 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
+
+  test(
+    'a whole conversation reads and marks read without loading it',
+    () async {
+      final a = Node(await LocalIdentity.create(), Store());
+      final b = Node(await LocalIdentity.create(), Store());
+      addTearDown(() async {
+        await a.close();
+        await b.close();
+      });
+      await a.addContact(b.identity.certificate);
+      await b.addContact(a.identity.certificate);
+      for (var i = 0; i < 130; i++) {
+        await b.publish(
+          'message',
+          {'text': '$i'},
+          space: '_messages',
+          audience: [a.person],
+        );
+      }
+      await a.publish(
+        'message',
+        {'text': 'mine'},
+        space: '_messages',
+        audience: [b.person],
+      );
+      await syncPair(a, b);
+      final newest = a.store.unreadMessages(a.person, b.person, limit: 3);
+      expect(
+        [for (final o in newest) (await a.content(o))!['text']],
+        ['129', '128', '127'],
+      );
+      await a.markConversationRead(b.person);
+      expect(a.store.conversationUnread(a.person, peer: b.person), 0);
+      expect(a.store.unreadMessages(a.person, b.person), isEmpty);
+      await b.publish('profile', {'name': 'B'}, space: '_identity');
+      await syncPair(a, b);
+      final profiles = a.store.objects(kind: 'profile', author: b.person);
+      expect(profiles.map((o) => o.author).toSet(), {b.person});
+    },
+  );
 }

@@ -42,7 +42,7 @@ extension _NotesHome on _OurNetAppState {
     onRemoved: (id) => notesRemoved([id]),
     onArchived: (id, pinned) => noteArchived([id], pinned: {if (pinned) id}),
     onOpenNote: (id) => unawaited(openNote(id)),
-    onReminderSet: () async => reminders?.requestPermission(),
+    onReminderSet: requestReminderPermission,
     pickImage: widget.pickImage,
     notice: notice,
   );
@@ -272,12 +272,17 @@ extension _NotesHome on _OurNetAppState {
     }
   }
 
+  /// Reminders are notifications; ask when the first one is set.
+  Future<void> requestReminderPermission() async {
+    if (reminders != null) await notifications.requestPermission();
+  }
+
   Future<void> remindNotes(BuildContext context, List<String> ids) async {
     final existing = ids.length == 1 ? notes.state.reminder(ids.single) : null;
     final chosen = await pickReminder(context, existing);
     if (chosen == null) return;
     try {
-      if (chosen.at != null) await reminders?.requestPermission();
+      if (chosen.at != null) await requestReminderPermission();
       await notes.state.setAll([
         for (final id in ids)
           (

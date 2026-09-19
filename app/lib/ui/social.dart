@@ -29,12 +29,7 @@ extension _SocialPages on _OurNetAppState {
       }, space: id);
     }
     node.subscribe(id, true);
-    update(() {
-      space = id;
-      selectedThread = null;
-      replyTo = null;
-      showForum = true;
-    });
+    openForum(id);
     if (create) {
       notice(
         'Forum created. Start a discussion, then copy the forum address to invite people.',
@@ -85,12 +80,7 @@ extension _SocialPages on _OurNetAppState {
                       unreadObjects('post').where((o) => o.space == forum),
                     ),
                     selected: forum == space,
-                    onTap: () => update(() {
-                      space = forum;
-                      selectedThread = null;
-                      replyTo = null;
-                      showForum = true;
-                    }),
+                    onTap: () => openForum(forum),
                   ),
               ],
             ),
@@ -145,11 +135,7 @@ extension _SocialPages on _OurNetAppState {
                           ),
                           selected: contact == person,
                           trailing: conversationUnreadBadge(person),
-                          onTap: () => update(() {
-                            contact = person;
-                            showConversation = true;
-                            replyTo = null;
-                          }),
+                          onTap: () => openConversation(person),
                         ),
                     ],
                   ),
@@ -407,16 +393,6 @@ extension _SocialPages on _OurNetAppState {
     if (conversationCursor < end) conversationCursor = end;
   }
 
-  List<String> messageHelpers(String recipient) {
-    final helper = node.store.setting('messageHelper/$recipient');
-    return helper is String &&
-            people.contains(helper) &&
-            helper != recipient &&
-            !node.blocked.contains(helper)
-        ? [helper]
-        : const [];
-  }
-
   Future<void> chooseMessageHelper(BuildContext context) async {
     final recipient = contact;
     if (recipient == null) return;
@@ -470,13 +446,7 @@ extension _SocialPages on _OurNetAppState {
       messageErrors.remove(recipient);
     });
     try {
-      await node.publish(
-        'message',
-        {'text': submitted.trim()},
-        space: '_messages',
-        audience: [recipient],
-        via: messageHelpers(recipient),
-      );
+      await sendMessage(node, recipient, submitted);
     } catch (error) {
       update(() => messageErrors[recipient] = 'Could not save message: $error');
       return;
@@ -527,7 +497,7 @@ extension _SocialPages on _OurNetAppState {
         recording.path,
         name: 'Voice message.$extension',
         audience: [recipient],
-        via: messageHelpers(recipient),
+        via: messageHelpers(node, recipient),
         extra: {
           'audio': {'mime': recording.mime, 'duration': recording.duration},
           if (transcript != null && transcript.isNotEmpty)
@@ -566,14 +536,9 @@ extension _SocialPages on _OurNetAppState {
       if (page.length < 50) conversationEnd.add(contact!);
       return page;
     });
-    final helpers = messageHelpers(contact!);
-    final unreadLoaded = objects
-        .where(
-          (o) =>
-              o.author != node.person &&
-              node.store.setting('read/${o.id}') != true,
-        )
-        .toList();
+    final helpers = messageHelpers(node, contact!);
+    final unread =
+        node.store.conversationUnread(node.person, peer: contact) > 0;
     return Column(
       children: [
         Material(
@@ -632,12 +597,8 @@ extension _SocialPages on _OurNetAppState {
                   onSelected: (action) {
                     switch (action) {
                       case 'read':
-                        act(() async {
-                          for (final object in unreadLoaded) {
-                            await node.markRead(object.id);
-                          }
-                          refresh();
-                        });
+                        final person = contact!;
+                        act(() => node.markConversationRead(person));
                       case 'helper':
                         chooseMessageHelper(context);
                       case 'places':
@@ -647,10 +608,10 @@ extension _SocialPages on _OurNetAppState {
                   itemBuilder: (_) => [
                     PopupMenuItem(
                       value: 'read',
-                      enabled: !busy && unreadLoaded.isNotEmpty,
+                      enabled: !busy && unread,
                       child: const ListTile(
                         leading: Icon(Icons.done_all),
-                        title: Text('Mark loaded messages read'),
+                        title: Text('Mark all read'),
                       ),
                     ),
                     PopupMenuItem(

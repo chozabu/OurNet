@@ -1,3 +1,4 @@
+import '../services/background_sync.dart';
 import '../services/drafts.dart';
 import '../services/folder_connections.dart';
 import '../services/coalesced_task.dart';
@@ -23,6 +24,7 @@ import 'package:ournet_transport/ournet_transport.dart'
 import '../services/network.dart';
 import '../services/files.dart';
 import '../services/calls.dart';
+import '../services/messaging.dart';
 import '../services/notifications.dart';
 import '../services/session.dart';
 import 'world_map.dart';
@@ -298,29 +300,17 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       automatic: widget.enablePlatform,
     );
     calls = Calls(network)..addListener(refresh);
-    notifications = Notifications(node)
+    notifications = Notifications(node, onAction: notificationActionDispatcher)
       ..onError = notice
+      ..showing = showingNotification
       ..onCallOpen = () {
-        if (mounted) {
-          update(() {
-            tab = Destination.messages;
-            showConversation = true;
-          });
-        }
-      }
-      ..onOpen = (id) {
-        final object = node.store.get(id);
-        if (object == null) return;
-        setState(() {
-          tab = object.kind == 'message'
-              ? Destination.messages
-              : Destination.forums;
+        update(() {
+          tab = Destination.messages;
           showConversation = true;
-          showForum = true;
-          contact = object.author;
-          space = object.space;
         });
-      };
+      }
+      ..onOpenChat = openConversation
+      ..onOpenForum = openForum;
     _deliveryRefresh = CoalescedTask(loadDeliveryLabels, (e) => notice('$e'));
     _dataRefresh = CoalescedTask(() async {
       await refreshConversations();
@@ -369,6 +359,13 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           },
         );
         unawaited(shareInbox!.start());
+        onBackgroundSync = _backgroundSync;
+        profileOpened(node);
+        unawaited(
+          scheduleBackgroundSync(
+            enabled: node.store.setting('backgroundSync') != false,
+          ).catchError((Object e) => notice('Background sync unavailable: $e')),
+        );
       }
       unawaited(
         speech.start().catchError(
@@ -392,9 +389,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         ),
       );
       unawaited(
-        notifications.initialise().catchError(
-          (Object e) => notice('Notifications unavailable: $e'),
-        ),
+        notifications
+            .initialise()
+            .then((_) => notifications.requestPermissionOnce())
+            .catchError((Object e) => notice('Notifications unavailable: $e')),
       );
     }
   }
@@ -453,6 +451,49 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     }
   }
 
+  /// Whether the app is showing what a notification [payload] would open.
+  bool showingNotification(String payload) =>
+      foreground &&
+      switch (tab) {
+        Destination.messages => payload == 'chat:$contact',
+        Destination.forums => payload == 'forum:$space',
+        _ => false,
+      };
+
+  /// Clears the notification for the chat or forum on screen.
+  void dismissShownNotification() {
+    final payload = switch (tab) {
+      Destination.messages when contact != null => 'chat:$contact',
+      Destination.forums => 'forum:$space',
+      _ => null,
+    };
+    if (payload != null && widget.enablePlatform) {
+      unawaited(notifications.dismiss(payload).catchError((Object _) {}));
+    }
+  }
+
+  void openConversation(String person) {
+    if (!people.contains(person)) return;
+    update(() {
+      tab = Destination.messages;
+      contact = person;
+      showConversation = true;
+      replyTo = null;
+    });
+    dismissShownNotification();
+  }
+
+  void openForum(String forum) {
+    update(() {
+      tab = Destination.forums;
+      space = forum;
+      selectedThread = null;
+      replyTo = null;
+      showForum = true;
+    });
+    dismissShownNotification();
+  }
+
   void showNotes() {
     tab = Destination.notes;
     activeRoom = null;
@@ -470,7 +511,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       if (ringing != _ringing) {
         _ringing = ringing;
         unawaited(
-          (ringing ? notifications.incomingCall() : notifications.clearCall())
+          (ringing
+                  ? notifications.incomingCall(
+                      node.contacts[calls.peer]?.person,
+                    )
+                  : notifications.clearCall())
               .catchError((Object e) => notice('$e')),
         );
       }
@@ -518,6 +563,33 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     }
   }
 
+  bool get foreground =>
+      WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+
+  /// Background work handed over while this isolate owns the profile: a
+  /// [periodic] sync, or sending what a notification button just did. The
+  /// foreground app already syncs, so only a paused app acts.
+  Future<void> _backgroundSync(bool periodic) async {
+    if (foreground ||
+        node.store.setting('autoConnect') == false ||
+        (periodic && node.store.setting('backgroundSync') == false)) {
+      return;
+    }
+    final started = !network.running;
+    if (started) await network.start();
+    await network.syncAll();
+    // Answer peers that are retrying now, as a headless run would.
+    await Future<void>.delayed(const Duration(seconds: 10));
+    if (started &&
+        mounted &&
+        !foreground &&
+        calls.phase == 'idle' &&
+        network.friendInvitation?.available != true &&
+        network.pairing?.available != true) {
+      await network.stop();
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (widget.enablePlatform) {
@@ -535,6 +607,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       );
     }
     if (state == AppLifecycleState.resumed && widget.enablePlatform) {
+      dismissShownNotification();
       // Speech settings may have changed outside the app.
       folderSync.schedule();
       unawaited(speech.checkLive());
@@ -575,6 +648,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   void dispose() {
     unawaited(draftStore.flush().catchError((Object _) {}));
     WidgetsBinding.instance.removeObserver(this);
+    if (onBackgroundSync == _backgroundSync) onBackgroundSync = null;
     _pausedStop?.cancel();
     _changes?.cancel();
     _dataRefresh.close();

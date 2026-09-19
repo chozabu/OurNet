@@ -4,6 +4,18 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'network.dart';
 
+/// Used until the user configures ICE servers. STUN only reveals the public
+/// address to the server operator; media still flows directly between devices.
+const defaultIceServers = [
+  {'urls': 'stun:stun.l.google.com:19302'},
+  {'urls': 'stun:stun.cloudflare.com:3478'},
+];
+
+/// ICE servers for a call: the user's configuration, or [defaultIceServers]
+/// when none is set. Local mode never contacts third parties by default.
+List<Object?> iceServers(Object? configured, {required bool local}) =>
+    configured is List ? configured : (local ? const [] : defaultIceServers);
+
 /// Media uses WebRTC. Only signalling crosses the authenticated iroh link.
 class Calls extends ChangeNotifier {
   final Network network;
@@ -54,7 +66,10 @@ class Calls extends ChangeNotifier {
     if (generation != _generation) throw StateError('Call cancelled');
     _remoteReady = false;
     final pc = await createPeerConnection({
-      'iceServers': network.node.store.setting('iceServers') ?? [],
+      'iceServers': iceServers(
+        network.node.store.setting('iceServers'),
+        local: network.local,
+      ),
     });
     if (generation != _generation) {
       await pc.close();

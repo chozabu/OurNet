@@ -102,8 +102,8 @@ and desktop microphone/output selectors whose choices are remembered locally.
 If Windows selects a virtual VR/streaming microphone, choose your physical microphone
 in the call panel. Video and own-device calls on mobile prefer speakerphone unless
 Bluetooth is available. Signalling uses the authenticated device link;
-media uses WebRTC and the configured ICE servers, so direct-only connections can
-still require STUN/TURN when devices are on different networks.
+media uses WebRTC with public STUN servers unless you configure your own, so
+calls behind carrier-grade or symmetric NAT can still require TURN.
 
 For a native media smoke test, run from `app`:
 
@@ -131,8 +131,9 @@ not yet a packaged background service or a multi-user hosting server.
 
 ## Product and protocol
 
-Read [CORE_IDEA.md](CORE_IDEA.md), [PROTOCOL.md](PROTOCOL.md), and the historical
-[PROTOTYPE_REVIEW.md](PROTOTYPE_REVIEW.md). Provenance proves signed statements
+Read [CORE_IDEA.md](CORE_IDEA.md), [PROTOCOL.md](PROTOCOL.md),
+[CONNECTIVITY.md](CONNECTIVITY.md) (NAT, offline delivery and friend carriers),
+and the historical [PROTOTYPE_REVIEW.md](PROTOTYPE_REVIEW.md). Provenance proves signed statements
 about recorded actions, not truth, real-world identity, or off-protocol copying.
 The current encryption is a prototype device-envelope scheme; forward secrecy,
 identity recovery and encrypted history migration remain separate work.
