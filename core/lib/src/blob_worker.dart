@@ -110,20 +110,38 @@ class BlobWorker {
   /// isolate with its own read-only connection, so preview reads run beside
   /// the serial worker instead of interleaving chunk by chunk. Callers bound
   /// how many run at once. Returns null when any chunk is not stored locally.
-  Future<Uint8List?> readLocal(List<String> hashes, List<int>? key) async {
+  /// Stops before retaining bytes beyond [limit] or [expectedSize], and checks
+  /// the final length when an expected size is supplied.
+  Future<Uint8List?> readLocal(
+    List<String> hashes,
+    List<int>? key, {
+    int limit = 8 * 1024 * 1024,
+    int? expectedSize,
+  }) async {
     if (_closing) throw StateError('Attachment worker is closed');
+    if (limit < 0 ||
+        (expectedSize != null && (expectedSize < 0 || expectedSize > limit))) {
+      throw StateError('Invalid attachment size limit');
+    }
+    final budget = expectedSize ?? limit;
     final path = store.path;
     if (path == null) {
       final result = BytesBuilder(copy: false);
       for (final hash in hashes) {
         final plain = await decode(hash, key);
         if (plain == null) return null;
+        if (result.length + plain.length > budget) {
+          throw StateError('File size exceeded');
+        }
         result.add(plain);
+      }
+      if (expectedSize != null && result.length != expectedSize) {
+        throw StateError('File size mismatch');
       }
       return result.takeBytes();
     }
     final read = await Isolate.run(
-      () => _readLocal(path, hashes, key),
+      () => _readLocal(path, hashes, key, budget, expectedSize),
       debugName: 'ournet-attachment-read',
     );
     return read?.materialize().asUint8List();
@@ -199,6 +217,8 @@ Future<TransferableTypedData?> _readLocal(
   String path,
   List<String> hashes,
   List<int>? keyBytes,
+  int budget,
+  int? expectedSize,
 ) async {
   final db = sqlite3.open(path, mode: OpenMode.readOnly);
   try {
@@ -206,6 +226,7 @@ Future<TransferableTypedData?> _readLocal(
     final statement = db.prepare('SELECT bytes FROM blobs WHERE id=?');
     final key = keyBytes == null ? null : SecretKey(keyBytes);
     final chunks = <Uint8List>[];
+    var size = 0;
     try {
       for (final hash in hashes) {
         final rows = statement.select([hash]);
@@ -216,23 +237,27 @@ Future<TransferableTypedData?> _readLocal(
         if (bytes.length > 128 * 1024 + 64 || blobHash(bytes) != hash) {
           throw StateError('Invalid file chunk');
         }
-        chunks.add(
-          key == null
-              ? bytes
-              : Uint8List.fromList(
-                  await Chacha20.poly1305Aead().decrypt(
-                    SecretBox.fromConcatenation(
-                      bytes,
-                      nonceLength: 12,
-                      macLength: 16,
-                    ),
-                    secretKey: key,
+        final plain = key == null
+            ? bytes
+            : Uint8List.fromList(
+                await Chacha20.poly1305Aead().decrypt(
+                  SecretBox.fromConcatenation(
+                    bytes,
+                    nonceLength: 12,
+                    macLength: 16,
                   ),
+                  secretKey: key,
                 ),
-        );
+              );
+        size += plain.length;
+        if (size > budget) throw StateError('File size exceeded');
+        chunks.add(plain);
       }
     } finally {
       statement.close();
+    }
+    if (expectedSize != null && size != expectedSize) {
+      throw StateError('File size mismatch');
     }
     return TransferableTypedData.fromList(chunks);
   } finally {

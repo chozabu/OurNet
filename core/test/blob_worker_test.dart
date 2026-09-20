@@ -5,6 +5,47 @@ import 'package:ournet_core/ournet_core.dart';
 import 'package:test/test.dart';
 
 void main() {
+  for (final disk in [false, true]) {
+    test('local read stops at its byte budget (disk: $disk)', () async {
+      final directory = await Directory.systemTemp.createTemp('ournet-budget-');
+      final node = Node(
+        await LocalIdentity.create(),
+        Store(path: disk ? '${directory.path}/test.db' : null),
+      );
+      try {
+        final key = Uint8List(32);
+        final hash = await node.blobs.encode(
+          Uint8List.fromList([1, 2, 3]),
+          key,
+        );
+        // If the worker walks beyond the budget it returns null for the missing
+        // chunk. It must instead reject the oversized prefix immediately.
+        await expectLater(
+          node.blobs.readLocal([hash, hash, 'missing'], key, limit: 5),
+          throwsStateError,
+        );
+        await expectLater(
+          node.blobs.readLocal([hash], key, expectedSize: 4),
+          throwsStateError,
+        );
+        expect(
+          await node.blobs.readLocal([hash], key, limit: 3, expectedSize: 3),
+          [1, 2, 3],
+        );
+        expect(
+          await node.blobs.readLocal([], key, limit: 0, expectedSize: 0),
+          isEmpty,
+        );
+      } finally {
+        await node.close();
+        for (final file in await directory.list().toList()) {
+          await file.delete();
+        }
+        await directory.delete();
+      }
+    });
+  }
+
   test(
     'worker stores encrypted chunks across connections and rejects tampering',
     () async {

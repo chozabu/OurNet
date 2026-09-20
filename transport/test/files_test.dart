@@ -5,6 +5,66 @@ import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
 
 void main() {
+  test('cached checks middle chunks and notices a later download', () async {
+    final node = Node(await LocalIdentity.create(), Store());
+    final files = Files(node, PeerNetwork(node));
+    try {
+      final hashes = <String>[];
+      for (var i = 0; i < 3; i++) {
+        hashes.add(await node.blobs.encode(Uint8List.fromList([i]), null));
+      }
+      final missing = blobHash([9]);
+      final different = {
+        'chunks': [hashes.first, missing, hashes.last],
+      };
+      expect(files.cached({'chunks': hashes}), isTrue);
+      expect(files.cached(different), isFalse);
+      await node.blobs.encode(Uint8List.fromList([9]), null);
+      expect(files.cached(different), isTrue);
+    } finally {
+      await node.close();
+    }
+  });
+
+  for (final disk in [false, true]) {
+    test('local preview validates actual size (disk: $disk)', () async {
+      final directory = await Directory.systemTemp.createTemp('ournet-size-');
+      final node = Node(
+        await LocalIdentity.create(),
+        Store(path: disk ? '${directory.path}/test.db' : null),
+      );
+      final files = Files(node, PeerNetwork(node));
+      try {
+        final hash = await node.blobs.encode(
+          Uint8List.fromList([1, 2, 3]),
+          null,
+        );
+        for (final size in [0, 1, 4]) {
+          final object = await node.publish('file', {
+            'name': 'incorrect.bin',
+            'chunks': [hash],
+            'size': size,
+            'key': null,
+          }, space: 'files');
+          await expectLater(files.readBytes(object), throwsStateError);
+        }
+        final valid = await node.publish('file', {
+          'name': 'correct.bin',
+          'chunks': [hash],
+          'size': 3,
+          'key': null,
+        }, space: 'files');
+        expect(await files.readBytes(valid, limit: 3), [1, 2, 3]);
+      } finally {
+        await node.close();
+        for (final file in await directory.list().toList()) {
+          await file.delete();
+        }
+        await directory.delete();
+      }
+    });
+  }
+
   test(
     'preview requests share work, enforce limits and recover after errors',
     () async {

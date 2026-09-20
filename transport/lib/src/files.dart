@@ -96,18 +96,24 @@ class Files {
     }
   }
 
-  static final _complete = Expando<Set<String>>();
+  static final _complete = Expando<LinkedHashSet<String>>();
 
   /// Whether every original chunk is local. Chunks are content-addressed and
   /// retained, so positive answers are remembered; others use one query.
   bool cached(Json payload) {
     final chunks = (payload['chunks'] as List).cast<String>();
     if (chunks.isEmpty) return true;
-    final known = _complete[node] ??= <String>{};
-    final key = '${chunks.first}/${chunks.last}/${chunks.length}';
-    if (known.contains(key)) return true;
+    final known = _complete[node] ??= LinkedHashSet<String>();
+    // Chunk hashes have fixed width. Include every chunk, without hashing or
+    // reading blobs on the UI isolate, and bound retained cache metadata.
+    final key = chunks.join();
+    if (known.remove(key)) {
+      known.add(key);
+      return true;
+    }
     if (!node.store.hasBlobs(chunks)) return false;
     known.add(key);
+    if (known.length > 128) known.remove(known.first);
     return true;
   }
 
@@ -228,11 +234,10 @@ class Files {
       final local = await node.blobs.readLocal(
         chunks,
         payload['key'] == null ? null : unb64(payload['key']),
+        limit: limit,
+        expectedSize: payload['size'] as int,
       );
       if (local != null) {
-        if (local.length > limit) {
-          throw StateError('Image exceeds preview limit');
-        }
         return local;
       }
       final result = BytesBuilder(copy: false);

@@ -18,10 +18,20 @@ class CountingBlobWorker extends BlobWorker {
   }
 
   @override
-  Future<Uint8List?> readLocal(List<String> hashes, List<int>? key) {
+  Future<Uint8List?> readLocal(
+    List<String> hashes,
+    List<int>? key, {
+    int limit = 8 * 1024 * 1024,
+    int? expectedSize,
+  }) {
     // Whole-file reads on a disk profile bypass decode; count their chunks.
     if (store.path != null) chunkReads += hashes.length;
-    return super.readLocal(hashes, key);
+    return super.readLocal(
+      hashes,
+      key,
+      limit: limit,
+      expectedSize: expectedSize,
+    );
   }
 }
 
