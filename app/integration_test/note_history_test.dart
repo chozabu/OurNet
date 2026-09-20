@@ -47,7 +47,8 @@ void main() {
     final directory = await Directory.systemTemp.createTemp('ournet-history-');
     final owner = await LocalIdentity.create();
     final fresh = await LocalIdentity.create();
-    final phone = Node(owner, Store(path: '${directory.path}/phone.db'));
+    final phoneStore = _InventoryStore(path: '${directory.path}/phone.db');
+    final phone = Node(owner, phoneStore);
     final other = Node(
       await fresh.enrol(await owner.authorise(fresh.certificate)),
       Store(path: '${directory.path}/other.db'),
@@ -82,6 +83,29 @@ void main() {
       await syncPair(phone, other, rounds: 1000);
       report['initialSync'] = await initial.stop();
       log('initial sync ${report['initialSync']}');
+
+      // Exercise several bounded cursor pages even in the small fixture. A
+      // refresh must not reread the prefix of history for each older page.
+      InventoryCursor? cursor;
+      var inventoryPages = 0;
+      final oldWindow = Node.inventoryWindow;
+      try {
+        Node.inventoryWindow = 128;
+        do {
+          phoneStore.routeReads = 0;
+          final page = phone.inventoryAfter(
+            peerDevice: other.identity.device,
+            after: cursor,
+          );
+          expect(phoneStore.routeReads, lessThanOrEqualTo(129));
+          inventoryPages++;
+          cursor = InventoryCursor.parse(page['next']);
+          await Future<void>.delayed(Duration.zero);
+        } while (cursor != null);
+      } finally {
+        Node.inventoryWindow = oldWindow;
+      }
+      report['inventoryPages'] = inventoryPages;
 
       // A connected device: reconcile shortly after changes on either side.
       final queue = SyncQueue((_) => syncPair(phone, other));
@@ -207,4 +231,15 @@ void main() {
       await directory.delete(recursive: true);
     }
   });
+}
+
+class _InventoryStore extends Store {
+  _InventoryStore({super.path});
+  int routeReads = 0;
+  @override
+  List<ObjectRoute> routesAfter({(int, String)? after, int limit = 512}) {
+    final routes = super.routesAfter(after: after, limit: limit);
+    routeReads += routes.length;
+    return routes;
+  }
 }

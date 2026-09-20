@@ -337,6 +337,43 @@ class Node {
   /// holds. Tests narrow it to walk several windows over a small profile.
   static int inventoryWindow = 2000;
 
+  /// Cursor pages inspect a fixed number of routes, including routes this peer
+  /// cannot receive. A sparse sharing policy must not scan the whole profile.
+  /// The timestamp bounds still let older peers answer this inventory.
+  Json inventoryAfter({String? peerDevice, InventoryCursor? after}) {
+    final peer = peerDevice == null ? null : contacts[peerDevice];
+    final routes = store.routesAfter(
+      after: after == null ? null : (after.created, after.id),
+      limit: inventoryWindow + 1,
+    );
+    final more = routes.length > inventoryWindow;
+    final page = routes.take(inventoryWindow).toList();
+    final visible = page.where(
+      (route) =>
+          peerDevice == null ||
+          (peer != null && _offerable(route, peer, {route.space})),
+    );
+    store.primeEvidence([for (final route in visible) route.id]);
+    return {
+      'version': 2,
+      'cursorPaging': true,
+      'subscriptions': subscriptions.toList()..sort(),
+      'have': {
+        for (final route in visible) route.id: store.evidenceDigest(route.id),
+      },
+      'from': more ? page.last.created : 0,
+      if (after != null) 'until': after.created,
+      if (after != null) 'after': after.toJson(),
+      'more': more,
+      if (more)
+        'next': InventoryCursor(page.last.created, page.last.id).toJson(),
+      if (more)
+        'through': InventoryCursor(page.last.created, page.last.id).toJson(),
+      'revoked': revoked.toList()..sort(),
+      if (peer != null) 'devices': sharedCertificates(peer),
+    };
+  }
+
   /// What this device holds, for the [window]th page of history, newest
   /// first. `from` and `until` are the creation times the entries cover:
   /// window 0 reaches above the newest object this device holds, and the last
@@ -492,13 +529,20 @@ class Node {
     // pages, so a page is chosen without materialising the whole of it, and
     // all the way to the end of the window: stopping short of it would strand
     // whatever lay beyond, since the next window starts below this one.
-    (int, String)? cursor;
+    final after = inventory['cursorPaging'] == true
+        ? InventoryCursor.parse(inventory['after'])
+        : null;
+    final through = inventory['cursorPaging'] == true
+        ? InventoryCursor.parse(inventory['through'])
+        : null;
+    (int, String)? cursor = after == null ? null : (after.created, after.id);
     walk:
     while (true) {
       final entries = store.recentEntries(
         from: inventory['from'] as int? ?? 0,
         until: inventory['until'] as int?,
         after: cursor,
+        through: through == null ? null : (through.created, through.id),
       );
       if (entries.isEmpty) break;
       // One query for the page's digests: skipping a reconciled object must
@@ -853,14 +897,15 @@ Future<List<(bool, List<bool>)>> _verifySignatures(List<dynamic> items) =>
 
 /// Deterministic integration harness. No sockets, UI or native iroh needed.
 Future<int> syncPair(Node a, Node b, {int rounds = 8}) async {
-  var total = 0, window = 0;
+  var total = 0;
+  InventoryCursor? afterA, afterB;
   for (var i = 0; i < rounds; i++) {
-    final forB = b.inventory(peerDevice: a.identity.device, window: window);
+    final forB = b.inventoryAfter(peerDevice: a.identity.device, after: afterB);
     var changed = await b.receive(
       a.identity.device,
       await a.offer(b.identity.device, forB),
     );
-    final forA = a.inventory(peerDevice: b.identity.device, window: window);
+    final forA = a.inventoryAfter(peerDevice: b.identity.device, after: afterA);
     changed += await a.receive(
       b.identity.device,
       await b.offer(a.identity.device, forA),
@@ -870,10 +915,32 @@ Future<int> syncPair(Node a, Node b, {int rounds = 8}) async {
     // need reconciling before the pair is done.
     if (changed == 0) {
       if (forA['more'] != true && forB['more'] != true) break;
-      window++;
+      if (forA['more'] == true) afterA = InventoryCursor.parse(forA['next']);
+      if (forB['more'] == true) afterB = InventoryCursor.parse(forB['next']);
     }
   }
   return total;
 }
 
 typedef _Received = ({SignedObject object, List<Evidence> evidence});
+
+/// Stable position in newest-first routing history. Validate wire cursors
+/// before using them in a query; they never authorize sharing an object.
+class InventoryCursor {
+  final int created;
+  final String id;
+  const InventoryCursor(this.created, this.id);
+
+  List<Object> toJson() => [created, id];
+
+  static InventoryCursor? parse(Object? value) {
+    if (value == null) return null;
+    if (value case [
+      final int created,
+      final String id,
+    ] when created >= 0 && RegExp(r'^[0-9a-f]{64}$').hasMatch(id)) {
+      return InventoryCursor(created, id);
+    }
+    throw StateError('Invalid inventory cursor');
+  }
+}

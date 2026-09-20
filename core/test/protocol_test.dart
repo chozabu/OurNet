@@ -10,6 +10,83 @@ Future<void> friend(Node a, Node b) async {
 
 void main() {
   test(
+    'cursor inventory bounds sparse scans and resumes without rescanning',
+    () async {
+      final store = _RouteCountingStore();
+      final a = Node(await LocalIdentity.create(), store);
+      final b = await node();
+      addTearDown(() async {
+        await a.close();
+        await b.close();
+        Node.inventoryWindow = 2000;
+      });
+      await friend(a, b);
+      Node.inventoryWindow = 3;
+      for (var i = 0; i < 20; i++) {
+        await a.publish(
+          'message',
+          {'text': 'own device only $i'},
+          audience: [a.person],
+          space: '_messages',
+        );
+      }
+      InventoryCursor? cursor;
+      var pages = 0;
+      do {
+        store.reads.clear();
+        final page = a.inventoryAfter(
+          peerDevice: b.identity.device,
+          after: cursor,
+        );
+        expect(page['have'], isEmpty);
+        expect(store.reads, hasLength(1));
+        expect(
+          store.reads.single.$1,
+          cursor == null ? null : (cursor.created, cursor.id),
+        );
+        expect(store.reads.single.$2, lessThanOrEqualTo(4));
+        pages++;
+        cursor = InventoryCursor.parse(page['next']);
+      } while (cursor != null);
+      expect(pages, 7);
+    },
+  );
+
+  test(
+    'cursor sync converges across timestamp ties and asymmetric history',
+    () async {
+      final a = Node(
+        await LocalIdentity.create(),
+        Store(),
+        clock: () => 1000000,
+      );
+      final b = Node(
+        await LocalIdentity.create(),
+        Store(),
+        clock: () => 1000000,
+      );
+      addTearDown(() async {
+        await a.close();
+        await b.close();
+        Node.inventoryWindow = 2000;
+      });
+      await friend(a, b);
+      Node.inventoryWindow = 7;
+      for (var i = 0; i < 45; i++) {
+        await a.publish('post', {'text': 'tied $i'});
+      }
+      await b.publish('post', {'text': 'other direction'});
+      await syncPair(a, b, rounds: 100);
+      expect(b.store.ids(), a.store.ids());
+      expect(b.store.count, 46);
+      expect(await syncPair(a, b, rounds: 100), 0);
+      final latest = await a.publish('post', {'text': 'new tied arrival'});
+      await syncPair(a, b, rounds: 100);
+      expect(b.store.get(latest.id), isNotNull);
+    },
+  );
+
+  test(
     'public objects need no private predecessor and subscriptions filter transfer',
     () async {
       final a = await node(), b = await node(), c = await node();
@@ -379,10 +456,18 @@ void main() {
     final first = a.inventory(peerDevice: b.identity.device);
     expect((first['have'] as Json).length, 2);
     expect(first['more'], isTrue);
-    expect(first['until'], isNull, reason: 'window 0 is open at the newest end');
+    expect(
+      first['until'],
+      isNull,
+      reason: 'window 0 is open at the newest end',
+    );
     final last = a.inventory(peerDevice: b.identity.device, window: 3);
     expect(last['more'], isFalse);
-    expect(last['from'], 0, reason: 'the last window is open at the oldest end');
+    expect(
+      last['from'],
+      0,
+      reason: 'the last window is open at the oldest end',
+    );
     // Every window is walked, so all of history arrives.
     await syncPair(a, b, rounds: 40);
     expect(b.store.count, a.store.count);
@@ -415,4 +500,14 @@ void main() {
     final page = await a.offer(b.identity.device, legacy);
     expect(await b.receive(a.identity.device, page), greaterThan(0));
   });
+}
+
+class _RouteCountingStore extends Store {
+  final reads = <((int, String)?, int)>[];
+  @override
+  List<ObjectRoute> routesAfter({(int, String)? after, int limit = 512}) {
+    final routes = super.routesAfter(after: after, limit: limit);
+    reads.add((after, routes.length));
+    return routes;
+  }
 }

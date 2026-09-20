@@ -249,6 +249,12 @@ supposed to cost what it shows rather than what is stored.
   the message routing index, so an inventory page is an index scan instead of
   re-extracting JSON from every stored object. No route is held in memory
   between calls, and a sync page no longer re-sorts every object it holds.
+- Cursor-capable sync seeks on `(created,id)` indexes, reading at most 2,001
+  routes per inventory even when none are shareable. Older pages resume from
+  retained cursors; they do not reread the newer prefix. Exact ID boundaries
+  also bound pages whose creation timestamps tie. Numbered-window fallback
+  remains for older peers. This bounds each inventory, not the total work to
+  reconcile an entire history or answer a peer with a much larger time range.
 - Evidence digests are a bounded cache over an indexed lookup rather than every
   object's evidence held at once, and offers walk a creation-time window in
   keyset pages rather than materialising it.
@@ -292,9 +298,8 @@ remains for a first load is decrypting the records a view actually shows, and
 one migration pass per device to record the counter described above.
 Windows first-use rendering, sync-under-load scenarios,
 direct input-to-paint measurement, cancellation and physical Android validation
-remain follow-up work, as does the cost of an inventory for a peer that can see
-very little of a large profile: the sharing index makes that an index scan, but
-it is still a scan. The new measurements should guide that work.
+remain follow-up work. Sparse-sharing inventory scans are now bounded for
+cursor-capable peers; full reconciliation still visits the historical pages.
 
 ## Recorded validation of the foundation
 

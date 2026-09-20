@@ -59,17 +59,24 @@ Inventory exchanges both object IDs and digests of held evidence IDs. Peers can
 therefore reconcile new provenance even when both already have the content.
 Evidence is unioned after validation; exceeding resource bounds is rejected.
 
-One inventory covers a window of history rather than everything a device holds,
-so the message stays bounded as a profile grows. Entries are the newest 2,000
-objects offerable to that peer, and `from`/`until` give the creation times they
-cover: window 0 is open above the newest object, the last window is open below
-the oldest, and successive windows overlap by an entry so equal creation times
-are never split. `more` says whether an older window follows. An offer only
-considers objects inside the window it was given, because outside it a missing
-entry says nothing about what the peer holds. A pull request names the `window`
-it is on and the reply answers with the same one, so both sides walk history
-together; a page that changes nothing moves to the next window, and a sync ends
-when the last window is quiet. Inventories carrying no window (earlier builds)
+One inventory covers a window of history rather than everything a device holds.
+Cursor-capable pulls set `cursorPaging: true` and pass the receiver's previous
+`next` token as `after` (null for the first page). Each device walks its own
+history in descending `(created, id)` order. A page inspects at most 2,000 routes
+plus one lookahead, including routes it cannot share; only offerable objects
+appear in `have`. Sparse sharing therefore cannot make an inventory scan the
+whole profile. Cursors are `[created, id]` positions, not access capabilities.
+
+Inventories retain `from`/`until` timestamp bounds and add an exclusive `after`
+and inclusive `through` position for exact boundaries across timestamp ties.
+The first page is open at the newest end and the last at the oldest end.
+`more` and `next` describe the next page. An offer considers only its supplied
+bounds. A quiet exchange advances each side that has more history; completion
+requires both sides' last pages to be quiet. Continuations first reconcile the
+newest page, then resume the retained cursors.
+
+Peers without cursor support use the existing numbered `window` requests and
+overlapping timestamp bounds. Inventories carrying no bounds (earlier builds)
 cover all history, as before.
 
 ## Transfers and limits

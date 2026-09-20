@@ -42,7 +42,11 @@ class PeerNetwork {
   Timer? _debounce;
   final Map<String, Timer> _retry = {};
   final Map<String, int> _failures = {};
-  final Map<String, int> _resume = {};
+  final Map<
+    String,
+    ({int window, InventoryCursor? local, InventoryCursor? remote})
+  >
+  _resume = {};
   final Set<String> _busy = {};
   final Set<iroh.Connection> _connections = {};
   final Set<Future<void>> _jobs = {};
@@ -308,24 +312,31 @@ class PeerNetwork {
     try {
       // Bounded work per session; exhausted pages schedule a continuation.
       var exhausted = true;
-      // Both sides reconcile the same window of history per page, then walk
-      // back through older ones once the current window agrees. A
+      // Both sides reconcile their current slices, then walk back through
+      // older ones once the current exchange agrees. A
       // continuation checks the newest window, then resumes where the last
       // session stopped, so history beyond one session's pages is reached.
       var window = 0;
-      final resume = _resume.remove(device) ?? 0;
+      final resume = _resume.remove(device);
+      InventoryCursor? localCursor, remoteCursor;
+      var cursorPaging = true;
       for (var page = 0; page < 16; page++) {
-        final inventory = node.inventory(peerDevice: device, window: window);
+        final inventory = cursorPaging
+            ? node.inventoryAfter(peerDevice: device, after: localCursor)
+            : node.inventory(peerDevice: device, window: window);
         final reply = await request(device, {
           'type': 'pull',
           'inventory': inventory,
           'window': window,
+          if (cursorPaging) 'cursorPaging': true,
+          if (cursorPaging) 'after': remoteCursor?.toJson(),
           'addresses': _sharedAddresses(device),
           if (build.isNotEmpty) 'build': build,
         });
         _noteBuild(device, reply['build']);
         final incoming = await node.receive(device, reply['items']);
-        final outgoing = await node.offer(device, reply['inventory']);
+        final remoteInventory = reply['inventory'] as Json;
+        final outgoing = await node.offer(device, remoteInventory);
         await _learnAddresses(device, reply['addresses']);
         final pushed = await request(device, {
           'type': 'push',
@@ -333,17 +344,44 @@ class PeerNetwork {
         });
         _progress[device] = _progress[device]! + incoming + outgoing.length;
         _activity();
+        if (cursorPaging && remoteInventory['cursorPaging'] != true) {
+          // Old builds ignore the cursor fields. Restart numbered pagination
+          // from the top; mixing the two kinds of boundaries could skip data.
+          cursorPaging = false;
+          window = 0;
+          continue;
+        }
         // Without changes on either side the next page would be identical,
         // e.g. items the peer ignores; move on rather than resend them.
         if (incoming == 0 && pushed['changed'] == 0) {
-          if (inventory['more'] != true) {
+          if (inventory['more'] != true && remoteInventory['more'] != true) {
             exhausted = false;
             break;
           }
-          window = window == 0 && resume > 0 ? resume : window + 1;
+          if (window == 0 && resume != null && resume.window > 0) {
+            window = resume.window;
+            localCursor = resume.local;
+            remoteCursor = resume.remote;
+          } else {
+            window++;
+            if (cursorPaging) {
+              if (inventory['more'] == true) {
+                localCursor = InventoryCursor.parse(inventory['next']);
+              }
+              if (remoteInventory['more'] == true) {
+                remoteCursor = InventoryCursor.parse(remoteInventory['next']);
+              }
+            }
+          }
         }
       }
-      if (exhausted) _resume[device] = window;
+      if (exhausted) {
+        _resume[device] = (
+          window: window,
+          local: localCursor,
+          remote: remoteCursor,
+        );
+      }
       syncErrors.remove(device);
       lastSync[device] = DateTime.now();
       _remember(device);
@@ -441,13 +479,18 @@ class PeerNetwork {
             reply = {
               'items': items,
               // The window the caller is on, so both sides walk together.
-              'inventory': node.inventory(
-                peerDevice: peer,
-                window: switch (j['window']) {
-                  final int w when w >= 0 => w,
-                  _ => 0,
-                },
-              ),
+              'inventory': j['cursorPaging'] == true
+                  ? node.inventoryAfter(
+                      peerDevice: peer,
+                      after: InventoryCursor.parse(j['after']),
+                    )
+                  : node.inventory(
+                      peerDevice: peer,
+                      window: switch (j['window']) {
+                        final int w when w >= 0 => w,
+                        _ => 0,
+                      },
+                    ),
               'addresses': _sharedAddresses(peer),
               if (build.isNotEmpty) 'build': build,
             };

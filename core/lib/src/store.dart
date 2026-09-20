@@ -27,6 +27,9 @@ class Store {
       CREATE TABLE IF NOT EXISTS blobs(id TEXT PRIMARY KEY, bytes BLOB NOT NULL);
     ''');
     db.execute('PRAGMA user_version=1');
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS objects_sync_cursor ON objects(created DESC,id DESC)',
+    );
     // Derived routing index contains no plaintext message payloads.
     if (db
         .select("SELECT name FROM sqlite_master WHERE name='message_peers'")
@@ -147,6 +150,10 @@ class Store {
       CREATE TRIGGER IF NOT EXISTS object_route_removed AFTER DELETE ON objects
       BEGIN DELETE FROM object_routes WHERE id=OLD.id; END;
     ''');
+
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS object_routes_sync_cursor ON object_routes(created DESC,id DESC)',
+    );
 
     // Objects are bounded by the bytes they occupy, not by a count: one
     // object ranges up to 256 KiB, so a row total says nothing about disk.
@@ -382,20 +389,24 @@ class Store {
     int from = 0,
     int? until,
     (int, String)? after,
-  }) => [
-    for (final row in _select(
-      'SELECT created, id FROM objects WHERE created>=? AND created<=? '
-      '${after == null ? '' : 'AND (created<? OR (created=? AND id>?)) '}'
-      'ORDER BY created DESC,id LIMIT ?',
-      [
-        from,
-        until ?? 253402300799999,
-        if (after != null) ...[after.$1, after.$1, after.$2],
-        limit,
-      ],
-    ))
-      (row['created'] as int, row['id'] as String),
-  ];
+    (int, String)? through,
+  }) {
+    final lower = through != null && through.$1 >= from ? through : (from, '');
+    final ceiling = until ?? 253402300799999;
+    final resume = after != null && after.$1 <= ceiling;
+    final upper = resume ? after : (ceiling, '\uffff');
+    // A single range on the composite index seeks directly to the cursor,
+    // including when thousands of records share a timestamp.
+    return [
+      for (final row in _select(
+        'SELECT created,id FROM objects WHERE (created,id)>=(?,?) '
+        'AND (created,id)${resume ? '<' : '<='}(?,?) '
+        'ORDER BY created DESC,id DESC LIMIT ?',
+        [lower.$1, lower.$2, upper.$1, upper.$2, limit],
+      ))
+        (row['created'] as int, row['id'] as String),
+    ];
+  }
 
   List<String> ids({int limit = 10000}) => [
     for (final row in _select('SELECT id FROM objects ORDER BY id LIMIT ?', [
@@ -414,10 +425,10 @@ class Store {
     for (final row in _select(
       'SELECT id,kind,space,author,created,device,expires,audience,via '
       'FROM object_routes '
-      '${after == null ? '' : 'WHERE created<? OR (created=? AND id>?) '}'
-      'ORDER BY created DESC,id LIMIT ?',
+      '${after == null ? '' : 'WHERE (created,id)<(?,?) '}'
+      'ORDER BY created DESC,id DESC LIMIT ?',
       [
-        if (after != null) ...[after.$1, after.$1, after.$2],
+        if (after != null) ...[after.$1, after.$2],
         limit,
       ],
     ))

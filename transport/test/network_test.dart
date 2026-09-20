@@ -6,6 +6,51 @@ import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
 
 void main() {
+  for (final legacy in [false, true]) {
+    test(
+      'history continues across sync sessions (legacy: $legacy)',
+      () async {
+        var clock = 1000000;
+        final a = Node(
+          await LocalIdentity.create(),
+          Store(),
+          clock: () => clock += 1000,
+        );
+        final b = legacy
+            ? _LegacyInventoryNode(await LocalIdentity.create(), Store())
+            : Node(await LocalIdentity.create(), Store());
+        final na = PeerNetwork(a), nb = PeerNetwork(b);
+        addTearDown(() async {
+          await na.stop();
+          await nb.stop();
+          await a.close();
+          await b.close();
+          Node.inventoryWindow = 2000;
+        });
+        Node.inventoryWindow = 2;
+        await na.start(local: true, automatic: false);
+        await nb.start(local: true, automatic: false);
+        await na.addCard(nb.contactCard());
+        await nb.addCard(na.contactCard());
+        for (var i = 0; i < 18; i++) {
+          await a.publish('post', {'text': 'old $i'});
+        }
+        for (var i = 0; i < 6; i++) {
+          await na.sync(b.identity.device);
+        }
+        expect(na.syncErrors, isEmpty, reason: na.events.join('\n'));
+        expect(b.store.ids(), a.store.ids());
+        expect(b.store.count, 18);
+        final latest = await a.publish('post', {
+          'text': 'new during continuation',
+        });
+        await na.sync(b.identity.device);
+        expect(b.store.get(latest.id), isNotNull);
+      },
+      timeout: const Timeout(Duration(seconds: 90)),
+    );
+  }
+
   test('overlapping lifecycle transitions leave one usable endpoint', () async {
     final node = Node(await LocalIdentity.create(), Store());
     final network = PeerNetwork(node);
@@ -182,4 +227,12 @@ void main() {
     },
     timeout: const Timeout(Duration(seconds: 60)),
   );
+}
+
+/// Old peers ignore cursor requests and return numbered-window inventories.
+class _LegacyInventoryNode extends Node {
+  _LegacyInventoryNode(super.identity, super.store);
+  @override
+  Json inventoryAfter({String? peerDevice, InventoryCursor? after}) =>
+      inventory(peerDevice: peerDevice);
 }
