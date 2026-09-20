@@ -94,7 +94,7 @@ extension _DiscoveryPages on _OurNetAppState {
     update(() {
       if (o.kind == 'inbox') {
         activeRoom = null;
-        notesFilter = item.data['type'] == 'file'
+        notesController.notesFilter = item.data['type'] == 'file'
             ? 'Files'
             : item.data['type'] == 'check'
             ? 'Lists'

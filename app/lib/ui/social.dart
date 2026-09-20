@@ -337,62 +337,6 @@ extension _SocialPages on _OurNetAppState {
     return depth;
   }
 
-  int compareMessages(SignedObject a, SignedObject b) {
-    final time = b.created.compareTo(a.created);
-    return time == 0 ? a.id.compareTo(b.id) : time;
-  }
-
-  Future<void> refreshConversations() async {
-    final end = node.store.insertionCursor;
-    while (conversationCursor < end) {
-      final page = node.store.insertedAfter(conversationCursor, ['message']);
-      if (page.isEmpty) break;
-      for (final (cursor, object) in page) {
-        conversationCursor = cursor;
-        final peers = object.author == node.person
-            ? object.audience
-            : object.audience.contains(node.person)
-            ? [object.author]
-            : <String>[];
-        for (final peer in peers) {
-          final loaded = conversationOlder[peer];
-          if (loaded == null) continue;
-          final scroll = conversationScroll[peer];
-          if (loaded.isNotEmpty &&
-              (conversationPending.contains(peer) ||
-                  scroll == null ||
-                  !scroll.hasClients ||
-                  scroll.offset > 16)) {
-            // Do not move the reader's visible messages under background sync.
-            // Keep only a dirty flag, not an unbounded queue of unseen arrivals.
-            conversationPending.add(peer);
-            continue;
-          }
-          // Ignore arrivals older than the loaded range until that page opens.
-          if (loaded.isNotEmpty &&
-              !conversationEnd.contains(peer) &&
-              compareMessages(object, loaded.last) > 0) {
-            continue;
-          }
-          var low = 0, high = loaded.length;
-          while (low < high) {
-            final mid = (low + high) ~/ 2;
-            if (compareMessages(loaded[mid], object) < 0) {
-              low = mid + 1;
-            } else {
-              high = mid;
-            }
-          }
-          if (low == loaded.length || loaded[low].id != object.id) {
-            loaded.insert(low, object);
-          }
-        }
-      }
-      await Future<void>.delayed(Duration.zero);
-    }
-    if (conversationCursor < end) conversationCursor = end;
-  }
-
   Future<void> chooseMessageHelper(BuildContext context) async {
     final recipient = contact;
     if (recipient == null) return;
@@ -527,15 +471,8 @@ extension _SocialPages on _OurNetAppState {
       );
     }
     final scheme = Theme.of(context).colorScheme;
-    final scroll = conversationScroll.putIfAbsent(
-      contact!,
-      ScrollController.new,
-    );
-    final objects = conversationOlder.putIfAbsent(contact!, () {
-      final page = node.store.conversation(node.person, contact!);
-      if (page.length < 50) conversationEnd.add(contact!);
-      return page;
-    });
+    final scroll = conversations.scrollFor(contact!);
+    final objects = conversations.messages(contact!);
     final helpers = messageHelpers(node, contact!);
     final unread =
         node.store.conversationUnread(node.person, peer: contact) > 0;
@@ -662,7 +599,7 @@ extension _SocialPages on _OurNetAppState {
                 Positioned.fill(
                   child: conversationList(context, objects, controller: scroll),
                 ),
-                if (objects.isNotEmpty && !conversationEnd.contains(contact))
+                if (objects.isNotEmpty && conversations.hasOlder(contact!))
                   Align(
                     alignment: Alignment.topCenter,
                     child: Padding(
@@ -670,19 +607,12 @@ extension _SocialPages on _OurNetAppState {
                       child: ActionChip(
                         avatar: const Icon(Icons.history, size: 18),
                         label: const Text('Load older messages'),
-                        onPressed: () => update(() {
-                          final page = node.store.conversation(
-                            node.person,
-                            contact!,
-                            before: objects.last,
-                          );
-                          conversationOlder[contact!] = [...objects, ...page];
-                          if (page.length < 50) conversationEnd.add(contact!);
-                        }),
+                        onPressed: () =>
+                            update(() => conversations.loadOlder(contact!)),
                       ),
                     ),
                   ),
-                if (conversationPending.contains(contact))
+                if (conversations.hasPending(contact!))
                   Align(
                     alignment: Alignment.bottomCenter,
                     child: Padding(
@@ -691,19 +621,7 @@ extension _SocialPages on _OurNetAppState {
                         icon: const Icon(Icons.keyboard_double_arrow_down),
                         label: const Text('Show latest messages'),
                         onPressed: () {
-                          update(() {
-                            final page = node.store.conversation(
-                              node.person,
-                              contact!,
-                            );
-                            conversationOlder[contact!] = page;
-                            conversationPending.remove(contact);
-                            if (page.length < 50) {
-                              conversationEnd.add(contact!);
-                            } else {
-                              conversationEnd.remove(contact);
-                            }
-                          });
+                          update(() => conversations.showLatest(contact!));
                           if (scroll.hasClients) scroll.jumpTo(0);
                         },
                       ),

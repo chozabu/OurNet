@@ -1,3 +1,6 @@
+import 'conversation_history.dart';
+import '../controllers/notes_home_controller.dart';
+import '../controllers/conversation_controller.dart';
 import '../services/background_sync.dart';
 import '../services/drafts.dart';
 import '../services/folder_connections.dart';
@@ -55,6 +58,8 @@ import 'speech_settings.dart';
 import 'voice_recorder.dart';
 import 'note_attachments.dart' show AudioClip;
 import 'package:image_picker/image_picker.dart';
+
+export '../controllers/notes_home_controller.dart' show notesPage, NotesView;
 
 part 'home.dart';
 part 'everyday.dart';
@@ -161,24 +166,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   bool showConversation = false;
   bool showForum = false;
   bool attachmentFiles = false;
-  String notesFilter = 'All';
-  final notesSearch = TextEditingController();
-  bool notesGrid = true;
-
-  /// Optimistic list state shown before summaries catch up.
-  final hiddenNotes = <String>{};
-  final selectedNotes = <String>{};
-  final noteObjects = <String, SignedObject?>{};
-  final notesSearchFocus = FocusNode();
-  final noteChecks = <String, Map<String, bool>>{};
-
-  /// The filtered, sorted notes list and what it was computed from.
-  NotesView? notesView;
-  Object? notesViewKey;
-  List<EverydayItem>? notesViewSource;
-
-  /// Notes shown in Others; grows a page at a time while scrolling.
-  int notesShown = notesPage;
+  late final NotesHomeController notesController;
   final roomChecks = <String, bool>{};
   String fileQuery = '';
   final fileSearch = TextEditingController();
@@ -232,11 +220,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     }
   }
 
-  final conversationOlder = <String, List<SignedObject>>{};
-  final conversationEnd = <String>{};
-  final conversationPending = <String>{};
-  final conversationScroll = <String, ScrollController>{};
-  int conversationCursor = 0;
+  late final ConversationController conversations;
   final sendingMessages = <String>{};
   final messageErrors = <String, String>{};
 
@@ -250,9 +234,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     if (widget.enablePlatform) performance.start();
-    conversationCursor = node.store.insertionCursor;
+    conversations = ConversationController(node);
     draftStore = DraftStore(node);
     notes = Notes(node);
+    notesController = NotesHomeController(notes);
     inboxComposer.addListener(
       () => rememberDraft(notesComposerContext, inboxComposer),
     );
@@ -288,7 +273,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         Destination.notes;
     dark = node.store.setting('dark') == true;
     compact = node.store.setting('compact') == true;
-    notesGrid = node.store.setting('notesGrid') != false;
+    notesController.notesGrid = node.store.setting('notesGrid') != false;
     accent = node.store.setting('accent') as int? ?? 0xff137d72;
     network = Network(node)..addListener(refresh);
     files = Files(node, network);
@@ -323,7 +308,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       ..onOpenForum = openForum;
     _deliveryRefresh = CoalescedTask(loadDeliveryLabels, (e) => notice('$e'));
     _dataRefresh = CoalescedTask(() async {
-      await refreshConversations();
+      await conversations.refreshConversations();
       searchIndex = null;
       driveView = null;
       everydayView = null;
@@ -744,9 +729,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _pausedStop?.cancel();
     _changes?.cancel();
     _dataRefresh.close();
-    for (final controller in conversationScroll.values) {
-      controller.dispose();
-    }
+    conversations.dispose();
     _deliveryRefresh.close();
     imports.dispose();
     performance.stop();
@@ -758,7 +741,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     speech
       ..removeListener(refresh)
       ..close();
-    notesSearchFocus.dispose();
+    notesController.dispose();
     network.removeListener(refresh);
     calls.removeListener(refresh);
     if (widget.enablePlatform) unawaited(calls.close());
@@ -770,7 +753,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     listName.dispose();
     composer.dispose();
     search.dispose();
-    notesSearch.dispose();
     fileSearch.dispose();
     super.dispose();
   }

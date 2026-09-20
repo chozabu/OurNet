@@ -12,16 +12,6 @@ const notesFilters = {
   'Removed': 'Removed',
 };
 
-/// Notes added to the list each time scrolling nears its end.
-const notesPage = 60;
-
-typedef NotesView = ({
-  Set<Object?> pins,
-  List<EverydayItem> visible,
-  List<EverydayItem> pinned,
-  List<EverydayItem> others,
-});
-
 extension _NotesHome on _OurNetAppState {
   Widget noteEditor({String? id, bool checklist = false}) => NoteEditor(
     key: ValueKey('editor/${id ?? 'new'}'),
@@ -170,7 +160,7 @@ extension _NotesHome on _OurNetAppState {
   /// One Undo snackbar for a whole removal, however many notes it covers.
   void notesRemoved(List<String> ids) {
     if (ids.isEmpty) return;
-    update(() => hiddenNotes.addAll(ids));
+    update(() => notesController.hiddenNotes.addAll(ids));
     notesNotice(
       ids,
       'removed',
@@ -181,7 +171,9 @@ extension _NotesHome on _OurNetAppState {
   Future<void> setNotesRemoved(List<String> ids, bool removed) async {
     update(() {
       for (final id in ids) {
-        removed ? hiddenNotes.add(id) : hiddenNotes.remove(id);
+        removed
+            ? notesController.hiddenNotes.add(id)
+            : notesController.hiddenNotes.remove(id);
       }
     });
     final done = <String>[];
@@ -194,7 +186,11 @@ extension _NotesHome on _OurNetAppState {
         done.add(id);
       } catch (e) {
         error ??= e;
-        update(() => removed ? hiddenNotes.remove(id) : hiddenNotes.add(id));
+        update(
+          () => removed
+              ? notesController.hiddenNotes.remove(id)
+              : notesController.hiddenNotes.add(id),
+        );
       }
     }
     if (removed) notesRemoved(done);
@@ -243,7 +239,7 @@ extension _NotesHome on _OurNetAppState {
     final row = (p['checks'] as List).cast<Map>().firstWhere(
       (r) => r['id'] == check,
     );
-    update(() => (noteChecks[p['entry']] ??= {})[check] = done);
+    update(() => (notesController.noteChecks[p['entry']] ??= {})[check] = done);
     try {
       await notes.edit(
         p['entry'],
@@ -253,7 +249,7 @@ extension _NotesHome on _OurNetAppState {
         (row['parents'] as List).cast<String>(),
       );
     } catch (e) {
-      update(() => noteChecks[p['entry']]?.remove(check));
+      update(() => notesController.noteChecks[p['entry']]?.remove(check));
       notice('$e');
     }
   }
@@ -403,7 +399,7 @@ extension _NotesHome on _OurNetAppState {
         await notes.pin(id, !pinned);
         update(() {});
       case 'select':
-        update(() => selectedNotes.add(id));
+        update(() => notesController.selectedNotes.add(id));
       case 'archive':
         await setArchived([id], !archived);
       case 'reminder':
@@ -450,23 +446,15 @@ extension _NotesHome on _OurNetAppState {
 
   /// Removed notes leave Removed after [removedDays] days, or when emptied.
   /// Their encrypted history stays on the device; Recovery is not offered.
-  static const removedDays = 7;
+  static const removedDays = NotesHomeController.removedDays;
   static const removedDaysText = '$removedDays days';
-  bool emptied(Json p) {
-    final at = p['removedAt'] as int?;
-    return notes.state.purged(p['entry'], p['removal'] as String?) ||
-        (at != null &&
-            DateTime.now().millisecondsSinceEpoch - at >
-                removedDays * Duration.millisecondsPerDay);
-  }
-
   Future<void> emptyRemoved(List<EverydayItem> all) async {
     final removed = [
       for (final i in all)
         if (i.data['type'] == 'shared_note' &&
             i.data['removed'] == true &&
             i.data['removal'] != null &&
-            !emptied(i.data))
+            !notesController.emptied(i.data))
           i,
     ];
     if (removed.isEmpty) return;
@@ -479,52 +467,6 @@ extension _NotesHome on _OurNetAppState {
     } catch (e) {
       notice('$e');
     }
-  }
-
-  bool notesMatch(EverydayItem item, String query) {
-    final p = item.data;
-    final type = p['type'];
-    if (type == 'pin') return false;
-    final shared = type == 'shared_note';
-    final id = p['entry'] as String? ?? '';
-    final state = notes.state;
-    final removedView = notesFilter == 'Removed';
-    if (removedView) {
-      if (!shared || p['deleted'] != true) return false;
-      if (emptied(p)) return false;
-    } else if (p['deleted'] == true || hiddenNotes.contains(id)) {
-      return false;
-    }
-    final archived = shared && state.archived(id);
-    if (notesFilter == 'Archive') {
-      if (!archived) return false;
-    } else if (archived && !removedView && notesFilter != 'Reminders') {
-      return false;
-    }
-    final text = (p['text'] ?? '').toString();
-    final link = text.startsWith('http');
-    final files = (p['files'] as List? ?? const []).cast<Map>();
-    final passes = switch (notesFilter) {
-      'Text' => shared && p['checklist'] != true || type == 'note' && !link,
-      'Lists' => shared && p['checklist'] == true || type == 'check',
-      'Links' => (type == 'note' || shared) && link,
-      'Files' =>
-        type == 'file' ||
-            files.any((f) => f['kind'] == 'image' || f['kind'] == 'drawing'),
-      'Voice' => files.any((f) => f['kind'] == 'audio'),
-      'Reminders' => shared && state.reminder(id) != null,
-      _ when notesFilter.startsWith('label:') =>
-        shared && state.labelsOf(id).contains(notesFilter.substring(6)),
-      _ => true,
-    };
-    if (!passes) return false;
-    if (query.isEmpty) return true;
-    final labelNames = shared
-        ? state.labelsOf(id).map((l) => state.labels[l]).join(' ')
-        : '';
-    return '${p['title'] ?? ''}\n$text\n${p['transcript'] ?? ''}\n${p['name'] ?? ''}\n${p['list'] ?? ''}\n$labelNames'
-        .toLowerCase()
-        .contains(query);
   }
 
   Widget legacyCard(BuildContext context, EverydayItem item, Set pins) {
@@ -626,12 +568,12 @@ extension _NotesHome on _OurNetAppState {
 
   /// Signed objects are immutable, so lookups for card previews are cached.
   SignedObject? cachedObject(String id) =>
-      noteObjects[id] ??= node.store.get(id);
+      notesController.noteObjects[id] ??= node.store.get(id);
 
   void toggleSelected(String id) => update(
-    () => selectedNotes.contains(id)
-        ? selectedNotes.remove(id)
-        : selectedNotes.add(id),
+    () => notesController.selectedNotes.contains(id)
+        ? notesController.selectedNotes.remove(id)
+        : notesController.selectedNotes.add(id),
   );
 
   Widget noteTile(
@@ -646,14 +588,14 @@ extension _NotesHome on _OurNetAppState {
     final id = p['entry'] as String;
     final colors = Theme.of(context).colorScheme;
     final color = noteColor(context, p['color']) ?? colors.surface;
-    final overrides = noteChecks[id] ?? const <String, bool>{};
+    final overrides = notesController.noteChecks[id] ?? const <String, bool>{};
     final state = notes.state;
     final live = isLiveNote(p);
     final labelNames = state.labels;
     final draggable =
-        notesFilter != 'Removed' &&
+        notesController.notesFilter != 'Removed' &&
         live &&
-        notesSearch.text.trim().isEmpty &&
+        notesController.notesSearch.text.trim().isEmpty &&
         section.length > 1;
     Widget card(VoidCallback open) => NoteCard(
       item: item,
@@ -665,8 +607,8 @@ extension _NotesHome on _OurNetAppState {
       onMenu: (position) => noteMenu(context, item, pins, position),
       labels: [for (final l in state.labelsOf(id)) labelNames[l]!],
       reminder: state.reminder(id),
-      selected: selectedNotes.contains(id),
-      selecting: selectedNotes.isNotEmpty,
+      selected: notesController.selectedNotes.contains(id),
+      selecting: notesController.selectedNotes.isNotEmpty,
       onSelect: live ? () => toggleSelected(id) : null,
       longPress: !draggable,
       files: files,
@@ -687,7 +629,7 @@ extension _NotesHome on _OurNetAppState {
       openBuilder: (_, _) => noteEditor(id: id),
       closedBuilder: (context, open) => card(open),
     );
-    if (notesFilter == 'Removed' || !live) return container;
+    if (notesController.notesFilter == 'Removed' || !live) return container;
     final dismissible = Dismissible(
       key: ValueKey('dismiss/$id'),
       onDismissed: (_) => unawaited(setArchived([id], !state.archived(id))),
@@ -712,7 +654,8 @@ extension _NotesHome on _OurNetAppState {
         child: LongPressDraggable<String>(
           data: id,
           hapticFeedbackOnStart: true,
-          onDragStarted: () => update(() => selectedNotes.add(id)),
+          onDragStarted: () =>
+              update(() => notesController.selectedNotes.add(id)),
           feedback: Material(
             color: Colors.transparent,
             elevation: 8,
@@ -741,7 +684,10 @@ extension _NotesHome on _OurNetAppState {
       await notes.state.move(
         [
           for (final s in section)
-            (id: s.data['entry'] as String, key: noteListKey(s)),
+            (
+              id: s.data['entry'] as String,
+              key: notesController.noteListKey(s),
+            ),
         ],
         moved,
         target,
@@ -750,95 +696,6 @@ extension _NotesHome on _OurNetAppState {
     } catch (e) {
       notice('$e');
     }
-  }
-
-  /// Where [item] sorts in the notes list (see `NoteState.listKey`); only
-  /// notes can be moved, other saved items sort by time.
-  String noteListKey(EverydayItem item) {
-    final id = '${item.data['entry']}';
-    final time = item.data['updated'] as int? ?? item.object.created;
-    return item.data['type'] == 'shared_note'
-        ? notes.state.listKey(id, time)
-        : NoteState.timeKey(time, id);
-  }
-
-  /// Filtered and sorted notes. Rebuilding the app for other reasons reuses
-  /// the last result; new notes, personal state, the filter, the search and
-  /// optimistic hides recompute it. A new filter or search starts again at
-  /// the first page.
-  NotesView notesViewOf(List<EverydayItem> all, String query) {
-    final state = notes.state;
-    if (!identical(all, notesViewSource)) {
-      notesViewSource = all;
-      final byId = <Object?, EverydayItem>{
-        for (final i in all)
-          if (i.data['type'] == 'shared_note') i.data['entry']: i,
-      };
-      // Removals the summaries now reflect no longer need hiding.
-      hiddenNotes.removeWhere((id) => byId[id]?.data['deleted'] == true);
-      selectedNotes.removeWhere((id) => byId[id]?.data['deleted'] != false);
-      // Drop optimistic checks the summaries now reflect.
-      for (final MapEntry(key: id, value: overrides) in noteChecks.entries) {
-        final item = byId[id];
-        if (item == null) continue;
-        final unchecked = {
-          for (final c in (item.data['checks'] as List? ?? const [])) c['id'],
-        };
-        overrides.removeWhere((id, done) => done != unchecked.contains(id));
-      }
-    }
-    final key = (
-      all,
-      state.version,
-      notesFilter,
-      query,
-      hiddenNotes.join('\n'),
-    );
-    final previous = notesViewKey;
-    final view = notesView;
-    if (previous == key && view != null) return view;
-    if (previous is! (Object, int, String, String, String) ||
-        previous.$3 != notesFilter ||
-        previous.$4 != query) {
-      notesShown = notesPage;
-    }
-    notesViewKey = key;
-    final pins = <Object?>{
-      for (final i in all)
-        if (i.data['type'] == 'pin' && i.data['pinned'] == true)
-          i.data['target'],
-      for (final i in all)
-        if (i.data['type'] == 'shared_note' && state.pinned(i.data['entry']))
-          i.data['entry'],
-    };
-    final visible = all.where((i) => notesMatch(i, query)).toList();
-    if (notesFilter == 'Reminders') {
-      int at(EverydayItem i) =>
-          state.reminder(i.data['entry'])?['at'] as int? ?? 0;
-      visible.sort((a, b) => at(a).compareTo(at(b)));
-    } else {
-      // Newest edit first, with moved notes where they were placed.
-      final keys = {for (final i in visible) i: noteListKey(i)};
-      visible.sort((a, b) {
-        final order = keys[a]!.compareTo(keys[b]!);
-        return order == 0
-            ? '${a.data['entry']}'.compareTo('${b.data['entry']}')
-            : order;
-      });
-    }
-    final pinned = ['Removed', 'Archive'].contains(notesFilter)
-        ? <EverydayItem>[]
-        : visible.where((i) => pins.contains(i.data['entry'])).toList();
-    final pinnedSet = pinned.toSet();
-    return notesView = (
-      pins: pins,
-      visible: visible,
-      pinned: pinned,
-      others: [
-        for (final i in visible)
-          if (!pinnedSet.contains(i)) i,
-      ],
-    );
   }
 
   Widget captureBar(BuildContext context) {
@@ -961,7 +818,7 @@ extension _NotesHome on _OurNetAppState {
   }
 
   Widget selectionBar(BuildContext context, List<EverydayItem> all) {
-    final ids = selectedNotes.toList();
+    final ids = notesController.selectedNotes.toList();
     final state = notes.state;
     final allPinned = ids.every(notes.pinned);
     final allArchived = ids.every(state.archived);
@@ -983,7 +840,7 @@ extension _NotesHome on _OurNetAppState {
           children: [
             IconButton(
               tooltip: 'Clear selection',
-              onPressed: () => update(selectedNotes.clear),
+              onPressed: () => update(notesController.selectedNotes.clear),
               icon: const Icon(Icons.close),
             ),
             Expanded(
@@ -1021,7 +878,7 @@ extension _NotesHome on _OurNetAppState {
             IconButton(
               tooltip: allArchived ? 'Unarchive' : 'Archive',
               onPressed: () async {
-                update(selectedNotes.clear);
+                update(notesController.selectedNotes.clear);
                 await setArchived(ids, !allArchived);
               },
               icon: Icon(
@@ -1039,7 +896,7 @@ extension _NotesHome on _OurNetAppState {
                     update(() {
                       for (final item in all) {
                         if (isLiveNote(item.data)) {
-                          selectedNotes.add(item.data['entry']);
+                          notesController.selectedNotes.add(item.data['entry']);
                         }
                       }
                     });
@@ -1049,9 +906,9 @@ extension _NotesHome on _OurNetAppState {
                         await notes.copy(id);
                       }
                     });
-                    update(selectedNotes.clear);
+                    update(notesController.selectedNotes.clear);
                   case 'remove':
-                    update(selectedNotes.clear);
+                    update(notesController.selectedNotes.clear);
                     await setNotesRemoved(ids, true);
                 }
               },
@@ -1089,11 +946,11 @@ extension _NotesHome on _OurNetAppState {
               child: ChoiceChip(
                 avatar: Icon(icon, size: 18),
                 label: Text(label),
-                selected: notesFilter == value,
+                selected: notesController.notesFilter == value,
                 showCheckmark: false,
                 onSelected: (_) => update(() {
-                  notesFilter = value;
-                  selectedNotes.clear();
+                  notesController.notesFilter = value;
+                  notesController.selectedNotes.clear();
                 }),
               ),
             ),
@@ -1104,9 +961,11 @@ extension _NotesHome on _OurNetAppState {
               label: const Text('Edit labels'),
               onPressed: () async {
                 await manageLabels(context, notes.state, notice: notice);
-                if (notesFilter.startsWith('label:') &&
-                    !notes.state.labels.containsKey(notesFilter.substring(6))) {
-                  notesFilter = 'All';
+                if (notesController.notesFilter.startsWith('label:') &&
+                    !notes.state.labels.containsKey(
+                      notesController.notesFilter.substring(6),
+                    )) {
+                  notesController.notesFilter = 'All';
                 }
                 update(() {});
               },
@@ -1119,22 +978,22 @@ extension _NotesHome on _OurNetAppState {
 
   Widget notesHome(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final query = notesSearch.text.trim().toLowerCase();
+    final query = notesController.notesSearch.text.trim().toLowerCase();
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 600;
-        final columns = notesGrid
+        final columns = notesController.notesGrid
             ? (constraints.maxWidth / 250).floor().clamp(2, 5)
             : 1;
-        final tileWidth = notesGrid
+        final tileWidth = notesController.notesGrid
             ? (constraints.maxWidth - 10 * (columns - 1)) / columns
             : constraints.maxWidth.clamp(0, 640).toDouble();
         final search = Row(
           children: [
             Expanded(
               child: TextField(
-                controller: notesSearch,
-                focusNode: notesSearchFocus,
+                controller: notesController.notesSearch,
+                focusNode: notesController.notesSearchFocus,
                 // Presentation only: no data reload or saved destination.
                 onChanged: (_) => redraw(),
                 textInputAction: TextInputAction.search,
@@ -1146,7 +1005,7 @@ extension _NotesHome on _OurNetAppState {
                       : IconButton(
                           tooltip: 'Clear search',
                           onPressed: () {
-                            notesSearch.clear();
+                            notesController.notesSearch.clear();
                             redraw();
                           },
                           icon: const Icon(Icons.close),
@@ -1165,16 +1024,16 @@ extension _NotesHome on _OurNetAppState {
             PopupMenuButton<String>(
               tooltip: 'Show',
               icon: Badge(
-                isLabelVisible: notesFilter != 'All',
+                isLabelVisible: notesController.notesFilter != 'All',
                 smallSize: 8,
                 child: const Icon(Icons.filter_list),
               ),
-              initialValue: notesFilter,
+              initialValue: notesController.notesFilter,
               onSelected: (value) async {
                 if (value != 'widget') {
                   update(() {
-                    notesFilter = value;
-                    selectedNotes.clear();
+                    notesController.notesFilter = value;
+                    notesController.selectedNotes.clear();
                   });
                   return;
                 }
@@ -1191,7 +1050,7 @@ extension _NotesHome on _OurNetAppState {
                 for (final entry in notesFilters.entries)
                   CheckedPopupMenuItem(
                     value: entry.key,
-                    checked: notesFilter == entry.key,
+                    checked: notesController.notesFilter == entry.key,
                     child: Text(entry.value),
                   ),
                 if (noteWidgets != null) ...[
@@ -1208,13 +1067,17 @@ extension _NotesHome on _OurNetAppState {
               ],
             ),
             IconButton(
-              tooltip: notesGrid ? 'List view' : 'Grid view',
+              tooltip: notesController.notesGrid ? 'List view' : 'Grid view',
               onPressed: () {
-                update(() => notesGrid = !notesGrid);
-                node.store.set('notesGrid', notesGrid);
+                update(
+                  () => notesController.notesGrid = !notesController.notesGrid,
+                );
+                node.store.set('notesGrid', notesController.notesGrid);
               },
               icon: Icon(
-                notesGrid ? Icons.view_agenda_outlined : Icons.grid_view,
+                notesController.notesGrid
+                    ? Icons.view_agenda_outlined
+                    : Icons.grid_view,
               ),
             ),
           ],
@@ -1232,11 +1095,12 @@ extension _NotesHome on _OurNetAppState {
               return const Center(child: CircularProgressIndicator());
             }
             final all = loaded = snapshot.data!;
-            final (:pins, :visible, :pinned, :others) = notesViewOf(all, query);
+            final (:pins, :visible, :pinned, :others) = notesController
+                .notesViewOf(all, query);
             if (visible.isEmpty) {
               final (title, detail) = query.isNotEmpty
                   ? ('No matching notes', 'Try other words, or show all notes.')
-                  : switch (notesFilter) {
+                  : switch (notesController.notesFilter) {
                       'Removed' => (
                         'Nothing removed',
                         'Removed notes stay here, and can be restored.',
@@ -1249,10 +1113,11 @@ extension _NotesHome on _OurNetAppState {
                         'No upcoming reminders',
                         'Notes with a reminder appear here, soonest first.',
                       ),
-                      _ when notesFilter.startsWith('label:') => (
-                        'No notes with this label',
-                        'Add labels from a note\'s menu.',
-                      ),
+                      _ when notesController.notesFilter.startsWith('label:') =>
+                        (
+                          'No notes with this label',
+                          'Add labels from a note\'s menu.',
+                        ),
                       _ => (
                         'Your next small habit starts here',
                         'Take a note, start a list, record your voice or draw. Drop a file, or paste a screenshot.',
@@ -1297,14 +1162,14 @@ extension _NotesHome on _OurNetAppState {
                     ),
                   ),
                 );
-            final more = notesShown < others.length;
+            final more = notesController.notesShown < others.length;
             // Grow before the end is reached, and again after layout while
             // the shown notes do not yet fill the view.
             bool showMore(ScrollMetrics metrics) {
               if (more &&
                   metrics.axis == Axis.vertical &&
                   metrics.extentAfter < 1500) {
-                update(() => notesShown += notesPage);
+                update(() => notesController.notesShown += notesPage);
               }
               return false;
             }
@@ -1312,14 +1177,16 @@ extension _NotesHome on _OurNetAppState {
             return Center(
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  maxWidth: notesGrid ? double.infinity : 640,
+                  maxWidth: notesController.notesGrid ? double.infinity : 640,
                 ),
                 child: NotificationListener<ScrollMetricsNotification>(
                   onNotification: (n) => showMore(n.metrics),
                   child: NotificationListener<ScrollUpdateNotification>(
                     onNotification: (n) => showMore(n.metrics),
                     child: CustomScrollView(
-                      key: PageStorageKey('everyday/self/$notesFilter'),
+                      key: PageStorageKey(
+                        'everyday/self/${notesController.notesFilter}',
+                      ),
                       slivers: [
                         if (pinned.isNotEmpty) ...[
                           header('Pinned'),
@@ -1327,7 +1194,7 @@ extension _NotesHome on _OurNetAppState {
                           if (others.isNotEmpty) header('Others'),
                         ] else
                           const SliverToBoxAdapter(child: SizedBox(height: 8)),
-                        grid(others, shown: notesShown),
+                        grid(others, shown: notesController.notesShown),
                         const SliverToBoxAdapter(child: SizedBox(height: 16)),
                       ],
                     ),
@@ -1337,7 +1204,7 @@ extension _NotesHome on _OurNetAppState {
             );
           },
         );
-        final addDisabled = notesFilter == 'Removed';
+        final addDisabled = notesController.notesFilter == 'Removed';
         return _UnlessTypingShortcuts(
           bindings: {
             const SingleActivator(LogicalKeyboardKey.keyC): () {
@@ -1350,18 +1217,18 @@ extension _NotesHome on _OurNetAppState {
               if (!addDisabled) unawaited(captureVoice());
             },
             const SingleActivator(LogicalKeyboardKey.slash): () =>
-                notesSearchFocus.requestFocus(),
+                notesController.notesSearchFocus.requestFocus(),
             const SingleActivator(LogicalKeyboardKey.escape): () =>
-                update(selectedNotes.clear),
+                update(notesController.selectedNotes.clear),
             const SingleActivator(LogicalKeyboardKey.keyE): () {
-              if (selectedNotes.isEmpty) return;
-              final ids = selectedNotes.toList();
-              update(selectedNotes.clear);
+              if (notesController.selectedNotes.isEmpty) return;
+              final ids = notesController.selectedNotes.toList();
+              update(notesController.selectedNotes.clear);
               unawaited(setArchived(ids, !ids.every(notes.state.archived)));
             },
             const SingleActivator(LogicalKeyboardKey.keyF): () {
-              if (selectedNotes.isEmpty) return;
-              final ids = selectedNotes.toList();
+              if (notesController.selectedNotes.isEmpty) return;
+              final ids = notesController.selectedNotes.toList();
               final value = !ids.every(notes.pinned);
               unawaited(
                 notes.state
@@ -1370,15 +1237,16 @@ extension _NotesHome on _OurNetAppState {
               );
             },
             const SingleActivator(LogicalKeyboardKey.delete): () {
-              final ids = selectedNotes.toList();
-              update(selectedNotes.clear);
+              final ids = notesController.selectedNotes.toList();
+              update(notesController.selectedNotes.clear);
               unawaited(setNotesRemoved(ids, true));
             },
             const SingleActivator(LogicalKeyboardKey.keyA, control: true): () =>
                 update(() {
                   for (final item in loaded) {
-                    if (isLiveNote(item.data) && notesMatch(item, query)) {
-                      selectedNotes.add(item.data['entry']);
+                    if (isLiveNote(item.data) &&
+                        notesController.notesMatch(item, query)) {
+                      notesController.selectedNotes.add(item.data['entry']);
                     }
                   }
                 }),
@@ -1404,12 +1272,12 @@ extension _NotesHome on _OurNetAppState {
                     children: [
                       AnimatedSwitcher(
                         duration: const Duration(milliseconds: 150),
-                        child: selectedNotes.isEmpty
+                        child: notesController.selectedNotes.isEmpty
                             ? search
                             : selectionBar(context, loaded),
                       ),
                       filterChips(context),
-                      if (notesFilter == 'Removed')
+                      if (notesController.notesFilter == 'Removed')
                         Padding(
                           padding: const EdgeInsets.only(top: 6),
                           child: Row(
@@ -1431,16 +1299,19 @@ extension _NotesHome on _OurNetAppState {
                             'Reminders',
                             'Archive',
                             'Removed',
-                          ].contains(notesFilter) &&
-                          !notesFilter.startsWith('label:'))
+                          ].contains(notesController.notesFilter) &&
+                          !notesController.notesFilter.startsWith('label:'))
                         Padding(
                           padding: const EdgeInsets.only(top: 4),
                           child: Align(
                             alignment: Alignment.centerLeft,
                             child: InputChip(
-                              label: Text(notesFilters[notesFilter]!),
-                              onDeleted: () =>
-                                  update(() => notesFilter = 'All'),
+                              label: Text(
+                                notesFilters[notesController.notesFilter]!,
+                              ),
+                              onDeleted: () => update(
+                                () => notesController.notesFilter = 'All',
+                              ),
                             ),
                           ),
                         ),

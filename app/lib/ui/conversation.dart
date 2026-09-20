@@ -25,68 +25,12 @@ extension _ConversationPages on _OurNetAppState {
         Icons.lock_outline,
       );
     }
-    return ListView.builder(
+    return ConversationHistory(
+      peer: contact!,
+      objects: objects,
       controller: controller,
-      reverse: true,
-      key: PageStorageKey('conversation/$contact'),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      itemCount: objects.length,
-      itemBuilder: (context, index) {
-        final o = objects[index];
-        final older = index + 1 < objects.length ? objects[index + 1] : null;
-        final day = messageDay(o);
-        final newDay = older == null || messageDay(older) != day;
-        final groupStart = newDay || older.author != o.author;
-        return Column(
-          children: [
-            if (newDay) daySeparator(context, day),
-            messageBubble(context, o, groupStart: groupStart),
-          ],
-        );
-      },
-    );
-  }
-
-  DateTime messageDay(SignedObject o) {
-    final t = DateTime.fromMillisecondsSinceEpoch(o.created).toLocal();
-    return DateTime(t.year, t.month, t.day);
-  }
-
-  Widget daySeparator(BuildContext context, DateTime day) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final gap = today.difference(day).inDays;
-    const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-    ];
-    const weekdays = [
-      'Monday', 'Tuesday', 'Wednesday', 'Thursday', //
-      'Friday', 'Saturday', 'Sunday',
-    ];
-    final label = gap == 0
-        ? 'Today'
-        : gap == 1
-        ? 'Yesterday'
-        : gap < 7 && gap > 0
-        ? weekdays[day.weekday - 1]
-        : '${day.day} ${months[day.month - 1]}'
-              '${day.year == now.year ? '' : ' ${day.year}'}';
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Center(
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: scheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            child: Text(label, style: Theme.of(context).textTheme.labelMedium),
-          ),
-        ),
-      ),
+      bubble: (context, object, groupStart) =>
+          messageBubble(context, object, groupStart: groupStart),
     );
   }
 
