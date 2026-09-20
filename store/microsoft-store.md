@@ -91,9 +91,10 @@ Signed content with visible provenance
 
 **Images:**
 - Store logos: `store/ournet-icon-512.png` (1:1, 300x300 is enough).
-- Screenshots: `store/screenshots/*.png` are the Android app at 1080x1920.
-  Partner Center accepts them, but Windows screenshots of the desktop app
-  (1366x768 or larger) would describe the product better.
+- Screenshots: `store/screenshots-windows/*.png` are the Windows app at
+  1920x1080 and are the ones to submit. `store/screenshots-windows/raw/`
+  holds the unframed window captures behind them.
+  `store/screenshots/*.png` are the Android app at 1080x1920, kept for Play.
 - Hero image (optional, 16:9, 1920x1080): not yet made.
   `store/ournet-feature-1024x500.png` is the wrong ratio.
 
