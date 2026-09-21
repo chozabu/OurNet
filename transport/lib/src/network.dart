@@ -307,6 +307,7 @@ class PeerNetwork {
   Future<void> _sync(String device) async {
     if (!running || !node.allowedPeer(device) || !_busy.add(device)) return;
     _progress[device] = 0;
+    final resume = _resume.remove(device);
     lastAttempt[device] = DateTime.now();
     _activity();
     try {
@@ -317,7 +318,6 @@ class PeerNetwork {
       // continuation checks the newest window, then resumes where the last
       // session stopped, so history beyond one session's pages is reached.
       var window = 0;
-      final resume = _resume.remove(device);
       InventoryCursor? localCursor, remoteCursor;
       var cursorPaging = true;
       for (var page = 0; page < 16; page++) {
@@ -392,6 +392,10 @@ class PeerNetwork {
       }
       log('Synced ${node.contacts[device]?.label ?? device}');
     } catch (e) {
+      // How far back through history this pair had reached is progress, not
+      // state to discard: a link that drops mid-session would otherwise
+      // restart at the newest window every time and never reach the rest.
+      if (resume != null) _resume.putIfAbsent(device, () => resume);
       syncErrors[device] = e.toString();
       final failures = (_failures[device] ?? 0) + 1;
       _failures[device] = failures;

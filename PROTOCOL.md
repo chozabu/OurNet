@@ -31,11 +31,22 @@ device certificate, kind, space, creation time, optional expiry, audience, optio
 relay audience, payload and signature. Their IDs hash the signed representation.
 There is no dependency on an author's unrelated earlier private objects.
 
-Public objects travel to admitted friends subscribed to their space. Private
+Public objects travel to admitted friends subscribed to their space. Which
+spaces a person follows is itself personal state replicated between their own
+devices, one register per space, so two devices do not disagree about which
+forums they keep and pass on. Private
 objects travel only to author devices, selected recipient people, or explicitly
 named relays. The author encrypts a payload key for each known authorised device
-using X25519, HKDF and ChaCha20-Poly1305. Newly enrolled devices cannot decrypt
-older messages without a future history-transfer mechanism. Static recipient
+using X25519, HKDF and ChaCha20-Poly1305. A device enrolled later holds no key
+for anything written before it, so enrolment re-issues what its owner can
+re-issue: drive revisions, inbox entries, the groups and notes this person
+owns, and personal note state. Each note register is copied as an owner
+checkpoint that replaces only the version it copies, so concurrent branches
+survive, and the note's edit time is restored afterwards. Rooms keep their
+epoch: membership has not changed, and bumping it would strand what other
+members wrote concurrently. Private messages, and groups and notes someone
+else owns, are not re-issued — a room record counts only from its owner, so
+those wait for that owner's next re-issue. Static recipient
 key compromise can expose recorded envelopes: this is not a ratcheting protocol.
 
 Inventory filters object identifiers using the same recipient policy; it does

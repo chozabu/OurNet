@@ -115,13 +115,19 @@ class _AddDevicePageState extends State<AddDevicePage> {
           );
           if (!expired && shareHistory) {
             try {
-              await Drive(widget.network.node).shareHistory();
-              await Everyday(widget.network.node).shareHistory();
+              final node = widget.network.node;
+              await Drive(node).shareHistory();
+              await Everyday(node).shareHistory();
+              // Re-encrypted for the device just added: without this its
+              // groups and notes stay unreadable there for good, since a
+              // later edit arrives in a space it has no record for.
+              await Everyday(node).shareRooms();
+              await Notes(node).shareNotes();
               await widget.network.syncAll();
               if (mounted) {
                 setState(
                   () => status =
-                      'Device added. Inbox and drive history are ready to sync. Old private chat history is not transferred.',
+                      'Device added. Notes, groups you own, files and inbox history are ready to sync. Old private chat history, and groups and notes someone else owns, are not transferred.',
                 );
               }
             } catch (e) {

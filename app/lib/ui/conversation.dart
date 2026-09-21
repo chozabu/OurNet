@@ -57,6 +57,43 @@ extension _ConversationPages on _OurNetAppState {
     );
   }
 
+  /// A message this device holds but cannot decrypt: it was encrypted to the
+  /// devices this person had when it was sent, and this one was added later.
+  Widget unreadableBubble(
+    BuildContext context,
+    SignedObject o, {
+    required bool mine,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.lock_outline, size: 14, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                'Sent before this device was added',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget messageBubble(
     BuildContext context,
     SignedObject o, {
@@ -76,7 +113,14 @@ extension _ConversationPages on _OurNetAppState {
       future: node.content(o),
       builder: (context, snapshot) {
         final p = snapshot.data;
-        if (p == null) return const SizedBox.shrink();
+        if (p == null) {
+          // Blocked or expired messages are simply not shown. One that is
+          // still visible but unreadable was encrypted before this device
+          // was added, so say so rather than leaving a silent gap.
+          return node.visible(o) && !snapshot.hasError && snapshot.hasData
+              ? unreadableBubble(context, o, mine: mine)
+              : const SizedBox.shrink();
+        }
         final body = (p['text'] ?? '').toString();
         final meta = Row(
           mainAxisSize: MainAxisSize.min,

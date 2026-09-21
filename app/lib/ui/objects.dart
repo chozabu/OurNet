@@ -451,7 +451,7 @@ extension _ObjectsPages on _OurNetAppState {
         contentPadding: EdgeInsets.zero,
         title: const Text('Subscribe to public files'),
         value: node.subscriptions.contains('files'),
-        onChanged: (v) => node.subscribe('files', v),
+        onChanged: (v) => act(() => notes.state.subscribe('files', v)),
       ),
       Expanded(child: objectList(context, publicFileObjects())),
     ],

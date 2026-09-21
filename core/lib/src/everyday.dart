@@ -23,6 +23,78 @@ class Everyday {
     }
   }
 
+  /// Re-encrypts the groups this person owns to the devices admitted now.
+  ///
+  /// A private object is encrypted to the devices that existed when it was
+  /// written, so a device enrolled later reads none of it. Without this a new
+  /// device cannot see that a group exists at all: its room record stays
+  /// unreadable, and later writes arrive in a space it has no membership for.
+  ///
+  /// The epoch is deliberately left alone. A membership change would strand
+  /// whatever the other members wrote concurrently, and nothing about the
+  /// membership has changed here — only which of this person's devices can
+  /// read it. Only rooms this person owns are re-issued: a room record counts
+  /// only from its owner, so a group someone else runs is theirs to re-issue.
+  Future<int> shareRooms() async {
+    var count = 0;
+    for (final room in await rooms()) {
+      // Legacy rooms take their epoch from the record's own ID, so a copy
+      // would not describe the same epoch. They migrate on their next edit.
+      if (room.data['owner'] != node.person ||
+          room.data['note'] == true ||
+          room.data['generation'] == null)
+        continue;
+      try {
+        count += await reissue(room);
+      } catch (_) {
+        // A group with a member this device can no longer encrypt to must
+        // not stop the rest of the pass; it is safe to run again later.
+      }
+    }
+    return count;
+  }
+
+  /// Republishes [room]'s record, and its live entries when [entries] is set,
+  /// unchanged except for being encrypted to the devices admitted now.
+  Future<int> reissue(EverydayItem room, {bool entries = true}) async {
+    final current = await this.current(room);
+    if (current.data['owner'] != node.person)
+      throw StateError('Only the group owner can re-issue this group.');
+    var count = 1;
+    final history = entries ? await items(current) : const <EverydayItem>[];
+    // The record first: a device that stops here has the group, and its
+    // entries arrive with the next write or the next pass.
+    await node.publish(
+      'room',
+      current.data,
+      space: current.object.space,
+      audience: current.object.audience.cast<String>(),
+    );
+    for (final item in history) {
+      // A deleted entry has nothing left to show, so the copy is the record
+      // that said so; leaving it out simply leaves the entry absent.
+      if (item.data['deleted'] == true) continue;
+      // One below the record it copies, so a device that can read both keeps
+      // showing the original: entries are deduplicated by the highest clock,
+      // and a copy is only ever needed where the original cannot be read.
+      final clock = item.data['clock'] as int;
+      await node.publish(
+        'room_item',
+        {
+          ...item.data,
+          'clock': clock > 0 ? clock - 1 : 0,
+          'epoch': epoch(current),
+          'history': true,
+          'originalAuthor': item.data['originalAuthor'] ?? item.object.author,
+        },
+        space: current.object.space,
+        audience: await members(current),
+      );
+      count++;
+    }
+    return count;
+  }
+
   /// The record kinds group history is made of. Membership lives in the first
   /// two; the rest is what members wrote.
   static const membershipKinds = ['room', 'room_leave'];

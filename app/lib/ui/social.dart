@@ -28,7 +28,7 @@ extension _SocialPages on _OurNetAppState {
         'description': description,
       }, space: id);
     }
-    node.subscribe(id, true);
+    await notes.state.subscribe(id, true);
     openForum(id);
     if (create) {
       notice(
@@ -166,7 +166,7 @@ extension _SocialPages on _OurNetAppState {
               }
               if (action == 'edit') act(() => forumSettings(context));
               if (action == 'leave') {
-                node.subscribe(space, false);
+                act(() => notes.state.subscribe(space, false));
                 update(() {
                   space =
                       node.subscriptions

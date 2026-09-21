@@ -709,6 +709,73 @@ class Notes {
     );
   });
 
+  /// Re-encrypts this person's own notes, and their personal note state, to
+  /// the devices admitted now.
+  ///
+  /// Note operations are encrypted to the devices that existed when they were
+  /// written, so a device enrolled later reads none of them — not even the
+  /// room record, without which the note does not appear at all and later
+  /// edits arrive in a space it knows nothing about. Each live register is
+  /// rewritten as a checkpoint that consumes exactly the version it copies,
+  /// so branches are preserved rather than silently resolved, and the note's
+  /// edit time is restored afterwards so a new device does not reorder the
+  /// list. Notes owned by a collaborator are theirs to re-issue.
+  Future<int> shareNotes() async {
+    await refresh();
+    var count = 0;
+    for (final id in _rooms.keys.toList()) {
+      final note = await get(id);
+      if (note == null || note.room.data['owner'] != node.person) continue;
+      try {
+        count += await _reissue(note);
+      } catch (_) {
+        // A note this device can no longer encrypt to every collaborator
+        // must not stop the pass; running it again later is safe.
+      }
+    }
+    return count + await state.reshare();
+  }
+
+  Future<int> _reissue(NoteDocument note) => _serial(() async {
+    final edited = note.updated;
+    // Both records describe the same room, so which one a device that holds
+    // both settles on is decided by object ID. A note that never recorded
+    // its own creation time reads it off that record, so write it down
+    // before the copy exists rather than let the date move.
+    if (note.value('created') == null) {
+      await _publish(note.room, 'created', note.created, const [], 1,
+          checkpoint: true);
+    }
+    var count = await _everyday.reissue(note.room, entries: false) + 1;
+    for (final MapEntry(key: field, value: heads) in note.heads.entries) {
+      if (field == 'edited') continue;
+      // Each branch copies itself and names only its own version as the
+      // parent it replaces, so concurrent versions stay concurrent.
+      for (final head in heads) {
+        await _publish(
+          note.room,
+          field,
+          head.data['value'] as Object,
+          [head.object.id],
+          (head.data['clock'] as int) + 1,
+          checkpoint: true,
+          extra: _fileFields(head.data),
+        );
+        count++;
+      }
+    }
+    // Last, so the copies above are not read as edits: see [updated].
+    await _publish(
+      note.room,
+      'edited',
+      edited,
+      note.parents('edited'),
+      _clock(note) + 2,
+      checkpoint: true,
+    );
+    return count + 1;
+  });
+
   Future<void> leave(String id) => _serial(() async {
     final note = await get(id);
     if (note == null) return;

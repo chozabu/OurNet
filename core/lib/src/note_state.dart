@@ -40,6 +40,52 @@ class NoteState {
       }
     }
     await _migrate();
+    _applyFollows();
+  }
+
+  /// Forums followed on this person's other devices are followed here too.
+  ///
+  /// Which spaces a device stores, offers and shows is [Node.subscriptions],
+  /// a local setting: two of this person's devices would otherwise disagree
+  /// about which forums they are in, and one of them would neither keep nor
+  /// pass on the other's posts. Each space is its own register, so devices
+  /// that follow different forums merge instead of overwriting one another.
+  void _applyFollows() {
+    for (final heads in _heads.values) {
+      final head = heads.firstOrNull;
+      if (head == null || head.data['field'] != 'follow') continue;
+      final space = head.data['target'] as String;
+      final wanted = head.data['value'] == true;
+      if (node.subscriptions.contains(space) != wanted) {
+        node.subscribe(space, wanted);
+      }
+    }
+  }
+
+  /// Follows or unfollows [space] on every device this person has.
+  Future<void> subscribe(String space, bool enabled) async {
+    node.subscribe(space, enabled);
+    await set('follow', space, enabled);
+  }
+
+  /// Republishes every personal value, encrypted to the devices admitted now.
+  /// Without it a newly enrolled device reads none of this person's pins,
+  /// labels, reminders, ordering or followed forums.
+  Future<int> reshare() async {
+    await refresh();
+    final values = [
+      // Personal state is read as a single value per register, so a copy of
+      // the version that wins is all a new device needs.
+      for (final heads in _heads.values)
+        if (heads.firstOrNull case final head?)
+          (
+            head.data['field'] as String,
+            head.data['target'] as String,
+            head.data['value'] as Object,
+          ),
+    ];
+    await _setAll(values);
+    return values.length;
   }
 
   /// Changes whenever a personal value changes, so views can skip rework.
@@ -67,16 +113,32 @@ class NoteState {
       });
   }
 
-  /// Pins were device-local settings before they synced between devices.
+  /// Pins, and then followed forums, were device-local settings before they
+  /// synced between devices. Each migration runs once per profile.
   Future<void> _migrate() async {
-    if (node.store.setting('noteStateMigrated') == true) return;
-    node.store.set('noteStateMigrated', true);
-    final pins = node.store.trueSettings('notePin/');
-    if (pins.isEmpty) return;
-    await _setAll([
-      for (final id in pins)
-        if (value('pin', id) == null) ('pin', id, true),
-    ]);
+    if (node.store.setting('noteStateMigrated') != true) {
+      node.store.set('noteStateMigrated', true);
+      final pins = node.store.trueSettings('notePin/');
+      await _setAll([
+        for (final id in pins)
+          if (value('pin', id) == null) ('pin', id, true),
+      ]);
+    }
+    if (node.store.setting('followMigrated') != true) {
+      node.store.set('followMigrated', true);
+      // Internal spaces are not forums, and a profile still on the default
+      // has chosen nothing worth recording: a fresh one writes nothing here.
+      final followed = node.subscriptions
+          .where((s) => !s.startsWith('_'))
+          .toList()
+        ..sort();
+      if (canonical(followed) != canonical(const ['general'])) {
+        await _setAll([
+          for (final space in followed)
+            if (value('follow', space) == null) ('follow', space, true),
+        ]);
+      }
+    }
   }
 
   Object? value(String field, String target) =>
