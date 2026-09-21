@@ -1,5 +1,6 @@
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:math';
 import 'package:crypto/crypto.dart' as digest;
 import 'package:cryptography/cryptography.dart';
@@ -320,15 +321,156 @@ class DeviceCertificate {
   }
 }
 
+//// A person's root secret, encrypted under their recovery phrase.
+///
+/// Every device the person links may keep a copy, so any surviving device can
+/// add and remove devices. The phrase is what separates holding a device from
+/// holding the identity: the root is used only to add and remove devices, so
+/// asking for it then costs little. Argon2id parameters travel with the copy,
+/// so they can be raised later without breaking older copies.
+class SealedRoot {
+  static const minimumPhrase = 12;
+  static const _domain = 'ournet/root/2';
+  final Json data;
+  SealedRoot._(Json data) : data = frozen(jsonDecode(canonical(data)));
+  String get person => data['person'] as String;
+  Json toJson() => data;
+
+  /// Rejects anything malformed, and parameters that would let a copy make
+  /// this device spend unbounded memory or time deriving a key.
+  factory SealedRoot.fromJson(Object? j) {
+    if (j is! Map ||
+        j['domain'] != _domain ||
+        j['kdf'] != 'argon2id' ||
+        j['person'] is! String ||
+        j['salt'] is! String ||
+        j['box'] is! String) {
+      throw const FormatException('Invalid sealed root');
+    }
+    final memory = j['memory'], iterations = j['iterations'];
+    if (memory is! int ||
+        memory < 8 * 1024 ||
+        memory > 256 * 1024 ||
+        iterations is! int ||
+        iterations < 1 ||
+        iterations > 10 ||
+        unb64(j['salt']).length != 16 ||
+        unb64(j['box']).length != 32 + 12 + 16 ||
+        unb64(j['person']).length != 32) {
+      throw const FormatException('Invalid sealed root');
+    }
+    return SealedRoot._(j.cast<String, dynamic>());
+  }
+
+  static void checkPhrase(String phrase) {
+    if (phrase.trim().length < minimumPhrase) {
+      throw StateError(
+        'Use a recovery phrase of at least $minimumPhrase characters',
+      );
+    }
+  }
+
+  /// [memory] is in KiB. The defaults take under a second on a desktop and a
+  /// few seconds on a phone; tests pass smaller values.
+  static Future<SealedRoot> seal(
+    SimpleKeyPair root,
+    String phrase, {
+    int memory = 64 * 1024,
+    int iterations = 3,
+  }) async {
+    checkPhrase(phrase);
+    final person = b64((await root.extractPublicKey()).bytes);
+    final salt = List.generate(16, (_) => Random.secure().nextInt(256));
+    final key = await _derive(phrase, salt, memory, iterations);
+    final box = await Chacha20.poly1305Aead().encrypt(
+      await root.extractPrivateKeyBytes(),
+      secretKey: key,
+      aad: utf8.encode('$_domain/$person'),
+    );
+    return SealedRoot._({
+      'domain': _domain,
+      'person': person,
+      'kdf': 'argon2id',
+      'memory': memory,
+      'iterations': iterations,
+      'salt': b64(salt),
+      'box': b64(box.concatenation()),
+    });
+  }
+
+  Future<SimpleKeyPair> open(String phrase) async {
+    final key = await _derive(
+      phrase,
+      unb64(data['salt']),
+      data['memory'],
+      data['iterations'],
+    );
+    final List<int> seed;
+    try {
+      seed = await Chacha20.poly1305Aead().decrypt(
+        SecretBox.fromConcatenation(
+          unb64(data['box']),
+          nonceLength: 12,
+          macLength: 16,
+        ),
+        secretKey: key,
+        aad: utf8.encode('$_domain/$person'),
+      );
+    } on SecretBoxAuthenticationError {
+      throw StateError('That recovery phrase is not right');
+    }
+    final root = await _signer.newKeyPairFromSeed(seed);
+    if (b64((await root.extractPublicKey()).bytes) != person) {
+      throw StateError('Sealed root does not match its person');
+    }
+    return root;
+  }
+
+  /// Runs in its own isolate: Argon2id is pure Dart here, and would otherwise
+  /// stall the caller's event loop (and a UI) for the whole derivation.
+  static Future<SecretKey> _derive(
+    String phrase,
+    List<int> salt,
+    int memory,
+    int iterations,
+  ) async {
+    final password = phrase.trim();
+    final key = await Isolate.run(
+      () async => (await Argon2id(
+        parallelism: 1,
+        memory: memory,
+        iterations: iterations,
+        hashLength: 32,
+      ).deriveKeyFromPassword(password: password, nonce: salt)).extractBytes(),
+    );
+    return SecretKey(key);
+  }
+}
+
 /// Secrets are exported only to the platform vault, never the content store.
 class LocalIdentity {
+  /// The root in the clear: a new profile, or an original device from before
+  /// recovery phrases that has not set one yet. Null once sealed.
   final SimpleKeyPair? root;
+
+  /// This device's copy of the root, opened with the recovery phrase.
+  final SealedRoot? sealedRoot;
   final SimpleKeyPair deviceKey;
   final SimpleKeyPair agreementKey;
   final DeviceCertificate certificate;
-  LocalIdentity(this.root, this.deviceKey, this.agreementKey, this.certificate);
+  LocalIdentity(
+    this.root,
+    this.deviceKey,
+    this.agreementKey,
+    this.certificate, {
+    this.sealedRoot,
+  });
   String get person => certificate.person;
   String get device => certificate.device;
+
+  /// Whether this device can add and remove devices, given the phrase if the
+  /// root is sealed.
+  bool get holdsRoot => root != null || sealedRoot != null;
   static Future<LocalIdentity> create({
     String label = 'This device',
     SimpleKeyPair? root,
@@ -353,6 +495,7 @@ class LocalIdentity {
 
   Future<Json> exportSecrets() async => {
     'root': root == null ? null : b64(await root!.extractPrivateKeyBytes()),
+    'sealedRoot': sealedRoot?.toJson(),
     'device': b64(await deviceKey.extractPrivateKeyBytes()),
     'agreement': b64(await agreementKey.extractPrivateKeyBytes()),
     'certificate': certificate.toJson(),
@@ -361,38 +504,98 @@ class LocalIdentity {
     final root = j['root'] == null
         ? null
         : await _signer.newKeyPairFromSeed(unb64(j['root']));
+    final sealed = j['sealedRoot'] == null
+        ? null
+        : SealedRoot.fromJson(j['sealedRoot']);
     final device = await _signer.newKeyPairFromSeed(unb64(j['device']));
     final agreement = await X25519().newKeyPairFromSeed(unb64(j['agreement']));
     final cert = DeviceCertificate.fromJson(j['certificate']);
     if (!await cert.valid() ||
         (root != null &&
             b64((await root.extractPublicKey()).bytes) != cert.person) ||
+        (sealed != null && sealed.person != cert.person) ||
         b64((await device.extractPublicKey()).bytes) != cert.device ||
         b64((await agreement.extractPublicKey()).bytes) != cert.agreement) {
       throw StateError('Identity vault does not match certificate');
     }
-    return LocalIdentity(root, device, agreement, cert);
+    return LocalIdentity(root, device, agreement, cert, sealedRoot: sealed);
   }
 
-  Future<DeviceCertificate> authorise(DeviceCertificate request) async {
-    if (root == null)
-      throw StateError('Use the identity owner device to authorise devices');
+  /// This device with its root sealed under [phrase], and no longer held in
+  /// the clear.
+  Future<LocalIdentity> seal(
+    String phrase, {
+    int memory = 64 * 1024,
+    int iterations = 3,
+  }) async {
+    final clear = root;
+    if (clear == null) throw StateError('This device has no root to seal');
+    return LocalIdentity(
+      null,
+      deviceKey,
+      agreementKey,
+      certificate,
+      sealedRoot: await SealedRoot.seal(
+        clear,
+        phrase,
+        memory: memory,
+        iterations: iterations,
+      ),
+    );
+  }
+
+  /// The root, for adding or removing a device. [phrase] opens a sealed copy.
+  Future<SimpleKeyPair> unlockRoot([String? phrase]) async {
+    if (root case final clear?) return clear;
+    final sealed = sealedRoot;
+    if (sealed == null) {
+      throw StateError('This device cannot add or remove devices');
+    }
+    if (phrase == null) throw StateError('Enter your recovery phrase');
+    return sealed.open(phrase);
+  }
+
+  /// [unlocked] is the root from [unlockRoot], needed once it is sealed.
+  Future<DeviceCertificate> authorise(
+    DeviceCertificate request, {
+    SimpleKeyPair? unlocked,
+  }) async {
+    final key = unlocked ?? root;
+    if (key == null) {
+      throw StateError('Enter your recovery phrase to add a device');
+    }
+    if (b64((await key.extractPublicKey()).bytes) != person) {
+      throw StateError('That root is not this person');
+    }
     if (!await request.valid()) throw StateError('Invalid enrolment request');
     final data = <String, dynamic>{...request.data, 'person': person};
-    return DeviceCertificate(data, await sign(data, root!));
+    return DeviceCertificate(data, await sign(data, key));
   }
 
-  Future<LocalIdentity> enrol(DeviceCertificate approval) async {
+  /// [sealedRoot] is the copy the approving device sent, if it shared one.
+  Future<LocalIdentity> enrol(
+    DeviceCertificate approval, {
+    SealedRoot? sealedRoot,
+  }) async {
     if (!await approval.valid() ||
         approval.device != device ||
         approval.agreement != certificate.agreement) {
       throw StateError('Approval is not for this device');
     }
-    return LocalIdentity(null, deviceKey, agreementKey, approval);
+    if (sealedRoot != null && sealedRoot.person != approval.person) {
+      throw StateError('Sealed root is for another person');
+    }
+    return LocalIdentity(
+      null,
+      deviceKey,
+      agreementKey,
+      approval,
+      sealedRoot: sealedRoot,
+    );
   }
 }
 
-/// Every object verifies without downloading any other application history.
+// Every object verifies without downloading any other application history.
 class SignedObject {
   final Json data;
   final String signature;

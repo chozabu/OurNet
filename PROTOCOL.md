@@ -10,8 +10,16 @@ them, with a device label. iroh authenticates the operational device key.
 Adding a certificate locally admits that device; the other side must independently
 admit yours. An authenticated connection alone does not confer admission.
 
-Enrolment sends a root-signed certificate back to the requesting device. The
-root secret is not copied. Root-signed revocations stop future admission and
+Enrolment sends a root-signed certificate back to the requesting device, and,
+unless the approving person opts out, a copy of the root secret sealed under
+their recovery phrase: Argon2id (parameters carried with the copy, 64 MiB and
+3 passes by default) keying ChaCha20-Poly1305, with the person's key as
+associated data. Any device holding a copy can add and revoke devices once the
+phrase opens it, so losing one device no longer freezes the identity. A device
+from before phrases holds its root in the clear until it first adds or removes
+a device, when it must set a phrase and seals it. Anyone who has both a
+device holding a copy and its phrase controls the identity; there is no root
+rotation. Root-signed revocations stop future admission and
 forwarding locally once received. This prototype conservatively excludes revoked
 devices' evidence, including historical evidence; nuanced historical validity
 and recovery policy are not implemented.

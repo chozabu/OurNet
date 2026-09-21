@@ -2,19 +2,33 @@ part of 'network.dart';
 
 /// Only alive while the owner explicitly opens Add device. QUIC authenticates
 /// the request device; the invitation pins the owner's endpoint and identity.
+///
+/// Any device holding the root can open one: [root] is the root unlocked with
+/// the recovery phrase, held only while the session is open.
 class PairingSession {
   final PeerNetwork network;
   final Future<bool> Function(DeviceCertificate, String) confirm;
+  SimpleKeyPair? _root;
+
+  /// Whether the new device also gets this device's sealed copy of the root,
+  /// so that it too can add and remove devices. Read when approving.
+  bool shareRoot = true;
   final String token = b64(
     List.generate(32, (_) => Random.secure().nextInt(256)),
   );
   final DateTime expires = DateTime.now().add(const Duration(minutes: 5));
   bool _closed = false, _pending = false;
   final _cancelled = Completer<bool>();
-  PairingSession(this.network, this.confirm) {
-    if (network.node.identity.root == null || !network.running) {
-      throw StateError('Open pairing on your original device');
+  PairingSession(this.network, this.confirm, {SimpleKeyPair? root})
+    : _root = root ?? network.node.identity.root {
+    if (_root == null) {
+      throw StateError(
+        network.node.identity.holdsRoot
+            ? 'Enter your recovery phrase to add a device'
+            : 'This device cannot add devices. Use one that can.',
+      );
     }
+    if (!network.running) throw StateError('Network is stopped');
     network.pairing?.close();
     network.pairing = this;
   }
@@ -74,7 +88,11 @@ class PairingSession {
       ]).timeout(const Duration(seconds: 90), onTimeout: () => false);
       if (!accepted || !available)
         return {'error': 'Pairing declined or expired. Try again.'};
-      final approval = await network.node.identity.authorise(cert);
+      final approval = await network.node.identity.authorise(
+        cert,
+        unlocked: _root,
+      );
+      final sealed = shareRoot ? network.node.identity.sealedRoot : null;
       if (!available) return {'error': 'Pairing cancelled'};
       await network.addCard(
         canonical({...card, 'certificate': approval.toJson()}),
@@ -83,6 +101,7 @@ class PairingSession {
       return {
         'approval': approval.toJson(),
         'card': jsonDecode(network.contactCard()),
+        'sealedRoot': ?sealed?.toJson(),
       };
     } finally {
       _pending = false;
@@ -91,6 +110,7 @@ class PairingSession {
 
   void close() {
     _closed = true;
+    _root = null;
     if (!_cancelled.isCompleted) _cancelled.complete(false);
   }
 
@@ -148,7 +168,13 @@ class PairingSession {
       final approval = DeviceCertificate.fromJson(response['approval']);
       if (approval.person != owner.person)
         throw StateError('Unexpected profile');
-      final identity = await network.node.identity.enrol(approval);
+      final sealed = response['sealedRoot'] == null
+          ? null
+          : SealedRoot.fromJson(response['sealedRoot']);
+      final identity = await network.node.identity.enrol(
+        approval,
+        sealedRoot: sealed,
+      );
       await network.addCard(canonical(card));
       return identity;
     } finally {

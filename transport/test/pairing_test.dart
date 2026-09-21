@@ -88,6 +88,86 @@ void main() {
     timeout: const Timeout(Duration(seconds: 120)),
   );
 
+  test(
+    'a paired device gets the sealed root and can pair another device itself',
+    () async {
+      const phrase = 'correct horse battery staple';
+      final laptop = Node(
+        await (await LocalIdentity.create(
+          label: 'Laptop',
+        )).seal(phrase, memory: 8 * 1024, iterations: 1),
+        Store(),
+      );
+      final phone = Node(await LocalIdentity.create(label: 'Phone'), Store());
+      final tablet = Node(await LocalIdentity.create(label: 'Tablet'), Store());
+      final watch = Node(await LocalIdentity.create(label: 'Watch'), Store());
+      final networks = [
+        for (final node in [laptop, phone, tablet, watch]) PeerNetwork(node),
+      ];
+      addTearDown(() async {
+        for (final network in networks) {
+          await network.stop();
+        }
+      });
+      for (final network in networks) {
+        await network.start(local: true, automatic: false);
+      }
+      final [a, b, c, d] = networks;
+
+      expect(
+        () => PairingSession(a, (_, _) async => true),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('recovery phrase'),
+          ),
+        ),
+      );
+      final fromLaptop = PairingSession(
+        a,
+        (_, _) async => true,
+        root: await laptop.identity.unlockRoot(phrase),
+      );
+      final onPhone = await PairingSession.join(b, fromLaptop.invitation);
+      expect(onPhone.root, isNull);
+      expect(
+        onPhone.sealedRoot!.toJson(),
+        laptop.identity.sealedRoot!.toJson(),
+      );
+
+      // The phone, now enrolled, opens Add device without the laptop.
+      await b.stop();
+      await a.stop();
+      final enrolled = Node(onPhone, phone.store);
+      final e = PeerNetwork(enrolled);
+      networks.add(e);
+      await e.start(local: true, automatic: false);
+      expect(() => PairingSession(e, (_, _) async => true), throwsStateError);
+      final fromPhone = PairingSession(
+        e,
+        (_, _) async => true,
+        root: await onPhone.unlockRoot(phrase),
+      );
+      final onTablet = await PairingSession.join(c, fromPhone.invitation);
+      expect(onTablet.person, laptop.person);
+      expect(await onTablet.certificate.valid(), isTrue);
+      expect(onTablet.sealedRoot, isNotNull);
+      expect(enrolled.contacts[onTablet.device]!.person, laptop.person);
+
+      // A device paired with the box unticked gets no copy.
+      final withoutCopy = PairingSession(
+        e,
+        (_, _) async => true,
+        root: await onPhone.unlockRoot(phrase),
+      )..shareRoot = false;
+      final onWatch = await PairingSession.join(d, withoutCopy.invitation);
+      expect(onWatch.person, laptop.person);
+      expect(onWatch.holdsRoot, isFalse);
+    },
+    timeout: const Timeout(Duration(seconds: 120)),
+  );
+
   test('expired invitations are rejected before connecting', () {
     expect(
       () => PairingSession.parse(

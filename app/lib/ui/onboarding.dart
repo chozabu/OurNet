@@ -169,7 +169,7 @@ class _SetupPageState extends State<SetupPage> {
                       ? 'One profile for you, wherever you use OurNet.'
                       : page == 'create'
                       ? 'Choose how people see you and name this device.'
-                      : 'On your original device, open Profile → Add device. Keep both apps open.',
+                      : 'On a device already linked to your profile, open Profile → Add device. Keep both apps open.',
                 ),
                 const SizedBox(height: 24),
                 if (page == 'welcome') ...[

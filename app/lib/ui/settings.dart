@@ -42,17 +42,25 @@ extension _SettingsPages on _OurNetAppState {
           ),
         ),
       const SizedBox(height: 12),
-      if (node.identity.root != null)
+      if (node.identity.holdsRoot)
         FilledButton.icon(
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => AddDevicePage(network: network)),
-          ),
+          onPressed: () => act(() async {
+            final root = await unlockRoot(context, node);
+            if (root == null || !context.mounted) return;
+            unawaited(
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => AddDevicePage(network: network, root: root),
+                ),
+              ),
+            );
+          }),
           icon: const Icon(Icons.add_to_photos_outlined),
           label: const Text('Add device'),
         )
       else
         const Text(
-          'To add another device, open OurNet on your original owner device.',
+          'This device cannot add or remove devices. Use one of yours that can.',
         ),
       ListTile(
         leading: const Icon(Icons.devices),
@@ -95,7 +103,7 @@ extension _SettingsPages on _OurNetAppState {
                             }),
                     ),
                   ],
-                  if (node.identity.root != null &&
+                  if (node.identity.holdsRoot &&
                       !node.revoked.contains(c.device))
                     IconButton(
                       tooltip: 'Remove device access',
@@ -120,7 +128,11 @@ extension _SettingsPages on _OurNetAppState {
                             ],
                           ),
                         );
-                        if (allow == true) await node.revoke(c.device);
+                        if (allow != true || !context.mounted) return;
+                        final root = await unlockRoot(context, node);
+                        if (root != null) {
+                          await node.revoke(c.device, unlocked: root);
+                        }
                       }),
                     ),
                 ],

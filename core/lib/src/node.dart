@@ -8,7 +8,9 @@ import 'store.dart';
 import 'blob_worker.dart';
 
 class Node {
-  final LocalIdentity identity;
+  /// Replaced only by [updateIdentity], when this same device seals its root.
+  LocalIdentity get identity => _identity;
+  LocalIdentity _identity;
   final Store store;
   late final blobs = BlobWorker(store);
   final int Function() now;
@@ -50,7 +52,7 @@ class Node {
       store.setting('receivedBudget') as int? ?? maxReceivedBytes;
   static const maxEvidence = 128;
   static const maxPageBytes = 1024 * 1024;
-  Node(this.identity, this.store, {int Function()? clock})
+  Node(this._identity, this.store, {int Function()? clock})
     : now = clock ?? (() => DateTime.now().millisecondsSinceEpoch) {
     for (final j in (store.setting('contacts') as List? ?? [])) {
       final c = DeviceCertificate.fromJson(j);
@@ -68,6 +70,17 @@ class Node {
     }
   }
   String get person => identity.person;
+
+  /// Swaps in [next]: this device with its root sealed. The device and
+  /// agreement keys, and so everything peers know of this device, stay.
+  void updateIdentity(LocalIdentity next) {
+    if (next.device != identity.device ||
+        next.person != identity.person ||
+        next.certificate.agreement != identity.certificate.agreement) {
+      throw StateError('Not this device');
+    }
+    _identity = next;
+  }
   void notify() {
     if (!changes.isClosed) changes.add(null);
   }
@@ -237,9 +250,16 @@ class Node {
       (o.expires == 0 || o.expires > now()) &&
       (o.isPublic || o.audience.contains(person));
 
-  Future<SignedObject> revoke(String device) async {
-    if (identity.root == null)
-      throw StateError('Use the identity owner device to revoke devices');
+  /// [unlocked] is the root from [LocalIdentity.unlockRoot], needed once
+  /// this device's root is sealed.
+  Future<SignedObject> revoke(String device, {SimpleKeyPair? unlocked}) async {
+    final root = unlocked ?? identity.root;
+    if (root == null) {
+      throw StateError('Enter your recovery phrase to remove a device');
+    }
+    if (b64((await root.extractPublicKey()).bytes) != person) {
+      throw StateError('That root is not this person');
+    }
     final target = contacts[device];
     if (target == null || target.person != person)
       throw StateError('Can only revoke your own enrolled device');
@@ -250,7 +270,7 @@ class Node {
     };
     final object = await publish('revoke', {
       'proof': proof,
-      'signature': await sign(proof, identity.root!),
+      'signature': await sign(proof, root),
       // Binds the device to this person for peers that do not hold it.
       'certificate': target.toJson(),
     }, space: '_identity');

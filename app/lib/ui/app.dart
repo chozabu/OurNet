@@ -38,6 +38,7 @@ import 'inline_image.dart';
 import 'friend_invite.dart';
 import '../build_info.dart';
 import 'add_device.dart';
+import 'recovery_phrase.dart';
 import 'onboarding.dart';
 import 'sync_status.dart';
 import 'sync_health.dart';

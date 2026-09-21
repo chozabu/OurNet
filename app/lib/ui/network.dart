@@ -80,11 +80,14 @@ extension _NetworkPages on _OurNetAppState {
                 onPressed: () => act(() => syncNow(c.device)),
                 icon: const Icon(Icons.sync),
               ),
-              if (c.person == node.person)
+              if (c.person == node.person && node.identity.holdsRoot)
                 IconButton(
                   tooltip: 'Revoke this device',
                   onPressed: () => act(() async {
-                    await node.revoke(c.device);
+                    final root = await unlockRoot(context, node);
+                    if (root != null) {
+                      await node.revoke(c.device, unlocked: root);
+                    }
                   }),
                   icon: const Icon(Icons.phonelink_erase),
                 ),

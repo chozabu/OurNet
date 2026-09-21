@@ -94,8 +94,12 @@ are exchanged automatically and sync starts when setup finishes.
 Existing profiles open normally. An empty profile from an earlier build can
 join via Profile → **Connect this empty profile to my existing profile**.
 Profiles containing content cannot be merged through device pairing.
-The original device retains the root key. Existing drive history is shared by
-default, with an opt-out before approval; old private chat history is not migrated.
+The first time you add a device, you set a recovery phrase. It locks your
+identity's root key, and each device you add keeps a locked copy by default,
+so any of them can later add a device or remove a lost one once you enter the
+phrase. Untick **Can add and remove devices** for a device you trust less.
+Existing drive history is shared by default, with an opt-out before approval;
+old private chat history is not migrated.
 
 ## Development checks
 

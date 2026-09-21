@@ -10,7 +10,10 @@ import 'friend_invite.dart' show CodeText;
 
 class AddDevicePage extends StatefulWidget {
   final PeerNetwork network;
-  const AddDevicePage({super.key, required this.network});
+
+  /// The root, unlocked with the recovery phrase before this page opened.
+  final SimpleKeyPair root;
+  const AddDevicePage({super.key, required this.network, required this.root});
   @override
   State<AddDevicePage> createState() => _AddDevicePageState();
 }
@@ -21,6 +24,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
   Timer? timer;
   String status = 'Preparing a secure connection…';
   bool shareHistory = true;
+  bool shareRoot = true;
   @override
   void initState() {
     super.initState();
@@ -60,7 +64,11 @@ class _AddDevicePageState extends State<AddDevicePage> {
                   const SizedBox(height: 12),
                   Center(child: CodeText(code)),
                   const SizedBox(height: 12),
-                  const Text('It will have access to your profile.'),
+                  Text(
+                    shareRoot
+                        ? 'It will have access to your profile, and can add or remove devices with your recovery phrase.'
+                        : 'It will have access to your profile.',
+                  ),
                 ],
               ),
               actions: [
@@ -78,7 +86,8 @@ class _AddDevicePageState extends State<AddDevicePage> {
         );
         expiry.cancel();
         return approved == true;
-      });
+      }, root: widget.root);
+      pairing.shareRoot = shareRoot;
       setState(() {
         session = pairing;
         status =
@@ -193,6 +202,18 @@ class _AddDevicePageState extends State<AddDevicePage> {
                 ),
                 value: shareHistory,
                 onChanged: (value) => setState(() => shareHistory = value),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Can add and remove devices'),
+                subtitle: const Text(
+                  'Your new device keeps a copy of your identity, locked by your recovery phrase, so it can stand in if you lose this one. Turn off for a device you trust less.',
+                ),
+                value: shareRoot,
+                onChanged: (value) => setState(() {
+                  shareRoot = value;
+                  session?.shareRoot = value;
+                }),
               ),
               OutlinedButton.icon(
                 onPressed: () async {
