@@ -32,7 +32,8 @@ function Get-VcRuntime {
 }
 $taskRoot=Split-Path $PSScriptRoot -Parent
 $taskBuild=Get-Date -Format 'yyyyMMdd-HHmmss'
-$taskOutput=Join-Path $taskRoot "dist/OurNet-0.2.0-$taskBuild"
+$taskVersion=(Select-String -Path (Join-Path $taskRoot 'app/pubspec.yaml') -Pattern '^version:\s*(\d+\.\d+\.\d+)').Matches[0].Groups[1].Value
+$taskOutput=Join-Path $taskRoot "dist/OurNet-$taskVersion-$taskBuild"
 $taskStage=Join-Path $taskRoot 'build/package-source'
 # Build a source snapshot so running app binaries are never overwritten.
 foreach($taskComponent in @('app','core','transport','vendor/iroh_mobile')) {
@@ -66,12 +67,12 @@ Start-Process -FilePath (Join-Path $PSScriptRoot 'ournet.exe') -ArgumentList "--
 '@ | Set-Content (Join-Path $taskOutput 'Launch.ps1')
   'Unzip the entire folder. Double-click ournet.exe, or run .\Launch.ps1 -Profile alice. Use a fresh profile for device enrolment. Your identity and database remain in your Windows user profile when you replace this application folder.' | Set-Content (Join-Path $taskOutput 'START-HERE.txt')
   Compress-Archive -Path "$taskOutput/*" -DestinationPath "$taskOutput-windows.zip"
-  "dist/OurNet-0.2.0-$taskBuild" | Set-Content (Join-Path $taskRoot 'dist/latest-windows.txt')
+  "dist/OurNet-$taskVersion-$taskBuild" | Set-Content (Join-Path $taskRoot 'dist/latest-windows.txt')
   if($Msix){
     $taskMsixArgs=@(
       '--logo-path',(Join-Path $taskRoot 'store/ournet-icon-512.png'),
       '--output-path',(Join-Path $taskRoot 'dist'),
-      '--output-name',"OurNet-0.2.0-$taskBuild-windows"
+      '--output-name',"OurNet-$taskVersion-$taskBuild-windows"
     )
     if($Store){$taskMsixArgs+=@('--store','--identity-name',$IdentityName,'--publisher',$Publisher,'--publisher-display-name',$PublisherDisplayName)}
     dart run msix:build @taskMsixArgs
