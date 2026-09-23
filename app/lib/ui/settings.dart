@@ -159,7 +159,13 @@ extension _SettingsPages on _OurNetAppState {
       ),
       ListTile(
         title: const Text('OurNet $appVersion'),
-        subtitle: const Text('Build $buildId'),
+        subtitle: const Text(
+          'Build $buildId\n'
+          'Early test release: the encryption has not been independently '
+          'audited. To report a problem, copy diagnostics and send them '
+          'with a description of what happened.',
+        ),
+        isThreeLine: true,
         trailing: TextButton(
           onPressed: () => act(() async {
             await Clipboard.setData(
