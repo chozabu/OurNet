@@ -1,7 +1,16 @@
 # Prototype parity and validation
 
-Updated 9 September 2026. This tracks working behaviour, not placeholder screens.
+Updated 22 September 2026. This tracks working behaviour, not placeholder screens.
 Full release readiness is not claimed. The previous prototype remains intact.
+
+Update 22 September: OurNet is in everyday use on Windows and a physical Pixel 8
+Pro, and ships to Google Play internal testing and the Microsoft Store. Recorded
+physical-device checks: the Android document-provider acceptance test and the
+history/editor profile journey ([PRIVATE_DRIVE.md](PRIVATE_DRIVE.md)), and
+voice-note recording/transcription timing ([NOTES_KEEP.md](NOTES_KEEP.md)).
+Android background sync, the stay-connected foreground service and the Windows
+notification area are implemented ([CONNECTIVITY.md](CONNECTIVITY.md)). Rows
+below are otherwise as of 9 September.
 
 Update 10 September: OurNet 0.2 adds app-managed private folders/files, encrypted
 offline copies, revision history, concurrent-edit resolution, deletion/restore,
@@ -22,12 +31,12 @@ See PRIVATE_DRIVE.md and PERFORMANCE.md for the new workflows and measurements.
 | Locations | Offline world map, encrypted selected-recipient coordinates, expiry | Coordinate/expiry policy tests; rendered map and phone layout inspected |
 | Voting and delegation | Typed signed objects; direct vote override; cycle-safe resolution | Delegation/cycle tests and phone layout |
 | Profile and contact views | Signed names, identity/device enrolment, contact graph, blocking/revocation | Core policy tests and phone layout |
-| Voice and video | WebRTC media with authenticated iroh signalling; ring, answer, mute, hang up | Builds only; real media and WAN calls need hands-on testing |
+| Voice and video | WebRTC media with authenticated iroh signalling; ring, answer, mute, hang up | Loopback test with real camera/microphone (`calls_media_test.dart`); WAN calls need hands-on testing |
 | Notifications and badges | Opt-in activity/call notifications, privacy-safe text, OS badge and sidebar counts | Compiles; OS delivery and action behaviour need hands-on testing |
 | Appearance and responsive UI | Persistent theme, accent and compact spacing; phone drawer/desktop sidebar | All-page phone tests and rendered captures |
 | Own node | UI-independent Dart transport and interactive password-encrypted CLI | CLI startup/publish/exit smoke check and pure Dart transport tests |
 | Windows | Debug and release runner, independent profiles | Both builds passed; visible debug window confirmed by user |
-| Android | Native transport, secure storage, file/media permissions | Debug APK compilation; no physical-device validation yet |
+| Android | Native transport, secure storage, file/media permissions | Everyday use and recorded acceptance/timing tests on a Pixel 8 Pro; Play internal testing builds |
 
 ## Still needed before declaring verified parity
 
