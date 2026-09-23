@@ -19,3 +19,5 @@ play-service-account.json
 
 # Personal data exports used for local testing - never commit
 PrivateData/
+# Saved profiles from earlier releases, opened by core/test/upgrade_test.dart.
+!core/test/fixtures/upgrade/*/profile.db

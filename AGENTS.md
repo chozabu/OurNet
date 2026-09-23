@@ -44,6 +44,9 @@ that older builds ignore or refuse individually. Never change the meaning of an
 existing field or kind. A breaking change needs a new ALPN that the next release
 accepts alongside `ournet/2`. Peers exchange `version` (keep `appVersion` in
 `app/lib/build_info.dart` equal to `pubspec.yaml`, which a test checks).
+When releasing a new version, run `dart run tool/upgrade_fixture.dart <version>`
+in `core` and commit the saved profile; `test/upgrade_test.dart` opens every
+saved profile with the current build.
 
 ## Microsoft Store
 
