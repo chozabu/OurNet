@@ -24,7 +24,11 @@ class PeerNetwork {
   /// mismatch. Empty for development builds.
   final String build;
 
-  PeerNetwork(this.node, {this.build = ''}) {
+  /// This app's release version (x.y.z), sent alongside [build]. Builds of
+  /// one release differ per platform; the version says which side is older.
+  final String version;
+
+  PeerNetwork(this.node, {this.build = '', this.version = ''}) {
     final saved = node.store.setting('peerHealth');
     if (saved is Map) {
       for (final MapEntry(:key, :value) in saved.entries) {
@@ -33,6 +37,7 @@ class PeerNetwork {
           lastSync[key] = DateTime.fromMillisecondsSinceEpoch(ms);
         }
         if (value['build'] case final String b) peerBuilds[key] = b;
+        if (value['version'] case final String v) peerVersions[key] = v;
       }
     }
   }
@@ -67,6 +72,9 @@ class PeerNetwork {
   /// Build stamp each device reported in its most recent exchange.
   final Map<String, String> peerBuilds = {};
 
+  /// Release version each device reported; absent for builds that predate it.
+  final Map<String, String> peerVersions = {};
+
   /// Inbound handshakes that failed since the network started. The accept
   /// loop survives them; the count shows whether peers are struggling.
   int acceptFailures = 0;
@@ -81,22 +89,39 @@ class PeerNetwork {
   void _remember(String device) {
     final synced = lastSync[device];
     final build = peerBuilds[device];
+    final version = peerVersions[device];
     final saved = Map<String, dynamic>.from(
       node.store.setting('peerHealth') as Map? ?? const {},
     );
     saved[device] = {
       if (synced != null) 'synced': synced.millisecondsSinceEpoch,
       if (build != null) 'build': build,
+      if (version != null) 'version': version,
     };
     node.store.set('peerHealth', saved);
   }
 
-  void _noteBuild(String device, Object? build) {
-    if (build is! String || build.length > 64) return;
-    if (peerBuilds[device] == build) return;
-    peerBuilds[device] = build;
-    _remember(device);
+  /// Records the build and version a peer stated in a request or reply.
+  void _notePeer(String device, Json message) {
+    var changed = false;
+    if (message['build'] case final String b
+        when b.length <= 64 && peerBuilds[device] != b) {
+      peerBuilds[device] = b;
+      changed = true;
+    }
+    if (message['version'] case final String v
+        when v.length <= 32 && peerVersions[device] != v) {
+      peerVersions[device] = v;
+      changed = true;
+    }
+    if (changed) _remember(device);
   }
+
+  /// Build and version fields for outgoing sync messages.
+  Json get _stamp => {
+    if (build.isNotEmpty) 'build': build,
+    if (version.isNotEmpty) 'version': version,
+  };
 
   final Map<String, int> _progress = {};
 
@@ -279,6 +304,8 @@ class PeerNetwork {
           .readToEnd(3 * 1024 * 1024)
           .timeout(const Duration(seconds: 20));
       final reply = jsonDecode(utf8.decode(data)) as Json;
+      // Refusals carry the stamp too, so an incompatible peer is identifiable.
+      if (node.contacts.containsKey(device)) _notePeer(device, reply);
       if (reply['error'] != null) throw StateError(reply['error']);
       return reply;
     } finally {
@@ -331,9 +358,8 @@ class PeerNetwork {
           if (cursorPaging) 'cursorPaging': true,
           if (cursorPaging) 'after': remoteCursor?.toJson(),
           'addresses': _sharedAddresses(device),
-          if (build.isNotEmpty) 'build': build,
+          ..._stamp,
         });
-        _noteBuild(device, reply['build']);
         final incoming = await node.receive(device, reply['items']);
         final remoteInventory = reply['inventory'] as Json;
         final outgoing = await node.offer(device, remoteInventory);
@@ -477,7 +503,7 @@ class PeerNetwork {
         lastInbound[peer] = DateTime.now();
         switch (j['type']) {
           case 'pull':
-            _noteBuild(peer, j['build']);
+            _notePeer(peer, j);
             final items = await node.offer(peer, j['inventory']);
             await _learnAddresses(peer, j['addresses']);
             reply = {
@@ -496,7 +522,7 @@ class PeerNetwork {
                       },
                     ),
               'addresses': _sharedAddresses(peer),
-              if (build.isNotEmpty) 'build': build,
+              ..._stamp,
             };
           case 'push':
             reply = {'changed': await node.receive(peer, j['items'])};
@@ -534,7 +560,10 @@ class PeerNetwork {
       // transport failure. Only policy refusals carry their message.
       try {
         await replyStream?.writeAll(
-          bytes({'error': e is StateError ? e.message : 'Request failed'}),
+          bytes({
+            'error': e is StateError ? e.message : 'Request failed',
+            if (node.allowedPeer(peer)) ..._stamp,
+          }),
         );
         await replyStream?.finish();
         await connection.closed().timeout(

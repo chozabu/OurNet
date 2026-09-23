@@ -36,6 +36,15 @@ transfer is in `transport`. Preserve the separation between these packages.
   baselines. Do not compare debug timings to profile/release timings or collect
   benchmark results while other builds or test suites are running.
 
+## Compatibility
+
+Store rollouts are staged, so friends run mixed versions for days. Change the
+protocol and database additively: new optional fields, kinds and request types
+that older builds ignore or refuse individually. Never change the meaning of an
+existing field or kind. A breaking change needs a new ALPN that the next release
+accepts alongside `ournet/2`. Peers exchange `version` (keep `appVersion` in
+`app/lib/build_info.dart` equal to `pubspec.yaml`, which a test checks).
+
 ## Microsoft Store
 
 - Store releases go through `tool/publish-store.ps1 -Build` (builds the Store

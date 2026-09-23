@@ -14,8 +14,9 @@ typedef Health = ({HealthLevel level, String headline, List<String> details});
 /// rather than a passing delay.
 const _stale = Duration(hours: 12);
 
-/// Turns transport failures into something a person can act on.
-String friendlySyncError(String error) {
+/// Turns transport failures into something a person can act on. [order]
+/// compares the other device's release with this one's, when both are known.
+String friendlySyncError(String error, {int? order}) {
   if (error.contains('TimeoutException')) {
     return 'No response. It may be closed, asleep or offline.';
   }
@@ -25,7 +26,13 @@ String friendlySyncError(String error) {
   if (error.contains('Network is stopped')) return 'Networking is off here.';
   if (error.contains('Unsupported protocol') ||
       error.contains('Unknown request')) {
-    return 'It runs an incompatible version. Update both devices.';
+    return switch (order) {
+      final o? when o > 0 =>
+        'It runs a newer OurNet that this one can’t sync with. Update OurNet here.',
+      final o? when o < 0 =>
+        'It runs an older OurNet that can’t sync with this one. Update OurNet there.',
+      _ => 'It runs an incompatible version. Update both devices.',
+    };
   }
   if (error.contains('SocketException') ||
       error.contains('Network is unreachable')) {
@@ -77,7 +84,11 @@ Health deviceHealth(PeerNetwork network, String device, {DateTime? now}) {
     return (
       level: failing ? HealthLevel.error : HealthLevel.warning,
       headline: 'Can’t reach $label',
-      details: [friendlySyncError(error), ...details, 'Retrying automatically'],
+      details: [
+        friendlySyncError(error, order: releaseOrder(network, device)),
+        ...details,
+        'Retrying automatically',
+      ],
     );
   }
   if (synced == null) {
@@ -94,13 +105,54 @@ Health deviceHealth(PeerNetwork network, String device, {DateTime? now}) {
   );
 }
 
-/// A note when a device reports a different build from this one.
+/// Compares x.y.z release versions; null when either is not one.
+int? compareReleases(String a, String b) {
+  List<int>? parse(String v) {
+    final parts = v.split('.').map(int.tryParse).toList();
+    return parts.length == 3 && !parts.contains(null)
+        ? parts.cast<int>()
+        : null;
+  }
+
+  final (x, y) = (parse(a), parse(b));
+  if (x == null || y == null) return null;
+  for (var i = 0; i < 3; i++) {
+    if (x[i] != y[i]) return x[i].compareTo(y[i]);
+  }
+  return 0;
+}
+
+/// Whether a device runs a newer (positive) or older (negative) release
+/// than this one; null when it has not said.
+int? releaseOrder(PeerNetwork network, String device) {
+  final theirs = network.peerVersions[device];
+  return theirs == null ? null : compareReleases(theirs, network.version);
+}
+
+/// A note when a device runs a different release from this one. Builds of
+/// one release differ per platform, so they are compared only when a device
+/// predates version reporting.
 String? buildNote(PeerNetwork network, String device) {
+  final order = releaseOrder(network, device);
+  if (order != null) {
+    if (order == 0) return null;
+    return 'Runs OurNet ${network.peerVersions[device]}, '
+        '${order > 0 ? 'newer' : 'older'} than this one';
+  }
   final theirs = network.peerBuilds[device];
   if (theirs == null || network.build.isEmpty) return null;
   if (theirs == network.build) return null;
   final newer = theirs.compareTo(network.build) > 0;
   return 'Runs build $theirs, ${newer ? 'newer' : 'older'} than this one';
+}
+
+/// The newest release any contact's device runs, if newer than this one.
+String? newerRelease(PeerNetwork network) {
+  String? newest;
+  for (final v in network.peerVersions.values) {
+    if ((compareReleases(v, newest ?? network.version) ?? 0) > 0) newest = v;
+  }
+  return newest;
 }
 
 /// Devices whose health reaches the status bar: this person's other
@@ -379,6 +431,8 @@ class ConnectionHealthCard extends StatelessWidget {
               '${network.acceptFailures == 1 ? '' : 's'} failed'
               '${network.lastAcceptError == null ? '' : ' · ${friendlySyncError(network.lastAcceptError!)}'}',
         if (network.build.isNotEmpty) 'This device runs build ${network.build}',
+        if (newerRelease(network) case final v?)
+          'A contact runs OurNet $v, newer than this one',
       ];
       return Card(
         child: Padding(
@@ -431,6 +485,7 @@ Map<String, Object?> syncDiagnostics(PeerNetwork network) => {
         'lastInbound': network.lastInbound[device]?.toIso8601String(),
         'error': network.syncErrors[device],
         'build': network.peerBuilds[device],
+        'version': network.peerVersions[device],
       },
   ],
 };

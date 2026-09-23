@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ournet/build_info.dart';
 import 'package:ournet/services/network.dart';
 import 'package:ournet/ui/sync_health.dart';
 import 'package:ournet_core/ournet_core.dart';
@@ -78,6 +81,49 @@ void main() {
     );
     stamped.peerBuilds[laptop] = '20260916-135200';
     expect(buildNote(stamped, laptop), isNull);
+  });
+
+  test('releases, not per-platform builds, decide newer and older', () {
+    final here = PeerNetwork(node, build: '20260922-120000', version: '0.3.0');
+    // Same release built separately for another platform.
+    here.peerBuilds[laptop] = '20260922-121500';
+    here.peerVersions[laptop] = '0.3.0';
+    expect(buildNote(here, laptop), isNull);
+    expect(newerRelease(here), isNull);
+
+    here.peerVersions[laptop] = '0.2.9';
+    expect(buildNote(here, laptop), 'Runs OurNet 0.2.9, older than this one');
+    here.peerVersions[friend] = '0.10.0';
+    expect(buildNote(here, friend), 'Runs OurNet 0.10.0, newer than this one');
+    expect(newerRelease(here), '0.10.0');
+    expect(compareReleases('0.3', '0.3.0'), isNull);
+  });
+
+  test('an incompatible device says which side to update', () {
+    network.syncErrors[laptop] = 'Bad state: Unsupported protocol';
+    expect(
+      deviceHealth(network, laptop, now: now).details.first,
+      'It runs an incompatible version. Update both devices.',
+    );
+    network.peerVersions[laptop] = '9.0.0';
+    expect(
+      deviceHealth(network, laptop, now: now).details.first,
+      endsWith('Update OurNet here.'),
+    );
+    network.peerVersions[laptop] = '0.0.1';
+    expect(
+      deviceHealth(network, laptop, now: now).details.first,
+      endsWith('Update OurNet there.'),
+    );
+  });
+
+  test('the displayed version matches pubspec.yaml', () {
+    final pubspec = File('pubspec.yaml').readAsStringSync();
+    final version = RegExp(
+      r'^version: (\d+\.\d+\.\d+)',
+      multiLine: true,
+    ).firstMatch(pubspec)!.group(1);
+    expect(appVersion, version);
   });
 
   test('stopped network and missing relays are reported', () async {

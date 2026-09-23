@@ -180,8 +180,8 @@ void main() {
     () async {
       final a = Node(await LocalIdentity.create(label: 'A'), Store());
       final b = Node(await LocalIdentity.create(label: 'B'), Store());
-      final na = PeerNetwork(a, build: 'build-a');
-      final nb = PeerNetwork(b, build: 'build-b');
+      final na = PeerNetwork(a, build: 'build-a', version: '0.2.0');
+      final nb = PeerNetwork(b, build: 'build-b', version: '0.3.0');
       iroh.Endpoint? stray;
       addTearDown(() async {
         await stray?.close();
@@ -219,11 +219,29 @@ void main() {
       expect(na.peerBuilds[b.identity.device], 'build-b');
       expect(nb.peerBuilds[a.identity.device], 'build-a');
       expect(nb.lastInbound[a.identity.device], isNotNull);
+      expect(na.peerVersions[b.identity.device], '0.3.0');
+      expect(nb.peerVersions[a.identity.device], '0.2.0');
+
+      // A request the peer does not understand is refused with its version,
+      // so the caller can tell which side needs updating.
+      na.peerVersions.clear();
+      await expectLater(
+        na.request(b.identity.device, {'type': 'from-the-future'}),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            'Unknown request',
+          ),
+        ),
+      );
+      expect(na.peerVersions[b.identity.device], '0.3.0');
 
       // Sync health outlives the session.
       final again = PeerNetwork(a);
       expect(again.lastSync[b.identity.device], isNotNull);
       expect(again.peerBuilds[b.identity.device], 'build-b');
+      expect(again.peerVersions[b.identity.device], '0.3.0');
     },
     timeout: const Timeout(Duration(seconds: 60)),
   );

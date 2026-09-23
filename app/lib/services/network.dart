@@ -4,7 +4,11 @@ import 'package:ournet_transport/ournet_transport.dart';
 import '../build_info.dart';
 
 class Network extends PeerNetwork with ChangeNotifier {
-  Network(super.node) : super(build: buildId == 'development' ? '' : buildId);
+  Network(super.node)
+    : super(
+        build: buildId == 'development' ? '' : buildId,
+        version: appVersion,
+      );
   @override
   void notifyListeners() {
     super.notifyListeners();
