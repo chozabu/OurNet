@@ -117,6 +117,36 @@ class Store {
       ''');
     }
 
+    // Latest message per conversation, so the chat list can be ordered by
+    // recent activity without grouping over every stored message.
+    if (db
+        .select("SELECT name FROM sqlite_master WHERE name='message_latest'")
+        .isEmpty) {
+      db.execute('''BEGIN IMMEDIATE;
+        CREATE TABLE message_latest(owner TEXT NOT NULL, peer TEXT NOT NULL,
+          id TEXT NOT NULL, created INTEGER NOT NULL, PRIMARY KEY(owner,peer));
+        CREATE INDEX message_latest_order ON message_latest(owner,created DESC);
+        INSERT OR REPLACE INTO message_latest
+          SELECT owner,peer,id,MAX(created) FROM message_peers GROUP BY owner,peer;
+        COMMIT;
+      ''');
+    }
+    db.execute('''
+      CREATE TRIGGER IF NOT EXISTS message_latest_added AFTER INSERT ON message_peers
+      BEGIN
+        INSERT INTO message_latest VALUES(NEW.owner,NEW.peer,NEW.id,NEW.created)
+        ON CONFLICT(owner,peer) DO UPDATE SET id=excluded.id,created=excluded.created
+        WHERE excluded.created>created;
+      END;
+      CREATE TRIGGER IF NOT EXISTS message_latest_removed AFTER DELETE ON message_peers
+      WHEN EXISTS(SELECT 1 FROM message_latest WHERE owner=OLD.owner AND peer=OLD.peer AND id=OLD.id)
+      BEGIN
+        DELETE FROM message_latest WHERE owner=OLD.owner AND peer=OLD.peer;
+        INSERT INTO message_latest SELECT owner,peer,id,created FROM message_peers
+          WHERE owner=OLD.owner AND peer=OLD.peer ORDER BY created DESC,id LIMIT 1;
+      END;
+    ''');
+
     // Derived sharing index: the fields that decide whether an object may be
     // offered to a peer, extracted once when it is stored rather than out of
     // every object on every sync page. Contains no plaintext payloads.
@@ -287,6 +317,22 @@ class Store {
       [owner, peer, DateTime.now().millisecondsSinceEpoch, limit.clamp(1, 200)],
     ))
       if (get(row['id'] as String) case final object?) object,
+  ];
+
+  /// Each conversation [owner] has, with its latest message: most recent first.
+  List<({String peer, String id, int created})> recentConversations(
+    String owner,
+  ) => [
+    for (final row in _select(
+      'SELECT peer,id,created FROM message_latest WHERE owner=? '
+      'ORDER BY created DESC',
+      [owner],
+    ))
+      (
+        peer: row['peer'] as String,
+        id: row['id'] as String,
+        created: row['created'] as int,
+      ),
   ];
 
   /// Stable newest-first keyset pagination, including timestamp ties.

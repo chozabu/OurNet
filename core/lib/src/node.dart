@@ -795,11 +795,19 @@ class Node {
     );
     if (o.kind == 'read') {
       final payload = await content(o);
-      final original = payload == null ? null : store.get(payload['object']);
-      if (original != null &&
-          original.author == person &&
-          original.audience.contains(o.author)) {
-        store.set('readBy/${original.id}', o.author);
+      final ids = <Object?>{
+        if (payload != null) ...[
+          payload['object'],
+          ...?(payload['objects'] as List?),
+        ],
+      };
+      for (final id in ids.whereType<String>()) {
+        final original = store.get(id);
+        if (original != null &&
+            original.author == person &&
+            original.audience.contains(o.author)) {
+          store.set('readBy/${original.id}', o.author);
+        }
       }
     }
     for (final h in handoffs) {
@@ -820,28 +828,47 @@ class Node {
     return changed;
   }
 
-  Future<void> markRead(String objectId) async {
-    final o = store.get(objectId);
-    if (o == null || o.author == person || !visible(o)) return;
-    if (store.setting('read/$objectId') == true) return;
-    await publish(
-      'read',
-      {'object': objectId},
-      audience: [o.author],
-      space: '_messages',
-    );
-    store.set('read/$objectId', true);
-    notify();
+  Future<void> markRead(String objectId) => markManyRead([objectId]);
+
+  /// Marks messages read with one receipt per author, rather than one per
+  /// message. The newest is also named alone, for builds that read only that.
+  Future<void> markManyRead(Iterable<String> objectIds) async {
+    final byAuthor = <String, List<SignedObject>>{};
+    for (final id in objectIds.toSet()) {
+      final o = store.get(id);
+      if (o == null || o.author == person || !visible(o)) continue;
+      if (store.setting('read/$id') == true) continue;
+      (byAuthor[o.author] ??= []).add(o);
+    }
+    for (final MapEntry(key: author, value: all) in byAuthor.entries) {
+      all.sort((a, b) => b.created.compareTo(a.created));
+      for (var start = 0; start < all.length; start += 200) {
+        final page = all.skip(start).take(200).toList();
+        await publish(
+          'read',
+          {
+            'object': page.first.id,
+            if (page.length > 1) 'objects': [for (final o in page) o.id],
+          },
+          audience: [author],
+          space: '_messages',
+        );
+        store.batch(() {
+          for (final o in page) {
+            store.set('read/${o.id}', true);
+          }
+        });
+      }
+    }
+    if (byAuthor.isNotEmpty) notify();
   }
 
   /// Marks every unread message from [peer] read.
   Future<void> markConversationRead(String peer) async {
     while (true) {
-      final page = store.unreadMessages(person, peer, limit: 100);
+      final page = store.unreadMessages(person, peer, limit: 200);
       if (!page.any(visible)) return;
-      for (final o in page.where(visible)) {
-        await markRead(o.id);
-      }
+      await markManyRead(page.where(visible).map((o) => o.id));
     }
   }
 

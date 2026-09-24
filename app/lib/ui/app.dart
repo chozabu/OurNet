@@ -1,4 +1,7 @@
 import 'conversation_history.dart';
+import 'conversation_search.dart';
+import 'message_text.dart';
+import '../services/typing.dart';
 import '../controllers/notes_home_controller.dart';
 import '../controllers/conversation_controller.dart';
 import '../services/background_sync.dart';
@@ -222,8 +225,39 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   }
 
   late final ConversationController conversations;
-  final sendingMessages = <String>{};
+  late final MessageUpdates messageUpdates;
+  late final Typing typing;
   final messageErrors = <String, String>{};
+
+  /// Per conversation: messages shown at once while they are being saved
+  /// and sent, in order; a failed one stays with its error until retried.
+  final outgoing = <String, List<OutgoingMessage>>{};
+  final _sendChains = <String, Future<void>>{};
+
+  /// Per conversation: the message being replied to, or edited.
+  final messageReply = <String, String>{};
+  final messageEdit = <String, String>{};
+
+  /// Messages chosen in selection mode, in the open conversation.
+  final selectedMessages = <String>{};
+  String? highlightedMessage;
+  bool searchingConversation = false;
+  bool showArchivedChats = false;
+
+  /// The oldest message unread when [unreadMarkerPeer]'s chat was opened.
+  String? unreadMarkerPeer, unreadMarker;
+
+  /// Messages seen on screen, marked read together after a short pause.
+  final _pendingReads = <String>{};
+  Timer? _readTimer;
+
+  /// Per conversation: what adding attachments is doing.
+  final attachProgress = <String, String>{};
+  bool chatDragging = false;
+  String _typedText = '';
+
+  /// The draft set aside while a sent message is being edited.
+  final _draftBeforeEdit = <String, TextEditingValue>{};
 
   /// Per conversation: what a voice message being prepared is doing.
   final voiceProgress = <String, String>{};
@@ -236,6 +270,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     super.initState();
     if (widget.enablePlatform) performance.start();
     conversations = ConversationController(node);
+    messageUpdates = MessageUpdates(node);
     draftStore = DraftStore(node);
     notes = Notes(node);
     notesController = NotesHomeController(notes);
@@ -243,6 +278,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       () => rememberDraft(notesComposerContext, inboxComposer),
     );
     composer.addListener(() => rememberDraft(composerContext, composer));
+    composer.addListener(composerTyped);
     unawaited(
       draftStore.ready
           .then<void>((_) {
@@ -277,6 +313,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     notesController.notesGrid = node.store.setting('notesGrid') != false;
     accent = node.store.setting('accent') as int? ?? 0xff137d72;
     network = Network(node)..addListener(refresh);
+    typing = Typing(network)..addListener(redraw);
     files = Files(node, network);
     speech = Speech(notes, files)..addListener(refresh);
     everydaySync = EverydaySync(
@@ -296,20 +333,28 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       automatic: widget.enablePlatform,
     );
     calls = Calls(network)..addListener(refresh);
-    notifications = Notifications(node, onAction: notificationActionDispatcher)
-      ..onError = notice
-      ..showing = showingNotification
-      ..onCallOpen = () {
-        update(() {
-          tab = Destination.messages;
-          showConversation = true;
-        });
-      }
-      ..onOpenChat = openConversation
-      ..onOpenForum = openForum;
+    notifications =
+        Notifications(
+            node,
+            onAction: notificationActionDispatcher,
+            updates: messageUpdates,
+          )
+          ..onError = notice
+          ..showing = showingNotification
+          ..onCallOpen = () {
+            update(() {
+              tab = Destination.messages;
+              showConversation = true;
+            });
+          }
+          ..onOpenChat = openConversation
+          ..onOpenForum = openForum;
     _deliveryRefresh = CoalescedTask(loadDeliveryLabels, (e) => notice('$e'));
     _dataRefresh = CoalescedTask(() async {
-      await conversations.refreshConversations();
+      await messageUpdates.catchUp();
+      for (final person in await conversations.refreshConversations()) {
+        typing.clear(person);
+      }
       searchIndex = null;
       driveView = null;
       everydayView = null;
@@ -471,6 +516,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         if (previousRoom != activeRoom?.object.id) everydayView = null;
         if (tab != previousTab) {
           node.store.set('lastDestination', (tab.parent ?? tab).id);
+          unreadMarkerPeer = null;
+          selectedMessages.clear();
         }
       });
     }
@@ -500,10 +547,16 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   void openConversation(String person) {
     if (!people.contains(person)) return;
     update(() {
+      if (contact != person) {
+        selectedMessages.clear();
+        searchingConversation = false;
+      }
+      if (contact != person || !showConversation) unreadMarkerPeer = null;
       tab = Destination.messages;
       contact = person;
       showConversation = true;
       replyTo = null;
+      node.store.set('chatUnread/$person', null);
     });
     dismissShownNotification();
   }
@@ -657,6 +710,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Messages on screen are marked read as they are shown, which only
+    // counts while the app is in front: show them again on return.
+    if (state == AppLifecycleState.resumed) redraw();
     if (widget.enablePlatform) {
       if (state == AppLifecycleState.resumed) {
         performance.start();
@@ -730,6 +786,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _pausedStop?.cancel();
     _changes?.cancel();
     _dataRefresh.close();
+    _readTimer?.cancel();
+    typing
+      ..removeListener(redraw)
+      ..dispose();
     conversations.dispose();
     _deliveryRefresh.close();
     imports.dispose();

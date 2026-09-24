@@ -171,4 +171,136 @@ void main() {
       expect(profiles.map((o) => o.author).toSet(), {b.person});
     },
   );
+
+  test('conversations are listed by their latest message', () async {
+    final a = Node(await LocalIdentity.create(), Store());
+    final b = Node(await LocalIdentity.create(), Store());
+    final c = Node(await LocalIdentity.create(), Store());
+    addTearDown(() async {
+      await a.close();
+      await b.close();
+      await c.close();
+    });
+    for (final other in [b, c]) {
+      await a.addContact(other.identity.certificate);
+      await other.addContact(a.identity.certificate);
+    }
+    Future<SignedObject> say(Node from, Node to, String text) => from.publish(
+      'message',
+      {'text': text},
+      space: '_messages',
+      audience: [to.person],
+    );
+    await say(a, b, 'to b');
+    await say(a, c, 'to c');
+    expect(a.store.recentConversations(a.person).map((r) => r.peer), [
+      c.person,
+      b.person,
+    ]);
+    final reply = await say(b, a, 'from b');
+    await syncPair(a, b);
+    final recent = a.store.recentConversations(a.person);
+    expect(recent.map((r) => r.peer), [b.person, c.person]);
+    expect(recent.first.id, reply.id);
+    a.store.db.execute('DELETE FROM objects WHERE id=?', [reply.id]);
+    expect(a.store.recentConversations(a.person).first.peer, c.person);
+  });
+
+  test('one receipt marks many messages read for the sender', () async {
+    final a = Node(await LocalIdentity.create(), Store());
+    final b = Node(await LocalIdentity.create(), Store());
+    addTearDown(() async {
+      await a.close();
+      await b.close();
+    });
+    await a.addContact(b.identity.certificate);
+    await b.addContact(a.identity.certificate);
+    final sent = [
+      for (var i = 0; i < 5; i++)
+        await b.publish(
+          'message',
+          {'text': '$i'},
+          space: '_messages',
+          audience: [a.person],
+        ),
+    ];
+    await syncPair(a, b);
+    await a.markManyRead(sent.map((o) => o.id));
+    expect(a.store.objects(kind: 'read', author: a.person).length, 1);
+    await syncPair(a, b);
+    for (final o in sent) {
+      expect(b.store.setting('readBy/${o.id}'), a.person);
+    }
+  });
+
+  test('reactions, edits and deletions reach the other person', () async {
+    final a = Node(await LocalIdentity.create(), Store());
+    final b = Node(await LocalIdentity.create(), Store());
+    final stranger = Node(await LocalIdentity.create(), Store());
+    addTearDown(() async {
+      await a.close();
+      await b.close();
+      await stranger.close();
+    });
+    await a.addContact(b.identity.certificate);
+    await b.addContact(a.identity.certificate);
+    final updatesA = MessageUpdates(a), updatesB = MessageUpdates(b);
+    final message = await a.publish(
+      'message',
+      {'text': 'Hello'},
+      space: '_messages',
+      audience: [b.person],
+    );
+    final other = await a.publish(
+      'message',
+      {'text': 'Bye'},
+      space: '_messages',
+      audience: [b.person],
+    );
+    await syncPair(a, b);
+    final atB = b.store.get(message.id)!;
+    await updatesB.react(atB, '👍');
+    await updatesA.edit(message, 'Hello there');
+    await updatesA.deleteForEveryone(other);
+    await expectLater(() => updatesB.edit(atB, 'forged'), throwsStateError);
+    await syncPair(a, b);
+    await updatesA.catchUp();
+    await updatesB.catchUp();
+    expect(updatesA.reactions(message), {b.person: '👍'});
+    expect(updatesB.editedText(atB), 'Hello there');
+    expect(
+      updatesB.current(atB, (await b.content(atB))!)!['text'],
+      'Hello there',
+    );
+    expect(updatesB.deleted(b.store.get(other.id)!), isTrue);
+    // A newer reaction replaces the older one; an empty one withdraws it.
+    await updatesB.react(atB, '');
+    await syncPair(a, b);
+    await updatesA.catchUp();
+    expect(updatesA.reactions(message), isEmpty);
+    // Only the author's edits count, and only participants' reactions.
+    b.store.set('edited/${atB.id}', {
+      'author': stranger.person,
+      'text': 'forged',
+      'created': 1,
+    });
+    b.store.set('reactions/${atB.id}', {
+      stranger.person: {'emoji': '💩', 'created': 1},
+    });
+    expect(updatesB.editedText(atB), isNull);
+    expect(updatesB.reactions(atB), isEmpty);
+    // Hiding is local and clears unread.
+    final incoming = await b.publish(
+      'message',
+      {'text': 'hide me'},
+      space: '_messages',
+      audience: [a.person],
+    );
+    await syncPair(a, b);
+    final atA = a.store.get(incoming.id)!;
+    expect(a.store.conversationUnread(a.person, peer: b.person), 1);
+    await updatesA.hide(atA);
+    expect(updatesA.hidden(atA), isTrue);
+    expect(a.store.conversationUnread(a.person, peer: b.person), 0);
+  });
 }

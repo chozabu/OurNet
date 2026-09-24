@@ -15,14 +15,39 @@ List<String> messageHelpers(Node node, String recipient) {
       : const [];
 }
 
-Future<SignedObject> sendMessage(Node node, String recipient, String text) =>
-    node.publish(
-      'message',
-      {'text': text.trim()},
-      space: '_messages',
-      audience: [recipient],
-      via: messageHelpers(node, recipient),
-    );
+/// Sends [text] to [recipient], optionally as a reply to message [reply].
+Future<SignedObject> sendMessage(
+  Node node,
+  String recipient,
+  String text, {
+  String? reply,
+}) => node.publish(
+  'message',
+  {'text': text.trim(), 'reply': ?reply},
+  space: '_messages',
+  audience: [recipient],
+  via: messageHelpers(node, recipient),
+);
+
+/// Sends another message's [payload] on to [recipient] as a new message.
+/// Attachments keep their chunks and key, so nothing is re-encrypted; the
+/// recipient fetches the chunks from this device.
+Future<SignedObject> forwardMessage(Node node, String recipient, Json payload) {
+  final copy = Map<String, dynamic>.of(payload)
+    ..remove('reply')
+    ..['forwarded'] = true;
+  return node.publish(
+    'message',
+    copy,
+    space: '_messages',
+    audience: [recipient],
+    via: messageHelpers(node, recipient),
+  );
+}
+
+/// Whether notifications for the chat with [peer] are silenced.
+bool chatMuted(Node node, String peer) =>
+    node.store.setting('chatMuted/$peer') == true;
 
 /// One line describing a message or post: its title, text, a voice
 /// transcript, or the attachment's name. Empty when there is nothing to show.

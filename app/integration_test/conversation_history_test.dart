@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:ournet/ui/app.dart';
+import 'package:ournet/ui/conversation_history.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'perf_support.dart';
 
@@ -87,7 +88,10 @@ void main() {
           tester.widget<TextField>(composer).controller!.text,
           'Draft stays usable 19',
         );
-        expect(find.text('Show latest messages'), findsOneWidget);
+        expect(
+          tester.widget<JumpToLatest>(find.byType(JumpToLatest)).pending,
+          isTrue,
+        );
         final metrics = await phase.stop();
         (binding.reportData ??= {})['conversationHistory'] = {
           'buildMode': 'profile',
@@ -104,12 +108,23 @@ void main() {
           expect(frames['p99'], lessThan(2 * budget));
           expect(delay['max'], lessThan(100));
         }
-        await tester.tap(find.text('Show latest messages'));
+        await tester.tap(find.byTooltip('Show latest messages'));
         await tester.pump(const Duration(milliseconds: 400));
         expect(controller.offset, 0);
         await tester.tap(find.byIcon(Icons.send));
         await tester.pump(const Duration(seconds: 1));
         expect(tester.widget<TextField>(composer).controller!.text, isEmpty);
+        // The chat list's order comes from the latest message, kept as
+        // messages arrive rather than found by grouping the history.
+        final latest = local.store.recentConversations(local.person).single;
+        expect(latest.peer, remote.person);
+        expect(
+          latest.id,
+          local.store
+              .conversation(local.person, remote.person, limit: 1)
+              .single
+              .id,
+        );
       } finally {
         await tester.pumpWidget(const SizedBox.shrink());
         await local.close();

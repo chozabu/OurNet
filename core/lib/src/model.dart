@@ -124,11 +124,28 @@ bool validContent(String kind, Json p) {
       p['text'] is String &&
           (p['title'] == null ||
               (p['title'] is String && (p['title'] as String).length <= 200)),
-    'message' => p['text'] is String || p['chunks'] is List,
+    'message' =>
+      (p['text'] is String || p['chunks'] is List) &&
+          (p['reply'] == null || p['reply'] is String) &&
+          (p['forwarded'] == null || p['forwarded'] is bool),
     'file' => p['chunks'] is List,
     'vote' => p['object'] is String && [-1, 0, 1].contains(p['value']),
     'delegate' => p['person'] is String,
-    'read' => p['object'] is String,
+    // `objects` (optional) marks several messages read at once; builds that
+    // predate it mark only `object`, the newest of them.
+    'read' =>
+      p['object'] is String &&
+          (p['objects'] == null ||
+              p['objects'] is List &&
+                  (p['objects'] as List).length <= 200 &&
+                  (p['objects'] as List).every((v) => v is String)),
+    // An empty emoji withdraws the author's reaction.
+    'reaction' =>
+      p['object'] is String &&
+          p['emoji'] is String &&
+          (p['emoji'] as String).length <= 32,
+    'message_edit' => p['object'] is String && p['text'] is String,
+    'message_delete' => p['object'] is String,
     'location' =>
       p['lat'] is String &&
           p['lng'] is String &&

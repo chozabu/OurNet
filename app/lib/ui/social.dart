@@ -98,7 +98,9 @@ extension _SocialPages on _OurNetAppState {
   }
 
   Widget messages(BuildContext context) {
-    contact = people.contains(contact) ? contact : people.firstOrNull;
+    contact = people.contains(contact)
+        ? contact
+        : chatOrder().active.firstOrNull ?? people.firstOrNull;
     return browsePane(
       context,
       selected: showConversation,
@@ -119,25 +121,31 @@ extension _SocialPages on _OurNetAppState {
                     'Add a friend using their contact card.',
                     Icons.chat_bubble_outline,
                   )
-                : ListView(
-                    children: [
-                      for (final person in people)
-                        ListTile(
-                          leading: conversationAvatar(person, radius: 20),
-                          title: Text(name(person)),
-                          subtitle: recentActivity(
-                            node.store.conversation(
-                              node.person,
-                              person,
-                              limit: 1,
+                : Builder(
+                    builder: (context) {
+                      final order = chatOrder();
+                      return ListView(
+                        children: [
+                          for (final person in order.active)
+                            chatTile(context, person),
+                          if (order.archived.isNotEmpty)
+                            ListTile(
+                              leading: const Icon(Icons.archive_outlined),
+                              title: Text(
+                                showArchivedChats
+                                    ? 'Hide archived'
+                                    : 'Archived (${order.archived.length})',
+                              ),
+                              onTap: () => update(
+                                () => showArchivedChats = !showArchivedChats,
+                              ),
                             ),
-                            'Private conversation',
-                          ),
-                          selected: contact == person,
-                          trailing: conversationUnreadBadge(person),
-                          onTap: () => openConversation(person),
-                        ),
-                    ],
+                          if (showArchivedChats)
+                            for (final person in order.archived)
+                              chatTile(context, person),
+                        ],
+                      );
+                    },
                   ),
           ),
         ],
@@ -266,15 +274,6 @@ extension _SocialPages on _OurNetAppState {
     ],
   );
 
-  Widget conversationUnreadBadge(String person) {
-    final count = node.store.conversationUnread(
-      node.person,
-      peer: person,
-      blocked: node.blocked,
-    );
-    return Badge.count(count: count, isLabelVisible: count > 0);
-  }
-
   Widget unreadBadge(Iterable<SignedObject> unread) {
     final count = unread.length;
     return Badge.count(count: count, isLabelVisible: count > 0);
@@ -379,24 +378,33 @@ extension _SocialPages on _OurNetAppState {
     }
   }
 
+  /// Shows the message at once and saves it in the background, so typing
+  /// can go on; see [deliverOutgoing]. In edit mode, saves the edit instead.
   Future<void> sendConversationMessage() async {
     final recipient = contact;
-    if (recipient == null || sendingMessages.contains(recipient)) return;
+    if (recipient == null) return;
     final draftKey = composerContext;
     final submitted = composer.text;
-    if (submitted.trim().isEmpty) return;
-    update(() {
-      sendingMessages.add(recipient);
-      messageErrors.remove(recipient);
-    });
-    try {
-      await sendMessage(node, recipient, submitted);
-    } catch (error) {
-      update(() => messageErrors[recipient] = 'Could not save message: $error');
+    if (messageEdit[recipient] case final id?) {
+      await finishEdit(recipient, id, submitted);
       return;
-    } finally {
-      update(() => sendingMessages.remove(recipient));
     }
+    if (submitted.trim().isEmpty) return;
+    final item = OutgoingMessage(
+      submitted.trim(),
+      messageReply.remove(recipient),
+    );
+    update(() {
+      (outgoing[recipient] ??= []).add(item);
+      if (unreadMarkerPeer == recipient) unreadMarker = null;
+      if (conversations.hasPending(recipient)) {
+        conversations.showLatest(recipient);
+      }
+    });
+    typing.sent(recipient);
+    final scroll = conversations.scrollFor(recipient);
+    if (scroll.hasClients) scroll.jumpTo(0);
+    deliverOutgoing(recipient, item);
     // A draft persistence failure must never offer to publish this message twice.
     try {
       await finishDraft(draftKey, submitted);
@@ -470,185 +478,282 @@ extension _SocialPages on _OurNetAppState {
         Icons.chat_bubble_outline,
       );
     }
+    final peer = contact!;
     final scheme = Theme.of(context).colorScheme;
-    final scroll = conversations.scrollFor(contact!);
-    final objects = conversations.messages(contact!);
-    final helpers = messageHelpers(node, contact!);
-    final unread =
-        node.store.conversationUnread(node.person, peer: contact) > 0;
-    return Column(
-      children: [
-        Material(
-          color: scheme.surfaceContainer,
-          borderRadius: back == null
-              ? const BorderRadius.vertical(top: Radius.circular(12))
-              : null,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(4, 6, 4, 6),
-            child: Row(
-              children: [
-                if (back != null)
+    final scroll = conversations.scrollFor(peer);
+    final objects = conversations.messages(peer);
+    final helpers = messageHelpers(node, peer);
+    final unreadCount = node.store.conversationUnread(node.person, peer: peer);
+    // Where reading resumes, fixed while the chat stays open.
+    if (unreadMarkerPeer != peer) {
+      unreadMarkerPeer = peer;
+      unreadMarker = unreadCount == 0
+          ? null
+          : node.store
+                .unreadMessages(node.person, peer, limit: 200)
+                .lastOrNull
+                ?.id;
+    }
+    final muted = chatMuted(node, peer);
+    final desktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+    final header = selectedMessages.isNotEmpty
+        ? messageSelectionBar(context)
+        : searchingConversation
+        ? ConversationSearch(
+            key: ValueKey('search/$peer'),
+            node: node,
+            updates: messageUpdates,
+            peer: peer,
+            name: name,
+            onClose: () => update(() => searchingConversation = false),
+            onOpen: (o) {
+              update(() => searchingConversation = false);
+              unawaited(jumpToMessage(o.id));
+            },
+          )
+        : Material(
+            color: scheme.surfaceContainer,
+            borderRadius: back == null
+                ? const BorderRadius.vertical(top: Radius.circular(12))
+                : null,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(4, 6, 4, 6),
+              child: Row(
+                children: [
+                  if (back != null)
+                    IconButton(
+                      tooltip: 'Back to list',
+                      onPressed: back,
+                      icon: const Icon(Icons.arrow_back),
+                    )
+                  else
+                    const SizedBox(width: 8),
+                  conversationAvatar(peer),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          name(peer),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        if (typing.isTyping(peer))
+                          Text(
+                            'typing…',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: scheme.primary,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                          )
+                        else
+                          ConversationDelivery(
+                            key: ValueKey('delivery/$peer'),
+                            network: network,
+                            person: peer,
+                            helpers: helpers,
+                          ),
+                      ],
+                    ),
+                  ),
                   IconButton(
-                    tooltip: 'Back to list',
-                    onPressed: back,
-                    icon: const Icon(Icons.arrow_back),
-                  )
-                else
-                  const SizedBox(width: 8),
-                conversationAvatar(contact!),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        name(contact!),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleMedium,
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Search this chat',
+                    onPressed: () => update(() => searchingConversation = true),
+                    icon: const Icon(Icons.search),
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Video call',
+                    onPressed: () => startCall(true),
+                    icon: const Icon(Icons.videocam_outlined),
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Voice call',
+                    onPressed: () => startCall(false),
+                    icon: const Icon(Icons.call_outlined),
+                  ),
+                  PopupMenuButton<String>(
+                    tooltip: 'Conversation options',
+                    onSelected: (action) {
+                      switch (action) {
+                        case 'read':
+                          unawaited(markChatRead(peer));
+                        case 'mute':
+                          toggleMute(peer);
+                        case 'helper':
+                          chooseMessageHelper(context);
+                        case 'places':
+                          update(() => tab = Destination.locations);
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      PopupMenuItem(
+                        value: 'read',
+                        enabled: unreadCount > 0,
+                        child: const ListTile(
+                          leading: Icon(Icons.done_all),
+                          title: Text('Mark all read'),
+                        ),
                       ),
-                      ConversationDelivery(
-                        key: ValueKey('delivery/$contact'),
-                        network: network,
-                        person: contact!,
-                        helpers: helpers,
+                      PopupMenuItem(
+                        value: 'mute',
+                        child: ListTile(
+                          leading: Icon(
+                            muted
+                                ? Icons.volume_up_outlined
+                                : Icons.volume_off_outlined,
+                          ),
+                          title: Text(
+                            muted
+                                ? 'Unmute notifications'
+                                : 'Mute notifications',
+                          ),
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: 'helper',
+                        child: ListTile(
+                          leading: Icon(
+                            helpers.isEmpty
+                                ? Icons.cloud_outlined
+                                : Icons.cloud_done_outlined,
+                          ),
+                          title: Text(
+                            helpers.isEmpty
+                                ? 'Optional text forwarding'
+                                : 'Text forwarding · ${name(helpers.first)}',
+                          ),
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'places',
+                        child: ListTile(
+                          leading: Icon(Icons.place_outlined),
+                          title: Text('Shared places'),
+                        ),
                       ),
                     ],
                   ),
-                ),
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  tooltip: 'Video call',
-                  onPressed: () => startCall(true),
-                  icon: const Icon(Icons.videocam_outlined),
-                ),
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  tooltip: 'Voice call',
-                  onPressed: () => startCall(false),
-                  icon: const Icon(Icons.call_outlined),
-                ),
-                PopupMenuButton<String>(
-                  tooltip: 'Conversation options',
-                  onSelected: (action) {
-                    switch (action) {
-                      case 'read':
-                        final person = contact!;
-                        act(() => node.markConversationRead(person));
-                      case 'helper':
-                        chooseMessageHelper(context);
-                      case 'places':
-                        update(() => tab = Destination.locations);
-                    }
-                  },
-                  itemBuilder: (_) => [
-                    PopupMenuItem(
-                      value: 'read',
-                      enabled: !busy && unread,
-                      child: const ListTile(
-                        leading: Icon(Icons.done_all),
-                        title: Text('Mark all read'),
-                      ),
-                    ),
-                    PopupMenuItem(
-                      value: 'helper',
-                      child: ListTile(
-                        leading: Icon(
-                          helpers.isEmpty
-                              ? Icons.cloud_outlined
-                              : Icons.cloud_done_outlined,
-                        ),
-                        title: Text(
-                          helpers.isEmpty
-                              ? 'Optional text forwarding'
-                              : 'Text forwarding · ${name(helpers.first)}',
-                        ),
-                      ),
-                    ),
-                    const PopupMenuItem(
-                      value: 'places',
-                      child: ListTile(
-                        leading: Icon(Icons.place_outlined),
-                        title: Text('Shared places'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        Expanded(
-          child: ColoredBox(
-            color: Color.alphaBlend(
-              scheme.primary.withValues(alpha: 0.05),
-              scheme.surfaceContainerLow,
-            ),
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: RepaintBoundary(
-                    child: CustomPaint(
-                      painter: ChatWallpaper(
-                        scheme.onSurface.withValues(alpha: 0.05),
-                      ),
-                    ),
-                  ),
-                ),
-                Positioned.fill(
-                  child: conversationList(context, objects, controller: scroll),
-                ),
-                if (objects.isNotEmpty && conversations.hasOlder(contact!))
-                  Align(
-                    alignment: Alignment.topCenter,
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: ActionChip(
-                        avatar: const Icon(Icons.history, size: 18),
-                        label: const Text('Load older messages'),
-                        onPressed: () =>
-                            update(() => conversations.loadOlder(contact!)),
-                      ),
-                    ),
-                  ),
-                if (conversations.hasPending(contact!))
-                  Align(
-                    alignment: Alignment.bottomCenter,
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: FilledButton.tonalIcon(
-                        icon: const Icon(Icons.keyboard_double_arrow_down),
-                        label: const Text('Show latest messages'),
-                        onPressed: () {
-                          update(() => conversations.showLatest(contact!));
-                          if (scroll.hasClients) scroll.jumpTo(0);
-                        },
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-        if (voiceProgress[contact] case final progress?)
-          Material(
-            color: scheme.secondaryContainer,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Row(
-                children: [
-                  const SizedBox.square(
-                    dimension: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(child: Text(progress)),
                 ],
               ),
             ),
+          );
+    Widget history = ColoredBox(
+      color: Color.alphaBlend(
+        scheme.primary.withValues(alpha: 0.05),
+        scheme.surfaceContainerLow,
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: RepaintBoundary(
+              child: CustomPaint(
+                painter: ChatWallpaper(
+                  scheme.onSurface.withValues(alpha: 0.05),
+                ),
+              ),
+            ),
           ),
-        if (messageErrors[contact] case final error?)
+          Positioned.fill(
+            child: conversationList(context, objects, controller: scroll),
+          ),
+          if (objects.isNotEmpty && conversations.hasOlder(peer))
+            Align(
+              alignment: Alignment.topCenter,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: ActionChip(
+                  avatar: const Icon(Icons.history, size: 18),
+                  label: const Text('Load older messages'),
+                  onPressed: () => update(() => conversations.loadOlder(peer)),
+                ),
+              ),
+            ),
+          Positioned(
+            right: 12,
+            bottom: 12,
+            child: JumpToLatest(
+              controller: scroll,
+              pending: conversations.hasPending(peer),
+              unread: unreadCount,
+              onPressed: () {
+                if (conversations.hasPending(peer)) {
+                  update(() => conversations.showLatest(peer));
+                }
+                if (!scroll.hasClients) return;
+                if (scroll.offset > 3000) {
+                  scroll.jumpTo(0);
+                } else {
+                  unawaited(
+                    scroll.animateTo(
+                      0,
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeOut,
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+          if (chatDragging)
+            Positioned.fill(
+              child: ColoredBox(
+                color: scheme.primary.withValues(alpha: 0.12),
+                child: Center(
+                  child: Text(
+                    'Drop to send to ${name(peer)}',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+    if (desktop) {
+      history = DropTarget(
+        onDragEntered: (_) => update(() => chatDragging = true),
+        onDragExited: (_) => update(() => chatDragging = false),
+        onDragDone: (details) {
+          update(() => chatDragging = false);
+          unawaited(
+            sendAttachments(peer, [
+              for (final f in details.files) (path: f.path, name: f.name),
+            ]),
+          );
+        },
+        child: history,
+      );
+    }
+    Widget progressBar(String text) => Material(
+      color: scheme.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            const SizedBox.square(
+              dimension: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 10),
+            Expanded(child: Text(text)),
+          ],
+        ),
+      ),
+    );
+    return Column(
+      children: [
+        header,
+        Expanded(child: history),
+        if (voiceProgress[peer] case final progress?) progressBar(progress),
+        if (attachProgress[peer] case final progress?) progressBar(progress),
+        if (messageErrors[peer] case final error?)
           Material(
             color: scheme.errorContainer,
             child: Padding(
@@ -662,8 +767,8 @@ extension _SocialPages on _OurNetAppState {
                     ),
                   ),
                   TextButton(
-                    onPressed: sendConversationMessage,
-                    child: const Text('Retry'),
+                    onPressed: () => update(() => messageErrors.remove(peer)),
+                    child: const Text('Dismiss'),
                   ),
                 ],
               ),
@@ -676,9 +781,10 @@ extension _SocialPages on _OurNetAppState {
             child: compose(
               context,
               sendConversationMessage,
-              sending: sendingMessages.contains(contact),
-              attach: () => pickFile([contact!]),
-              voice: voiceProgress.containsKey(contact)
+              attach: attachProgress.containsKey(peer)
+                  ? null
+                  : () => unawaited(pickConversationFiles()),
+              voice: voiceProgress.containsKey(peer)
                   ? null
                   : () => unawaited(sendVoiceMessage(context)),
             ),
@@ -717,7 +823,8 @@ extension _SocialPages on _OurNetAppState {
       padding: EdgeInsets.only(top: chat ? 6 : 12),
       child: Column(
         children: [
-          if (replyTo != null)
+          if (chat) ?composerContextBar(context),
+          if (!chat && replyTo != null)
             Row(
               children: [
                 Expanded(child: Text('Replying to ${short(replyTo!)}')),
@@ -772,6 +879,17 @@ extension _SocialPages on _OurNetAppState {
               Expanded(
                 child: Focus(
                   onKeyEvent: (_, event) {
+                    if (chat && event is KeyDownEvent) {
+                      if (event.logicalKey == LogicalKeyboardKey.escape &&
+                          cancelComposerMode()) {
+                        return KeyEventResult.handled;
+                      }
+                      if (event.logicalKey == LogicalKeyboardKey.arrowUp &&
+                          composer.text.isEmpty &&
+                          editLastMessage()) {
+                        return KeyEventResult.handled;
+                      }
+                    }
                     if (event.logicalKey != LogicalKeyboardKey.enter ||
                         (composer.value.composing.isValid &&
                             !composer.value.composing.isCollapsed)) {
@@ -800,7 +918,11 @@ extension _SocialPages on _OurNetAppState {
                     maxLines: 5,
                     decoration: chat
                         ? InputDecoration(
-                            hintText: 'Message',
+                            hintText:
+                                contact != null &&
+                                    messageEdit.containsKey(contact)
+                                ? 'Edit message'
+                                : 'Message',
                             filled: true,
                             fillColor: Theme.of(context).colorScheme.surface,
                             isDense: true,

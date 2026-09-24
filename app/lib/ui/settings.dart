@@ -247,6 +247,15 @@ extension _SettingsPages on _OurNetAppState {
             ? (v) => update(() => node.store.set('notificationPreviews', v))
             : null,
       ),
+      SwitchListTile(
+        title: const Text('Typing indicators'),
+        subtitle: const Text(
+          'Let friends see when you are typing to them, and see when they are. '
+          'Sent live only, to devices that are online.',
+        ),
+        value: typing.enabled,
+        onChanged: (v) => update(() => node.store.set('typingIndicator', v)),
+      ),
       const Divider(),
       SpeechSettings(speech: speech, notice: notice),
       ListTile(

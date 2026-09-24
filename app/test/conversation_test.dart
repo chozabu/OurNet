@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ournet/ui/app.dart';
+import 'package:ournet/ui/conversation_history.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'features_test.dart' show settled;
 
@@ -79,14 +80,17 @@ void main() {
       ),
     );
     await settled(tester);
-    expect(find.text('Show latest messages'), findsOneWidget);
+    expect(
+      tester.widget<JumpToLatest>(find.byType(JumpToLatest)).pending,
+      isTrue,
+    );
     expect(controller.offset, closeTo(offset, 0.1));
     expect(
       tester.widget<ListView>(history).childrenDelegate.estimatedChildCount,
       count,
     );
     expect(tester.widget<TextField>(composer).controller!.text, 'Still typing');
-    await tester.tap(find.text('Show latest messages'));
+    await tester.tap(find.byTooltip('Show latest messages'));
     await settled(tester);
     expect(controller.offset, 0);
     expect(find.text('Do not jump'), findsWidgets);

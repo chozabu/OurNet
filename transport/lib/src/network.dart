@@ -140,6 +140,11 @@ class PeerNetwork {
   String? error;
   int _activeInbound = 0;
   Future<Json> Function(String, Json)? signal;
+
+  /// Called when a friend's device says its person is typing to this one.
+  /// Only ever sent live; nothing is stored. Builds without it refuse the
+  /// request, which the sender ignores.
+  void Function(String device)? typing;
   static final _alpn = utf8.encode('ournet/2');
 
   void log(String message) {
@@ -540,6 +545,9 @@ class PeerNetwork {
             }
             final blob = node.store.blob(j['hash']);
             reply = {'bytes': blob == null ? null : b64(blob)};
+          case 'typing':
+            typing?.call(peer);
+            reply = {};
           case 'signal':
             if (signal == null) throw StateError('Calling unavailable');
             reply = await signal!(peer, j['payload']);

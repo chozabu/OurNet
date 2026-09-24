@@ -88,7 +88,11 @@ class Notifications {
   Future<void>? _checking;
   bool _dirty = false;
 
-  Notifications(this.node, {this.onAction});
+  /// Edits and deletions, so a notification shows what the author meant.
+  final MessageUpdates updates;
+
+  Notifications(this.node, {this.onAction, MessageUpdates? updates})
+    : updates = updates ?? MessageUpdates(node);
   Future<void>? _initialising;
 
   /// On by default on Android, where the system manages them per channel,
@@ -256,7 +260,7 @@ class Notifications {
           continue;
         }
         if (o.kind == 'message') {
-          chats.add(o.author);
+          if (!chatMuted(node, o.author)) chats.add(o.author);
         } else if (node.subscriptions.contains(o.space)) {
           (forums[o.space] ??= []).add(o);
         }
@@ -287,22 +291,32 @@ class Notifications {
   }
 
   Future<void> _showChat(String peer) async {
-    final unread = node.store
-        .unreadMessages(node.person, peer, limit: 6)
-        .where(node.visible)
-        .toList()
-        .reversed
-        .toList();
+    await updates.catchUp();
+    final unread = <SignedObject>[];
+    final texts = <String>[];
+    for (final o
+        in node.store
+            .unreadMessages(node.person, peer, limit: 6)
+            .where(node.visible)
+            .toList()
+            .reversed) {
+      if (updates.hidden(o)) continue;
+      final payload = await node.content(o);
+      final current = payload == null ? null : updates.current(o, payload);
+      if (payload != null && current == null) continue;
+      unread.add(o);
+      texts.add(_orNew(contentPreview(current)));
+    }
     if (unread.isEmpty) return;
     final count = node.store.conversationUnread(node.person, peer: peer);
     final name = profileName(node, peer) ?? 'A friend';
     final sender = Person(key: peer, name: name);
     final messages = [
       if (previews)
-        for (final o in unread)
+        for (var i = 0; i < unread.length; i++)
           Message(
-            _orNew(contentPreview(await node.content(o))),
-            DateTime.fromMillisecondsSinceEpoch(o.created),
+            texts[i],
+            DateTime.fromMillisecondsSinceEpoch(unread[i].created),
             sender,
           ),
     ];
