@@ -25,6 +25,12 @@ param(
   [switch]$NoCommit
 )
 $ErrorActionPreference = 'Stop'
+# msstore prints its banner to stderr, which 'Stop' turns into a terminating
+# error; native tools report failure through their exit code instead.
+function Invoke-Native([scriptblock]$Command) {
+  $ErrorActionPreference = 'Continue'
+  & $Command
+}
 $taskRoot = Split-Path $PSScriptRoot -Parent
 $taskProductId = '9N6P4X13QG9M'
 $taskIdentityName = 'Chozabu.OurNet'
@@ -72,14 +78,19 @@ $taskSeller = if($env:MSSTORE_SELLER_ID){$env:MSSTORE_SELLER_ID}else{$taskCred.s
 $taskClient = if($env:MSSTORE_CLIENT_ID){$env:MSSTORE_CLIENT_ID}else{$taskCred.clientId}
 $taskSecret = if($env:MSSTORE_CLIENT_SECRET){$env:MSSTORE_CLIENT_SECRET}else{$taskCred.clientSecret}
 if(!$taskTenant -or !$taskSeller -or !$taskClient -or !$taskSecret){throw "Store credentials missing: fill in $taskCredFile or the MSSTORE_* environment variables"}
-& $taskCli reconfigure --tenantId $taskTenant --sellerId $taskSeller --clientId $taskClient --clientSecret $taskSecret | Out-Null
+Invoke-Native { & $taskCli reconfigure --tenantId $taskTenant --sellerId $taskSeller --clientId $taskClient --clientSecret $taskSecret 2>&1 | Out-Null }
 if($LASTEXITCODE -ne 0){throw 'msstore reconfigure failed'}
 
-# The positional argument is the project folder; --inputFile stops msstore
-# packaging it again, so the .msix checked above is what gets uploaded.
-$taskArgs = @('publish', (Join-Path $taskRoot 'app'), '--inputFile', $Msix, '--appId', $taskProductId)
+# The positional argument is the project folder. msstore picks the package
+# from --inputDirectory, so give it a folder holding only the .msix checked
+# above; dist/ holds older builds too.
+$taskUpload = Join-Path $taskRoot 'build/store-upload'
+if(Test-Path -LiteralPath $taskUpload){Remove-Item -LiteralPath $taskUpload -Recurse -Force}
+New-Item -ItemType Directory -Path $taskUpload | Out-Null
+Copy-Item -LiteralPath $Msix -Destination $taskUpload
+$taskArgs = @('publish', (Join-Path $taskRoot 'app'), '--inputDirectory', $taskUpload, '--appId', $taskProductId, '--uploadTimeout', '900')
 if($NoCommit){$taskArgs += '--noCommit'}
-& $taskCli @taskArgs
+Invoke-Native { & $taskCli @taskArgs }
 if($LASTEXITCODE -ne 0){throw 'msstore publish failed'}
 if(!$NoCommit){$taskVersion.ToString() | Set-Content $taskLastFile}
 "Published $Msix version $taskVersion to $taskProductId"
