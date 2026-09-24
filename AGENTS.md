@@ -30,7 +30,9 @@ transfer is in `transport`. Preserve the separation between these packages.
   measurement builds under the everyday application ID. Extend
   `integration_test/photo_scroll_test.dart` for list/image changes.
 - Tester builds go to Google Play internal testing via
-  `tool/release-android.ps1 -Notes "..."`. The upload keystore and Play service
+  `tool/release-android.ps1 -Notes "..."`. `tool/release-all.ps1 -Notes "..."`
+  releases to Play and the Microsoft Store together (checks both stores'
+  credentials before building). The upload keystore and Play service
   account key live in `%USERPROFILE%\.ournet-signing`, never in the repo.
 - Follow `PERFORMANCE.md` for measurement boundaries, profile-mode runs and
   baselines. Do not compare debug timings to profile/release timings or collect
@@ -55,8 +57,16 @@ saved profile with the current build.
   `msstore` CLI). Bump the x.y.z part of `version:` in `app/pubspec.yaml` first:
   the Store needs a higher version for every submission.
 - Store API credentials live in `%USERPROFILE%\.ournet-signing\msstore.json`,
-  never in the repo. The first submission of a product must be done by hand in
-  Partner Center; the CLI only updates after that.
+  never in the repo: Entra app "OurNet Store CLI" (Manager role) in tenant
+  `chozabu.onmicrosoft.com`. Its client secret expires around September 2028;
+  then add a new key on that app's page in Partner Center and replace it.
+- The first submission of a product must be done by hand in Partner Center; the
+  CLI only updates after that. The CLI cannot add a package to a submission
+  started on the website, and the Store takes one submission at a time: wait
+  for a website submission to publish (or delete it) before running the script.
+- OurNet is available by direct link only, not in Store search (Submission 2,
+  September 2026). Changing that takes a new submission; the overview page's
+  availability toggle blocks installs entirely instead.
 - Listing copy, age-rating answers and certification notes are in
   `store/microsoft-store.md`; `store/submitted-version.txt` is the last version
   the Store has.
