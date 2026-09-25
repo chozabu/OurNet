@@ -6,8 +6,9 @@ Future<void> befriend(Node a, Node b) async {
   await b.addContact(a.identity.certificate);
 }
 
-/// Everything the pairing screen does once a device is approved.
-Future<void> enrolmentHandover(Node owner) async {
+/// Everything the pairing screen does once [device] is approved.
+Future<void> enrolmentHandover(Node owner, String device) async {
+  await owner.shareKeys(history: true);
   await Drive(owner).shareHistory();
   await Everyday(owner).shareHistory();
   await Everyday(owner).shareRooms();
@@ -21,7 +22,7 @@ Future<Node> enrol(Node owner, {String label = 'Phone'}) async {
   );
   await owner.addContact(device.identity.certificate);
   await device.addContact(owner.identity.certificate);
-  await enrolmentHandover(owner);
+  await enrolmentHandover(owner, device.identity.device);
   await syncPair(owner, device, rounds: 128);
   return device;
 }
@@ -114,7 +115,7 @@ void main() {
     expect(onPhone.text, (await Notes(laptop).list()).single.text);
   });
 
-  test('a group a collaborator owns is re-issued by its owner', () async {
+  test('a group a collaborator owns is readable on a new device', () async {
     final owner = Node(await LocalIdentity.create(), Store());
     final member = Node(await LocalIdentity.create(), Store());
     await befriend(owner, member);
@@ -123,21 +124,35 @@ void main() {
     await syncPair(owner, member, rounds: 64);
     expect(await Everyday(member).rooms(), hasLength(1));
 
-    // The member's own new device cannot read a record only its owner signs.
+    // The member's devices grant their own new one the keys they hold, so
+    // it need not wait for the owner to re-issue.
     final memberPhone = await enrol(member);
-    // The owner learns the new device before it can encrypt anything to it.
-    await syncPair(owner, member, rounds: 64);
-    expect(await Everyday(memberPhone).rooms(), isEmpty);
-
-    // The owner re-issues, and the member's devices all learn it.
-    await Everyday(owner).shareRooms();
-    await syncPair(owner, member, rounds: 64);
-    await syncPair(member, memberPhone, rounds: 64);
     final seen = await Everyday(memberPhone).rooms();
     expect(seen, hasLength(1));
     expect(
       (await Everyday(memberPhone).items(seen.single)).map((i) => i.data['text']),
       ['first'],
+    );
+
+    // Once the owner has learned the new device, it can write there too.
+    await syncPair(owner, member, rounds: 64);
+    await Everyday(memberPhone)
+        .write({'type': 'note', 'text': 'from the phone'}, room: seen.single);
+    await syncPair(member, memberPhone, rounds: 64);
+    await syncPair(owner, member, rounds: 64);
+    expect(
+      (await Everyday(owner).items(room)).map((i) => i.data['text']),
+      containsAll(['first', 'from the phone']),
+    );
+
+    // A re-issue by the owner still works alongside the grants.
+    await Everyday(owner).shareRooms();
+    await syncPair(owner, member, rounds: 64);
+    await syncPair(member, memberPhone, rounds: 64);
+    expect(await Everyday(memberPhone).rooms(), hasLength(1));
+    expect(
+      (await Everyday(memberPhone).items(seen.single)).map((i) => i.data['text']),
+      containsAll(['first', 'from the phone']),
     );
   });
 
@@ -159,5 +174,127 @@ void main() {
     await phoneNotes.refresh();
     expect(phone.subscriptions, isNot(contains('forum2:a:one')));
     expect(phone.subscriptions, contains('forum2:b:two'));
+  });
+
+  test('a new device reads the conversations from before it', () async {
+    final laptop = Node(await LocalIdentity.create(), Store());
+    final friend = Node(await LocalIdentity.create(), Store());
+    await befriend(laptop, friend);
+    final theirs = await friend.publish('message', {'text': 'hi from Bob'},
+        space: '_messages', audience: [laptop.person]);
+    await syncPair(laptop, friend);
+    final mine = await laptop.publish('message', {'text': 'hi back'},
+        space: '_messages', audience: [friend.person]);
+    await syncPair(laptop, friend);
+
+    final phone = await enrol(laptop);
+    Future<String?> text(SignedObject o) async =>
+        (await phone.content(phone.store.get(o.id)!))?['text'] as String?;
+    expect(await text(theirs), 'hi from Bob');
+    expect(await text(mine), 'hi back');
+    // The originals are unchanged: same objects, same authors.
+    expect(phone.store.get(theirs.id)!.author, friend.person);
+  });
+
+  test('a message becomes readable when its grant arrives later', () async {
+    final laptop = Node(await LocalIdentity.create(), Store());
+    final friend = Node(await LocalIdentity.create(), Store());
+    await befriend(laptop, friend);
+    final message = await friend.publish('message', {'text': 'early'},
+        space: '_messages', audience: [laptop.person]);
+    await syncPair(laptop, friend);
+    final phone = Node(
+      await LocalIdentity.create(root: laptop.identity.root, label: 'Phone'),
+      Store(),
+    );
+    await laptop.addContact(phone.identity.certificate);
+    await phone.addContact(laptop.identity.certificate);
+    await syncPair(laptop, phone, rounds: 64);
+    final held = phone.store.get(message.id)!;
+    // Asked before any grant: the answer must not stick.
+    expect(await phone.content(held), isNull);
+    // The automatic pass covers only what arrives from now on; earlier
+    // history is handed over when its owner asks.
+    expect(await laptop.shareKeys(), 0);
+    await syncPair(laptop, phone, rounds: 64);
+    expect(await phone.content(held), isNull);
+
+    expect(await laptop.shareKeys(history: true), 1);
+    await syncPair(laptop, phone, rounds: 64);
+    expect((await phone.content(held))?['text'], 'early');
+  });
+
+  test('keys are granted once, and again only for what is new', () async {
+    final laptop = Node(await LocalIdentity.create(), Store());
+    final friend = Node(await LocalIdentity.create(), Store());
+    await befriend(laptop, friend);
+    await friend.publish('message', {'text': 'one'},
+        space: '_messages', audience: [laptop.person]);
+    await syncPair(laptop, friend);
+    final phone = await enrol(laptop);
+    expect(await laptop.shareKeys(), 0, reason: 'nothing new since pairing');
+
+    // A friend who has not heard of the phone yet writes to the laptop
+    // alone; the laptop's next pass grants that message too.
+    final late = await friend.publish('message', {'text': 'two'},
+        space: '_messages', audience: [laptop.person]);
+    expect(
+      wrappedFor(late.data['payload'], phone.identity.device),
+      isFalse,
+    );
+    await syncPair(laptop, friend);
+    expect(await laptop.shareKeys(), 1);
+    expect(await laptop.shareKeys(), 0);
+    await syncPair(laptop, phone, rounds: 64);
+    expect((await phone.content(phone.store.get(late.id)!))?['text'], 'two');
+  });
+
+  test('another person cannot hand this device keys', () async {
+    final laptop = Node(await LocalIdentity.create(), Store());
+    final friend = Node(await LocalIdentity.create(), Store());
+    await befriend(laptop, friend);
+    final phone = await enrol(laptop);
+    final message = await friend.publish('message', {'text': 'secret'},
+        space: '_messages', audience: [laptop.person]);
+    await syncPair(laptop, friend);
+    // The real key, which the author holds: a grant is still only believed
+    // from this person, addressed to them alone.
+    final key = await unwrapFor(
+      message.data['payload'],
+      friend.identity.agreementKey,
+      friend.identity.device,
+    );
+    await friend.publish('keys', {
+      'keys': [
+        {'object': message.id, 'key': b64(key)},
+      ],
+    }, space: '_keys', audience: [laptop.person]);
+    await syncPair(laptop, friend);
+    await syncPair(laptop, phone, rounds: 64);
+    expect(await phone.content(phone.store.get(message.id)!), isNull);
+  });
+
+  test('forum posts a new device does not follow do not hold back history',
+      () async {
+    final laptop = Node(await LocalIdentity.create(), Store());
+    final friend = Node(await LocalIdentity.create(), Store());
+    await befriend(laptop, friend);
+    await friend.publish('profile', {'name': 'Bob'}, space: '_identity');
+    await syncPair(laptop, friend);
+    laptop.subscribe('forum2:x:old', true);
+    friend.subscribe('forum2:x:old', true);
+    for (var i = 0; i < 40; i++) {
+      await friend.publish('post', {'text': 'post $i'}, space: 'forum2:x:old');
+    }
+    await syncPair(laptop, friend, rounds: 64);
+    // Kept, but no longer followed, so a new device never takes them.
+    laptop.subscribe('forum2:x:old', false);
+
+    final phone = await enrol(laptop);
+    final names = [
+      for (final o in phone.store.objects(kind: 'profile'))
+        if (o.author == friend.person) o.data['payload']['name'],
+    ];
+    expect(names, ['Bob']);
   });
 }

@@ -80,6 +80,14 @@ extension _NetworkPages on _OurNetAppState {
                 onPressed: () => act(() => syncNow(c.device)),
                 icon: const Icon(Icons.sync),
               ),
+              if (c.person == node.person &&
+                  c.device != node.identity.device &&
+                  !node.revoked.contains(c.device))
+                IconButton(
+                  tooltip: 'Share your history with this device',
+                  onPressed: () => act(() => shareHistoryWith(c)),
+                  icon: const Icon(Icons.history),
+                ),
               if (c.person == node.person && node.identity.holdsRoot)
                 IconButton(
                   tooltip: 'Revoke this device',
@@ -106,6 +114,39 @@ extension _NetworkPages on _OurNetAppState {
       ),
     ],
   );
+
+  /// Lets [device], one of this person's own, read the chats, groups and
+  /// notes that were written before it was added.
+  Future<void> shareHistoryWith(DeviceCertificate device) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Share your history with ${device.label}?'),
+        content: const Text(
+          'Your devices will be able to read your earlier chats, groups and notes, including ones from before they were added. Only do this for a device you trust.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Share history'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    notice('Preparing your history for ${device.label}…');
+    final count = await node.shareKeys(history: true);
+    if (count > 0 && network.running) unawaited(network.sync(device.device));
+    notice(
+      count == 0
+          ? '${device.label} can already read everything this device can'
+          : 'Shared $count items with ${device.label}. They appear there after it syncs.',
+    );
+  }
 
   /// Syncs one device and reports the outcome, which [PeerNetwork.sync]
   /// records rather than throws.

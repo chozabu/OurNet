@@ -81,6 +81,7 @@ class Node {
     }
     _identity = next;
   }
+
   void notify() {
     if (!changes.isClosed) changes.add(null);
   }
@@ -224,9 +225,24 @@ class Node {
       return cached.$1;
     }
     Json? payload;
+    final encrypted = object.data['payload'];
+    if (encrypted is! Json) return null;
+    List<int>? granted;
+    if (!wrappedFor(encrypted, identity.device)) {
+      // Written before this device existed. Another of this person's devices
+      // may since have granted its key; until then nothing is cached, so the
+      // object becomes readable as soon as a grant arrives.
+      granted = await _grantedKey(id);
+      if (granted == null) return null;
+    }
     try {
       final plain =
-          frozen(await decryptFor(object.data['payload'], identity)) as Json;
+          frozen(
+                granted == null
+                    ? await decryptFor(encrypted, identity)
+                    : await decryptWith(encrypted, granted),
+              )
+              as Json;
       payload = validContent(object.kind, plain) ? plain : null;
     } catch (_) {
       payload = null;
@@ -243,6 +259,174 @@ class Node {
       _contentBytes -= _contents.remove(oldest)!.$2;
     }
     return payload;
+  }
+
+  /// Content keys this person's other devices granted this one, by object.
+  final _grantedKeys = <String, List<int>>{};
+
+  /// For each object with a grant this device can read, the devices that
+  /// grant was also encrypted to: those need no further grant for it.
+  final _grantedTo = <String, Set<String>>{};
+  int _grantCursor = 0;
+  Future<void>? _loadingGrants;
+
+  Future<List<int>?> _grantedKey(String id) async {
+    if (_grantedKeys[id] case final key?) return key;
+    await _readGrants();
+    return _grantedKeys[id];
+  }
+
+  Future<void> _readGrants() => _loadingGrants ??= _loadGrants().whenComplete(
+    () => _loadingGrants = null,
+  );
+
+  /// Reads the grants stored since the last look, in insertion order, so
+  /// each grant is decrypted once however often unreadable rows are drawn.
+  Future<void> _loadGrants() async {
+    while (true) {
+      final page = store.insertedOfKind(_grantCursor, 'keys');
+      if (page.isEmpty) return;
+      for (final (rowid, grant) in page) {
+        _grantCursor = rowid;
+        // Only this person's own devices may hand this device a key, and
+        // only in a record addressed to this person alone.
+        if (grant.author != person ||
+            grant.space != '_keys' ||
+            grant.audience.length != 1 ||
+            grant.audience.single != person ||
+            !visible(grant)) {
+          continue;
+        }
+        try {
+          final encrypted = grant.data['payload'] as Json;
+          // A grant written before this device existed is unreadable here
+          // too; a device that can read its objects grants them afresh.
+          if (!wrappedFor(encrypted, identity.device)) continue;
+          final p = await decryptFor(encrypted, identity);
+          if (!validContent('keys', p)) continue;
+          final to = {
+            for (final w in (encrypted['wraps'] as List).cast<Json>())
+              w['device'] as String,
+          };
+          for (final k in (p['keys'] as List).cast<Json>()) {
+            final id = k['object'] as String;
+            _grantedKeys[id] = unb64(k['key'] as String);
+            final known = _grantedTo[id];
+            _grantedTo[id] = known == null ? to : {...known, ...to};
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
+  /// Grants this person's other devices the content keys of the private
+  /// objects this device can read and one of them cannot.
+  ///
+  /// A private object is encrypted to the devices its author knew of when it
+  /// was written, so a device enrolled later reads none of what came before
+  /// it, and a friend who has not yet heard of it keeps writing to the others
+  /// alone. Conversations cannot be re-issued as notes and groups are, since a
+  /// message is its author's signed words. A grant leaves every object as it
+  /// is and hands over only the key that opens it, in records addressed to
+  /// this person alone, so authors, times and order are unchanged.
+  ///
+  /// A pass looks only at what was stored since the previous one: chiefly
+  /// messages from friends who have not yet heard of a newer device. With
+  /// [history] it walks everything this device holds, for a device that
+  /// should read what came before it; whether it should is its owner's
+  /// choice, so that is never automatic. Either way a key already granted to
+  /// every device is not granted again. [progress] is told how many keys have
+  /// been granted so far.
+  Future<int> shareKeys({bool history = false, void Function(int)? progress}) {
+    final run = _keyWork.then((_) => _shareKeys(history, progress));
+    _keyWork = run.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return run;
+  }
+
+  Future<void> _keyWork = Future.value();
+
+  Future<int> _shareKeys(bool history, void Function(int)? progress) async {
+    final self = identity.device;
+    final own = [
+      for (final c in contacts.values)
+        if (c.person == person &&
+            c.device != self &&
+            !revoked.contains(c.device))
+          c.device,
+    ];
+    // Where the previous pass stopped. A profile's first pass starts at the
+    // present: what came before is history, handed over only on request.
+    final saved =
+        store.setting('keyGrantCursor') as int? ?? store.insertionCursor;
+    if (own.isEmpty) {
+      store.set('keyGrantCursor', store.insertionCursor);
+      return 0;
+    }
+    // The last object examined. An incremental pass saves it only where
+    // everything up to it is granted or needs nothing, so an interrupted
+    // pass resumes there.
+    var last = history ? 0 : saved;
+    void save() {
+      if (last > (store.setting('keyGrantCursor') as int? ?? 0)) {
+        store.set('keyGrantCursor', last);
+      }
+    }
+
+    await _readGrants();
+    final slice = TimeSlice();
+    final agreement = await identity.agreementKey.extract();
+    var granted = 0;
+    var pending = <(String, Json)>[];
+    Future<void> flush() async {
+      if (pending.isEmpty) return;
+      final batch = pending;
+      pending = [];
+      final keys = await _grantableKeys(
+        batch,
+        agreement,
+        self,
+        background: store.path != null,
+      );
+      if (keys.isNotEmpty) {
+        await publish(
+          'keys',
+          {'keys': keys},
+          space: '_keys',
+          audience: [person],
+        );
+        granted += keys.length;
+        progress?.call(granted);
+      }
+      if (!history || last >= saved) save();
+    }
+
+    while (true) {
+      final page = store.insertedSince(last);
+      if (page.isEmpty) break;
+      for (final (rowid, object) in page) {
+        await slice.pause();
+        last = rowid;
+        final encrypted = object.data['payload'];
+        if (object.isPublic ||
+            object.kind == 'keys' ||
+            encrypted is! Json ||
+            !visible(object) ||
+            !wrappedFor(encrypted, self)) {
+          continue;
+        }
+        final covered = _grantedTo[object.id] ?? const <String>{};
+        if (own.every((d) => covered.contains(d) || wrappedFor(encrypted, d))) {
+          continue;
+        }
+        pending.add((object.id, encrypted));
+        if (pending.length >= maxGrantKeys) await flush();
+      }
+      if (pending.isEmpty && (!history || last >= saved)) save();
+    }
+    await flush();
+    save();
+    await _readGrants();
+    return granted;
   }
 
   bool visible(SignedObject o) =>
@@ -499,10 +683,13 @@ class Node {
       return false;
     if (!o.isPublic)
       return o.audience.contains(peer.person) || o.via.contains(peer.person);
+    // As [receive] accepts them. An own device offered posts from a forum it
+    // does not follow drops them, and every later page offered the same ones
+    // again, so nothing older than them ever reached it.
     return o.kind == 'revoke' ||
         o.kind == 'profile' ||
         wanted.contains(o.space) ||
-        peer.person == person;
+        (peer.person == person && o.author == person);
   }
 
   Future<Evidence> makeEvidence(Json data) async => Evidence(
@@ -941,6 +1128,35 @@ Future<List<(bool, List<bool>)>> _verifySignatures(List<dynamic> items) =>
           ),
       ];
     }, debugName: 'ournet-verify');
+
+/// The content keys of [batch] this device can open, as grant entries.
+/// Opening a wrap is a key agreement per object, so disk profiles do it in a
+/// short-lived isolate that captures nothing but the batch and the key.
+Future<List<Json>> _grantableKeys(
+  List<(String, Json)> batch,
+  SimpleKeyPairData agreement,
+  String device, {
+  required bool background,
+}) {
+  Future<List<Json>> unwrap() async => [
+    for (final (id, encrypted) in batch)
+      if (await _tryUnwrap(encrypted, agreement, device) case final key?)
+        {'object': id, 'key': b64(key)},
+  ];
+  return background ? Isolate.run(unwrap, debugName: 'ournet-grant') : unwrap();
+}
+
+Future<List<int>?> _tryUnwrap(
+  Json encrypted,
+  SimpleKeyPairData agreement,
+  String device,
+) async {
+  try {
+    return await unwrapFor(encrypted, agreement, device);
+  } catch (_) {
+    return null;
+  }
+}
 
 /// Deterministic integration harness. No sockets, UI or native iroh needed.
 Future<int> syncPair(Node a, Node b, {int rounds = 8}) async {

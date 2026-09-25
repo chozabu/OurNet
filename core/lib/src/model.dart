@@ -31,6 +31,10 @@ class TimeSlice {
   }
 }
 
+/// Content keys one `keys` record carries. An entry is about 140 bytes, so a
+/// full record stays well inside an object's size limit.
+const maxGrantKeys = 400;
+
 bool validContent(String kind, Json p) {
   if (p['text'] != null &&
       (p['text'] is! String || (p['text'] as String).length > 65536))
@@ -68,6 +72,19 @@ bool validContent(String kind, Json p) {
           p['description'] is String &&
           (p['description'] as String).length <= 4000,
     'forum_hide' => p['object'] is String,
+    // Content keys for objects written before one of this person's devices
+    // existed, re-wrapped for their devices: see [Node.shareKeys].
+    'keys' =>
+      p['keys'] is List &&
+          (p['keys'] as List).length <= maxGrantKeys &&
+          (p['keys'] as List).every(
+            (k) =>
+                k is Map &&
+                k['object'] is String &&
+                (k['object'] as String).length <= 128 &&
+                k['key'] is String &&
+                (k['key'] as String).length <= 64,
+          ),
     'room_leave' => p['epoch'] is String,
     'delivery' => p['object'] is String,
     'room' =>
@@ -729,12 +746,29 @@ Future<Json> encryptFor(Json plain, List<DeviceCertificate> recipients) async {
   return {'box': b64(box.concatenation()), 'wraps': wraps};
 }
 
-Future<Json> decryptFor(Json encrypted, LocalIdentity identity) async {
+Future<Json> decryptFor(Json encrypted, LocalIdentity identity) async =>
+    decryptWith(
+      encrypted,
+      await unwrapFor(encrypted, identity.agreementKey, identity.device),
+    );
+
+/// Whether [encrypted] carries a content key wrapped for [device].
+bool wrappedFor(Json encrypted, String device) =>
+    encrypted['wraps'] is List &&
+    (encrypted['wraps'] as List).any((w) => w is Map && w['device'] == device);
+
+/// The content key [encrypted] wraps for [device], opened with its
+/// agreement key. Throws when there is none for [device].
+Future<List<int>> unwrapFor(
+  Json encrypted,
+  SimpleKeyPair agreementKey,
+  String device,
+) async {
   final wrap = (encrypted['wraps'] as List).cast<Json>().firstWhere(
-    (w) => w['device'] == identity.device,
+    (w) => w['device'] == device,
   );
   final shared = await X25519().sharedSecretKey(
-    keyPair: identity.agreementKey,
+    keyPair: agreementKey,
     remotePublicKey: SimplePublicKey(
       unb64(wrap['ephemeral']),
       type: KeyPairType.x25519,
@@ -743,29 +777,31 @@ Future<Json> decryptFor(Json encrypted, LocalIdentity identity) async {
   final key = await Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
     secretKey: shared,
     nonce: const [],
-    info: utf8.encode('ournet/wrap/2/${identity.device}'),
+    info: utf8.encode('ournet/wrap/2/$device'),
   );
-  final cipher = Chacha20.poly1305Aead();
-  final raw = await cipher.decrypt(
+  return Chacha20.poly1305Aead().decrypt(
     SecretBox.fromConcatenation(
       unb64(wrap['box']),
       nonceLength: 12,
       macLength: 16,
     ),
     secretKey: key,
-    aad: utf8.encode(identity.device),
+    aad: utf8.encode(device),
   );
-  return jsonDecode(
-        utf8.decode(
-          await cipher.decrypt(
-            SecretBox.fromConcatenation(
-              unb64(encrypted['box']),
-              nonceLength: 12,
-              macLength: 16,
-            ),
-            secretKey: SecretKey(raw),
-          ),
-        ),
-      )
-      as Json;
 }
+
+/// Opens [encrypted] with its content key, however that key was obtained.
+Future<Json> decryptWith(Json encrypted, List<int> contentKey) async =>
+    jsonDecode(
+          utf8.decode(
+            await Chacha20.poly1305Aead().decrypt(
+              SecretBox.fromConcatenation(
+                unb64(encrypted['box']),
+                nonceLength: 12,
+                macLength: 16,
+              ),
+              secretKey: SecretKey(contentKey),
+            ),
+          ),
+        )
+        as Json;

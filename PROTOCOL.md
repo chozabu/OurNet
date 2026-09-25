@@ -29,7 +29,7 @@ A person's own devices receive all admitted contacts; friends receive only
 that person's other devices, and a friend's certificate for any other person
 is ignored. Linked devices therefore list, send and decrypt the same
 conversations. Messages encrypted before a device was learned stay unreadable
-there.
+there until one of the person's other devices grants their keys (below).
 
 ## Independent objects
 
@@ -39,22 +39,36 @@ device certificate, kind, space, creation time, optional expiry, audience, optio
 relay audience, payload and signature. Their IDs hash the signed representation.
 There is no dependency on an author's unrelated earlier private objects.
 
-Public objects travel to admitted friends subscribed to their space. Which
+Public objects travel to admitted friends subscribed to their space, and to a
+person's own devices when subscribed or when that person wrote them. Which
 spaces a person follows is itself personal state replicated between their own
 devices, one register per space, so two devices do not disagree about which
 forums they keep and pass on. Private
 objects travel only to author devices, selected recipient people, or explicitly
 named relays. The author encrypts a payload key for each known authorised device
 using X25519, HKDF and ChaCha20-Poly1305. A device enrolled later holds no key
-for anything written before it, so enrolment re-issues what its owner can
-re-issue: drive revisions, inbox entries, the groups and notes this person
-owns, and personal note state. Each note register is copied as an owner
-checkpoint that replaces only the version it copies, so concurrent branches
-survive, and the note's edit time is restored afterwards. Rooms keep their
-epoch: membership has not changed, and bumping it would strand what other
-members wrote concurrently. Private messages, and groups and notes someone
-else owns, are not re-issued — a room record counts only from its owner, so
-those wait for that owner's next re-issue. Static recipient
+for anything written before it, and a friend who has not yet learned of a
+device keeps encrypting to that person's other devices alone.
+
+A device that can read such an object grants its payload key to its owner's
+other devices: a private `keys` object in space `_keys`, audience only its own
+person, whose payload lists up to 400 `{object, key}` pairs. The object itself
+is untouched, so its author, signature and time stay as they were. A grant is
+believed only from the device's own person and addressed to that person
+alone. Each device grants, in the background, keys for objects stored since
+its last pass that another admitted device of its own cannot open. Earlier
+history is granted only on request: when pairing with history shared, or
+from the device list. A grant is encrypted to the owner's devices admitted
+when it is written; a device added later is covered by a later grant. Older
+builds store and relay `keys` objects and otherwise ignore them.
+
+Enrolment also re-issues what its owner can re-issue, for new devices on
+builds without grants: drive revisions, inbox entries, the groups and notes
+this person owns, and personal note state. Each note register is copied as an
+owner checkpoint that replaces only the version it copies, so concurrent
+branches survive, and the note's edit time is restored afterwards. Rooms keep
+their epoch: membership has not changed, and bumping it would strand what
+other members wrote concurrently. Static recipient
 key compromise can expose recorded envelopes: this is not a ratcheting protocol.
 
 Inventory filters object identifiers using the same recipient policy; it does

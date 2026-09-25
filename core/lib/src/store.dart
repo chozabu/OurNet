@@ -542,6 +542,31 @@ class Store {
     ))
       (row['rowid'] as int, _parse(row['id'] as String, row['wire'] as String)),
   ];
+
+  /// Every object stored after [cursor], in insertion order.
+  List<(int, SignedObject)> insertedSince(int cursor, {int limit = 128}) => [
+    for (final row in _select(
+      'SELECT rowid, id, wire FROM objects WHERE rowid>? ORDER BY rowid LIMIT ?',
+      [cursor, limit.clamp(1, 512)],
+    ))
+      (row['rowid'] as int, _parse(row['id'] as String, row['wire'] as String)),
+  ];
+
+  /// Objects of one [kind] stored after [cursor], in insertion order. The
+  /// kind index carries the rowid, so polling a rare kind costs the same
+  /// however much else the profile holds.
+  List<(int, SignedObject)> insertedOfKind(
+    int cursor,
+    String kind, {
+    int limit = 128,
+  }) => [
+    for (final row in _select(
+      'SELECT rowid, id, wire FROM objects INDEXED BY objects_kind '
+      'WHERE kind=? AND rowid>? ORDER BY rowid LIMIT ?',
+      [kind, cursor, limit.clamp(1, 128)],
+    ))
+      (row['rowid'] as int, _parse(row['id'] as String, row['wire'] as String)),
+  ];
   List<SignedObject> unread(String kind, String person) => [
     for (final row in _select(
       "SELECT o.id, o.wire FROM objects o LEFT JOIN settings s ON s.key=? || o.id WHERE o.kind=? AND o.author!=? AND (s.value IS NULL OR s.value!='true')",

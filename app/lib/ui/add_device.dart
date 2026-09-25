@@ -125,6 +125,19 @@ class _AddDevicePageState extends State<AddDevicePage> {
           if (!expired && shareHistory) {
             try {
               final node = widget.network.node;
+              // Conversations, and groups and notes someone else owns, can
+              // only be opened with keys this device hands over.
+              await node.shareKeys(
+                history: true,
+                progress: (count) {
+                  if (mounted) {
+                    setState(
+                      () => status =
+                          'Device approved. Preparing your history for it ($count items)…',
+                    );
+                  }
+                },
+              );
               await Drive(node).shareHistory();
               await Everyday(node).shareHistory();
               // Re-encrypted for the device just added: without this its
@@ -136,14 +149,14 @@ class _AddDevicePageState extends State<AddDevicePage> {
               if (mounted) {
                 setState(
                   () => status =
-                      'Device added. Notes, groups you own, files and inbox history are ready to sync. Old private chat history, and groups and notes someone else owns, are not transferred.',
+                      'Device added. Your chats, notes, groups, files and inbox history are ready to sync.',
                 );
               }
             } catch (e) {
               if (mounted) {
                 setState(
                   () => status =
-                      'Device added. Retry sharing drive history from Files: $e',
+                      'Device added, but not all history could be prepared for it. Try Share history on it in Network: $e',
                 );
               }
             }
@@ -196,9 +209,9 @@ class _AddDevicePageState extends State<AddDevicePage> {
               ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('Share inbox and drive history'),
+                title: const Text('Share history'),
                 subtitle: const Text(
-                  'Your new device can access your inbox and previous file revisions. Old private chats are not transferred.',
+                  'Your new device can read your earlier chats, notes, groups, inbox and previous file revisions.',
                 ),
                 value: shareHistory,
                 onChanged: (value) => setState(() => shareHistory = value),

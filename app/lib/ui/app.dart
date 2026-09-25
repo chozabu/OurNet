@@ -157,6 +157,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   bool? startsWithWindows;
   StreamSubscription<void>? _changes;
   late final CoalescedTask _dataRefresh;
+
+  /// Hands this person's other devices the keys to what they cannot read:
+  /// history from before a device was added, and messages from friends who
+  /// have not yet heard of it. Each pass covers only what arrived since.
+  CoalescedTask? _keyGrants;
   late final CoalescedTask _deliveryRefresh;
   bool addingAttachment = false;
   final imports = ValueNotifier<Map<Object, ({int completed, int total})>>({});
@@ -363,9 +368,17 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       refresh();
       _deliveryRefresh.schedule();
     }, (e) => notice('$e'));
-    _changes = node.changes.stream.listen((_) => _dataRefresh.schedule());
+    _changes = node.changes.stream.listen((_) {
+      _dataRefresh.schedule();
+      _keyGrants?.schedule();
+    });
     _deliveryRefresh.schedule();
     if (widget.enablePlatform) {
+      _keyGrants = CoalescedTask(
+        () => node.shareKeys(),
+        (e) => network.log('Could not share keys with your devices: $e'),
+        delay: const Duration(seconds: 2),
+      )..schedule();
       if (node.store.setting('autoConnect') != false) {
         unawaited(
           network.start().catchError(
@@ -786,6 +799,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _pausedStop?.cancel();
     _changes?.cancel();
     _dataRefresh.close();
+    _keyGrants?.close();
     _readTimer?.cancel();
     typing
       ..removeListener(redraw)

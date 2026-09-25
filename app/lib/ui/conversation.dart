@@ -514,7 +514,8 @@ extension _ConversationPages on _OurNetAppState {
   }
 
   /// A message this device holds but cannot decrypt: it was encrypted to the
-  /// devices this person had when it was sent, and this one was added later.
+  /// devices this person had when it was sent, and this one was added later
+  /// without being handed its key (see [Node.shareKeys]).
   Widget unreadableBubble(
     BuildContext context,
     SignedObject o, {
@@ -523,7 +524,8 @@ extension _ConversationPages on _OurNetAppState {
     context,
     mine: mine,
     icon: Icons.lock_outline,
-    text: 'Sent before this device was added',
+    text:
+        'Sent before this device was added. To read it, choose Share history for this device in Network on one of your other devices.',
   );
 
   Widget noticeBubble(
