@@ -525,7 +525,7 @@ extension _ConversationPages on _OurNetAppState {
     mine: mine,
     icon: Icons.lock_outline,
     text:
-        'Sent before this device was added. To read it, choose Share history for this device in Network on one of your other devices.',
+        'Sent before this device was added. To read it, on one of your other devices go to Settings › Profile and devices and tap the history button next to this one.',
   );
 
   Widget noticeBubble(

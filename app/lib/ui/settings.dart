@@ -68,16 +68,14 @@ extension _SettingsPages on _OurNetAppState {
         subtitle: const Text('This device'),
       ),
       ...node.contacts.values
-          .where((c) => c.person == node.person)
+          .where(
+            (c) => c.person == node.person && !node.revoked.contains(c.device),
+          )
           .map(
             (c) => ListTile(
-              leading: Icon(
-                node.revoked.contains(c.device) ? Icons.block : Icons.devices,
-              ),
+              leading: const Icon(Icons.devices),
               title: Text(c.label),
-              subtitle: node.revoked.contains(c.device)
-                  ? const Text('Access removed')
-                  : DeviceHealthText(network: network, device: c.device),
+              subtitle: DeviceHealthText(network: network, device: c.device),
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -103,8 +101,12 @@ extension _SettingsPages on _OurNetAppState {
                             }),
                     ),
                   ],
-                  if (node.identity.holdsRoot &&
-                      !node.revoked.contains(c.device))
+                  IconButton(
+                    tooltip: 'Share your history with this device',
+                    icon: const Icon(Icons.history),
+                    onPressed: () => act(() => shareHistoryWith(c)),
+                  ),
+                  if (node.identity.holdsRoot)
                     IconButton(
                       tooltip: 'Remove device access',
                       icon: const Icon(Icons.phonelink_erase),
@@ -139,6 +141,25 @@ extension _SettingsPages on _OurNetAppState {
               ),
             ),
           ),
+      if (node.contacts.values
+              .where(
+                (c) =>
+                    c.person == node.person && node.revoked.contains(c.device),
+              )
+              .toList()
+          case final removed when removed.isNotEmpty)
+        ExpansionTile(
+          leading: const Icon(Icons.block),
+          title: Text('Removed devices (${removed.length})'),
+          children: [
+            for (final c in removed)
+              ListTile(
+                leading: const Icon(Icons.block),
+                title: Text(c.label),
+                subtitle: const Text('Access removed'),
+              ),
+          ],
+        ),
     ],
   );
   Widget settings(BuildContext context) => ListView(

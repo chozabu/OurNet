@@ -156,7 +156,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
               if (mounted) {
                 setState(
                   () => status =
-                      'Device added, but not all history could be prepared for it. Try Share history on it in Network: $e',
+                      'Device added, but not all history could be prepared for it. Try again with the history button next to it in Settings › Profile and devices: $e',
                 );
               }
             }
