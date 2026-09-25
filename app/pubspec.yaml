@@ -1,7 +1,7 @@
 name: ournet
 description: Friend-to-friend sharing with persistent identities and signed provenance.
 publish_to: none
-version: 0.2.2+4
+version: 0.2.3+5
 
 environment:
   sdk: ^3.12.2
