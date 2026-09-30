@@ -1,0 +1,83 @@
+# Protocol and storage changelog
+
+What each release added to what OurNet writes, and what it still reads. Store
+rollouts are staged, so friends run mixed versions for days: every change is
+additive, and anything older builds cannot read is **read in one release and
+written in a later one** (see "Rollout switches").
+
+Versions are app versions (`app/pubspec.yaml`).
+
+## 0.2.4
+
+### Wire formats
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `v: 2` | signed object `data`, beside `domain` | Object format. Absent means the format before it. A build refuses an object whose `v` is neither absent nor 2. | Ignore it; the signature covers it. |
+| `caps: [...]` | `pull` request and reply, `push` request | What the sender can do: `cursor_paging`, `blob_inline`. A feature is used only if the peer lists it. Unknown names are ignored. | Ignore it. |
+| `reg: 1` | `note_op` payload | Register format. | Ignore it. |
+| `driveFormat: 1` | `drive` payload | Drive revision format. | Ignore it. |
+| `chunkBytes` | file manifests (`message`, `file`, `drive`, `inbox`, `room_item`, note `file:*:meta`) | Size of each plaintext chunk, currently 131072. Any power of two from 1 KiB to 1 MiB is accepted on read; anything else makes the payload invalid. | Ignore it. |
+| `kem: 'x25519'` | each entry of `wraps` in an encrypted payload | How the content key was agreed. A wrap naming another scheme is refused. Room for a hybrid post-quantum scheme. | Ignore it. |
+| `{type: 'pairing', v: 1, ...}` | Add device invitation (was `{pairing: 1, ...}`) | The invitation names its type and version. | **Reject it.** New builds still read the old form. |
+| `{type: 'friend', v: 1, ...}` | Friend invitation (was `{friend: 1, ...}`) | As above. | **Reject it.** New builds still read the old form. |
+
+`expires == 0` still means "never expires" on the wire. `SignedObject.hasExpiry`
+names it in code; nothing changed on the wire.
+
+### Confirmation code
+
+Pairing and friend codes are 12 hex characters (48 bits) shown as
+`ABCD-EFGH-IJKL`, up from 8 (32 bits). The first eight characters are the
+earlier code, so a new and an older build still show matching prefixes.
+
+### Cryptography
+
+- New recovery-phrase seals use Argon2id at 128 MiB and 3 passes (was 64 MiB).
+  Existing seals keep the parameters recorded in them; opening accepts up to
+  256 MiB and 10 passes as before.
+- Wrap key derivation gains a salt, `utf8('ournet/wrap/2')`, in HKDF. Readers
+  try the salted derivation first and fall back to the unsalted one, so wraps
+  from every earlier build still open. **Writing the salted form is off** (see
+  below).
+
+### Blobs
+
+Encrypted chunks may lead with a version byte, `0x01`, followed by the nonce,
+ciphertext and tag; the byte is authenticated as AEAD associated data. Readers
+accept both forms. A blob from before versioning starts with its random nonce,
+so its first byte is `0x01` one time in 256: such a blob is tried as versioned
+and, failing authentication, as legacy. Because of that a future version byte
+cannot be told from a legacy nonce, so an unknown version fails authentication
+rather than being named. Unencrypted chunks carry no version byte. **Writing
+the version byte is off** (see below).
+
+### Database (`user_version` 2)
+
+`Store._migrate` steps a database one version at a time, each in a transaction.
+Version 2 moves three lists out of the settings blob:
+
+- `device_contacts(device PRIMARY KEY, person, label, wire)`
+- `device_revoked(device PRIMARY KEY)`
+- `space_subscriptions(space PRIMARY KEY, since)`
+
+and deletes the `contacts`, `revoked` and `subscriptions` settings. A profile
+that never chose subscriptions starts on `general`, as before. An 0.2.3 build
+refuses a version 2 database ("needs a newer OurNet version"), so a profile
+cannot be moved back.
+
+### Rollout switches
+
+`WireFormat.saltedWraps` and `WireFormat.versionedBlobs` (`core/lib/src/model.dart`)
+are both **false** in 0.2.4: this release reads the new forms and writes the old
+ones. A build older than 0.2.4 cannot open a salted wrap or a versioned blob, so
+turning them on before those builds are gone would make friends' private
+messages and attachments unreadable to them. Turn each on in a later release,
+once 0.2.4 or newer is what friends run, and record it here.
+
+### Not done
+
+Device labels are inside the root-signed certificate, so a label cannot be
+blanked when a certificate is shared with a friend: the signature would fail,
+and every object carries its author's certificate anyway. Hiding labels needs a
+certificate format whose signature covers the label separately.

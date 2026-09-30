@@ -69,7 +69,7 @@ void main() {
       ]) {
         old.execute('INSERT INTO settings VALUES (?,?)', [k, canonical(v)]);
       }
-      old.dispose();
+      old.close();
 
       final node = Node(alice, Store(path: path));
       expect(node.store.db.select('PRAGMA user_version').first[0], 2);
@@ -100,7 +100,7 @@ void main() {
         CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
         PRAGMA user_version=1;
       ''');
-        old.dispose();
+        old.close();
         final store = Store(path: path);
         expect(store.subscribedSpaces(), {'general'});
         store.close();
@@ -131,7 +131,7 @@ void main() {
       final path = '${temp.path}/newer.db';
       sqlite3.open(path)
         ..execute('PRAGMA user_version=99')
-        ..dispose();
+        ..close();
       expect(() => Store(path: path), throwsStateError);
     });
   });
