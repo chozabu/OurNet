@@ -180,4 +180,55 @@ void main() {
       throwsStateError,
     );
   });
+
+  test('invitations name their type and version, and old ones still parse', () {
+    final now = DateTime.now().millisecondsSinceEpoch + 60000;
+    for (final head in [
+      {'type': 'pairing', 'v': 1},
+      {'pairing': 1},
+    ]) {
+      // Reaches the card check, past the header this test is about.
+      expect(
+        () => PairingSession.parse(
+          canonical({...head, 'token': 'x' * 44, 'expires': now, 'card': {}}),
+        ),
+        throwsA(
+          isNot(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('Invalid or expired'),
+            ),
+          ),
+        ),
+      );
+    }
+    for (final head in [
+      {'type': 'friend', 'v': 1},
+      {'type': 'pairing', 'v': 2},
+      <String, Object>{},
+    ]) {
+      expect(
+        () => PairingSession.parse(
+          canonical({...head, 'token': 'x' * 44, 'expires': now}),
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('Invalid or expired'),
+          ),
+        ),
+      );
+    }
+  });
+
+  test('confirmation codes are three groups of four', () async {
+    final device = await LocalIdentity.create();
+    final code = confirmationCode('t' * 44, device.certificate);
+    expect(code, matches(RegExp(r'^[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$')));
+    expect(PairingSession.code('t' * 44, device.certificate), code);
+    expect(FriendSession.code('t' * 44, device.certificate), code);
+    expect(confirmationCode('u' * 44, device.certificate), isNot(code));
+  });
 }

@@ -114,13 +114,29 @@ class PeerNetwork {
       peerVersions[device] = v;
       changed = true;
     }
+    if (message['caps'] case final List c
+        when c.length <= 32 && c.every((e) => e is String && e.length <= 32)) {
+      peerCaps[device] = c.cast<String>().toSet();
+    }
     if (changed) _remember(device);
   }
 
-  /// Build and version fields for outgoing sync messages.
+  /// What this build can do beyond the base sync protocol. Peers ignore names
+  /// they do not know, and a feature is used only when the peer lists it, so
+  /// builds of any age keep syncing.
+  ///
+  /// `cursor_paging`: inventories page by (created, id) cursor.
+  /// `blob_inline`: chunk bytes travel base64 in `blob` replies.
+  static const caps = ['cursor_paging', 'blob_inline'];
+
+  /// Capabilities each peer last announced; empty for builds that predate them.
+  final Map<String, Set<String>> peerCaps = {};
+
+  /// Build, version and capability fields for outgoing sync messages.
   Json get _stamp => {
     if (build.isNotEmpty) 'build': build,
     if (version.isNotEmpty) 'version': version,
+    'caps': caps,
   };
 
   final Map<String, int> _progress = {};
@@ -372,6 +388,7 @@ class PeerNetwork {
         final pushed = await request(device, {
           'type': 'push',
           'items': outgoing,
+          'caps': caps,
         });
         _progress[device] = _progress[device]! + incoming + outgoing.length;
         _activity();
@@ -530,6 +547,7 @@ class PeerNetwork {
               ..._stamp,
             };
           case 'push':
+            _notePeer(peer, j);
             reply = {'changed': await node.receive(peer, j['items'])};
           case 'blob':
             // Require a referenced object that this peer is allowed to receive.

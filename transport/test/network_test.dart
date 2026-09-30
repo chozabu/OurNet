@@ -155,6 +155,9 @@ void main() {
       final post = await a.publish('post', {'text': 'over actual QUIC'});
       await na.sync(b.identity.device);
       expect(b.store.get(post.id), isNotNull, reason: na.events.join('\n'));
+      // Each side learns what the other can do, from pull and push alike.
+      expect(na.peerCaps[b.identity.device], containsAll(PeerNetwork.caps));
+      expect(nb.peerCaps[a.identity.device], containsAll(PeerNetwork.caps));
       final message = await a.publish(
         'message',
         {'text': 'private actual QUIC'},

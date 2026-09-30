@@ -20,7 +20,8 @@ class FriendSession {
   }
   bool get available => !_closed && DateTime.now().isBefore(expires);
   String get invitation => canonical({
-    'friend': 1,
+    'type': 'friend',
+    'v': 1,
     'token': token,
     'expires': expires.millisecondsSinceEpoch,
     'card': jsonDecode(network.contactCard()),
@@ -28,7 +29,7 @@ class FriendSession {
   static Json parse(String text) {
     if (text.length > 16384) throw StateError('Friend invitation is too large');
     final j = jsonDecode(text) as Json;
-    if (j['friend'] != 1 ||
+    if (!isInvitation(j, 'friend') ||
         j['token'] is! String ||
         (j['token'] as String).length != 44 ||
         j['expires'] is! int ||
@@ -49,10 +50,8 @@ class FriendSession {
     return j;
   }
 
-  static String code(String token, DeviceCertificate certificate) => hash({
-    'token': token,
-    'device': certificate.toJson(),
-  }).substring(0, 8).toUpperCase();
+  static String code(String token, DeviceCertificate certificate) =>
+      confirmationCode(token, certificate);
   Future<Json> approve(String peer, Json request) async {
     if (!available || _pending || request['token'] != token) {
       throw StateError('Friend unavailable');

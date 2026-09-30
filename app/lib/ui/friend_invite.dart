@@ -191,7 +191,7 @@ class _FriendInvitePageState extends State<FriendInvitePage> {
   Future<void> accept(String text) async {
     final value = text.trim();
     final decoded = jsonDecode(value) as Json;
-    if (decoded['friend'] == 1) {
+    if (isInvitation(decoded, 'friend')) {
       final data = FriendSession.parse(value);
       if (!widget.enablePlatform) {
         throw StateError('Invitations require a network connection.');
@@ -576,11 +576,11 @@ class CodeText extends StatelessWidget {
       borderRadius: BorderRadius.circular(12),
     ),
     child: SelectableText(
-      code.length == 8 ? '${code.substring(0, 4)} ${code.substring(4)}' : code,
+      code,
       style: const TextStyle(
-        fontSize: 30,
+        fontSize: 26,
         fontFamily: 'monospace',
-        letterSpacing: 4,
+        letterSpacing: 2,
         fontWeight: FontWeight.w600,
       ),
     ),

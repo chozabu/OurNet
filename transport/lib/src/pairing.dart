@@ -1,5 +1,22 @@
 part of 'network.dart';
 
+/// Whether [j] is an invitation of [type]: `{type, v: 1}`, or the form builds
+/// before it wrote, which named the type as a top-level key set to 1.
+bool isInvitation(Json j, String type) =>
+    (j['type'] == type && j['v'] == 1) || j[type] == 1;
+
+/// What both devices show, so the people holding them can see that each is
+/// talking to the other. 48 bits of the hash of the token and certificate,
+/// as three groups of four: `ABCD-EFGH-IJKL`. The first eight characters are
+/// the code builds before it showed, so mixed versions still match by eye.
+String confirmationCode(String token, DeviceCertificate certificate) {
+  final digits = hash({
+    'token': token,
+    'device': certificate.toJson(),
+  }).substring(0, 12).toUpperCase();
+  return '${digits.substring(0, 4)}-${digits.substring(4, 8)}-${digits.substring(8)}';
+}
+
 /// Only alive while the owner explicitly opens Add device. QUIC authenticates
 /// the request device; the invitation pins the owner's endpoint and identity.
 ///
@@ -34,7 +51,8 @@ class PairingSession {
   }
   bool get available => !_closed && DateTime.now().isBefore(expires);
   String get invitation => canonical({
-    'pairing': 1,
+    'type': 'pairing',
+    'v': 1,
     'token': token,
     'expires': expires.millisecondsSinceEpoch,
     'card': jsonDecode(network.contactCard()),
@@ -43,7 +61,7 @@ class PairingSession {
     if (text.length > 16384)
       throw StateError('Pairing invitation is too large');
     final j = jsonDecode(text) as Json;
-    if (j['pairing'] != 1 ||
+    if (!isInvitation(j, 'pairing') ||
         j['token'] is! String ||
         (j['token'] as String).length != 44 ||
         j['expires'] is! int ||
@@ -62,10 +80,8 @@ class PairingSession {
     return j;
   }
 
-  static String code(String token, DeviceCertificate certificate) => hash({
-    'token': token,
-    'device': certificate.toJson(),
-  }).substring(0, 8).toUpperCase();
+  static String code(String token, DeviceCertificate certificate) =>
+      confirmationCode(token, certificate);
   Future<Json> approve(String peer, Json request) async {
     if (!available || _pending || request['token'] != token) {
       throw StateError('Pairing unavailable');
