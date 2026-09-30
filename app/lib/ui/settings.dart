@@ -179,6 +179,31 @@ extension _SettingsPages on _OurNetAppState {
         onTap: () => update(() => tab = Destination.network),
       ),
       ListTile(
+        leading: const Icon(Icons.archive_outlined),
+        title: const Text('Save a backup'),
+        subtitle: const Text(
+          'Everything in this profile in one zip, with your keys sealed under a passphrase',
+        ),
+        onTap: () async {
+          try {
+            if (await saveBackup(context, node)) notice('Backup saved');
+          } catch (e) {
+            notice('Could not save the backup: $e');
+          }
+        },
+      ),
+      ListTile(
+        leading: const Icon(Icons.unarchive_outlined),
+        title: const Text('Restore from a backup'),
+        subtitle: const Text('Replaces everything on this device'),
+        onTap: () => restoreBackup(
+          context,
+          node,
+          replacing: true,
+          stopApp: network.stop,
+        ).catchError((Object e) => notice('Could not restore: $e')),
+      ),
+      ListTile(
         title: const Text('OurNet $appVersion'),
         subtitle: const Text(
           'Build $buildId\n'

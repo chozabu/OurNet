@@ -41,7 +41,7 @@ const _linger = Duration(seconds: 10);
 /// in which case nothing is sent.
 Future<void> Function(String command)? onBackgroundSync;
 
-final _opened = Completer<Node>();
+var _opened = Completer<Node>();
 
 /// Whether this isolate is the profile owner, see [claimProfile].
 bool ownsProfile = false;
@@ -49,7 +49,9 @@ bool ownsProfile = false;
 /// The profile the app opened after [claimProfile]. Notification actions
 /// handed to the app are carried out on it.
 void profileOpened(Node node) {
-  if (!_opened.isCompleted) _opened.complete(node);
+  // A restored profile is a new node; actions must reach it, not the old one.
+  if (_opened.isCompleted) _opened = Completer<Node>();
+  _opened.complete(node);
 }
 
 /// A command sent to the owner: `[name, reply port, ...arguments]`.

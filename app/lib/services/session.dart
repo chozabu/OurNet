@@ -65,3 +65,60 @@ Future<void> saveIdentity(LocalIdentity identity) async {
     value: canonical(await identity.exportSecrets()),
   );
 }
+
+/// Where a backup is unpacked before it replaces the profile: beside the
+/// database, so that moving it into place is a rename.
+Future<String> restoreStagingPath() async {
+  final directory = await getApplicationSupportDirectory();
+  await directory.create(recursive: true);
+  return '${directory.path}/ournet-$activeProfile.db.restoring';
+}
+
+/// Replaces this profile's database and keys with [staged] and opens the
+/// result. [current] is this profile's open node, which is closed first: the
+/// caller must have stopped everything that uses it.
+///
+/// The old database and keys are kept aside until the restored profile has
+/// opened, and put back if anything fails, so a bad restore loses nothing.
+Future<Node> applyRestore(StagedRestore staged, Node current) async {
+  final profile = activeProfile;
+  final directory = await getApplicationSupportDirectory();
+  final database = '${directory.path}/ournet-$profile.db';
+  const vault = FlutterSecureStorage();
+  final key = 'ournet/v2/$profile';
+  final oldSecrets = await vault.read(key: key);
+  const parts = ['', '-wal', '-shm'];
+  await current.close();
+  await closeProfile();
+  try {
+    for (final part in parts) {
+      final aside = File('$database$part.before-restore');
+      if (await aside.exists()) await aside.delete();
+      final file = File('$database$part');
+      if (await file.exists()) await file.rename(aside.path);
+    }
+    await File(staged.database).rename(database);
+    await vault.write(key: key, value: canonical(staged.secrets));
+    final node = await openNode(profile: profile);
+    for (final part in parts) {
+      final aside = File('$database$part.before-restore');
+      if (await aside.exists()) await aside.delete();
+    }
+    return node;
+  } catch (_) {
+    await closeProfile();
+    for (final part in parts) {
+      final file = File('$database$part');
+      if (await file.exists()) await file.delete();
+      final aside = File('$database$part.before-restore');
+      if (await aside.exists()) await aside.rename(file.path);
+    }
+    if (oldSecrets == null) {
+      await vault.delete(key: key);
+    } else {
+      await vault.write(key: key, value: oldSecrets);
+    }
+    await staged.discard();
+    rethrow;
+  }
+}

@@ -75,6 +75,24 @@ turning them on before those builds are gone would make friends' private
 messages and attachments unreadable to them. Turn each on in a later release,
 once 0.2.4 or newer is what friends run, and record it here.
 
+### Backup files
+
+Settings can save a profile to one zip and restore it (`core/lib/src/backup.dart`).
+This is a local file format, not something sent to peers:
+
+- `manifest.json` (plain): `format: "ournet-backup"`, `version: 1`, `schema`
+  (the database `user_version`), app version, person, device, label, time, item
+  count.
+- `identity.json`: the identity secrets sealed with Argon2id (default 128 MiB,
+  3 passes; opening accepts 8-256 MiB, 1-10 passes) and ChaCha20-Poly1305 under
+  a passphrase of at least 12 characters, bound to the person.
+- `ournet.db`: a `VACUUM INTO` snapshot of the database, blobs included.
+
+A build refuses a backup whose `version` or `schema` is newer than it knows, and
+refuses to open one with the wrong passphrase or a damaged database before it
+touches the profile. Restoring keeps the replaced database and keys aside until
+the restored profile has opened, and puts them back if it does not.
+
 ### Not done
 
 Device labels are inside the root-signed certificate, so a label cannot be

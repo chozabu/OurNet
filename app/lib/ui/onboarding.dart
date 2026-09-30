@@ -8,6 +8,7 @@ import 'package:ournet_transport/ournet_transport.dart';
 import '../services/session.dart';
 import '../services/pairing_discovery.dart';
 import 'app.dart';
+import 'backup.dart';
 import 'friend_invite.dart' show CodeText;
 
 class SetupApp extends StatelessWidget {
@@ -182,8 +183,8 @@ class _SetupPageState extends State<SetupPage> {
                           'This profile already holds notes and messages, but '
                           'the keys that can read them are missing from this '
                           'device’s secure storage. Nothing here can recover '
-                          'them: restore the device backup that holds those '
-                          'keys, or carry on and start fresh, which leaves '
+                          'them: restore an OurNet backup or the device backup that '
+                          'holds those keys, or carry on and start fresh, which leaves '
                           'that history unreadable on this device.',
                         ),
                       ),
@@ -203,6 +204,20 @@ class _SetupPageState extends State<SetupPage> {
                     },
                     icon: const Icon(Icons.devices),
                     label: const Text('Connect to my existing profile'),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: busy
+                        ? null
+                        : () => act(
+                            () => restoreBackup(
+                              context,
+                              widget.node,
+                              replacing: false,
+                            ),
+                          ),
+                    icon: const Icon(Icons.unarchive_outlined),
+                    label: const Text('Restore from a backup'),
                   ),
                 ] else ...[
                   if (page == 'create') ...[
