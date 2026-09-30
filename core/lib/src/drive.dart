@@ -31,7 +31,13 @@ class Drive {
   Future<SignedObject> write(Json data, {List<String> parents = const []}) =>
       node.publish(
         'drive',
-        {...data, 'revision': randomId(), 'parents': parents},
+        {
+          ...data,
+          // Revision format, so a later one can be told from this one.
+          'driveFormat': 1,
+          'revision': randomId(),
+          'parents': parents,
+        },
         space: '_drive',
         audience: [node.person],
       );

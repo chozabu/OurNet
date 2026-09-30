@@ -81,7 +81,13 @@ class BlobWorker {
   }
 
   Future<String> encode(Uint8List bytes, List<int>? key) async {
-    final result = await _request({'op': 'encode', 'bytes': bytes, 'key': key});
+    final result = await _request({
+      'op': 'encode',
+      'bytes': bytes,
+      'key': key,
+      // Read here: static state does not reach the worker isolate.
+      'versioned': WireFormat.versionedBlobs,
+    });
     final hash = result['hash'] as String;
     if (store.path == null) store.putBlob(hash, result['bytes'] as Uint8List);
     return hash;
@@ -239,16 +245,7 @@ Future<TransferableTypedData?> _readLocal(
         }
         final plain = key == null
             ? bytes
-            : Uint8List.fromList(
-                await Chacha20.poly1305Aead().decrypt(
-                  SecretBox.fromConcatenation(
-                    bytes,
-                    nonceLength: 12,
-                    macLength: 16,
-                  ),
-                  secretKey: key,
-                ),
-              );
+            : Uint8List.fromList(await openBlob(bytes, key));
         size += plain.length;
         if (size > budget) throw StateError('File size exceeded');
         chunks.add(plain);
@@ -288,11 +285,10 @@ Future<void> _run(({SendPort port, String? path}) initial) async {
           if (plain.length > 128 * 1024) throw StateError('Invalid chunk size');
           final bytes = key == null
               ? plain
-              : Uint8List.fromList(
-                  (await Chacha20.poly1305Aead().encrypt(
-                    plain,
-                    secretKey: key,
-                  )).concatenation(),
+              : await sealBlob(
+                  plain,
+                  key,
+                  versioned: command['versioned'] == true,
                 );
           final hash = blobHash(bytes);
           store?.putBlob(hash, bytes);
@@ -312,16 +308,7 @@ Future<void> _run(({SendPort port, String? path}) initial) async {
           if (bytes.length > 128 * 1024 + 64 || blobHash(bytes) != hash) {
             throw StateError('Invalid file chunk');
           }
-          final plain = key == null
-              ? bytes
-              : await Chacha20.poly1305Aead().decrypt(
-                  SecretBox.fromConcatenation(
-                    bytes,
-                    nonceLength: 12,
-                    macLength: 16,
-                  ),
-                  secretKey: key,
-                );
+          final plain = key == null ? bytes : await openBlob(bytes, key);
           if (supplied != null) store?.putBlob(hash, bytes);
           initial.port.send({'id': id, 'bytes': Uint8List.fromList(plain)});
         } else if (command['op'] == 'preview_get' ||

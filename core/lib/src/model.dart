@@ -2,6 +2,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:isolate';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as digest;
 import 'package:cryptography/cryptography.dart';
 
@@ -35,7 +36,39 @@ class TimeSlice {
 /// full record stays well inside an object's size limit.
 const maxGrantKeys = 400;
 
+/// Switches for formats that builds before them cannot read. Reading is added
+/// in one release and writing enabled in a later one, so friends on mixed
+/// versions keep decrypting each other's content during a staged rollout.
+/// They are read at the call site and passed to isolates explicitly: static
+/// state does not cross an isolate boundary.
+abstract final class WireFormat {
+  /// Wraps use the salted HKDF derivation ([wrapSalt]) instead of an empty salt.
+  static bool saltedWraps = false;
+
+  /// New encrypted blobs carry a leading [blobVersion] byte.
+  static bool versionedBlobs = false;
+}
+
+/// HKDF salt of the second wrap derivation. Wraps made before it used none.
+final wrapSalt = utf8.encode('ournet/wrap/2');
+
+/// Leading byte of a versioned blob. Blobs written before versioning start
+/// with their random nonce instead, and remain readable.
+const blobVersion = 1;
+
+/// Largest chunk a manifest may declare, and the largest this build writes.
+const chunkBytes = 128 * 1024;
+
+/// Whether [v] is a chunk size a manifest may declare: any power of two.
+bool validChunkBytes(Object? v) =>
+    v is int && v >= 1024 && v <= 1024 * 1024 && (v & (v - 1)) == 0;
+
 bool validContent(String kind, Json p) {
+  if (p['chunkBytes'] != null && !validChunkBytes(p['chunkBytes'])) {
+    return false;
+  }
+  if (p['driveFormat'] != null && p['driveFormat'] is! int) return false;
+  if (p['reg'] != null && p['reg'] is! int) return false;
   if (p['text'] != null &&
       (p['text'] is! String || (p['text'] as String).length > 65536))
     return false;
@@ -404,13 +437,18 @@ class SealedRoot {
     }
   }
 
-  /// [memory] is in KiB. The defaults take under a second on a desktop and a
+  /// Argon2id cost of new seals, in KiB and passes. Copies made earlier keep
+  /// the cost recorded in them.
+  static const defaultMemory = 128 * 1024;
+  static const defaultIterations = 3;
+
+  /// [memory] is in KiB. The defaults take about a second on a desktop and a
   /// few seconds on a phone; tests pass smaller values.
   static Future<SealedRoot> seal(
     SimpleKeyPair root,
     String phrase, {
-    int memory = 64 * 1024,
-    int iterations = 3,
+    int memory = defaultMemory,
+    int iterations = defaultIterations,
   }) async {
     checkPhrase(phrase);
     final person = b64((await root.extractPublicKey()).bytes);
@@ -559,8 +597,8 @@ class LocalIdentity {
   /// the clear.
   Future<LocalIdentity> seal(
     String phrase, {
-    int memory = 64 * 1024,
-    int iterations = 3,
+    int memory = SealedRoot.defaultMemory,
+    int iterations = SealedRoot.defaultIterations,
   }) async {
     final clear = root;
     if (clear == null) throw StateError('This device has no root to seal');
@@ -645,7 +683,14 @@ class SignedObject {
   String get kind => data['kind'];
   String get space => data['space'];
   int get created => data['created'];
+
+  /// Object format: absent on objects from before versioning, 2 since.
+  int get version => data['v'] as int? ?? 1;
+
+  /// 0 is the wire value for "never expires"; any other value is a time in
+  /// milliseconds since the epoch. Prefer this over comparing with 0.
   int get expires => data['expires'];
+  bool get hasExpiry => expires != 0;
   List<String> get audience => (data['audience'] as List).cast<String>();
   bool get isPublic => audience.isEmpty;
   Json toJson() => {
@@ -660,7 +705,10 @@ class SignedObject {
   );
   Future<bool> valid() async {
     try {
+      // Objects from before `v` carry none; a version this build does not know
+      // is refused rather than misread.
       if (data['domain'] != 'ournet/object/2' ||
+          (data['v'] != null && data['v'] != 2) ||
           kind.length > 64 ||
           space.length > 128 ||
           created < 0 ||
@@ -713,7 +761,13 @@ class Evidence {
       await verify(data, signature, certificate.device);
 }
 
-Future<Json> encryptFor(Json plain, List<DeviceCertificate> recipients) async {
+/// [saltedWraps] chooses the wrap key derivation; callers on another isolate
+/// pass [WireFormat.saltedWraps] read on their own side.
+Future<Json> encryptFor(
+  Json plain,
+  List<DeviceCertificate> recipients, {
+  bool saltedWraps = false,
+}) async {
   final cipher = Chacha20.poly1305Aead();
   final contentKey = await cipher.newSecretKey();
   final box = await cipher.encrypt(bytes(plain), secretKey: contentKey);
@@ -727,11 +781,7 @@ Future<Json> encryptFor(Json plain, List<DeviceCertificate> recipients) async {
         type: KeyPairType.x25519,
       ),
     );
-    final key = await Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
-      secretKey: shared,
-      nonce: const [],
-      info: utf8.encode('ournet/wrap/2/${recipient.device}'),
-    );
+    final key = await _wrapKey(shared, recipient.device, salted: saltedWraps);
     final wrapped = await cipher.encrypt(
       await contentKey.extractBytes(),
       secretKey: key,
@@ -739,12 +789,25 @@ Future<Json> encryptFor(Json plain, List<DeviceCertificate> recipients) async {
     );
     wraps.add({
       'device': recipient.device,
+      // How the key was agreed, so a hybrid post-quantum scheme can be added
+      // beside it. Builds that predate the field ignore it.
+      'kem': 'x25519',
       'ephemeral': b64((await ephemeral.extractPublicKey()).bytes),
       'box': b64(wrapped.concatenation()),
     });
   }
   return {'box': b64(box.concatenation()), 'wraps': wraps};
 }
+
+Future<SecretKey> _wrapKey(
+  SecretKey shared,
+  String device, {
+  required bool salted,
+}) => Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
+  secretKey: shared,
+  nonce: salted ? wrapSalt : const [],
+  info: utf8.encode('ournet/wrap/2/$device'),
+);
 
 Future<Json> decryptFor(Json encrypted, LocalIdentity identity) async =>
     decryptWith(
@@ -767,6 +830,9 @@ Future<List<int>> unwrapFor(
   final wrap = (encrypted['wraps'] as List).cast<Json>().firstWhere(
     (w) => w['device'] == device,
   );
+  if (wrap['kem'] != null && wrap['kem'] != 'x25519') {
+    throw StateError('Unsupported key agreement');
+  }
   final shared = await X25519().sharedSecretKey(
     keyPair: agreementKey,
     remotePublicKey: SimplePublicKey(
@@ -774,20 +840,24 @@ Future<List<int>> unwrapFor(
       type: KeyPairType.x25519,
     ),
   );
-  final key = await Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
-    secretKey: shared,
-    nonce: const [],
-    info: utf8.encode('ournet/wrap/2/$device'),
+  final sealed = SecretBox.fromConcatenation(
+    unb64(wrap['box']),
+    nonceLength: 12,
+    macLength: 16,
   );
-  return Chacha20.poly1305Aead().decrypt(
-    SecretBox.fromConcatenation(
-      unb64(wrap['box']),
-      nonceLength: 12,
-      macLength: 16,
-    ),
-    secretKey: key,
-    aad: utf8.encode(device),
-  );
+  // Salted derivation first; wraps from builds before it used no salt.
+  for (final salted in [true, false]) {
+    try {
+      return await Chacha20.poly1305Aead().decrypt(
+        sealed,
+        secretKey: await _wrapKey(shared, device, salted: salted),
+        aad: utf8.encode(device),
+      );
+    } on SecretBoxAuthenticationError {
+      if (!salted) rethrow;
+    }
+  }
+  throw StateError('unreachable');
 }
 
 /// Opens [encrypted] with its content key, however that key was obtained.
@@ -805,3 +875,50 @@ Future<Json> decryptWith(Json encrypted, List<int> contentKey) async =>
           ),
         )
         as Json;
+
+/// Encrypts one file chunk. A versioned blob is [blobVersion] followed by the
+/// nonce, ciphertext and tag, with the version byte authenticated as AAD.
+Future<Uint8List> sealBlob(
+  List<int> plain,
+  SecretKey key, {
+  required bool versioned,
+}) async {
+  final box = await Chacha20.poly1305Aead().encrypt(
+    plain,
+    secretKey: key,
+    aad: versioned ? const [blobVersion] : const [],
+  );
+  return Uint8List.fromList([
+    if (versioned) blobVersion,
+    ...box.concatenation(),
+  ]);
+}
+
+/// Opens a blob written by [sealBlob], or by builds before versioning, whose
+/// blobs are nonce, ciphertext and tag with no leading byte. A nonce is random,
+/// so its first byte can equal [blobVersion]; that case is tried as a versioned
+/// blob and, failing authentication, as a legacy one. Any other first byte can
+/// only be legacy, so a future version byte cannot be told apart from it:
+/// unknown versions fail authentication rather than being named.
+Future<List<int>> openBlob(List<int> stored, SecretKey key) async {
+  final cipher = Chacha20.poly1305Aead();
+  if (stored.isNotEmpty && stored.first == blobVersion) {
+    try {
+      return await cipher.decrypt(
+        SecretBox.fromConcatenation(
+          stored.sublist(1),
+          nonceLength: 12,
+          macLength: 16,
+        ),
+        secretKey: key,
+        aad: const [blobVersion],
+      );
+    } on SecretBoxAuthenticationError {
+      // Legacy blob whose nonce happens to start with the version byte.
+    }
+  }
+  return cipher.decrypt(
+    SecretBox.fromConcatenation(stored, nonceLength: 12, macLength: 16),
+    secretKey: key,
+  );
+}

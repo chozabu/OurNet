@@ -573,6 +573,8 @@ class Notes {
       'note_op',
       {
         ...extra,
+        // Register format; lets a later one change how registers merge.
+        'reg': 1,
         'epoch': room.data['epoch'],
         'field': field,
         'value': value,
@@ -743,8 +745,14 @@ class Notes {
     // its own creation time reads it off that record, so write it down
     // before the copy exists rather than let the date move.
     if (note.value('created') == null) {
-      await _publish(note.room, 'created', note.created, const [], 1,
-          checkpoint: true);
+      await _publish(
+        note.room,
+        'created',
+        note.created,
+        const [],
+        1,
+        checkpoint: true,
+      );
     }
     var count = await _everyday.reissue(note.room, entries: false) + 1;
     for (final MapEntry(key: field, value: heads) in note.heads.entries) {
@@ -820,9 +828,7 @@ class Notes {
   }) async {
     // Refuse before storing chunks: blobs of a refused attachment stay behind.
     final before = await _writable(id, epoch);
-    if (fileId == null &&
-        field == 'meta' &&
-        before.files.length >= maxFiles) {
+    if (fileId == null && field == 'meta' && before.files.length >= maxFiles) {
       throw StateError('A note holds up to $maxFiles attachments.');
     }
     final key = List<int>.generate(32, (_) => Random.secure().nextInt(256));
@@ -871,6 +877,7 @@ class Notes {
           'name': safeName.trim().isEmpty ? 'Attachment' : safeName,
           'size': size,
           'key': b64(key),
+          'chunkBytes': chunkSize,
         },
       );
       if (isNew && field == 'meta') {
@@ -1047,7 +1054,7 @@ class Notes {
   );
 
   static Json _fileFields(Json data) => {
-    for (final key in ['chunks', 'name', 'size', 'key'])
+    for (final key in ['chunks', 'name', 'size', 'key', 'chunkBytes'])
       if (data[key] != null) key: data[key],
   };
 }

@@ -5,11 +5,16 @@ import 'package:sqlite3/sqlite3.dart';
 import 'model.dart';
 
 class Store {
+  /// The schema this build writes. Older databases are brought up to it by
+  /// [_migrate]; a newer one is refused, as it may hold what this build would
+  /// misread. Raise it together with a new step in [_migrate].
+  static const schemaVersion = 2;
   final Database db;
   final String? path;
   Store({this.path})
     : db = path == null ? sqlite3.openInMemory() : sqlite3.open(path) {
-    if ((db.select('PRAGMA user_version').first['user_version'] as int) > 1) {
+    final from = db.select('PRAGMA user_version').first['user_version'] as int;
+    if (from > schemaVersion) {
       db.close();
       throw StateError('This database needs a newer OurNet version');
     }
@@ -26,7 +31,8 @@ class Store {
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS blobs(id TEXT PRIMARY KEY, bytes BLOB NOT NULL);
     ''');
-    db.execute('PRAGMA user_version=1');
+    _migrate(from, schemaVersion);
+    db.execute('PRAGMA user_version=$schemaVersion');
     db.execute(
       'CREATE INDEX IF NOT EXISTS objects_sync_cursor ON objects(created DESC,id DESC)',
     );
@@ -226,6 +232,111 @@ class Store {
   final _statements = <String, PreparedStatement>{};
   PreparedStatement _statement(String sql) =>
       _statements[sql] ??= db.prepare(sql, persistent: true);
+
+  /// Steps a database from version [from] to [to], one version at a time and
+  /// each in a transaction. Version 0 is a new file: the base tables above
+  /// already exist and every later step runs over them.
+  void _migrate(int from, int to) {
+    for (var version = from; version < to; version++) {
+      switch (version) {
+        case 0:
+          break; // The base tables are the first version.
+        case 1:
+          _run('BEGIN IMMEDIATE', _contactsToTables);
+        default:
+          throw StateError('No migration from version $version');
+      }
+    }
+  }
+
+  void _run(String begin, void Function() step) {
+    db.execute(begin);
+    try {
+      step();
+      db.execute('COMMIT');
+    } catch (_) {
+      db.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  /// Version 2: contacts, revoked devices and subscriptions leave the settings
+  /// blob for tables of their own, so changing one no longer rewrites all.
+  void _contactsToTables() {
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS device_contacts(
+        device TEXT PRIMARY KEY, person TEXT NOT NULL, label TEXT NOT NULL,
+        wire TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS device_revoked(device TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS space_subscriptions(
+        space TEXT PRIMARY KEY, since INTEGER NOT NULL);
+    ''');
+    dynamic old(String key) {
+      final rows = db.select('SELECT value FROM settings WHERE key=?', [key]);
+      return rows.isEmpty ? null : jsonDecode(rows.first['value'] as String);
+    }
+
+    for (final j in (old('contacts') as List? ?? const [])) {
+      final c = DeviceCertificate.fromJson(j);
+      db.execute('INSERT OR REPLACE INTO device_contacts VALUES (?,?,?,?)', [
+        c.device,
+        c.person,
+        c.label,
+        canonical(c.toJson()),
+      ]);
+    }
+    for (final device in (old('revoked') as List? ?? const []).cast<String>()) {
+      db.execute('INSERT OR IGNORE INTO device_revoked VALUES (?)', [device]);
+    }
+    // Never changed means the default, which a new profile also starts with.
+    final since = DateTime.now().millisecondsSinceEpoch;
+    for (final space
+        in (old('subscriptions') as List? ?? const ['general'])
+            .cast<String>()) {
+      db.execute('INSERT OR IGNORE INTO space_subscriptions VALUES (?,?)', [
+        space,
+        since,
+      ]);
+    }
+    db.execute(
+      "DELETE FROM settings WHERE key IN ('contacts','revoked','subscriptions')",
+    );
+  }
+
+  /// Admitted devices, oldest first.
+  List<DeviceCertificate> contacts() => [
+    for (final row in _select(
+      'SELECT wire FROM device_contacts ORDER BY rowid',
+    ))
+      DeviceCertificate.fromJson(jsonDecode(row['wire'] as String)),
+  ];
+
+  void putContact(DeviceCertificate c) => _execute(
+    'INSERT INTO device_contacts VALUES (?,?,?,?) ON CONFLICT(device) DO UPDATE '
+    'SET person=excluded.person,label=excluded.label,wire=excluded.wire',
+    [c.device, c.person, c.label, canonical(c.toJson())],
+  );
+
+  Set<String> revokedDevices() => {
+    for (final row in _select('SELECT device FROM device_revoked'))
+      row['device'] as String,
+  };
+
+  void addRevoked(String device) =>
+      _execute('INSERT OR IGNORE INTO device_revoked VALUES (?)', [device]);
+
+  Set<String> subscribedSpaces() => {
+    for (final row in _select('SELECT space FROM space_subscriptions'))
+      row['space'] as String,
+  };
+
+  void setSubscribed(String space, bool enabled, int since) => enabled
+      ? _execute('INSERT OR IGNORE INTO space_subscriptions VALUES (?,?)', [
+          space,
+          since,
+        ])
+      : _execute('DELETE FROM space_subscriptions WHERE space=?', [space]);
+
   ResultSet _select(String sql, [List<Object?> parameters = const []]) =>
       _statement(sql).select(parameters);
   void _execute(String sql, [List<Object?> parameters = const []]) =>
@@ -836,6 +947,7 @@ class ObjectRoute {
         via: (o.data['via'] as List).cast<String>(),
       );
   bool get isPublic => audience.isEmpty;
+  bool get hasExpiry => expires != 0;
 }
 
 class _EvidenceSet {

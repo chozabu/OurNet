@@ -54,15 +54,12 @@ class Node {
   static const maxPageBytes = 1024 * 1024;
   Node(this._identity, this.store, {int Function()? clock})
     : now = clock ?? (() => DateTime.now().millisecondsSinceEpoch) {
-    for (final j in (store.setting('contacts') as List? ?? [])) {
-      final c = DeviceCertificate.fromJson(j);
+    for (final c in store.contacts()) {
       contacts[c.device] = c;
     }
-    subscriptions.addAll(
-      (store.setting('subscriptions') as List? ?? ['general']).cast<String>(),
-    );
+    subscriptions.addAll(store.subscribedSpaces());
     blocked.addAll((store.setting('blocked') as List? ?? []).cast<String>());
-    revoked.addAll((store.setting('revoked') as List? ?? []).cast<String>());
+    revoked.addAll(store.revokedDevices());
     // Profiles that applied revocations before withdrawal existed.
     if (canonical(store.setting('revokedWithdrawn')) !=
         canonical(revoked.toList()..sort())) {
@@ -92,7 +89,7 @@ class Node {
     if (revoked.contains(certificate.device))
       throw StateError('Device revoked');
     contacts[certificate.device] = certificate;
-    store.set('contacts', contacts.values.map((c) => c.toJson()).toList());
+    store.putContact(certificate);
     notify();
   }
 
@@ -102,7 +99,7 @@ class Node {
     } else {
       subscriptions.remove(space);
     }
-    store.set('subscriptions', subscriptions.toList()..sort());
+    store.setSubscribed(space, enabled, now());
     notify();
   }
 
@@ -179,6 +176,8 @@ class Node {
     }
     final data = <String, dynamic>{
       'domain': 'ournet/object/2',
+      // Absent on objects from before it; builds that do not know it ignore it.
+      'v': 2,
       'nonce': randomId(),
       'kind': kind,
       'space': space,
@@ -194,6 +193,8 @@ class Node {
       await identity.deviceKey.extract(),
       identity.certificate,
       background: store.path != null,
+      // Read here: static state does not reach the publishing isolate.
+      saltedWraps: WireFormat.saltedWraps,
     );
     // Policy may change while cryptography runs on the worker.
     if (revoked.contains(identity.device)) {
@@ -431,7 +432,7 @@ class Node {
 
   bool visible(SignedObject o) =>
       !blocked.contains(o.author) &&
-      (o.expires == 0 || o.expires > now()) &&
+      (!o.hasExpiry || o.expires > now()) &&
       (o.isPublic || o.audience.contains(person));
 
   /// [unlocked] is the root from [LocalIdentity.unlockRoot], needed once
@@ -476,7 +477,7 @@ class Node {
     if (!await _ownsDevice(object.author, proof['device'], p['certificate']))
       return;
     if (!revoked.add(proof['device'])) return;
-    store.set('revoked', revoked.toList()..sort());
+    store.addRevoked(proof['device']);
     _withdrawRevokedEvidence();
   }
 
@@ -667,7 +668,11 @@ class Node {
       } catch (_) {}
     }
     if (added.isNotEmpty) {
-      store.set('contacts', contacts.values.map((c) => c.toJson()).toList());
+      store.batch(() {
+        for (final c in added) {
+          store.putContact(c);
+        }
+      });
       notify();
     }
     return added;
@@ -679,7 +684,7 @@ class Node {
   bool _offerable(ObjectRoute o, DeviceCertificate peer, Set<String> wanted) {
     if (blocked.contains(o.author) ||
         revoked.contains(o.device) ||
-        (o.expires != 0 && o.expires <= now()))
+        (o.hasExpiry && o.expires <= now()))
       return false;
     if (!o.isPublic)
       return o.audience.contains(peer.person) || o.via.contains(peer.person);
@@ -902,7 +907,7 @@ class Node {
     if (o.encodedLength > maxObjectBytes) throw StateError('Invalid object');
     if (revoked.contains(o.certificate.device) || blocked.contains(o.author))
       return 0;
-    if (o.expires != 0 && o.expires <= now()) return 0;
+    if (o.hasExpiry && o.expires <= now()) return 0;
     if (!o.isPublic &&
         !o.audience.contains(person) &&
         !(o.data['via'] as List).contains(person))
@@ -1083,10 +1088,15 @@ Future<SignedObject> _preparePublication(
   SimpleKeyPairData key,
   DeviceCertificate certificate, {
   required bool background,
+  required bool saltedWraps,
 }) {
   Future<SignedObject> prepare() async {
     if ((data['audience'] as List).isNotEmpty) {
-      data['payload'] = await encryptFor(data['payload'], recipients);
+      data['payload'] = await encryptFor(
+        data['payload'],
+        recipients,
+        saltedWraps: saltedWraps,
+      );
     }
     final object = SignedObject(data, await sign(data, key), certificate);
     if (!await object.valid()) throw StateError('Invalid object fields');

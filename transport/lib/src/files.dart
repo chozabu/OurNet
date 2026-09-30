@@ -73,6 +73,7 @@ class Files {
           'name': name ?? file.uri.pathSegments.last,
           'size': size,
           'chunks': chunks,
+          'chunkBytes': chunkSize,
           'key': keyBytes == null ? null : b64(keyBytes),
           if (drive != null) ...drive,
           if (everyday != null) ...everyday,
