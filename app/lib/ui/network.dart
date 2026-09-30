@@ -123,7 +123,7 @@ extension _NetworkPages on _OurNetAppState {
       builder: (context) => AlertDialog(
         title: Text('Share your history with ${device.label}?'),
         content: const Text(
-          'Your devices will be able to read your earlier chats, groups and notes, including ones from before they were added. Only do this for a device you trust.',
+          'Your devices will be able to read your earlier chats, groups, notes and files, including ones from before they were added. Only do this for a device you trust.',
         ),
         actions: [
           TextButton(
@@ -139,13 +139,66 @@ extension _NetworkPages on _OurNetAppState {
     );
     if (confirmed != true) return;
     notice('Preparing your history for ${device.label}…');
-    final count = await node.shareKeys(history: true);
+    final count = await shareAllHistory(node);
     if (count > 0 && network.running) unawaited(network.sync(device.device));
     notice(
       count == 0
           ? '${device.label} can already read everything this device can'
           : 'Shared $count items with ${device.label}. They appear there after it syncs.',
     );
+  }
+
+  /// Once per own device, offers it the history from before it was linked.
+  /// Devices linked by earlier builds, or without "Share history" at pairing,
+  /// otherwise never read older chats and show friends as bare hashes.
+  Future<void> offerHistory() async {
+    // Not over the Add device page, which offers this itself.
+    if (_offeringHistory || !mounted) return;
+    if (ModalRoute.of(context)?.isCurrent == false) return;
+    final waiting = devicesAwaitingHistory(node);
+    if (waiting.isEmpty) return;
+    _offeringHistory = true;
+    try {
+      final names = waiting.map((c) => c.label).toSet().join(', ');
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Share your earlier history?'),
+          content: Text(
+            '$names can’t read chats, groups or notes from before it was linked. Share them so all your devices show the same history? Only do this for devices you trust.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Not now'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Share history'),
+            ),
+          ],
+        ),
+      );
+      markHistoryOffered(node);
+      if (confirmed != true) {
+        notice(
+          'You can share history later with the history button beside a device in Settings.',
+        );
+        return;
+      }
+      notice('Preparing your history…');
+      final count = await shareAllHistory(node);
+      if (network.running) unawaited(network.syncAll());
+      notice(
+        count == 0
+            ? 'Your devices can already read everything this device can'
+            : 'Shared $count items. They appear on your other devices after they sync.',
+      );
+    } catch (e) {
+      notice('Could not share history: $e');
+    } finally {
+      _offeringHistory = false;
+    }
   }
 
   /// Syncs one device and reports the outcome, which [PeerNetwork.sync]

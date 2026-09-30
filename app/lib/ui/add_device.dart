@@ -125,10 +125,8 @@ class _AddDevicePageState extends State<AddDevicePage> {
           if (!expired && shareHistory) {
             try {
               final node = widget.network.node;
-              // Conversations, and groups and notes someone else owns, can
-              // only be opened with keys this device hands over.
-              await node.shareKeys(
-                history: true,
+              await shareAllHistory(
+                node,
                 progress: (count) {
                   if (mounted) {
                     setState(
@@ -138,13 +136,6 @@ class _AddDevicePageState extends State<AddDevicePage> {
                   }
                 },
               );
-              await Drive(node).shareHistory();
-              await Everyday(node).shareHistory();
-              // Re-encrypted for the device just added: without this its
-              // groups and notes stay unreadable there for good, since a
-              // later edit arrives in a space it has no record for.
-              await Everyday(node).shareRooms();
-              await Notes(node).shareNotes();
               await widget.network.syncAll();
               if (mounted) {
                 setState(

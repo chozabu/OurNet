@@ -8,11 +8,7 @@ Future<void> befriend(Node a, Node b) async {
 
 /// Everything the pairing screen does once [device] is approved.
 Future<void> enrolmentHandover(Node owner, String device) async {
-  await owner.shareKeys(history: true);
-  await Drive(owner).shareHistory();
-  await Everyday(owner).shareHistory();
-  await Everyday(owner).shareRooms();
-  await Notes(owner).shareNotes();
+  await shareAllHistory(owner);
 }
 
 Future<Node> enrol(Node owner, {String label = 'Phone'}) async {
@@ -28,6 +24,33 @@ Future<Node> enrol(Node owner, {String label = 'Phone'}) async {
 }
 
 void main() {
+  test('a linked device is offered earlier history once, and only if there is any',
+      () async {
+    final laptop = Node(await LocalIdentity.create(), Store());
+    final friend = Node(await LocalIdentity.create(), Store());
+    await befriend(laptop, friend);
+    final phone = Node(
+      await LocalIdentity.create(root: laptop.identity.root),
+      Store(),
+    );
+    await laptop.addContact(phone.identity.certificate);
+    // A new profile has nothing to hand over.
+    expect(devicesAwaitingHistory(laptop), isEmpty);
+
+    final other = Node(
+      await LocalIdentity.create(root: laptop.identity.root),
+      Store(),
+    );
+    await friend.publish('message', {'text': 'hi'},
+        space: '_messages', audience: [laptop.person]);
+    await syncPair(laptop, friend);
+    await laptop.addContact(other.identity.certificate);
+    expect(devicesAwaitingHistory(laptop).map((c) => c.device),
+        [other.identity.device]);
+    await shareAllHistory(laptop);
+    expect(devicesAwaitingHistory(laptop), isEmpty);
+  });
+
   test('a device enrolled later reads the notes and groups made before it', () async {
     final laptop = Node(await LocalIdentity.create(), Store());
     final friend = Node(await LocalIdentity.create(), Store());

@@ -7,6 +7,12 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.5
+
+No wire or database change. A device now offers its history to each of its
+owner's other devices once (setting `historyOffered`), and the history button
+beside a device hands over files, inbox, groups and notes as well as chats.
+
 ## 0.2.4
 
 ### Wire formats

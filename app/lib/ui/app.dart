@@ -163,6 +163,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// history from before a device was added, and messages from friends who
   /// have not yet heard of it. Each pass covers only what arrived since.
   CoalescedTask? _keyGrants;
+  bool _offeringHistory = false;
   late final CoalescedTask _deliveryRefresh;
   bool addingAttachment = false;
   final imports = ValueNotifier<Map<Object, ({int completed, int total})>>({});
@@ -372,6 +373,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _changes = node.changes.stream.listen((_) {
       _dataRefresh.schedule();
       _keyGrants?.schedule();
+      if (widget.enablePlatform) unawaited(offerHistory());
     });
     _deliveryRefresh.schedule();
     if (widget.enablePlatform) {
