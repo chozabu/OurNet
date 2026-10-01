@@ -275,6 +275,9 @@ extension _EverydayPages on _OurNetAppState {
     final colors = Theme.of(context).colorScheme;
     final typing = MediaQuery.viewInsetsOf(context).bottom > 0;
     final lists = everydaySection == 'Lists';
+    final chat = everydaySection == 'Conversation';
+    final forumTab = everydaySection == 'Forum';
+    ensureRoomForum(room);
     return DropTarget(
       enable: widget.enablePlatform && !addingAttachment,
       onDragEntered: (_) => update(() => inboxDragging = true),
@@ -346,11 +349,23 @@ extension _EverydayPages on _OurNetAppState {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                for (final section in ['Conversation', 'Files', 'Lists'])
+                for (final section in [
+                  'Conversation',
+                  'Forum',
+                  'Files',
+                  'Lists',
+                ])
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: ChoiceChip(
-                      label: Text(section),
+                      label: section == 'Forum'
+                          ? Badge.count(
+                              count: groupForumUnread(),
+                              isLabelVisible: groupForumUnread() > 0,
+                              offset: const Offset(10, -6),
+                              child: const Text('Forum'),
+                            )
+                          : Text(section),
                       selected: everydaySection == section,
                       onSelected: (_) =>
                           update(() => everydaySection = section),
@@ -360,71 +375,79 @@ extension _EverydayPages on _OurNetAppState {
             ),
           ),
           Expanded(
-            child: FutureBuilder<List<EverydayItem>>(
-              future: everydayView ??= Everyday(node).items(room),
-              builder: (context, snapshot) {
-                if (snapshot.hasError) {
-                  return Center(
-                    child: Text('Could not load items: ${snapshot.error}'),
-                  );
-                }
-                if (!snapshot.hasData) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                final all = snapshot.data!;
-                final pins = all
-                    .where(
-                      (i) =>
-                          i.data['type'] == 'pin' && i.data['pinned'] == true,
-                    )
-                    .map((i) => i.data['target'])
-                    .toSet();
-                for (final item in all) {
-                  if (roomChecks[item.data['entry']] ==
-                      (item.data['done'] == true)) {
-                    roomChecks.remove(item.data['entry']);
-                  }
-                }
-                final visible = all.where((i) {
-                  final type = i.data['type'];
-                  if (type == 'pin' || i.data['deleted'] == true) return false;
-                  return switch (everydaySection) {
-                    'Files' => type == 'file',
-                    'Lists' => type == 'check',
-                    _ => type != 'check',
-                  };
-                }).toList();
-                visible.sort((a, b) {
-                  final pinned = (pins.contains(b.data['entry']) ? 1 : 0)
-                      .compareTo(pins.contains(a.data['entry']) ? 1 : 0);
-                  return pinned != 0
-                      ? pinned
-                      : b.object.created.compareTo(a.object.created);
-                });
-                if (visible.isEmpty) {
-                  return empty(
-                    lists
-                        ? 'Less remembering. More doing.'
-                        : 'Make yourselves at home',
-                    lists
-                        ? 'Create a shopping, packing, or household checklist below.'
-                        : 'Send a message or add the first file.',
-                    Icons.favorite_border,
-                  );
-                }
-                return ListView.builder(
-                  key: PageStorageKey(
-                    'everyday/${room.object.id}/$everydaySection',
+            child: chat
+                ? groupChatView(context, room)
+                : forumTab
+                ? groupForumView(context, room)
+                : FutureBuilder<List<EverydayItem>>(
+                    future: everydayView ??= Everyday(node).items(room),
+                    builder: (context, snapshot) {
+                      if (snapshot.hasError) {
+                        return Center(
+                          child: Text(
+                            'Could not load items: ${snapshot.error}',
+                          ),
+                        );
+                      }
+                      if (!snapshot.hasData) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      final all = snapshot.data!;
+                      final pins = all
+                          .where(
+                            (i) =>
+                                i.data['type'] == 'pin' &&
+                                i.data['pinned'] == true,
+                          )
+                          .map((i) => i.data['target'])
+                          .toSet();
+                      for (final item in all) {
+                        if (roomChecks[item.data['entry']] ==
+                            (item.data['done'] == true)) {
+                          roomChecks.remove(item.data['entry']);
+                        }
+                      }
+                      final visible = all.where((i) {
+                        final type = i.data['type'];
+                        if (type == 'pin' || i.data['deleted'] == true) {
+                          return false;
+                        }
+                        return switch (everydaySection) {
+                          'Files' => type == 'file',
+                          _ => type == 'check',
+                        };
+                      }).toList();
+                      visible.sort((a, b) {
+                        final pinned = (pins.contains(b.data['entry']) ? 1 : 0)
+                            .compareTo(pins.contains(a.data['entry']) ? 1 : 0);
+                        return pinned != 0
+                            ? pinned
+                            : b.object.created.compareTo(a.object.created);
+                      });
+                      if (visible.isEmpty) {
+                        return empty(
+                          lists
+                              ? 'Less remembering. More doing.'
+                              : 'Make yourselves at home',
+                          lists
+                              ? 'Create a shopping, packing, or household checklist below.'
+                              : 'Send a message or add the first file.',
+                          Icons.favorite_border,
+                        );
+                      }
+                      return ListView.builder(
+                        key: PageStorageKey(
+                          'everyday/${room.object.id}/$everydaySection',
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        itemCount: visible.length,
+                        itemBuilder: (context, index) => KeyedSubtree(
+                          key: ValueKey(visible[index].data['entry']),
+                          child: everydayRow(context, visible[index], pins),
+                        ),
+                      );
+                    },
                   ),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  itemCount: visible.length,
-                  itemBuilder: (context, index) => KeyedSubtree(
-                    key: ValueKey(visible[index].data['entry']),
-                    child: everydayRow(context, visible[index], pins),
-                  ),
-                );
-              },
-            ),
           ),
           if (lists)
             Padding(
@@ -438,92 +461,101 @@ extension _EverydayPages on _OurNetAppState {
                 ),
               ),
             ),
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              border: Border.all(color: colors.outlineVariant),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              children: [
-                TextField(
-                  controller: inboxComposer,
-                  minLines: 1,
-                  maxLines: 4,
-                  decoration: InputDecoration(
-                    hintText: lists ? 'Add an item…' : 'Write a message…',
-                    border: InputBorder.none,
-                    enabledBorder: InputBorder.none,
+          if (!forumTab)
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                border: Border.all(color: colors.outlineVariant),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Column(
+                children: [
+                  if (chat) groupComposerBar(context, room),
+                  TextField(
+                    controller: inboxComposer,
+                    minLines: 1,
+                    maxLines: 4,
+                    decoration: InputDecoration(
+                      hintText: lists ? 'Add an item…' : 'Write a message…',
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                    ),
                   ),
-                ),
-                Row(
-                  children: [
-                    IconButton(
-                      tooltip: 'Add original file',
-                      onPressed: addingAttachment
-                          ? null
-                          : () => attachmentAct(() async {
-                              final picker = widget.pickAttachment;
-                              if (picker != null) {
-                                final file = await picker();
-                                if (file != null) {
+                  Row(
+                    children: [
+                      IconButton(
+                        tooltip: 'Add original file',
+                        onPressed: addingAttachment
+                            ? null
+                            : () => attachmentAct(() async {
+                                final picker = widget.pickAttachment;
+                                if (picker != null) {
+                                  final file = await picker();
+                                  if (file != null) {
+                                    await addEverydayFile(
+                                      file.path,
+                                      name: file.name,
+                                      room: room,
+                                    );
+                                  }
+                                  return;
+                                }
+                                final selected = await FilePicker.pickFile();
+                                if (selected?.path != null) {
                                   await addEverydayFile(
-                                    file.path,
-                                    name: file.name,
+                                    selected!.path!,
+                                    name: selected.name,
                                     room: room,
                                   );
                                 }
-                                return;
-                              }
-                              final selected = await FilePicker.pickFile();
-                              if (selected?.path != null) {
-                                await addEverydayFile(
-                                  selected!.path!,
-                                  name: selected.name,
-                                  room: room,
+                              }),
+                        icon: const Icon(Icons.attach_file),
+                      ),
+                      IconButton(
+                        tooltip: 'Paste text or screenshot',
+                        onPressed: addingAttachment
+                            ? null
+                            : () => attachmentAct(pasteInbox),
+                        icon: const Icon(Icons.content_paste),
+                      ),
+                      const Spacer(),
+                      FilledButton.icon(
+                        onPressed: savingNote
+                            ? null
+                            : chat
+                            ? () => noteAction(
+                                () => sendGroupMessage(room, draftKey),
+                              )
+                            : () => noteAction(() async {
+                                final submitted = inboxComposer.text;
+                                final text = submitted.trim();
+                                if (text.isEmpty) return;
+                                await Everyday(node).write({
+                                  'type': lists ? 'check' : 'note',
+                                  'text': text,
+                                  if (lists) 'done': false,
+                                  if (lists)
+                                    'list': listName.text.trim().isEmpty
+                                        ? 'Shopping'
+                                        : listName.text.trim(),
+                                }, room: room);
+                                await finishDraft(
+                                  draftKey,
+                                  submitted,
+                                  notes: true,
                                 );
-                              }
-                            }),
-                      icon: const Icon(Icons.attach_file),
-                    ),
-                    IconButton(
-                      tooltip: 'Paste text or screenshot',
-                      onPressed: addingAttachment
-                          ? null
-                          : () => attachmentAct(pasteInbox),
-                      icon: const Icon(Icons.content_paste),
-                    ),
-                    const Spacer(),
-                    FilledButton.icon(
-                      onPressed: savingNote
-                          ? null
-                          : () => noteAction(() async {
-                              final submitted = inboxComposer.text;
-                              final text = submitted.trim();
-                              if (text.isEmpty) return;
-                              await Everyday(node).write({
-                                'type': lists ? 'check' : 'note',
-                                'text': text,
-                                if (lists) 'done': false,
-                                if (lists)
-                                  'list': listName.text.trim().isEmpty
-                                      ? 'Shopping'
-                                      : listName.text.trim(),
-                              }, room: room);
-                              await finishDraft(
-                                draftKey,
-                                submitted,
-                                notes: true,
-                              );
-                            }),
-                      icon: const Icon(Icons.arrow_upward, size: 18),
-                      label: const Text('Add'),
-                    ),
-                  ],
-                ),
-              ],
+                              }),
+                        icon: Icon(
+                          chat ? Icons.send : Icons.arrow_upward,
+                          size: 18,
+                        ),
+                        label: Text(chat ? 'Send' : 'Add'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
         ],
       ),
     );

@@ -1,5 +1,8 @@
+import 'dart:async';
+import 'dart:math' as math;
 import 'model.dart';
 import 'node.dart';
+import 'room_forum.dart';
 
 class EverydayItem {
   final SignedObject object;
@@ -92,8 +95,29 @@ class Everyday {
       );
       count++;
     }
+    if (entries) {
+      for (final post in await RoomForum.read(node, current)) {
+        await node.publish(
+          'room_post',
+          _postCopy(post),
+          space: current.object.space,
+          audience: await members(current),
+        );
+        count++;
+      }
+    }
     return count;
   }
+
+  /// A forum post as republished for people who could not read the original.
+  /// It remembers what it copies, so replies still find their parent.
+  Json _postCopy(ForumPost post) => {
+    ...post.data,
+    'history': true,
+    'originalAuthor': post.author,
+    'copyOf': post.root,
+    'sent': post.sent,
+  };
 
   /// The record kinds group history is made of. Membership lives in the first
   /// two; the rest is what members wrote.
@@ -382,6 +406,28 @@ class Everyday {
         audience: historyAudience,
       );
     }
+    // The group forum has no epochs: members who had a post keep it. Where the
+    // room moved to a new space (legacy groups) everyone needs a copy, and
+    // otherwise only the people joining do, and only if history is shared.
+    final before = (room.data['members'] as List).cast<String>();
+    final joining = nextMembers.where((p) => !before.contains(p)).toList();
+    for (final post in await RoomForum.read(node, room)) {
+      final List<String> readers;
+      if (id == room.object.space) {
+        if (!shareHistory || joining.isEmpty) continue;
+        readers = [node.person, ...joining];
+      } else {
+        readers = shareHistory
+            ? nextMembers
+            : nextMembers.where(post.object.audience.contains).toList();
+      }
+      await node.publish(
+        'room_post',
+        _postCopy(post),
+        space: id,
+        audience: readers,
+      );
+    }
     await beforePublish?.call(data, nextMembers);
     final next = EverydayItem(
       await node.publish('room', data, space: id, audience: audience),
@@ -422,6 +468,33 @@ class Everyday {
     );
   }
 
+  /// Whether [r] is an item of [selected], the room record in force: written
+  /// by a member, to the right audience and, once rooms have epochs, within
+  /// the current one. History shared with a new member counts only from the
+  /// owner.
+  bool _belongs(EverydayItem selected, EverydayItem r) =>
+      r.object.kind == 'room_item' &&
+      r.object.space == selected.data['room'] &&
+      (selected.data['members'] as List).contains(r.object.author) &&
+      (selected.data['generation'] == null
+          ? r.object.audience.toSet().containsAll(selected.object.audience) &&
+                r.object.audience.length == selected.object.audience.length
+          : r.data['epoch'] == epoch(selected) &&
+                r.object.audience.every(
+                  (p) => (selected.data['members'] as List).contains(p),
+                ) &&
+                (r.data['history'] != true ||
+                    r.object.author == selected.data['owner']));
+
+  /// When an item was first written. Editing replaces the object, so newer
+  /// items carry the original time in `sent`; older ones fall back to the
+  /// object's own.
+  static int sentOf(EverydayItem i) =>
+      i.data['sent'] as int? ?? i.object.created;
+
+  /// What reactions to a group entry are filed under.
+  static String reactionTarget(EverydayItem i) => 'entry:${i.data['entry']}';
+
   Future<List<EverydayItem>> items([EverydayItem? room]) async {
     // One pass over the space serves both membership and item selection. A
     // room's items live in its own space, and the inbox in `_inbox`, so this
@@ -431,29 +504,12 @@ class Everyday {
     final selected = room;
     final result = records
         .where(
-          (r) => room == null
+          (r) => selected == null
               ? r.object.kind == 'inbox' &&
                     r.object.author == node.person &&
                     r.object.audience.length == 1 &&
                     r.object.audience.single == node.person
-              : r.object.kind == 'room_item' &&
-                    r.object.space == selected!.data['room'] &&
-                    (selected.data['members'] as List).contains(
-                      r.object.author,
-                    ) &&
-                    (selected.data['generation'] == null
-                        ? r.object.audience.toSet().containsAll(
-                                selected.object.audience,
-                              ) &&
-                              r.object.audience.length ==
-                                  selected.object.audience.length
-                        : r.data['epoch'] == epoch(selected) &&
-                              r.object.audience.every(
-                                (p) => (selected.data['members'] as List)
-                                    .contains(p),
-                              ) &&
-                              (r.data['history'] != true ||
-                                  r.object.author == selected.data['owner'])),
+              : _belongs(selected, r),
         )
         .toList();
     result.sort((a, b) {
@@ -622,3 +678,183 @@ class _EverydayIndex {
 class _EverydaySpace {
   final records = <EverydayItem>[];
 }
+
+/// A window onto one group's chat that grows from the newest message back,
+/// and takes in new arrivals from an insertion cursor.
+///
+/// [Everyday.items] reads and decrypts a whole space, which is the right
+/// answer for a pass that must see everything (re-sharing history) but not
+/// for showing a chat: opening it would cost the length of the conversation.
+/// This reads pages of the newest objects until it has enough entries, keeps
+/// only the latest version of each, and later pages back on request. The cost
+/// of opening, and of every refresh, follows what is shown or new.
+class RoomFeed {
+  final Node node;
+  final String space;
+  EverydayItem _room;
+  final _entries = <String, EverydayItem>{};
+  (int, String)? _after;
+  bool _exhausted = false;
+  int _cursor;
+  int _floor = 0;
+  String _blocked;
+  List<EverydayItem>? _sorted;
+  Future<void>? _loading;
+  final _deferred = <String, EverydayItem>{};
+
+  RoomFeed(this.node, EverydayItem room)
+    : space = room.object.space,
+      _room = room,
+      _cursor = node.store.insertionCursor,
+      _blocked = '${node.blocked.toList()..sort()}';
+
+  /// The room record this window was last checked against.
+  EverydayItem get room => _room;
+
+  /// Whether older messages remain beyond what has been read.
+  bool get hasOlder => !_exhausted;
+
+  /// Latest version of each loaded entry, newest first. Deleted entries are
+  /// included so callers can show that they were removed.
+  List<EverydayItem> get items => _sorted ??= () {
+    final list = _entries.values.toList();
+    list.sort((a, b) {
+      final order = Everyday.sentOf(b).compareTo(Everyday.sentOf(a));
+      if (order != 0) return order;
+      final clock = (b.data['clock'] as int).compareTo(a.data['clock'] as int);
+      return clock != 0 ? clock : b.object.id.compareTo(a.object.id);
+    });
+    return list;
+  }();
+
+  /// The loaded entry with this entry ID, if any.
+  EverydayItem? entry(String id) => _entries[id];
+
+  /// Reads back until about [want] more entries are loaded or history ends.
+  /// Returns how many were added. Concurrent calls queue behind each other.
+  Future<int> loadOlder({int want = 40}) async {
+    while (_loading != null) {
+      await _loading;
+    }
+    final done = Completer<void>();
+    _loading = done.future;
+    try {
+      return await _loadOlder(want);
+    } finally {
+      _loading = null;
+      done.complete();
+    }
+  }
+
+  Future<int> _loadOlder(int want) async {
+    if (_exhausted) return 0;
+    final everyday = Everyday(node);
+    _room = await everyday.current(_room);
+    var added = 0;
+    final slice = TimeSlice();
+    while (added < want && !_exhausted) {
+      final page = node.store.objects(
+        kind: 'room_item',
+        space: space,
+        after: _after,
+        limit: 64,
+      );
+      if (page.isEmpty) {
+        _exhausted = true;
+        break;
+      }
+      _after = (page.last.created, page.last.id);
+      for (final o in page) {
+        await slice.pause();
+        if (await _take(everyday, o) == _Merge.added) added++;
+      }
+    }
+    if (_entries.isNotEmpty) {
+      _floor = _entries.values.map(Everyday.sentOf).reduce(math.min);
+    }
+    return added;
+  }
+
+  /// Takes in what arrived since the last call. True when anything shown may
+  /// have changed, including a membership change that restarts the window.
+  Future<bool> refresh() async {
+    final target = node.store.insertionCursor;
+    final blocked = '${node.blocked.toList()..sort()}';
+    final everyday = Everyday(node);
+    final next = await everyday.current(_room);
+    if (everyday.epoch(next) != everyday.epoch(_room) ||
+        next.data['generation'] != _room.data['generation'] ||
+        blocked != _blocked) {
+      _room = next;
+      _blocked = blocked;
+      _entries.clear();
+      _deferred.clear();
+      _after = null;
+      _exhausted = false;
+      _sorted = null;
+      _cursor = target;
+      await loadOlder();
+      return true;
+    }
+    _room = next;
+    if (target == _cursor) return false;
+    var changed = false;
+    var cursor = _cursor;
+    final slice = TimeSlice();
+    while (true) {
+      final page = node.store.insertedAfter(cursor, ['room_item']);
+      if (page.isEmpty) break;
+      for (final (sequence, o) in page) {
+        cursor = sequence;
+        if (o.space != space) continue;
+        await slice.pause();
+        if (await _take(everyday, o, fresh: true) != _Merge.none) {
+          changed = true;
+        }
+      }
+    }
+    _cursor = math.max(cursor, target);
+    return changed;
+  }
+
+  Future<_Merge> _take(
+    Everyday everyday,
+    SignedObject o, {
+    bool fresh = false,
+  }) async {
+    if (o.isPublic || !node.visible(o)) return _Merge.none;
+    final p = await node.content(o);
+    if (p == null) return _Merge.none;
+    var item = EverydayItem(o, p);
+    if (!everyday._belongs(_room, item)) return _Merge.none;
+    final id = p['entry'];
+    if (id is! String) return _Merge.none;
+    final old = _entries[id];
+    // An edit to something older than the window would leave a gap of
+    // unloaded messages if shown now. It is held until paging reaches the
+    // entry, because that walk goes by when objects were written and the edit
+    // sits ahead of it.
+    if (fresh && old == null && !_exhausted && Everyday.sentOf(item) < _floor) {
+      final held = _deferred[id];
+      if (held == null || _newer(item, held)) _deferred[id] = item;
+      return _Merge.none;
+    }
+    if (!fresh) {
+      final held = _deferred[id];
+      if (held != null && _newer(held, item)) item = held;
+    }
+    if (old != null && !_newer(item, old)) return _Merge.none;
+    _deferred.remove(id);
+    _entries[id] = item;
+    _sorted = null;
+    return old == null ? _Merge.added : _Merge.replaced;
+  }
+
+  /// Which version of an entry wins: the higher clock, then the higher ID.
+  static bool _newer(EverydayItem a, EverydayItem b) {
+    final order = (a.data['clock'] as int).compareTo(b.data['clock'] as int);
+    return order > 0 || (order == 0 && a.object.id.compareTo(b.object.id) > 0);
+  }
+}
+
+enum _Merge { none, replaced, added }

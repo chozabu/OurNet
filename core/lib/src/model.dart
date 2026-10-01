@@ -147,6 +147,10 @@ bool validContent(String kind, Json p) {
           ['note', 'file', 'check', 'pin'].contains(p['type']) &&
           (!['note', 'check'].contains(p['type']) || p['text'] is String) &&
           (p['deleted'] == null || p['deleted'] is bool) &&
+          // Optional, for group chat: the entry replied to, and when the
+          // entry was first written (an edit is a newer object).
+          (p['reply'] == null || p['reply'] is String) &&
+          (p['sent'] == null || p['sent'] is int) &&
           (p['type'] != 'file' || p['chunks'] is List) &&
           (p['type'] != 'check' ||
               (p['done'] is bool && p['list'] is String)) &&
@@ -174,6 +178,17 @@ bool validContent(String kind, Json p) {
       p['text'] is String &&
           (p['title'] == null ||
               (p['title'] is String && (p['title'] as String).length <= 200)),
+    // A discussion post in a private group's forum: like `post`, but private
+    // to the group, so it is its own kind and builds without it ignore it.
+    'room_post' =>
+      (p['text'] is String || p['chunks'] is List) &&
+          (p['title'] == null ||
+              (p['title'] is String && (p['title'] as String).length <= 200)) &&
+          (p['parent'] == null || p['parent'] is String) &&
+          (p['history'] == null || p['history'] is bool) &&
+          (p['originalAuthor'] == null || p['originalAuthor'] is String) &&
+          (p['copyOf'] == null || p['copyOf'] is String) &&
+          (p['sent'] == null || p['sent'] is int),
     'message' =>
       (p['text'] is String || p['chunks'] is List) &&
           (p['reply'] == null || p['reply'] is String) &&

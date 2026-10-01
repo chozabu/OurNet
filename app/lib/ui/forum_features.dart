@@ -57,7 +57,8 @@ extension _ForumFeatures on _OurNetAppState {
     }, space: space);
   }
 
-  Future<void> newDiscussion(BuildContext context) async {
+  /// Starts a discussion in the public forum, or in [group]'s private one.
+  Future<void> newDiscussion(BuildContext context, {RoomForum? group}) async {
     final title = TextEditingController(), body = TextEditingController();
     dynamic attachment;
     final accepted = await showDialog<bool>(
@@ -108,8 +109,10 @@ extension _ForumFeatures on _OurNetAppState {
                       onPressed: () => change(() => attachment = null),
                       child: const Text('Remove attachment'),
                     ),
-                  const Text(
-                    'Public · anyone receiving this forum can read this discussion.',
+                  Text(
+                    group != null
+                        ? 'Private · only members of this group can read this discussion.'
+                        : 'Public · anyone receiving this forum can read this discussion.',
                   ),
                 ],
               ),
@@ -137,11 +140,12 @@ extension _ForumFeatures on _OurNetAppState {
     });
     if (accepted != true) return;
     if (attachment == null) {
-      await node.publish('post', {
-        'title': heading,
-        'text': text,
-        'parent': null,
-      }, space: space);
+      final content = {'title': heading, 'text': text, 'parent': null};
+      if (group != null) {
+        await group.publish(content);
+      } else {
+        await node.publish('post', content, space: space);
+      }
     } else {
       final directory = await getTemporaryDirectory();
       final temp = File('${directory.path}/${randomId()}.post');
@@ -161,12 +165,19 @@ extension _ForumFeatures on _OurNetAppState {
         await files.publish(
           temp.path,
           name: attachment.name as String,
-          postSpace: space,
+          postSpace: group?.space ?? space,
           post: {'title': heading, 'text': text, 'parent': null},
+          audience: group == null ? const [] : await group.audience(),
+          kind: group == null ? null : 'room_post',
         );
       } finally {
         if (await temp.exists()) await temp.delete();
       }
+    }
+    if (group != null) {
+      await group.refresh();
+      if (mounted) update(() {});
+      return;
     }
     update(() {
       selectedThread = null;

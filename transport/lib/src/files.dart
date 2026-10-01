@@ -26,6 +26,10 @@ class Files {
     String? postSpace,
     Json? post,
 
+    /// The object kind to publish as, where the usual choice from the other
+    /// arguments is not wanted (a private group's forum posts).
+    String? kind,
+
     /// Extra payload fields, such as a voice message's duration and transcript.
     Json? extra,
     List<String> via = const [],
@@ -59,15 +63,16 @@ class Files {
       }
       if (completed != size) throw StateError('File changed during import');
       return await node.publish(
-        postSpace != null
-            ? 'post'
-            : everyday != null
-            ? (room == null ? 'inbox' : 'room_item')
-            : drive != null
-            ? 'drive'
-            : audience.isEmpty
-            ? 'file'
-            : 'message',
+        kind ??
+            (postSpace != null
+                ? 'post'
+                : everyday != null
+                ? (room == null ? 'inbox' : 'room_item')
+                : drive != null
+                ? 'drive'
+                : audience.isEmpty
+                ? 'file'
+                : 'message'),
         {
           'text': text,
           'name': name ?? file.uri.pathSegments.last,

@@ -804,6 +804,12 @@ extension _SocialPages on _OurNetAppState {
     VoidCallback? attach,
     VoidCallback? voice,
     bool sending = false,
+
+    /// For a composer that is not the DM or public forum one: its draft key,
+    /// the post being replied to, and how to stop replying.
+    String? draftKey,
+    String? replying,
+    VoidCallback? cancelReply,
   }) {
     final chat = tab == Destination.messages;
     final desktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
@@ -856,9 +862,11 @@ extension _SocialPages on _OurNetAppState {
       );
     }
 
-    final key = tab == Destination.messages
-        ? 'message/$contact'
-        : 'community/$space/$selectedThread';
+    final key =
+        draftKey ??
+        (tab == Destination.messages
+            ? 'message/$contact'
+            : 'community/$space/$selectedThread');
     if (composerContext != key) {
       if (composerContext != null) drafts[composerContext!] = composer.value;
       composerContext = key;
@@ -871,12 +879,15 @@ extension _SocialPages on _OurNetAppState {
       child: Column(
         children: [
           if (chat) ?composerContextBar(context),
-          if (!chat && replyTo != null)
+          if (!chat && (replying ?? replyTo) != null)
             Row(
               children: [
-                Expanded(child: Text('Replying to ${short(replyTo!)}')),
+                Expanded(
+                  child: Text('Replying to ${short((replying ?? replyTo)!)}'),
+                ),
                 IconButton(
-                  onPressed: () => update(() => replyTo = null),
+                  tooltip: 'Cancel reply',
+                  onPressed: cancelReply ?? () => update(() => replyTo = null),
                   icon: const Icon(Icons.close),
                 ),
               ],
@@ -890,7 +901,7 @@ extension _SocialPages on _OurNetAppState {
                   onPressed: busy ? null : attach,
                   icon: const Icon(Icons.attach_file),
                 ),
-              if (attach != null)
+              if (attach != null && chat)
                 IconButton(
                   tooltip: 'Paste image',
                   onPressed: busy ? null : () => act(pasteImage),

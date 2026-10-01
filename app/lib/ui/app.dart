@@ -69,6 +69,8 @@ export '../controllers/notes_home_controller.dart' show notesPage, NotesView;
 
 part 'home.dart';
 part 'everyday.dart';
+part 'group_chat.dart';
+part 'group_forum.dart';
 part 'social.dart';
 part 'conversation.dart';
 part 'objects.dart';
@@ -190,6 +192,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   Future<List<EverydayItem>>? roomsView;
   Future<List<(EverydayItem, String)>>? attachmentsView;
   final inboxComposer = TextEditingController();
+  final groupChatScroll = ScrollController();
   final listName = TextEditingController(text: 'Shopping');
   String everydaySection = 'Conversation';
   bool inboxDragging = false;
@@ -246,6 +249,28 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   final messageReply = <String, String>{};
   final messageEdit = <String, String>{};
 
+  /// The open group's chat: a window onto its newest messages that grows
+  /// backwards as the reader scrolls. Replaced when another group opens.
+  RoomFeed? roomFeed;
+  bool roomFeedReady = false;
+  bool roomFeedLoadingOlder = false;
+  Object? roomFeedError;
+
+  /// Per group: the entry being replied to, or edited.
+  final groupReply = <String, String>{};
+  final groupEdit = <String, String>{};
+  final groupKeys = <String, GlobalKey>{};
+
+  /// The open group's forum, read once and kept current.
+  RoomForum? roomForum;
+  bool roomForumReady = false;
+  Object? roomForumError;
+
+  /// Per group (by room ID): the open discussion and the post being replied to.
+  final groupThreads = <String, String>{};
+  final groupReplies = <String, String>{};
+  final groupDraftBeforeEdit = <String, TextEditingValue>{};
+
   /// Messages chosen in selection mode, in the open conversation.
   final selectedMessages = <String>{};
   String? highlightedMessage;
@@ -276,6 +301,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    groupChatScroll.addListener(groupChatScrolled);
     if (widget.enablePlatform) performance.start();
     conversations = ConversationController(node);
     messageUpdates = MessageUpdates(node);
@@ -368,6 +394,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       everydayView = null;
       roomsView = null;
       attachmentsView = null;
+      await refreshGroupChat();
+      await refreshGroupForum();
       refresh();
       _deliveryRefresh.schedule();
     }, (e) => notice('$e'));
@@ -830,6 +858,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     unawaited(folderSync.close());
     unawaited(notifications.close());
     inboxComposer.dispose();
+    groupChatScroll
+      ..removeListener(groupChatScrolled)
+      ..dispose();
     listName.dispose();
     composer.dispose();
     search.dispose();
@@ -860,6 +891,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     final base = _plainName(person);
     return node.blocked.contains(person) ? '$base (blocked)' : base;
   }
+
+  /// Whether chat bubbles from others carry the sender's name. Group chats
+  /// always do; the setting covers direct messages and defaults to on.
+  bool get showSenderNames => node.store.setting('chatNames') != false;
 
   List<String> get people => node.contacts.values
       .map((c) => c.person)

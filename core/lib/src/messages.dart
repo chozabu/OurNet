@@ -110,19 +110,33 @@ class MessageUpdates {
   }
 
   /// Emoji per person who reacted to [message] and may see it.
-  Map<String, String> reactions(SignedObject message) {
-    final all = node.store.setting('reactions/${message.id}');
+  Map<String, String> reactions(SignedObject message) =>
+      reactionsFor(message.id, {message.author, ...message.audience});
+
+  /// Emoji per person in [people] who reacted to [target]. A group entry is
+  /// reacted to by its entry ID (see [Everyday.reactionTarget]) rather than
+  /// by object, because editing or re-sharing it replaces the object.
+  Map<String, String> reactionsFor(String target, Set<String> people) {
+    final all = node.store.setting('reactions/$target');
     if (all is! Map) return const {};
     return {
       for (final MapEntry(:key, :value) in all.entries)
         if (value is Map &&
             value['emoji'] is String &&
             (value['emoji'] as String).isNotEmpty &&
-            (key == message.author || message.audience.contains(key)) &&
+            people.contains(key) &&
             !node.blocked.contains(key))
           key as String: value['emoji'] as String,
     };
   }
+
+  /// A reaction to something that is not a single message object, sent to
+  /// [audience] (everyone concerned except this person).
+  Future<SignedObject> reactToTarget(
+    String target,
+    List<String> audience,
+    String emoji,
+  ) => _publish('reaction', target, audience, {'emoji': emoji});
 
   /// The replacement text its author gave [message], if any.
   String? editedText(SignedObject message) {
@@ -149,21 +163,35 @@ class MessageUpdates {
     return text == null ? payload : {...payload, 'text': text};
   }
 
-  Future<SignedObject> react(SignedObject message, String emoji) =>
-      _publish('reaction', message, {'emoji': emoji});
+  Future<SignedObject> react(SignedObject message, String emoji) => _publish(
+    'reaction',
+    message.id,
+    message.audience.where((p) => p != node.person).toList(),
+    {'emoji': emoji},
+  );
 
   Future<SignedObject> edit(SignedObject message, String text) {
     if (message.author != node.person) {
       throw StateError('Only your own messages can be edited');
     }
-    return _publish('message_edit', message, {'text': text.trim()});
+    return _publish(
+      'message_edit',
+      message.id,
+      message.audience.where((p) => p != node.person).toList(),
+      {'text': text.trim()},
+    );
   }
 
   Future<SignedObject> deleteForEveryone(SignedObject message) {
     if (message.author != node.person) {
       throw StateError('Only your own messages can be deleted for everyone');
     }
-    return _publish('message_delete', message, const {});
+    return _publish(
+      'message_delete',
+      message.id,
+      message.audience.where((p) => p != node.person).toList(),
+      const {},
+    );
   }
 
   /// Hides [message] on this device only; settings are not shared. It is
@@ -176,14 +204,15 @@ class MessageUpdates {
 
   Future<SignedObject> _publish(
     String kind,
-    SignedObject message,
+    String target,
+    List<String> audience,
     Json fields,
   ) async {
     final object = await node.publish(
       kind,
-      {'object': message.id, ...fields},
+      {'object': target, ...fields},
       space: '_messages',
-      audience: message.audience.where((p) => p != node.person).toList(),
+      audience: audience,
     );
     await catchUp();
     node.notify();

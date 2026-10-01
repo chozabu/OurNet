@@ -10,6 +10,7 @@ export 'src/voting.dart';
 export 'src/messages.dart';
 export 'src/drive.dart';
 export 'src/everyday.dart';
+export 'src/room_forum.dart';
 export 'src/notes.dart';
 export 'src/note_state.dart';
 export 'src/keep_import.dart';

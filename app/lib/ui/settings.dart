@@ -247,6 +247,14 @@ extension _SettingsPages on _OurNetAppState {
           node.store.set('compact', value);
         },
       ),
+      SwitchListTile(
+        title: const Text('Show names in direct messages'),
+        subtitle: const Text(
+          'Put the sender\'s name above their messages, as in group chats.',
+        ),
+        value: showSenderNames,
+        onChanged: (value) => update(() => node.store.set('chatNames', value)),
+      ),
       ListTile(
         title: const Text('Accent colour'),
         subtitle: Wrap(

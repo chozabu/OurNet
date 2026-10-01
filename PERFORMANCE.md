@@ -592,3 +592,24 @@ p99 10.596 ms, maximum 10.752 ms, and maximum sampled event-loop delay 15.338 ms
 Report: `app/build/conversation_history_test-windows.json`. This is one profile
 run, not a comparative speedup claim. No physical Android device was connected;
 Android, WAN and real voice/video acceptance remain outstanding.
+
+## Group chat journey, 1 October 2026
+
+`integration_test/group_history_test.dart` is the group counterpart: two disk
+profiles and a private group holding 1,005 messages. A group chat shows
+`RoomFeed`'s window (newest first, 40 or more entries at a time) instead of
+reading the whole group, so the journey measures the open, then a deliberately
+harsh read-back (jumping to the end of the list repeatedly until message 0 is
+loaded), then twelve incoming messages while typing with the reader scrolled
+away from the newest. It asserts the draft survives and that "latest" returns to
+the newest message. It is part of `tool/check.ps1 -Performance`.
+
+On this Windows reference machine (profile, one run): the chat showed the newest
+message 58 ms after the group was tapped. The enforced phase, incoming messages
+while typing, measured 255 frames over 2.3 seconds: frame-stage p95 7.16 ms, p99
+19.4 ms, maximum 22.1 ms, and maximum sampled event-loop delay 22.1 ms. The
+read-back phase is recorded but **not** asserted: it had 18 of 281 frames over
+budget (build p95 38.8 ms, maximum 51 ms) because each page of earlier messages
+is built in one frame after a jump to the end; it is not a figure for normal
+scrolling. No physical Android device was connected; Android timing is
+unvalidated. The other four journeys were not re-run for this change.

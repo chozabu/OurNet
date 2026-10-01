@@ -5,7 +5,12 @@ extension _ObjectsPages on _OurNetAppState {
     BuildContext context,
     List<SignedObject> objects, {
     ScrollController? controller,
+
+    /// Set for a private group's forum, which keeps its own open discussion
+    /// and reply target; otherwise the public forum's are used.
+    ForumScope? forum,
   }) {
+    final thread = forum != null ? forum.thread : selectedThread;
     objects = objects.where(contentVisible).toList();
     if (objects.isEmpty) {
       return empty(
@@ -16,7 +21,9 @@ extension _ObjectsPages on _OurNetAppState {
     }
     return ListView.builder(
       controller: controller,
-      key: PageStorageKey('objects/$tab/$contact/$space/$selectedThread'),
+      key: PageStorageKey(
+        forum?.key ?? 'objects/$tab/$contact/$space/$selectedThread',
+      ),
       itemCount: objects.length,
       itemBuilder: (context, index) {
         final o = objects[index];
@@ -25,9 +32,20 @@ extension _ObjectsPages on _OurNetAppState {
           builder: (context, snapshot) {
             final p = snapshot.data;
             if (p == null) return const SizedBox.shrink();
+            final isPost = o.kind == 'post' || o.kind == 'room_post';
+            // Forum history shared with a new member is republished by the
+            // group's owner; the person who wrote it is named in the post.
+            final author = o.kind == 'room_post' && p['history'] == true
+                ? (p['originalAuthor'] as String? ?? o.author)
+                : o.author;
+            final written = DateTime.fromMillisecondsSinceEpoch(
+              o.kind == 'room_post'
+                  ? p['sent'] as int? ?? o.created
+                  : o.created,
+            );
             return Card(
               color:
-                  o.author != node.person &&
+                  author != node.person &&
                       node.store.setting(
                             '${o.kind == 'message' ? 'read' : 'seen'}/${o.id}',
                           ) !=
@@ -37,8 +55,8 @@ extension _ObjectsPages on _OurNetAppState {
               margin: EdgeInsets.only(
                 top: 6,
                 bottom: 6,
-                left: o.kind == 'post' && selectedThread != null
-                    ? replyDepth(o).clamp(0, 4) * 16.0
+                left: isPost && thread != null
+                    ? (forum?.depth(o) ?? replyDepth(o)).clamp(0, 4) * 16.0
                     : 0,
               ),
               child: Padding(
@@ -50,22 +68,20 @@ extension _ObjectsPages on _OurNetAppState {
                       children: [
                         CircleAvatar(
                           radius: 15,
-                          child: Text(name(o.author).substring(0, 1)),
+                          child: Text(name(author).substring(0, 1)),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            name(o.author),
+                            name(author),
                             style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
                         ),
                         Text(
-                          DateTime.fromMillisecondsSinceEpoch(
-                            o.created,
-                          ).toLocal().toString().substring(0, 16),
+                          written.toLocal().toString().substring(0, 16),
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
-                        if (o.kind == 'post')
+                        if (isPost)
                           PopupMenuButton<String>(
                             tooltip: 'Discussion options',
                             onSelected: (action) {
@@ -75,7 +91,7 @@ extension _ObjectsPages on _OurNetAppState {
                                 refresh();
                               }
                               if (action == 'block') {
-                                node.block(o.author, true);
+                                node.block(author, true);
                                 searchIndex = null;
                                 refresh();
                               }
@@ -92,7 +108,7 @@ extension _ObjectsPages on _OurNetAppState {
                                 value: 'hide',
                                 child: Text('Hide for me'),
                               ),
-                              if (o.author != node.person)
+                              if (author != node.person)
                                 const PopupMenuItem(
                                   value: 'block',
                                   child: Text('Block author'),
@@ -111,7 +127,7 @@ extension _ObjectsPages on _OurNetAppState {
                         ),
                       ],
                     ),
-                    if (o.kind == 'post' && p['title'] != null)
+                    if (isPost && p['title'] != null)
                       Padding(
                         padding: const EdgeInsets.only(top: 12),
                         child: Text(
@@ -156,26 +172,30 @@ extension _ObjectsPages on _OurNetAppState {
                       ),
                     if (fileErrors[o.id] case final error?)
                       Text('$error · Verified chunks are kept for retry.'),
-                    if (o.kind == 'post' && selectedThread == null)
+                    if (isPost && thread == null)
                       TextButton.icon(
-                        onPressed: () => update(() {
-                          selectedThread = o.id;
-                          replyTo = null;
-                        }),
+                        onPressed: forum != null
+                            ? () => forum.open(o.id)
+                            : () => update(() {
+                                selectedThread = o.id;
+                                replyTo = null;
+                              }),
                         icon: const Icon(Icons.forum_outlined),
                         label: Text(
-                          'Open discussion · ${replyCounts()[o.id] ?? 0} direct replies',
+                          'Open discussion · ${forum?.replies(o) ?? replyCounts()[o.id] ?? 0} direct replies',
                         ),
                       ),
                     Wrap(
                       spacing: 8,
                       children: [
-                        if (o.kind == 'post')
+                        if (isPost)
                           TextButton.icon(
-                            onPressed: () => update(() {
-                              selectedThread ??= o.id;
-                              replyTo = o.id;
-                            }),
+                            onPressed: forum != null
+                                ? () => forum.reply(o.id)
+                                : () => update(() {
+                                    selectedThread ??= o.id;
+                                    replyTo = o.id;
+                                  }),
                             icon: const Icon(Icons.reply, size: 16),
                             label: const Text('Reply'),
                           ),
@@ -194,7 +214,11 @@ extension _ObjectsPages on _OurNetAppState {
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         Text(
-                          o.isPublic ? 'Public' : 'Encrypted · selected people',
+                          o.isPublic
+                              ? 'Public'
+                              : o.kind == 'room_post'
+                              ? 'Encrypted · group members'
+                              : 'Encrypted · selected people',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
@@ -431,4 +455,23 @@ extension _ObjectsPages on _OurNetAppState {
       Expanded(child: objectList(context, publicFileObjects())),
     ],
   );
+}
+
+/// What a private group's forum needs from [objectList] beyond the posts:
+/// where it is in its discussions, and how to move around them.
+class ForumScope {
+  final String key;
+  final String? thread;
+  final int Function(SignedObject) depth;
+  final int Function(SignedObject) replies;
+  final void Function(String id) open;
+  final void Function(String id) reply;
+  const ForumScope({
+    required this.key,
+    required this.thread,
+    required this.depth,
+    required this.replies,
+    required this.open,
+    required this.reply,
+  });
 }

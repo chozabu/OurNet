@@ -13,6 +13,9 @@ class ConversationHistory extends StatelessWidget {
   final Widget Function(BuildContext, SignedObject, bool) bubble;
   final List<Widget> footer;
 
+  /// Shown above the oldest message, e.g. while earlier ones are loading.
+  final Widget? earlier;
+
   /// The oldest message that was unread when the conversation was opened.
   final String? unreadMarker;
   final GlobalKey Function(String id)? keyFor;
@@ -23,6 +26,7 @@ class ConversationHistory extends StatelessWidget {
     required this.controller,
     required this.bubble,
     this.footer = const [],
+    this.earlier,
     this.unreadMarker,
     this.keyFor,
   });
@@ -33,10 +37,11 @@ class ConversationHistory extends StatelessWidget {
     reverse: true,
     key: PageStorageKey('conversation/$peer'),
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-    itemCount: footer.length + objects.length,
+    itemCount: footer.length + objects.length + (earlier == null ? 0 : 1),
     itemBuilder: (context, index) {
       if (index < footer.length) return footer[footer.length - 1 - index];
       index -= footer.length;
+      if (index == objects.length) return earlier!;
       final object = objects[index];
       final older = index + 1 < objects.length ? objects[index + 1] : null;
       final day = messageDay(object);

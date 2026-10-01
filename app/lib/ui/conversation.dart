@@ -30,6 +30,28 @@ extension _ConversationPages on _OurNetAppState {
     );
   }
 
+  /// The sender's name above their message, tinted per person so a busy
+  /// group stays readable.
+  Widget senderLabel(BuildContext context, String person) {
+    final hue = person.codeUnits.fold<int>(7, (h, c) => (h * 31 + c) % 360);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Text(
+        name(person),
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+          fontWeight: FontWeight.w700,
+          color: HSLColor.fromAHSL(
+            1,
+            hue.toDouble(),
+            .55,
+            dark ? .72 : .34,
+          ).toColor(),
+        ),
+      ),
+    );
+  }
+
   /// Latest message per conversation, read once per build.
   Map<String, ({String id, int created})> recentChats() => memo(
     'recentChats',
@@ -633,8 +655,9 @@ extension _ConversationPages on _OurNetAppState {
   Widget reactionRow(
     BuildContext context,
     SignedObject o,
-    Map<String, String> reactions,
-  ) {
+    Map<String, String> reactions, {
+    void Function(String emoji)? onReact,
+  }) {
     final scheme = Theme.of(context).colorScheme;
     final counts = <String, int>{};
     for (final emoji in reactions.values) {
@@ -661,7 +684,7 @@ extension _ConversationPages on _OurNetAppState {
                 ),
                 child: InkWell(
                   customBorder: const StadiumBorder(),
-                  onTap: () => react(o, emoji),
+                  onTap: () => (onReact ?? (e) => react(o, e))(emoji),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 6,
@@ -788,6 +811,8 @@ extension _ConversationPages on _OurNetAppState {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (!mine && groupStart && showSenderNames)
+                senderLabel(context, o.author),
               if (p['forwarded'] == true)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 2),
