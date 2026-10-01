@@ -809,6 +809,53 @@ extension _SocialPages on _OurNetAppState {
     final desktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
     const sendHint = 'Enter sends · Shift+Enter adds a line';
     final sendDisabled = chat ? sending : busy;
+    Future<void> pasteImage([Uint8List? given, String? mime]) async {
+      final draftKey = composerContext;
+      final submitted = composer.text;
+      final recipient = contact!;
+      final image = given ?? await clipboardImage();
+      if (image == null) {
+        throw StateError('Clipboard has no image');
+      }
+      if (image.length > 8 * 1024 * 1024) {
+        throw StateError('Clipboard image limit is 8 MiB');
+      }
+      final extension = switch (mime) {
+        'image/jpeg' => 'jpg',
+        'image/gif' => 'gif',
+        'image/webp' => 'webp',
+        _ => 'png',
+      };
+      final temp = File(
+        '${(await getTemporaryDirectory()).path}/${randomId()}.$extension',
+      );
+      try {
+        await temp.writeAsBytes(image);
+        await files.publish(temp.path, audience: [recipient], text: submitted);
+        await finishDraft(draftKey, submitted);
+      } finally {
+        if (await temp.exists()) await temp.delete();
+      }
+    }
+
+    // Ctrl/Cmd+V: send a clipboard image, otherwise paste text as usual.
+    Future<void> pasteIntoComposer(Future<void> Function() sendImage) async {
+      if (busy) return;
+      if (await clipboardImage() != null) {
+        await act(sendImage);
+        return;
+      }
+      final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+      if (text == null || text.isEmpty) return;
+      final selection = composer.selection;
+      final start = selection.isValid ? selection.start : composer.text.length;
+      final end = selection.isValid ? selection.end : start;
+      composer.value = TextEditingValue(
+        text: composer.text.replaceRange(start, end, text),
+        selection: TextSelection.collapsed(offset: start + text.length),
+      );
+    }
+
     final key = tab == Destination.messages
         ? 'message/$contact'
         : 'community/$space/$selectedThread';
@@ -846,99 +893,128 @@ extension _SocialPages on _OurNetAppState {
               if (attach != null)
                 IconButton(
                   tooltip: 'Paste image',
-                  onPressed: busy
-                      ? null
-                      : () => act(() async {
-                          final draftKey = composerContext;
-                          final submitted = composer.text;
-                          final recipient = contact!;
-                          final image = await Pasteboard.image;
-                          if (image == null) {
-                            throw StateError('Clipboard has no image');
-                          }
-                          if (image.length > 8 * 1024 * 1024) {
-                            throw StateError('Clipboard image limit is 8 MiB');
-                          }
-                          final temp = File(
-                            '${(await getTemporaryDirectory()).path}/${randomId()}.png',
-                          );
-                          try {
-                            await temp.writeAsBytes(image);
-                            await files.publish(
-                              temp.path,
-                              audience: [recipient],
-                              text: submitted,
-                            );
-                            await finishDraft(draftKey, submitted);
-                          } finally {
-                            if (await temp.exists()) await temp.delete();
-                          }
-                        }),
+                  onPressed: busy ? null : () => act(pasteImage),
                   icon: const Icon(Icons.content_paste),
                 ),
               Expanded(
-                child: Focus(
-                  onKeyEvent: (_, event) {
-                    if (chat && event is KeyDownEvent) {
-                      if (event.logicalKey == LogicalKeyboardKey.escape &&
-                          cancelComposerMode()) {
-                        return KeyEventResult.handled;
-                      }
-                      if (event.logicalKey == LogicalKeyboardKey.arrowUp &&
-                          composer.text.isEmpty &&
-                          editLastMessage()) {
-                        return KeyEventResult.handled;
-                      }
-                    }
-                    if (event.logicalKey != LogicalKeyboardKey.enter ||
-                        (composer.value.composing.isValid &&
-                            !composer.value.composing.isCollapsed)) {
-                      return KeyEventResult.ignored;
-                    }
-                    if (HardwareKeyboard.instance.isShiftPressed) {
-                      if (event is KeyDownEvent) {
-                        final selection = composer.selection;
-                        final start = selection.isValid
-                            ? selection.start
-                            : composer.text.length;
-                        final end = selection.isValid ? selection.end : start;
-                        composer.value = TextEditingValue(
-                          text: composer.text.replaceRange(start, end, '\n'),
-                          selection: TextSelection.collapsed(offset: start + 1),
-                        );
-                      }
-                      return KeyEventResult.handled;
-                    }
-                    if (event is KeyDownEvent && !sendDisabled) send();
-                    return KeyEventResult.handled;
+                child: Shortcuts(
+                  // The text field consumes Ctrl+V before a Focus ancestor
+                  // sees it, so claim the shortcut nearer to the field.
+                  shortcuts: {
+                    if (chat && attach != null) ...{
+                      const SingleActivator(
+                        LogicalKeyboardKey.keyV,
+                        control: true,
+                      ): const _PasteIntent(),
+                      const SingleActivator(
+                        LogicalKeyboardKey.keyV,
+                        meta: true,
+                      ): const _PasteIntent(),
+                    },
                   },
-                  child: TextField(
-                    controller: composer,
-                    minLines: 1,
-                    maxLines: 5,
-                    decoration: chat
-                        ? InputDecoration(
-                            hintText:
-                                contact != null &&
-                                    messageEdit.containsKey(contact)
-                                ? 'Edit message'
-                                : 'Message',
-                            filled: true,
-                            fillColor: Theme.of(context).colorScheme.surface,
-                            isDense: true,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
-                            ),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(24),
-                              borderSide: BorderSide.none,
-                            ),
-                          )
-                        : InputDecoration(
-                            helperText: desktop ? sendHint : null,
-                            hintText: 'Start a discussion in this forum…',
-                          ),
+                  child: Actions(
+                    actions: {
+                      _PasteIntent: CallbackAction<_PasteIntent>(
+                        onInvoke: (_) {
+                          unawaited(pasteIntoComposer(pasteImage));
+                          return null;
+                        },
+                      ),
+                    },
+                    child: Focus(
+                      onKeyEvent: (_, event) {
+                        if (chat && event is KeyDownEvent) {
+                          if (event.logicalKey == LogicalKeyboardKey.escape &&
+                              cancelComposerMode()) {
+                            return KeyEventResult.handled;
+                          }
+                          if (event.logicalKey == LogicalKeyboardKey.arrowUp &&
+                              composer.text.isEmpty &&
+                              editLastMessage()) {
+                            return KeyEventResult.handled;
+                          }
+                        }
+                        if (event.logicalKey != LogicalKeyboardKey.enter ||
+                            (composer.value.composing.isValid &&
+                                !composer.value.composing.isCollapsed)) {
+                          return KeyEventResult.ignored;
+                        }
+                        if (HardwareKeyboard.instance.isShiftPressed) {
+                          if (event is KeyDownEvent) {
+                            final selection = composer.selection;
+                            final start = selection.isValid
+                                ? selection.start
+                                : composer.text.length;
+                            final end = selection.isValid
+                                ? selection.end
+                                : start;
+                            composer.value = TextEditingValue(
+                              text: composer.text.replaceRange(
+                                start,
+                                end,
+                                '\n',
+                              ),
+                              selection: TextSelection.collapsed(
+                                offset: start + 1,
+                              ),
+                            );
+                          }
+                          return KeyEventResult.handled;
+                        }
+                        if (event is KeyDownEvent && !sendDisabled) send();
+                        return KeyEventResult.handled;
+                      },
+                      child: TextField(
+                        controller: composer,
+                        minLines: 1,
+                        maxLines: 5,
+                        // Images from the Android keyboard (stickers, GIFs, clipboard).
+                        contentInsertionConfiguration: chat && attach != null
+                            ? ContentInsertionConfiguration(
+                                allowedMimeTypes: const [
+                                  'image/png',
+                                  'image/jpeg',
+                                  'image/gif',
+                                  'image/webp',
+                                ],
+                                onContentInserted: (content) {
+                                  final bytes = content.data;
+                                  if (bytes == null || busy) return;
+                                  unawaited(
+                                    act(
+                                      () => pasteImage(bytes, content.mimeType),
+                                    ),
+                                  );
+                                },
+                              )
+                            : null,
+                        decoration: chat
+                            ? InputDecoration(
+                                hintText:
+                                    contact != null &&
+                                        messageEdit.containsKey(contact)
+                                    ? 'Edit message'
+                                    : 'Message',
+                                filled: true,
+                                fillColor: Theme.of(
+                                  context,
+                                ).colorScheme.surface,
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 12,
+                                ),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                  borderSide: BorderSide.none,
+                                ),
+                              )
+                            : InputDecoration(
+                                helperText: desktop ? sendHint : null,
+                                hintText: 'Start a discussion in this forum…',
+                              ),
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -970,4 +1046,8 @@ extension _SocialPages on _OurNetAppState {
       ),
     );
   }
+}
+
+class _PasteIntent extends Intent {
+  const _PasteIntent();
 }

@@ -354,32 +354,7 @@ extension _ObjectsPages on _OurNetAppState {
       await files.readBytes(object, limit: Files.maxSize),
     );
     if (!context.mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (context) => Dialog(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Flexible(
-              child: InteractiveViewer(
-                child: Image.memory(
-                  image,
-                  cacheWidth: 1600,
-                  errorBuilder: (_, _, _) => const Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Text('This file could not be decoded as an image.'),
-                  ),
-                ),
-              ),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-          ],
-        ),
-      ),
-    );
+    await showImageViewer(context, bytes: Future.value(image));
   });
   Future<void> saveFile(
     BuildContext context,

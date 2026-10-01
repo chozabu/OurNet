@@ -1,9 +1,9 @@
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
 
 import '../services/thumbnails.dart';
+import 'image_viewer.dart';
 
 bool isImagePayload(Json p) =>
     p['chunks'] is List &&
@@ -81,40 +81,11 @@ class _InlineImageState extends State<InlineImage> {
     ),
   );
 
-  void openOriginal(ImageProvider preview) => showDialog<void>(
-    context: context,
-    builder: (context) => Dialog(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(
-            child: InteractiveViewer(
-              child: FutureBuilder<Uint8List>(
-                future: widget.files.readBytes(
-                  widget.object,
-                  limit: Files.maxSize,
-                ),
-                builder: (context, snapshot) => snapshot.hasData
-                    ? Image.memory(
-                        snapshot.data!,
-                        cacheWidth: 1600,
-                        gaplessPlayback: true,
-                        errorBuilder: (_, _, _) =>
-                            const Text('Image could not be displayed'),
-                      )
-                    : snapshot.hasError
-                    ? const Text('Image could not be displayed')
-                    : Image(image: preview, gaplessPlayback: true),
-              ),
-            ),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    ),
+  void openOriginal(ImageProvider preview) => showImageViewer(
+    context,
+    bytes: widget.files.readBytes(widget.object, limit: Files.maxSize),
+    preview: preview,
+    title: widget.payload['name'] as String?,
   );
 
   @override

@@ -18,6 +18,36 @@ class MainActivity : FlutterActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private var folders: FolderAccess? = null
     private var channel: MethodChannel? = null
+    // The primary clip's first image, copied to the cache so Dart reads a file
+    // rather than receiving the bytes over the channel. Null when it has none.
+    private fun clipboardImage(): String? {
+        val manager = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val item = manager.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0) ?: return null
+        val uri = item.uri ?: return null
+        if (contentResolver.getType(uri)?.startsWith("image/") != true) return null
+        val out = File(cacheDir, "clip-${UUID.randomUUID()}")
+        try {
+            val input = contentResolver.openInputStream(uri) ?: return null
+            input.use { source ->
+                out.outputStream().use { sink ->
+                    val buffer = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val n = source.read(buffer)
+                        if (n < 0) break
+                        total += n
+                        if (total > 8L * 1024 * 1024) throw IllegalStateException("Clipboard image limit is 8 MiB")
+                        sink.write(buffer, 0, n)
+                    }
+                }
+            }
+            return out.path
+        } catch (e: Throwable) {
+            out.delete()
+            throw e
+        }
+    }
+
     private val queueDir get() = File(filesDir, "share-inbox").apply { mkdirs() }
 
     // Android may recreate the activity for configuration changes we do not
@@ -56,6 +86,16 @@ class MainActivity : FlutterActivity() {
         WidgetStore.attach(applicationContext, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/widgets"))
         WidgetStore.receiveLaunch(applicationContext, intent)
         SystemSpeech.attach(applicationContext, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/speech"))
+        MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/clipboard").setMethodCallHandler { call, result ->
+            if (call.method != "image") result.notImplemented()
+            else worker.execute {
+                val outcome = runCatching { clipboardImage() }
+                runOnUiThread {
+                    outcome.onSuccess { result.success(it) }
+                        .onFailure { result.error("clipboard", it.message, null) }
+                }
+            }
+        }
         channel = MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/share")
         channel!!.setMethodCallHandler { call, result ->
             when (call.method) {

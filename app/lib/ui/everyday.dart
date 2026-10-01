@@ -160,7 +160,7 @@ extension _EverydayPages on _OurNetAppState {
 
   Future<void> pasteInbox() async {
     final room = activeRoom;
-    final image = await Pasteboard.image;
+    final image = await clipboardImage();
     if (image != null) {
       final temp = File(
         '${(await getTemporaryDirectory()).path}/${randomId()}.png',
