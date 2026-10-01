@@ -15,15 +15,44 @@ import 'notes.dart';
 /// callers ask first; pairing asks with "Share history" and the device list
 /// offers it afterwards.
 Future<int> shareAllHistory(Node node, {void Function(int)? progress}) async {
-  final granted = await node.shareKeys(history: true, progress: progress);
-  await Drive(node).shareHistory();
-  await Everyday(node).shareHistory();
+  // Each step stands alone: a failure in one must not keep chats, which are
+  // the part people notice, from reaching the other device. What failed is
+  // reported at the end, with where, so it can be fixed rather than guessed at.
+  final failures = <String>[];
+  Future<T?> step<T>(String name, Future<T> Function() run) async {
+    try {
+      return await run();
+    } catch (e, stack) {
+      final where = stack
+          .toString()
+          .split('\n')
+          .take(3)
+          .map((l) => l.trim())
+          .join(' < ');
+      failures.add('$name: $e${where.isEmpty ? '' : ' [$where]'}');
+      return null;
+    }
+  }
+
+  final granted =
+      await step(
+        'chats',
+        () => node.shareKeys(history: true, progress: progress),
+      ) ??
+      0;
+  await step('files', () => Drive(node).shareHistory());
+  await step('inbox', () => Everyday(node).shareHistory());
   // Re-encrypted for the devices already added: without this their groups
   // and notes stay unreadable there for good, since a later edit arrives in a
   // space they have no record for.
-  await Everyday(node).shareRooms();
-  await Notes(node).shareNotes();
-  markHistoryOffered(node);
+  await step('groups', () => Everyday(node).shareRooms());
+  await step('notes', () => Notes(node).shareNotes());
+  if (failures.isEmpty) markHistoryOffered(node);
+  if (failures.isNotEmpty) {
+    throw StateError(
+      'Shared $granted chat items, but not everything. ${failures.join('; ')}',
+    );
+  }
   return granted;
 }
 
