@@ -839,7 +839,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   String short(String id) => id.length > 12
       ? '${id.substring(0, 8)}…${id.substring(id.length - 4)}'
       : id;
-  String name(String person) =>
+  String _plainName(String person) =>
       memo('names', () {
         final names = <String, String>{};
         // Newest first; keep the latest visible profile per person.
@@ -851,6 +851,14 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         return names;
       })[person] ??
       (person == node.person ? 'You' : short(person));
+
+  /// A person's name, with a note when this device is ignoring them. Blocking
+  /// is per device, and a blocked friend otherwise looks like a bare
+  /// identifier with no messages.
+  String name(String person) {
+    final base = _plainName(person);
+    return node.blocked.contains(person) ? '$base (blocked)' : base;
+  }
 
   List<String> get people => node.contacts.values
       .map((c) => c.person)

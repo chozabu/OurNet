@@ -102,8 +102,15 @@ extension _NetworkPages on _OurNetAppState {
               if (c.person != node.person)
                 IconButton(
                   tooltip: 'Block or unblock person',
-                  onPressed: () =>
-                      node.block(c.person, !node.blocked.contains(c.person)),
+                  onPressed: () {
+                    final unblock = node.blocked.contains(c.person);
+                    node.block(c.person, !unblock);
+                    // What was refused while blocked arrives on the next sync.
+                    if (unblock && network.running) {
+                      unawaited(network.sync(c.device));
+                    }
+                    refresh();
+                  },
                   icon: Icon(
                     node.blocked.contains(c.person) ? Icons.undo : Icons.block,
                   ),

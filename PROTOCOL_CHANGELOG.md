@@ -7,6 +7,12 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.11
+
+No wire or database change. A blocked person is labelled "(blocked)" wherever their
+name shows, unblocking syncs at once, diagnostics list blocked people, and file
+chunks written on a removed device can be fetched by the person's own devices.
+
 ## 0.2.10
 
 No wire or database change. Copy diagnostics failed on decimal numbers (frame

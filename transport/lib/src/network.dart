@@ -553,7 +553,9 @@ class PeerNetwork {
             // Require a referenced object that this peer is allowed to receive.
             final o = node.store.get(j['object']);
             if (o == null ||
-                !node.canOffer(o, node.contacts[peer]!, {o.space})) {
+                !node.canOffer(o, node.contacts[peer]!, {
+                  o.space,
+                }, relay: true)) {
               throw StateError('File not shared with peer');
             }
             final payload = await node.content(o);

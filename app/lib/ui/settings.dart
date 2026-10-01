@@ -224,6 +224,7 @@ extension _SettingsPages on _OurNetAppState {
                   'devices': node.contacts.length,
                   'networkRunning': network.running,
                   'sync': syncDiagnostics(network),
+                  'blockedPeople': node.blocked.map(short).toList(),
                   'history': await historyReport(node),
                   'driveOffline': driveSync.enabled,
                   'driveError': driveSync.error,

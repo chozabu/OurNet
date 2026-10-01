@@ -103,4 +103,29 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await node.close();
   });
+
+  testWidgets('a blocked friend is labelled, and unblocking is one tap', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final node = Node(await LocalIdentity.create(), Store());
+    final friend = Node(await LocalIdentity.create(), Store());
+    await node.addContact(friend.identity.certificate);
+    node.block(friend.person, true);
+    await tester.pumpWidget(OurNetApp(node: node, enablePlatform: false));
+    await settle(tester);
+    await tester.tap(find.text('Settings').first);
+    await settle(tester);
+    await tester.tap(find.text('Network and connections'));
+    await settle(tester);
+    expect(find.textContaining('(blocked)'), findsWidgets);
+    await tester.tap(find.byIcon(Icons.undo));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(node.blocked, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+    await node.close();
+  });
 }
