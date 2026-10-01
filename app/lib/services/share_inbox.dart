@@ -44,6 +44,9 @@ class ShareInbox {
         final error = share['error'] as String? ?? '';
         onResult(error.isEmpty ? null : error);
       }
+    } on MissingPluginException {
+      // Started by the connection service before an activity existed; the
+      // app drains again when it comes to the front.
     } catch (e) {
       onResult('Share is waiting to import: $e');
     } finally {

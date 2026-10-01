@@ -7,6 +7,12 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.7
+
+No wire or database change. App fixes only: the share-history dialogs open, and
+Android widgets and shared files start after the connection service has run
+the app before its screen existed.
+
 ## 0.2.5
 
 No wire or database change. A device now offers its history to each of its

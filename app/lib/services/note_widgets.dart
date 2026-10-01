@@ -33,10 +33,18 @@ class NoteWidgets {
   }) {
     task = CoalescedTask(drain, (e) => notice('Widget update will retry: $e'));
   }
+  bool _active = false;
+
+  /// Turns widgets on. When the app was started by the connection service,
+  /// before an activity existed, Android has not registered this channel yet:
+  /// that is not an error to show, and [start] is tried again when the app
+  /// comes to the front.
   Future<void> start() async {
+    if (_active || _closed) return;
     try {
       await channel.invokeMethod<void>('activate', {'profile': profile});
-      if (_closed) return;
+      if (_closed || _active) return;
+      _active = true;
       channel.setMethodCallHandler((call) async {
         if (call.method == 'changed') {
           _published = null; // Widget configuration may have changed.
@@ -45,6 +53,8 @@ class NoteWidgets {
       });
       _changes = notes.node.changes.stream.listen((_) => schedule());
       schedule();
+    } on MissingPluginException {
+      // No activity yet; see above.
     } catch (e) {
       notice('Widgets unavailable: $e');
     }

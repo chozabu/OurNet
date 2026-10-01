@@ -752,6 +752,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       folderSync.schedule();
       unawaited(speech.checkLive());
       unawaited(shareInbox?.drain());
+      unawaited(noteWidgets?.start());
       noteWidgets?.schedule();
       unawaited(
         network.start().catchError((Object e) => notice('Sync will retry: $e')),

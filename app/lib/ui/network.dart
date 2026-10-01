@@ -118,8 +118,12 @@ extension _NetworkPages on _OurNetAppState {
   /// Lets [device], one of this person's own, read the chats, groups and
   /// notes that were written before it was added.
   Future<void> shareHistoryWith(DeviceCertificate device) async {
+    // This state sits above the app's Navigator, so its own context cannot
+    // show dialogs.
+    final dialogContext = noteNavigator.currentContext;
+    if (dialogContext == null) return;
     final confirmed = await showDialog<bool>(
-      context: context,
+      context: dialogContext,
       builder: (context) => AlertDialog(
         title: Text('Share your history with ${device.label}?'),
         content: const Text(
@@ -152,16 +156,18 @@ extension _NetworkPages on _OurNetAppState {
   /// Devices linked by earlier builds, or without "Share history" at pairing,
   /// otherwise never read older chats and show friends as bare hashes.
   Future<void> offerHistory() async {
-    // Not over the Add device page, which offers this itself.
-    if (_offeringHistory || !mounted) return;
-    if (ModalRoute.of(context)?.isCurrent == false) return;
+    // Only from the home screen, not over the Add device page, which offers
+    // this itself.
+    final dialogContext = noteNavigator.currentContext;
+    if (_offeringHistory || !mounted || dialogContext == null) return;
+    if (noteNavigator.currentState?.canPop() == true) return;
     final waiting = devicesAwaitingHistory(node);
     if (waiting.isEmpty) return;
     _offeringHistory = true;
     try {
       final names = waiting.map((c) => c.label).toSet().join(', ');
       final confirmed = await showDialog<bool>(
-        context: context,
+        context: dialogContext,
         builder: (context) => AlertDialog(
           title: const Text('Share your earlier history?'),
           content: Text(
