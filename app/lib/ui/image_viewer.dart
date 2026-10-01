@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -173,10 +172,6 @@ class _ImageViewerState extends State<ImageViewer>
                 behavior: HitTestBehavior.opaque,
                 onDoubleTapDown: (d) => doubleTapAt = d.localPosition,
                 onDoubleTap: toggleZoom,
-                // A quick vertical flick at 1x closes, like most photo viewers.
-                onVerticalDragEnd: (d) {
-                  if (!zoomed && (d.primaryVelocity ?? 0).abs() > 900) close();
-                },
                 child: InteractiveViewer(
                   transformationController: transform,
                   minScale: 1,
@@ -184,39 +179,44 @@ class _ImageViewerState extends State<ImageViewer>
                   child: SizedBox.expand(child: picture()),
                 ),
               ),
-              SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Row(
-                    children: [
-                      IconButton(
-                        tooltip: 'Close',
-                        color: Colors.white,
-                        style: buttons,
-                        onPressed: close,
-                        icon: const Icon(Icons.close),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          widget.title ?? '',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            shadows: [Shadow(blurRadius: 6)],
-                          ),
-                        ),
-                      ),
-                      if (zoomed)
+              // Loose constraints: a StackFit.expand child would fill the screen
+              // and its title text would swallow the pinch and pan gestures.
+              Align(
+                alignment: Alignment.topCenter,
+                child: SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Row(
+                      children: [
                         IconButton(
-                          tooltip: 'Fit to screen',
+                          tooltip: 'Close',
                           color: Colors.white,
                           style: buttons,
-                          onPressed: () => animateTo(Matrix4.identity()),
-                          icon: const Icon(Icons.fit_screen),
+                          onPressed: close,
+                          icon: const Icon(Icons.close),
                         ),
-                    ],
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            widget.title ?? '',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              shadows: [Shadow(blurRadius: 6)],
+                            ),
+                          ),
+                        ),
+                        if (zoomed)
+                          IconButton(
+                            tooltip: 'Fit to screen',
+                            color: Colors.white,
+                            style: buttons,
+                            onPressed: () => animateTo(Matrix4.identity()),
+                            icon: const Icon(Icons.fit_screen),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
