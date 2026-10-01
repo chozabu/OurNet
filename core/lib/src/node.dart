@@ -556,12 +556,13 @@ class Node {
     final visible = page.where(
       (route) =>
           peerDevice == null ||
-          (peer != null && _offerable(route, peer, {route.space})),
+          (peer != null && _offerable(route, peer, {route.space}, relay: true)),
     );
     store.primeEvidence([for (final route in visible) route.id]);
     return {
       'version': 2,
       'cursorPaging': true,
+      'ownRelay': true,
       'subscriptions': subscriptions.toList()..sort(),
       'have': {
         for (final route in visible) route.id: store.evidenceDigest(route.id),
@@ -601,7 +602,8 @@ class Node {
       for (final route in batch) {
         cursor = (route.created, route.id);
         if (peerDevice != null &&
-            !(peer != null && _offerable(route, peer, {route.space})))
+            !(peer != null &&
+                _offerable(route, peer, {route.space}, relay: true)))
           continue;
         if (offerable < skip) {
           preceding = route;
@@ -616,6 +618,7 @@ class Node {
     }
     return {
       'version': 2,
+      'ownRelay': true,
       'subscriptions': subscriptions.toList()..sort(),
       'have': {for (final r in page) r.id: store.evidenceDigest(r.id)},
       // Bounds overlap by an object at each edge, so entries sharing a
@@ -678,12 +681,23 @@ class Node {
     return added;
   }
 
-  bool canOffer(SignedObject o, DeviceCertificate peer, Set<String> wanted) =>
-      _offerable(ObjectRoute.of(o), peer, wanted);
+  bool canOffer(
+    SignedObject o,
+    DeviceCertificate peer,
+    Set<String> wanted, {
+    bool relay = false,
+  }) => _offerable(ObjectRoute.of(o), peer, wanted, relay: relay);
 
-  bool _offerable(ObjectRoute o, DeviceCertificate peer, Set<String> wanted) {
+  /// [relay] is set when [peer] is one of this person's devices and said it
+  /// takes [relayed] objects (`ownRelay` in its inventory).
+  bool _offerable(
+    ObjectRoute o,
+    DeviceCertificate peer,
+    Set<String> wanted, {
+    bool relay = false,
+  }) {
     if (blocked.contains(o.author) ||
-        revoked.contains(o.device) ||
+        (revoked.contains(o.device) && !_relayable(o, peer, relay)) ||
         (o.hasExpiry && o.expires <= now()))
       return false;
     if (!o.isPublic)
@@ -696,6 +710,15 @@ class Node {
         wanted.contains(o.space) ||
         (peer.person == person && o.author == person);
   }
+
+  /// Devices get removed over the years, and what a removed device wrote is
+  /// still this person's own words. Revocation stops a device from being
+  /// listened to as a source, so a removed device's work is never taken from
+  /// a friend, but this person's own devices may hand each other what they
+  /// already hold, or a new device would never read the history written on
+  /// the old ones.
+  bool _relayable(ObjectRoute o, DeviceCertificate peer, bool relay) =>
+      relay && peer.person == person && o.author == person;
 
   Future<Evidence> makeEvidence(Json data) async => Evidence(
     data,
@@ -726,6 +749,8 @@ class Node {
     if (inventory['version'] != 2) throw StateError('Unsupported protocol');
     await learnCertificates(peerDevice, inventory['devices']);
     final peer = contacts[peerDevice]!;
+    // One of this person's own devices that asked for relayed objects.
+    final relay = inventory['ownRelay'] == true && peer.person == person;
     final wanted = (inventory['subscriptions'] as List).cast<String>().toSet();
     final have = inventory['have'] as Json;
     if (have.length > maxInventoryEntries || wanted.length > 256)
@@ -768,7 +793,9 @@ class Node {
         if (have[id] == store.evidenceDigest(id)) continue;
         await slice.pause();
         final object = store.get(id);
-        if (object == null || !canOffer(object, peer, wanted)) continue;
+        if (object == null || !canOffer(object, peer, wanted, relay: relay)) {
+          continue;
+        }
         final evidence = store.evidence(id);
         // Mint once per target, never on each repeated sync.
         final minted = evidence.any(
@@ -786,15 +813,22 @@ class Node {
               )
               .map((e) => e.id)
               .toList();
-          if (object.author != person && parents.isEmpty) continue;
+          // Another person's object can be handed on only along a route this
+          // device holds a receipt for. When that route went through a
+          // device since removed, the receipt is gone; this person's own
+          // devices still pass it on without one, signature intact.
+          final routed = object.author == person || parents.isNotEmpty;
+          if (!routed && !relay) continue;
           if (evidence.length >= maxEvidence - 2) continue;
-          handoffs.add({
-            'domain': 'ournet/handoff/2',
-            'object': id,
-            'to': peerDevice,
-            'parents': parents.take(1).toList(),
-            'created': now(),
-          });
+          if (routed) {
+            handoffs.add({
+              'domain': 'ournet/handoff/2',
+              'object': id,
+              'to': peerDevice,
+              'parents': parents.take(1).toList(),
+              'created': now(),
+            });
+          }
         }
         page.add(object);
       }
@@ -905,8 +939,13 @@ class Node {
     if (item == null || !signatures.$1) throw StateError('Invalid object');
     final (object: o, evidence: received) = item;
     if (o.encodedLength > maxObjectBytes) throw StateError('Invalid object');
-    if (revoked.contains(o.certificate.device) || blocked.contains(o.author))
+    // Handed over by one of this person's own devices: see [_relayable].
+    final own = contacts[peerDevice]?.person == person;
+    if ((revoked.contains(o.certificate.device) &&
+            !(own && o.author == person)) ||
+        blocked.contains(o.author)) {
       return 0;
+    }
     if (o.hasExpiry && o.expires <= now()) return 0;
     if (!o.isPublic &&
         !o.audience.contains(person) &&
@@ -974,8 +1013,9 @@ class Node {
               e.certificate.device == peerDevice,
         )
         .toList();
-    if (!held && handoffs.isEmpty)
+    if (!held && handoffs.isEmpty && !own) {
       throw StateError('No handoff from authenticated peer');
+    }
     if (!held && store.objectBytes >= _receivedBudget)
       throw StateError('Storage budget for received objects reached');
     await applyRevocation(o);

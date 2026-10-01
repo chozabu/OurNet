@@ -20,9 +20,13 @@ from before phrases holds its root in the clear until it first adds or removes
 a device, when it must set a phrase and seals it. Anyone who has both a
 device holding a copy and its phrase controls the identity; there is no root
 rotation. Root-signed revocations stop future admission and
-forwarding locally once received. This prototype conservatively excludes revoked
-devices' evidence, including historical evidence; nuanced historical validity
-and recovery policy are not implemented.
+forwarding locally once received. Revoked devices' evidence, including
+historical evidence, is excluded, and a friend never takes or is sent a revoked
+device's work. This person's own devices are the exception: a device that sends
+`ownRelay` in its inventory is handed, by the person's other devices, what the
+person wrote on a device since removed and what reached them only through one,
+signatures checked, without a delivery route. Other historical validity and
+recovery policy are not implemented.
 
 Sync inventories carry root-signed device certificates with address hints.
 A person's own devices receive all admitted contacts; friends receive only

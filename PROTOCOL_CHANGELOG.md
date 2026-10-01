@@ -7,6 +7,22 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.8
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `ownRelay: true` | sync inventory | The sender takes relayed objects from this person's other devices. | Ignore it, so are never sent any. |
+
+A device sends it to all peers; it is acted on only between two devices of the
+same person. Such a device may then hand on, and accept without a handoff:
+objects this person wrote on a device since removed, and other people's objects
+whose delivery receipt was lost when a device on the route was removed. Every
+signature is still checked. A removed device is still refused as a source by
+friends, and a friend is never sent a removed device's work.
+
+Reactions, edits and deletions that arrive before their message is readable are
+now kept and applied once it is (`messageUpdates/<kind>/waiting`).
+
 ## 0.2.7
 
 No wire or database change. App fixes only: the share-history dialogs open, and

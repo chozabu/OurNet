@@ -36,20 +36,45 @@ class MessageUpdates {
     }();
   }
 
+  /// Records this device could not read when they arrived, per kind. A key
+  /// granted later (see [Node.shareKeys]) makes them readable, so they are
+  /// tried again rather than lost behind the cursor.
+  static const _maxWaiting = 500;
+
   Future<void> _consume(String kind) async {
     final key = 'messageUpdates/$kind';
+    final waitingKey = '$key/waiting';
     var cursor = node.store.setting(key) as int? ?? 0;
+    final waiting = <String>[
+      ...?(node.store.setting(waitingKey) as List?)?.cast<String>(),
+    ];
+    final before = waiting.length;
+    for (final id in waiting.toList()) {
+      final o = node.store.get(id);
+      final p = o == null ? null : await node.content(o);
+      if (o == null || p != null) waiting.remove(id);
+      if (o != null && p != null) _apply(o, p);
+    }
+    var changed = waiting.length != before;
     while (true) {
       final page = node.store.objectsAfter(kind, cursor);
-      if (page.isEmpty) return;
+      if (page.isEmpty) break;
       for (final (rowid, o) in page) {
         cursor = rowid;
         final p = await node.content(o);
-        if (p != null) _apply(o, p);
+        if (p != null) {
+          _apply(o, p);
+        } else if (node.visible(o) &&
+            waiting.length < _maxWaiting &&
+            !waiting.contains(o.id)) {
+          waiting.add(o.id);
+          changed = true;
+        }
       }
       node.store.set(key, cursor);
-      if (page.length < 256) return;
+      if (page.length < 256) break;
     }
+    if (changed) node.store.set(waitingKey, waiting);
   }
 
   void _apply(SignedObject o, Json p) {
