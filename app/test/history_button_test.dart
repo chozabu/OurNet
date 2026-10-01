@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ournet/ui/app.dart';
 import 'package:ournet_core/ournet_core.dart';
@@ -61,6 +62,44 @@ void main() {
     print('SNACKS: $texts');
     expect(texts.join(), isNot(contains('Null check')));
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await node.close();
+  });
+
+  testWidgets('copy diagnostics produces a report', (tester) async {
+    tester.view.physicalSize = const Size(900, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied = (call.arguments as Map)['text'] as String;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    final node = Node(await LocalIdentity.create(), Store());
+    await tester.pumpWidget(OurNetApp(node: node, enablePlatform: false));
+    await settle(tester);
+    await tester.tap(find.text('Settings').first);
+    await settle(tester);
+    await tester.tap(find.text('Copy diagnostics'));
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(seconds: 1)),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(copied, isNotNull);
+    expect(copied, contains('"history"'));
     await tester.pumpWidget(const SizedBox());
     await node.close();
   });

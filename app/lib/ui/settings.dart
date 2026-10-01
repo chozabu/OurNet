@@ -216,7 +216,7 @@ extension _SettingsPages on _OurNetAppState {
           onPressed: () => act(() async {
             await Clipboard.setData(
               ClipboardData(
-                text: canonical({
+                text: jsonEncode({
                   'version': appVersion,
                   'build': buildId,
                   'platform': Platform.operatingSystem,
@@ -228,7 +228,7 @@ extension _SettingsPages on _OurNetAppState {
                   'driveOffline': driveSync.enabled,
                   'driveError': driveSync.error,
                   'performance': performance.snapshot(),
-                }),
+                }, toEncodable: (Object? o) => '$o'),
               ),
             );
             notice(

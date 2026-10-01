@@ -7,6 +7,11 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.10
+
+No wire or database change. Copy diagnostics failed on decimal numbers (frame
+timings) because it used the signing encoder; it now uses plain JSON.
+
 ## 0.2.9
 
 No wire or database change. Copy diagnostics gains a `history` section: counts of
