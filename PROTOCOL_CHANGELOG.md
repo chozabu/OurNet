@@ -7,6 +7,12 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.9
+
+No wire or database change. Copy diagnostics gains a `history` section: counts of
+private objects held and readable, what is unreadable and why, and which people
+lack a profile. No content or keys.
+
 ## 0.2.8
 
 | Field | Where | Meaning | Older builds |

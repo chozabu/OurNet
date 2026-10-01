@@ -271,6 +271,32 @@ class Node {
   int _grantCursor = 0;
   Future<void>? _loadingGrants;
 
+  /// Whether this device can open [o]: it was wrapped for this device, or
+  /// another of the person's devices granted the key.
+  Future<bool> holdsKeyFor(SignedObject o) async {
+    final encrypted = o.data['payload'];
+    if (encrypted is! Json) return false;
+    return wrappedFor(encrypted, identity.device) ||
+        await _grantedKey(o.id) != null;
+  }
+
+  /// How many of this person's other devices could not open [o] and have not
+  /// been granted its key, as far as this device knows.
+  int ownDevicesWithoutKey(SignedObject o) {
+    final encrypted = o.data['payload'];
+    if (encrypted is! Json) return 0;
+    final covered = _grantedTo[o.id] ?? const <String>{};
+    return [
+      for (final c in contacts.values)
+        if (c.person == person &&
+            c.device != identity.device &&
+            !revoked.contains(c.device) &&
+            !covered.contains(c.device) &&
+            !wrappedFor(encrypted, c.device))
+          c,
+    ].length;
+  }
+
   Future<List<int>?> _grantedKey(String id) async {
     if (_grantedKeys[id] case final key?) return key;
     await _readGrants();

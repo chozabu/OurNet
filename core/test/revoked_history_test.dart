@@ -130,4 +130,68 @@ void main() {
     await updates.catchUp();
     expect(updates.editedText(held), 'fixed');
   });
+
+  test(
+    'a friends message that arrived through a removed device is readable on a new one',
+    () async {
+      await setUpDevices();
+      final theirs = await friend.publish(
+        'message',
+        {'text': 'hello from the friend'},
+        space: '_messages',
+        audience: [laptop.person],
+      );
+      await syncPair(friend, old);
+      await syncPair(old, laptop);
+      expect(laptop.store.get(theirs.id), isNotNull);
+      expect(
+        (await laptop.content(laptop.store.get(theirs.id)!))?['text'],
+        'hello from the friend',
+      );
+      await laptop.revoke(old.identity.device);
+
+      final phone = await enrol(laptop);
+      final held = phone.store.get(theirs.id);
+      expect(held, isNotNull);
+      expect((await phone.content(held!))?['text'], 'hello from the friend');
+      expect(phone.store.conversation(phone.person, friend.person), isNotEmpty);
+    },
+  );
+
+  test('the history report counts what a device cannot read', () async {
+    await setUpDevices();
+    await friend.publish(
+      'message',
+      {'text': 'hi'},
+      space: '_messages',
+      audience: [laptop.person],
+    );
+    await friend.publish('profile', {'name': 'F'}, space: '_identity');
+    await syncPair(friend, laptop);
+    final phone = Node(
+      await LocalIdentity.create(root: laptop.identity.root, label: 'Phone'),
+      Store(),
+    );
+    await laptop.addContact(phone.identity.certificate);
+    await phone.addContact(laptop.identity.certificate);
+    await syncPair(laptop, phone, rounds: 64);
+    var report = await historyReport(phone);
+    expect(report['readable'], 0);
+    expect(
+      (report['unreadable'] as Map).values.fold<int>(
+        0,
+        (a, b) => a + (b as int),
+      ),
+      1,
+    );
+    expect(
+      await historyReport(laptop),
+      containsPair('readableButNotGrantedToOtherDevice', 1),
+    );
+    await laptop.shareKeys(history: true);
+    await syncPair(laptop, phone, rounds: 64);
+    report = await historyReport(phone);
+    expect(report['readable'], 1);
+    expect(report['unreadable'], isEmpty);
+  });
 }

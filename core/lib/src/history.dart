@@ -92,3 +92,70 @@ List<DeviceCertificate> devicesAwaitingHistory(Node node) {
 /// whether or not it was taken.
 void markHistoryOffered(Node node) =>
     node.store.set(_offered, [for (final c in _otherDevices(node)) c.device]);
+
+/// What this device holds and can read, for a bug report: counts only, no
+/// content or keys. Unreadable private objects are grouped by what they are,
+/// who wrote them and whether the device that signed them was since removed,
+/// since that is what decides whether a new device can ever get them.
+Future<Map<String, Object>> historyReport(Node node) async {
+  var privateHeld = 0, readable = 0, missingElsewhere = 0;
+  final unreadable = <String, int>{};
+  final perPerson = <String, Map<String, int>>{};
+  var cursor = 0;
+  while (true) {
+    final page = node.store.insertedSince(cursor);
+    if (page.isEmpty) break;
+    for (final (rowid, o) in page) {
+      cursor = rowid;
+      if (o.isPublic || o.kind == 'keys' || o.data['payload'] is! Map) continue;
+      if (!node.visible(o)) continue;
+      privateHeld++;
+      final ok = await node.holdsKeyFor(o);
+      if (ok) {
+        readable++;
+        if (node.ownDevicesWithoutKey(o) > 0) missingElsewhere++;
+      } else {
+        final key =
+            '${o.kind}/${o.author == node.person ? 'mine' : 'theirs'}/'
+            '${node.revoked.contains(o.certificate.device) ? 'removed-device' : 'device-ok'}';
+        unreadable[key] = (unreadable[key] ?? 0) + 1;
+      }
+      if (o.kind == 'message') {
+        final peers = o.author == node.person
+            ? o.audience.where((p) => p != node.person)
+            : [o.author];
+        for (final peer in peers) {
+          final row = perPerson[peer] ??= {'messages': 0, 'unreadable': 0};
+          row['messages'] = row['messages']! + 1;
+          if (!ok) row['unreadable'] = row['unreadable']! + 1;
+        }
+      }
+    }
+  }
+  String short(String id) => id.length > 6 ? id.substring(0, 6) : id;
+  final people = <String, Object>{};
+  for (final person in {
+    ...perPerson.keys,
+    for (final c in node.contacts.values)
+      if (c.person != node.person) c.person,
+  }) {
+    people[short(person)] = {
+      'profile': node.store
+          .objects(kind: 'profile', author: person, limit: 1)
+          .isNotEmpty,
+      ...?perPerson[person],
+    };
+  }
+  return {
+    'privateHeld': privateHeld,
+    'readable': readable,
+    'unreadable': unreadable,
+    'readableButNotGrantedToOtherDevice': missingElsewhere,
+    'people': people,
+    'ownDevicesInUse': [
+      for (final c in node.contacts.values)
+        if (c.person == node.person && !node.revoked.contains(c.device))
+          short(c.device),
+    ],
+  };
+}
