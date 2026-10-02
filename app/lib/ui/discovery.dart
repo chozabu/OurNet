@@ -106,7 +106,7 @@ extension _DiscoveryPages on _OurNetAppState {
         everydaySection = item.data['type'] == 'file'
             ? 'Files'
             : item.data['type'] == 'check'
-            ? 'Lists'
+            ? 'Notes'
             : 'Conversation';
       } else if (o.kind == 'message') {
         tab = Destination.messages;

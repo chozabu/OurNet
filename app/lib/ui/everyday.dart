@@ -1,10 +1,16 @@
 part of 'app.dart';
 
 extension _EverydayPages on _OurNetAppState {
-  Future<List<EverydayItem>> noteItems() async => [
-    ...await Everyday(node).items(),
-    ...await notes.summaries(includeDeleted: true),
-  ];
+  Future<List<EverydayItem>> noteItems() async {
+    final group = notesScope;
+    if (group != null) {
+      return notes.summaries(includeDeleted: true, group: group);
+    }
+    return [
+      ...await Everyday(node).items(),
+      ...await notes.summaries(includeDeleted: true),
+    ];
+  }
 
   Future<void> noteAction(Future<void> Function() action) async {
     if (savingNote) return;
@@ -274,7 +280,7 @@ extension _EverydayPages on _OurNetAppState {
     }
     final colors = Theme.of(context).colorScheme;
     final typing = MediaQuery.viewInsetsOf(context).bottom > 0;
-    final lists = everydaySection == 'Lists';
+    final notesTab = everydaySection == 'Notes';
     final chat = everydaySection == 'Conversation';
     final forumTab = everydaySection == 'Forum';
     ensureRoomForum(room);
@@ -293,92 +299,102 @@ extension _EverydayPages on _OurNetAppState {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.all(typing ? 12 : 24),
-            decoration: BoxDecoration(
-              color: inboxDragging
-                  ? colors.tertiaryContainer
-                  : colors.primaryContainer,
-              borderRadius: BorderRadius.circular(24),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.people_outline, size: 28),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        room.data['name'],
-                        style: const TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -.8,
+          // The notes screen brings its own search and capture bar, which
+          // need the room once the keyboard is up.
+          if (!(typing && notesTab))
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(typing ? 12 : 24),
+              decoration: BoxDecoration(
+                color: inboxDragging
+                    ? colors.tertiaryContainer
+                    : colors.primaryContainer,
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.people_outline, size: 28),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          room.data['name'],
+                          style: const TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -.8,
+                          ),
                         ),
                       ),
-                    ),
-                    IconButton(
-                      tooltip: 'Group members',
-                      onPressed: busy
-                          ? null
-                          : () => act(() => manageGroup(context, room)),
-                      icon: const Icon(Icons.manage_accounts_outlined),
-                    ),
-                  ],
-                ),
-                if (!typing) const SizedBox(height: 8),
-                Text(
-                  inboxDragging
-                      ? 'Drop to save here'
-                      : '${(room.data['members'] as List).length} members · Private group',
-                ),
-                if (!typing) const SizedBox(height: 12),
-                SyncStatus(
-                  network: network,
-                  people: (room.data['members'] as List).cast<String>(),
-                  suffix: ' · originals stay intact',
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                for (final section in [
-                  'Conversation',
-                  'Forum',
-                  'Files',
-                  'Lists',
-                ])
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
-                      label: section == 'Forum'
-                          ? Badge.count(
-                              count: groupForumUnread(),
-                              isLabelVisible: groupForumUnread() > 0,
-                              offset: const Offset(10, -6),
-                              child: const Text('Forum'),
-                            )
-                          : Text(section),
-                      selected: everydaySection == section,
-                      onSelected: (_) =>
-                          update(() => everydaySection = section),
-                    ),
+                      IconButton(
+                        tooltip: 'Group members',
+                        onPressed: busy
+                            ? null
+                            : () => act(() => manageGroup(context, room)),
+                        icon: const Icon(Icons.manage_accounts_outlined),
+                      ),
+                    ],
                   ),
-              ],
+                  if (!typing) const SizedBox(height: 8),
+                  Text(
+                    inboxDragging
+                        ? 'Drop to save here'
+                        : '${(room.data['members'] as List).length} members · Private group',
+                  ),
+                  if (!typing) const SizedBox(height: 12),
+                  SyncStatus(
+                    network: network,
+                    people: (room.data['members'] as List).cast<String>(),
+                    suffix: ' · originals stay intact',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ],
+              ),
             ),
-          ),
+          if (!(typing && notesTab)) ...[
+            const SizedBox(height: 12),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final section in [
+                    'Conversation',
+                    'Forum',
+                    'Files',
+                    'Notes',
+                  ])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: section == 'Forum'
+                            ? Badge.count(
+                                count: groupForumUnread(),
+                                isLabelVisible: groupForumUnread() > 0,
+                                offset: const Offset(10, -6),
+                                child: const Text('Forum'),
+                              )
+                            : Text(section),
+                        selected: everydaySection == section,
+                        onSelected: (_) => update(() {
+                          everydaySection = section;
+                          // Each section reads its own data into this view.
+                          everydayView = null;
+                        }),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
           Expanded(
             child: chat
                 ? groupChatView(context, room)
                 : forumTab
                 ? groupForumView(context, room)
+                : notesTab
+                ? groupNotesView(context, room)
                 : FutureBuilder<List<EverydayItem>>(
                     future: everydayView ??= Everyday(node).items(room),
                     builder: (context, snapshot) {
@@ -412,10 +428,7 @@ extension _EverydayPages on _OurNetAppState {
                         if (type == 'pin' || i.data['deleted'] == true) {
                           return false;
                         }
-                        return switch (everydaySection) {
-                          'Files' => type == 'file',
-                          _ => type == 'check',
-                        };
+                        return type == 'file';
                       }).toList();
                       visible.sort((a, b) {
                         final pinned = (pins.contains(b.data['entry']) ? 1 : 0)
@@ -426,12 +439,8 @@ extension _EverydayPages on _OurNetAppState {
                       });
                       if (visible.isEmpty) {
                         return empty(
-                          lists
-                              ? 'Less remembering. More doing.'
-                              : 'Make yourselves at home',
-                          lists
-                              ? 'Create a shopping, packing, or household checklist below.'
-                              : 'Send a message or add the first file.',
+                          'No files yet',
+                          'Add the first original file below.',
                           Icons.favorite_border,
                         );
                       }
@@ -449,19 +458,7 @@ extension _EverydayPages on _OurNetAppState {
                     },
                   ),
           ),
-          if (lists)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: TextField(
-                controller: listName,
-                decoration: const InputDecoration(
-                  labelText: 'List name',
-                  hintText: 'Shopping',
-                  isDense: true,
-                ),
-              ),
-            ),
-          if (!forumTab)
+          if (!forumTab && !notesTab)
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
@@ -476,7 +473,7 @@ extension _EverydayPages on _OurNetAppState {
                     minLines: 1,
                     maxLines: 4,
                     decoration: InputDecoration(
-                      hintText: lists ? 'Add an item…' : 'Write a message…',
+                      hintText: 'Write a message…',
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
                     ),
@@ -531,13 +528,8 @@ extension _EverydayPages on _OurNetAppState {
                                 final text = submitted.trim();
                                 if (text.isEmpty) return;
                                 await Everyday(node).write({
-                                  'type': lists ? 'check' : 'note',
+                                  'type': 'note',
                                   'text': text,
-                                  if (lists) 'done': false,
-                                  if (lists)
-                                    'list': listName.text.trim().isEmpty
-                                        ? 'Shopping'
-                                        : listName.text.trim(),
                                 }, room: room);
                                 await finishDraft(
                                   draftKey,

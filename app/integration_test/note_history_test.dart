@@ -26,6 +26,7 @@ import 'perf_support.dart';
 /// Reported per phase: UI-thread CPU (Android), event-loop delay and frames.
 const notesCount = int.fromEnvironment('NOTES', defaultValue: 25);
 const edits = int.fromEnvironment('EDITS', defaultValue: 30);
+const groupNotes = int.fromEnvironment('GROUP_NOTES', defaultValue: 5);
 
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -75,6 +76,27 @@ void main() {
           note = (await notes.get(note.id))!;
         }
       }
+      // Notes kept in a group's space take the same routes through sync and
+      // reading, so they are part of the history being carried.
+      final group = await Everyday(phone).createRoom('History group', []);
+      for (var n = 0; n < groupNotes; n++) {
+        var note = await notes.create(
+          group: group.object.space,
+          title: 'Group note $n',
+          text: 'Start',
+        );
+        for (var e = 0; e < edits; e++) {
+          await notes.edit(
+            note.id,
+            note.epoch,
+            'text',
+            'Group revision $e of note $n. ' * 8,
+            note.parents('text'),
+          );
+          note = (await notes.get(note.id))!;
+        }
+      }
+      report['groupNotes'] = groupNotes;
       report['objects'] = phone.store.count;
       report['historyMs'] = setup.elapsedMilliseconds;
       log('${phone.store.count} objects in ${setup.elapsed}');
@@ -208,6 +230,19 @@ void main() {
         expect(saved.text, 'Typed while the photo saves (4)');
         expect(saved.files, hasLength(1));
       }
+      // The group's notes arrived whole on the other device and read the same.
+      final here = await Notes(phone).list(group: group.object.space);
+      final there = await Notes(other).list(group: group.object.space);
+      expect(there, hasLength(groupNotes));
+      // Arrival order differs between devices; the contents must not.
+      List<String> contents(List<NoteDocument> list) =>
+          [for (final n in list) '${n.title}|${n.text}']..sort();
+      expect(contents(there), contents(here));
+      expect(
+        there.every((n) => n.text.startsWith('Group revision ${edits - 1} of')),
+        isTrue,
+      );
+      expect(await Notes(phone).list(), hasLength(notesCount));
       expect(tester.takeException(), isNull);
       if (const bool.fromEnvironment('PERF_ENFORCE')) {
         for (final name in ['initialSync', 'cameraReturn']) {

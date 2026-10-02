@@ -17,6 +17,7 @@ extension _NotesHome on _OurNetAppState {
     key: ValueKey('editor/${id ?? 'new'}'),
     notes: notes,
     id: id,
+    group: notesScope,
     checklist: checklist,
     drafts: draftStore,
     network: network,
@@ -67,7 +68,7 @@ extension _NotesHome on _OurNetAppState {
       save: (recording) async {
         final file = File(recording.path);
         try {
-          final note = await notes.create();
+          final note = await notes.create(group: notesScope);
           final attached = await notes.attachAudio(
             note,
             file.openRead(),
@@ -106,7 +107,7 @@ extension _NotesHome on _OurNetAppState {
     final result = await editDrawing(context);
     if (result == null || !mounted) return;
     try {
-      final note = await notes.create();
+      final note = await notes.create(group: notesScope);
       await notes.attachDrawing(
         note,
         png: result.png,
@@ -131,7 +132,7 @@ extension _NotesHome on _OurNetAppState {
     }
     if (picked == null || !mounted) return;
     try {
-      final note = await notes.create();
+      final note = await notes.create(group: notesScope);
       await notes.attachImage(note, picked.openRead(), picked.name);
       await openNote(note.id);
     } catch (e) {
@@ -978,6 +979,7 @@ extension _NotesHome on _OurNetAppState {
 
   Widget notesHome(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final scope = notesScope;
     final query = notesController.notesSearch.text.trim().toLowerCase();
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -998,7 +1000,9 @@ extension _NotesHome on _OurNetAppState {
                 onChanged: (_) => redraw(),
                 textInputAction: TextInputAction.search,
                 decoration: InputDecoration(
-                  hintText: 'Search your notes',
+                  hintText: scope == null
+                      ? 'Search your notes'
+                      : 'Search the group\'s notes',
                   prefixIcon: const Icon(Icons.search),
                   suffixIcon: query.isEmpty
                       ? null
@@ -1254,7 +1258,8 @@ extension _NotesHome on _OurNetAppState {
           child: Focus(
             autofocus: true,
             child: DropTarget(
-              enable: widget.enablePlatform && !addingAttachment,
+              enable:
+                  widget.enablePlatform && !addingAttachment && scope == null,
               onDragEntered: (_) => update(() => inboxDragging = true),
               onDragExited: (_) => update(() => inboxDragging = false),
               onDragDone: (details) {

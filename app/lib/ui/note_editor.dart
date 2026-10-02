@@ -45,6 +45,9 @@ class NoteEditor extends StatefulWidget {
 
   /// Null for a new note, which is created once something is written.
   final String? id;
+
+  /// For a new note: the group whose space it is created in.
+  final String? group;
   final bool checklist;
   final DraftStore drafts;
   final PeerNetwork? network;
@@ -73,6 +76,7 @@ class NoteEditor extends StatefulWidget {
     super.key,
     required this.notes,
     this.id,
+    this.group,
     this.checklist = false,
     required this.drafts,
     this.network,
@@ -760,6 +764,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
           return;
         }
         final created = await widget.notes.create(
+          group: widget.group,
           stableId: stableId,
           title: title,
           text: text,
@@ -935,6 +940,44 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     await flush();
     final current = note;
     if (!mounted || current == null) return;
+    if (current.isGroup) {
+      // Everyone in the group is a collaborator; the group decides who.
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Shared with the group'),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Everyone in the group can edit this note. To change who can, change who is in the group.',
+                ),
+                const SizedBox(height: 8),
+                for (final person in current.members)
+                  ListTile(
+                    dense: true,
+                    leading: PersonAvatar(name: nameOf(person)),
+                    title: Text(nameOf(person)),
+                    subtitle: person == current.room.data['owner']
+                        ? const Text('Group owner')
+                        : null,
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
     final owner = current.room.data['owner'] == widget.notes.node.person;
     final selected = current.members.toSet();
     final action = await showDialog<String>(

@@ -87,21 +87,12 @@ void main() {
       () => Future<void>.delayed(const Duration(milliseconds: 150)),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Lists'));
+    // Lists became notes: the group's Notes section opens empty, with the
+    // same capture bar as a person's own.
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Notes'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField).last, 'Bring chargers');
-    await tester.tap(find.text('Add'));
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 150)),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('Bring chargers'), findsOneWidget);
-    await tester.tap(find.byType(Checkbox));
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 150)),
-    );
-    await tester.pumpAndSettle();
-    expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, true);
+    expect(find.text('Take a note…'), findsOneWidget);
+    expect(find.text('Lists'), findsNothing);
     expect(tester.takeException(), isNull);
     tester.view.viewInsets = const FakeViewPadding(bottom: 300);
     await tester.pumpAndSettle();

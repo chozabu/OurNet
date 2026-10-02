@@ -71,6 +71,7 @@ part 'home.dart';
 part 'everyday.dart';
 part 'group_chat.dart';
 part 'group_forum.dart';
+part 'group_notes.dart';
 part 'social.dart';
 part 'conversation.dart';
 part 'objects.dart';
@@ -180,7 +181,20 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   bool showConversation = false;
   bool showForum = false;
   bool attachmentFiles = false;
-  late final NotesHomeController notesController;
+  late final NotesHomeController personalNotesController;
+  late final NotesHomeController groupNotesController;
+
+  /// The group whose notes are on screen, or null for a person's own. The
+  /// notes screen is shared: it filters, searches and selects within
+  /// whichever of the two is showing.
+  String? get notesScope =>
+      tab == Destination.groups &&
+          activeRoom != null &&
+          everydaySection == 'Notes'
+      ? activeRoom!.object.space
+      : null;
+  NotesHomeController get notesController =>
+      notesScope == null ? personalNotesController : groupNotesController;
   final roomChecks = <String, bool>{};
   String fileQuery = '';
   final fileSearch = TextEditingController();
@@ -193,7 +207,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   Future<List<(EverydayItem, String)>>? attachmentsView;
   final inboxComposer = TextEditingController();
   final groupChatScroll = ScrollController();
-  final listName = TextEditingController(text: 'Shopping');
   String everydaySection = 'Conversation';
   bool inboxDragging = false;
   bool dark = false, busy = false;
@@ -268,6 +281,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
 
   /// Per group (by room ID): the open discussion and the post being replied to.
   final groupThreads = <String, String>{};
+
+  /// Per group (by room ID): lists from before groups had notes, found by a
+  /// one-time read of the group, offered for import as notes.
+  final groupLists = <String, List<EverydayItem>>{};
   final groupReplies = <String, String>{};
   final groupDraftBeforeEdit = <String, TextEditingValue>{};
 
@@ -307,7 +324,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     messageUpdates = MessageUpdates(node);
     draftStore = DraftStore(node);
     notes = Notes(node);
-    notesController = NotesHomeController(notes);
+    personalNotesController = NotesHomeController(notes);
+    groupNotesController = NotesHomeController(notes);
     inboxComposer.addListener(
       () => rememberDraft(notesComposerContext, inboxComposer),
     );
@@ -861,7 +879,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     groupChatScroll
       ..removeListener(groupChatScrolled)
       ..dispose();
-    listName.dispose();
     composer.dispose();
     search.dispose();
     fileSearch.dispose();
@@ -1224,19 +1241,23 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     return Badge.count(count: count, isLabelVisible: count > 0);
   }
 
+  /// A placeholder for nothing to show. Scrolls rather than overflows where
+  /// the keyboard leaves it almost no height.
   Widget empty(String title, String detail, IconData icon) => Center(
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 48, color: Colors.teal),
-        const SizedBox(height: 16),
-        Text(
-          title,
-          style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 8),
-        Text(detail, textAlign: TextAlign.center),
-      ],
+    child: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 48, color: Colors.teal),
+          const SizedBox(height: 16),
+          Text(
+            title,
+            style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          Text(detail, textAlign: TextAlign.center),
+        ],
+      ),
     ),
   );
   Widget callPanel() => Card(

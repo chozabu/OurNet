@@ -14,6 +14,10 @@ class NoteDocument {
   final List<EverydayItem> history;
   final List<EverydayItem> earlier;
   final bool available;
+
+  /// Set for a note that belongs to a group: [room] is then the group's record
+  /// and this is the note's own space, `<group>#<key>`.
+  final String? noteId;
   NoteDocument(
     this.room,
     this.members,
@@ -21,8 +25,11 @@ class NoteDocument {
     this.history,
     this.earlier, {
     this.available = true,
+    this.noteId,
   });
-  String get id => room.object.space;
+  String get id => noteId ?? room.object.space;
+  bool get isGroup => noteId != null;
+  String? get group => noteId == null ? null : Notes.groupOf(noteId!);
   String get epoch => room.data['epoch'];
   bool get deleted => value('deleted') == true;
   String get title =>
@@ -233,12 +240,27 @@ class Notes {
   final _rooms = <String, EverydayItem>{};
   final _cache = LinkedHashMap<String, NoteDocument>();
   final _summaries = <String, EverydayItem>{};
+
+  /// Notes that live in a group's space, per group, in the order first seen.
+  /// Only their existence is known here; whether they are valid is decided
+  /// when one is read.
+  final _groupNotes = <String, Set<String>>{};
   int _cursor = 0;
   Future<void>? _refreshing;
   Future<void> _tail = Future.value();
   int _queued = 0;
   String _policy = '';
   static const maxChecks = 200;
+
+  /// The space of a note that belongs to [group]. Membership follows the
+  /// group, so such a note has no collaborator list of its own.
+  static String groupNoteId(String group, String key) => '$group#$key';
+
+  /// The group a note id belongs to, or null for a person's own note.
+  static String? groupOf(String id) {
+    final at = id.indexOf('#');
+    return at > 0 ? id.substring(0, at) : null;
+  }
 
   /// [value] cut to at most [length] characters.
   static String bounded(String value, int length) =>
@@ -285,6 +307,17 @@ class Notes {
       for (final (cursor, object) in page) {
         _cache.remove(object.space);
         _summaries.remove(object.space);
+        if (object.kind == 'note_op') {
+          if (groupOf(object.space) case final group?) {
+            (_groupNotes[group] ??= {}).add(object.space);
+          }
+        } else {
+          // A group's membership decides what its notes show.
+          for (final id in _groupNotes[object.space] ?? const <String>{}) {
+            _cache.remove(id);
+            _summaries.remove(id);
+          }
+        }
         if (object.kind == 'room') {
           final data = await node.content(object);
           if (data != null && data['note'] == true) {
@@ -301,10 +334,19 @@ class Notes {
     }
   }
 
-  Future<List<NoteDocument>> list({bool includeDeleted = false}) async {
+  /// The notes to list: a person's own, or [group]'s when given. Group notes
+  /// never appear among a person's own.
+  List<String> _ids(String? group) => group == null
+      ? _rooms.keys.toList().reversed.toList()
+      : (_groupNotes[group]?.toList() ?? const <String>[]).reversed.toList();
+
+  Future<List<NoteDocument>> list({
+    bool includeDeleted = false,
+    String? group,
+  }) async {
     await refresh();
     final result = <NoteDocument>[];
-    for (final id in _rooms.keys.toList().reversed) {
+    for (final id in _ids(group)) {
       final note = await get(id);
       if (note != null && (includeDeleted || !note.deleted)) result.add(note);
     }
@@ -315,11 +357,14 @@ class Notes {
   /// Text shown in a list is bounded; the editor loads the full document.
   /// Notes not yet projected are read with pauses, so a first load of many
   /// notes does not hold up the UI.
-  Future<List<EverydayItem>> summaries({bool includeDeleted = false}) async {
+  Future<List<EverydayItem>> summaries({
+    bool includeDeleted = false,
+    String? group,
+  }) async {
     await refresh();
     final result = <EverydayItem>[];
     final slice = TimeSlice();
-    for (final id in _rooms.keys.toList().reversed) {
+    for (final id in _ids(group)) {
       var summary = _summaries[id];
       if (summary == null) {
         await slice.pause();
@@ -414,6 +459,9 @@ class Notes {
       _cache[id] = cached;
       return cached.available || includeUnavailable ? cached : null;
     }
+    if (groupOf(id) != null) {
+      return _getGroupNote(id, includeUnavailable: includeUnavailable);
+    }
     final records = await _everyday.membership(id);
     final rooms = await _everyday.rooms(includeLeft: true, records: records);
     final room = rooms.firstOrNull;
@@ -464,6 +512,21 @@ class Notes {
       }
       await slice.pause();
     }
+    final note = NoteDocument(
+      room,
+      members,
+      _fold(ops),
+      ops,
+      earlier,
+      available: available,
+    );
+    _remember(id, note);
+    return note;
+  }
+
+  /// The live versions of each register: operations another one names as a
+  /// parent are consumed, and what remains is ordered newest first.
+  Map<String, List<EverydayItem>> _fold(List<EverydayItem> ops) {
     final fields = <String, List<EverydayItem>>{};
     for (final op in ops) {
       (fields[op.data['field']] ??= []).add(op);
@@ -486,23 +549,66 @@ class Notes {
         return order == 0 ? b.object.id.compareTo(a.object.id) : order;
       });
     }
-    final note = NoteDocument(
-      room,
-      members,
-      fields,
-      ops,
-      earlier,
-      available: available,
-    );
-    // Bound retained decrypted history by both count and value size.
+    return fields;
+  }
+
+  /// Keeps [note] for the next read, bounding what is retained by both count
+  /// and value size.
+  void _remember(String id, NoteDocument note) {
     final size = [
-      ...ops,
-      ...earlier,
+      ...note.history,
+      ...note.earlier,
     ].fold<int>(0, (n, r) => n + r.data.toString().length * 2);
     if (size < 512 * 1024) _cache[id] = note;
     while (_cache.length > 16) {
       _cache.remove(_cache.keys.first);
     }
+  }
+
+  /// A note kept in a group's space. There are no epochs of its own: what the
+  /// group's current members wrote is the note, and a person who joins later
+  /// is sent the note's current state by the group's owner (see [shareGroup]).
+  /// Null when nothing valid has been written under this id.
+  Future<NoteDocument?> _getGroupNote(
+    String id, {
+    required bool includeUnavailable,
+  }) async {
+    final group = groupOf(id)!;
+    final records = await _everyday.membership(group);
+    final rooms = await _everyday.rooms(includeLeft: true, records: records);
+    final room = rooms.firstOrNull;
+    if (room == null ||
+        room.data['note'] == true ||
+        room.data['generation'] == null) {
+      return null;
+    }
+    final members = _everyday.effectiveMembers(room, records);
+    final available =
+        members.contains(node.person) && room.data['archived'] != true;
+    if (!available && !includeUnavailable) return null;
+    final ops = <EverydayItem>[];
+    final slice = TimeSlice();
+    for (final object in node.store.allOf(kind: 'note_op', space: id)) {
+      final data = await node.content(object);
+      if (data == null || object.isPublic) continue;
+      if (!members.contains(object.author) ||
+          (data['checkpoint'] == true && object.author != room.data['owner'])) {
+        continue;
+      }
+      ops.add(EverydayItem(object, data));
+      await slice.pause();
+    }
+    if (ops.isEmpty) return null;
+    final note = NoteDocument(
+      room,
+      members,
+      _fold(ops),
+      ops,
+      const [],
+      available: available,
+      noteId: id,
+    );
+    _remember(id, note);
     return note;
   }
 
@@ -518,6 +624,9 @@ class Notes {
     String? background,
     String? format,
     int? created,
+
+    /// Creates the note in this group's space, readable by its members.
+    String? group,
   }) => _serial(() async {
     if (text.length > 16384 ||
         title.length > 100 ||
@@ -527,35 +636,81 @@ class Notes {
         'Use a title up to 100 characters and text up to 16,384 characters.',
       );
     final key = stableId ?? randomId();
-    final id = 'room2:${node.person}:$key';
+    final id = group == null
+        ? 'room2:${node.person}:$key'
+        : groupNoteId(group, key);
     final existing = await get(id);
     if (existing != null) return existing;
-    final room = await _everyday.createRoom(
-      title.trim().isEmpty
-          ? 'Note'
-          : title.trim().substring(0, title.trim().length.clamp(0, 100)),
-      [],
-      noteId: key,
-    );
+    final EverydayItem room;
+    if (group == null) {
+      room = await _everyday.createRoom(
+        title.trim().isEmpty
+            ? 'Note'
+            : title.trim().substring(0, title.trim().length.clamp(0, 100)),
+        [],
+        noteId: key,
+      );
+    } else {
+      final records = await _everyday.membership(group);
+      room = await _everyday.current(
+        (await _everyday.rooms(
+              includeLeft: true,
+              records: records,
+            )).where((r) => r.object.space == group).firstOrNull ??
+            (throw StateError('This group is unavailable.')),
+        records,
+      );
+      if (room.data['note'] == true || room.data['generation'] == null) {
+        throw StateError(
+          'This group is from an earlier version. Change its members once, '
+          'then it can have notes.',
+        );
+      }
+      await _everyday.prepare(room);
+    }
+    final space = group == null ? null : id;
+    // A group note exists once something is written to its space, so it
+    // always records when it was made.
+    if (group != null) {
+      await _publish(
+        room,
+        'created',
+        created ?? DateTime.now().millisecondsSinceEpoch,
+        [],
+        1,
+        space: space,
+      );
+    }
     // An absent register reads as empty, so writing one costs an object for
     // nothing. Imports of many short notes feel this most.
-    if (title.isNotEmpty) await _publish(room, 'title', title, [], 1);
-    if (text.isNotEmpty) await _publish(room, 'text', text, [], 1);
-    if (color != null && color != 'default')
-      await _publish(room, 'color', color, [], 1);
-    if (background != null && background != 'none')
-      await _publish(room, 'background', background, [], 1);
-    if (format != null && format != 'plain')
-      await _publish(room, 'format', format, [], 1);
-    if (created != null) await _publish(room, 'created', created, [], 1);
+    if (title.isNotEmpty) {
+      await _publish(room, 'title', title, [], 1, space: space);
+    }
+    if (text.isNotEmpty) {
+      await _publish(room, 'text', text, [], 1, space: space);
+    }
+    if (color != null && color != 'default') {
+      await _publish(room, 'color', color, [], 1, space: space);
+    }
+    if (background != null && background != 'none') {
+      await _publish(room, 'background', background, [], 1, space: space);
+    }
+    if (format != null && format != 'plain') {
+      await _publish(room, 'format', format, [], 1, space: space);
+    }
+    if (created != null && group == null) {
+      await _publish(room, 'created', created, [], 1);
+    }
     final written = items.isEmpty && checklist ? [''] : items;
     final keys = orderSequence(written.length);
     for (var i = 0; i < written.length; i++) {
       final item = randomId();
-      await _publish(room, 'check:$item:text', written[i], [], 1);
-      await _publish(room, 'check:$item:order', keys[i], [], 1);
+      await _publish(room, 'check:$item:text', written[i], [], 1, space: space);
+      await _publish(room, 'check:$item:order', keys[i], [], 1, space: space);
     }
-    return (await get(id))!;
+    final made = (await get(id))!;
+    if (group != null) _groupNotes.putIfAbsent(group, () => {}).add(id);
+    return made;
   });
 
   Future<SignedObject> _publish(
@@ -568,6 +723,9 @@ class Notes {
     bool checkpoint = false,
     List<String>? audience,
     Json extra = const {},
+
+    /// The space written to; a group's note has one of its own.
+    String? space,
   }) async {
     return node.publish(
       'note_op',
@@ -583,7 +741,7 @@ class Notes {
         'checkpoint': checkpoint,
         if (request != null) 'request': request,
       },
-      space: room.object.space,
+      space: space ?? room.object.space,
       audience: audience ?? await _everyday.members(room),
     );
   }
@@ -674,6 +832,7 @@ class Notes {
                 change.parents,
                 clock + 1,
                 request: request,
+                space: note.id,
               )).id,
     ];
   });
@@ -684,6 +843,9 @@ class Notes {
   ) => _serial(() async {
     final note = await get(id);
     if (note == null) throw StateError('This note is unavailable.');
+    if (note.isGroup) {
+      throw StateError('This note is shared with the group; change the group.');
+    }
     if (note.room.data['owner'] != node.person)
       throw StateError('Only the owner can change collaborators.');
     final heads = note.heads.values.expand((v) => v).toList();
@@ -735,58 +897,101 @@ class Notes {
         // must not stop the pass; running it again later is safe.
       }
     }
+    // Notes in groups this person owns, for the same reason.
+    for (final group in _groupNotes.keys.toList()) {
+      final room = (await _everyday.rooms()).where(
+        (r) => r.object.space == group && r.data['owner'] == node.person,
+      );
+      if (room.isEmpty) continue;
+      try {
+        count += await shareGroup(room.single);
+      } catch (_) {
+        // As above: a group that cannot be encrypted to now is tried later.
+      }
+    }
     return count + await state.reshare();
   }
 
-  Future<int> _reissue(NoteDocument note) => _serial(() async {
-    final edited = note.updated;
-    // Both records describe the same room, so which one a device that holds
-    // both settles on is decided by object ID. A note that never recorded
-    // its own creation time reads it off that record, so write it down
-    // before the copy exists rather than let the date move.
-    if (note.value('created') == null) {
-      await _publish(
-        note.room,
-        'created',
-        note.created,
-        const [],
-        1,
-        checkpoint: true,
-      );
+  /// Sends the current state of every note in [room]'s space to its members
+  /// as checkpoints, each consuming only the version it copies. Used when
+  /// someone joins, so they can read the notes (members who already have the
+  /// originals see no change), and when a device is admitted. Only the group's
+  /// owner does this: readers accept checkpoints from no one else.
+  Future<int> shareGroup(EverydayItem room, {List<String>? audience}) async {
+    if (room.data['owner'] != node.person) return 0;
+    final prefix = '${room.object.space}#';
+    var count = 0;
+    for (final id in node.store.spaces(['note_op'])) {
+      if (!id.startsWith(prefix)) continue;
+      final note = await _getGroupNote(id, includeUnavailable: false);
+      if (note == null) continue;
+      count += await _reissue(note, audience: audience);
     }
-    var count = await _everyday.reissue(note.room, entries: false) + 1;
-    for (final MapEntry(key: field, value: heads) in note.heads.entries) {
-      if (field == 'edited') continue;
-      // Each branch copies itself and names only its own version as the
-      // parent it replaces, so concurrent versions stay concurrent.
-      for (final head in heads) {
+    return count;
+  }
+
+  Future<int> _reissue(NoteDocument note, {List<String>? audience}) =>
+      _serial(() async {
+        final edited = note.updated;
+        // Both records describe the same room, so which one a device that holds
+        // both settles on is decided by object ID. A note that never recorded
+        // its own creation time reads it off that record, so write it down
+        // before the copy exists rather than let the date move.
+        if (note.value('created') == null) {
+          await _publish(
+            note.room,
+            'created',
+            note.created,
+            const [],
+            1,
+            checkpoint: true,
+            space: note.id,
+            audience: audience,
+          );
+        }
+        // A group's own record is re-issued with the group.
+        var count = note.isGroup
+            ? 1
+            : await _everyday.reissue(note.room, entries: false) + 1;
+        for (final MapEntry(key: field, value: heads) in note.heads.entries) {
+          if (field == 'edited') continue;
+          // Each branch copies itself and names only its own version as the
+          // parent it replaces, so concurrent versions stay concurrent.
+          for (final head in heads) {
+            await _publish(
+              note.room,
+              field,
+              head.data['value'] as Object,
+              [head.object.id],
+              (head.data['clock'] as int) + 1,
+              checkpoint: true,
+              extra: _fileFields(head.data),
+              space: note.id,
+              audience: audience,
+            );
+            count++;
+          }
+        }
+        // Last, so the copies above are not read as edits: see [updated].
         await _publish(
           note.room,
-          field,
-          head.data['value'] as Object,
-          [head.object.id],
-          (head.data['clock'] as int) + 1,
+          'edited',
+          edited,
+          note.parents('edited'),
+          _clock(note) + 2,
           checkpoint: true,
-          extra: _fileFields(head.data),
+          space: note.id,
+          audience: audience,
         );
-        count++;
-      }
-    }
-    // Last, so the copies above are not read as edits: see [updated].
-    await _publish(
-      note.room,
-      'edited',
-      edited,
-      note.parents('edited'),
-      _clock(note) + 2,
-      checkpoint: true,
-    );
-    return count + 1;
-  });
+        return count + 1;
+      });
 
   Future<void> leave(String id) => _serial(() async {
     final note = await get(id);
     if (note == null) return;
+    if (note.isGroup) {
+      throw StateError('This note is shared with the group; leave the group.');
+    }
     if (note.room.data['owner'] == node.person)
       throw StateError(
         'The owner can remove the note or manage collaborators.',
@@ -872,6 +1077,7 @@ class Notes {
         meta,
         parents,
         clock,
+        space: note.id,
         extra: {
           'chunks': chunks,
           'name': safeName.trim().isEmpty ? 'Attachment' : safeName,
@@ -890,6 +1096,7 @@ class Notes {
           orderBetween(last, null),
           [],
           clock,
+          space: note.id,
         );
       }
     });

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'model.dart';
 import 'node.dart';
+import 'notes.dart';
 import 'room_forum.dart';
 
 class EverydayItem {
@@ -433,6 +434,12 @@ class Everyday {
       await node.publish('room', data, space: id, audience: audience),
       data,
     );
+    // Notes kept in the group's space are encrypted to the people who were
+    // members when they were written. People joining are sent each note's
+    // current state, and the owner's other members see no change.
+    if (shareHistory && joining.isNotEmpty && id == room.object.space) {
+      await Notes(node).shareGroup(next, audience: nextMembers);
+    }
     if (id != room.object.space) {
       await node.publish(
         'room',
