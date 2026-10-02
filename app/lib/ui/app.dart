@@ -50,6 +50,7 @@ import 'sync_status.dart';
 import 'sync_health.dart';
 import 'conversation_delivery.dart';
 import 'note_editor.dart';
+import 'forum_thread.dart';
 import 'note_card.dart';
 import 'note_colors.dart';
 import 'keep_import.dart';
@@ -293,6 +294,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// one-time read of the group, offered for import as notes.
   final groupLists = <String, List<EverydayItem>>{};
   final groupReplies = <String, String>{};
+
+  /// Posts whose replies are folded away in the open discussion.
+  final collapsedPosts = <String>{};
   final groupDraftBeforeEdit = <String, TextEditingValue>{};
 
   /// Messages chosen in selection mode, in the open conversation.

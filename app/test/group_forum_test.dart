@@ -82,6 +82,18 @@ void main() {
     await steady(tester);
     expect(find.text('Lake, please'), findsOneWidget);
 
+    // Replies are compact rows; folding one hides its text and counts what
+    // sits beneath it, and unfolding brings it back.
+    expect(find.text('Reply'), findsWidgets);
+    expect(find.byIcon(Icons.unfold_less), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.unfold_less));
+    await steady(tester);
+    expect(find.text('Lake, please'), findsNothing);
+    expect(find.byIcon(Icons.unfold_more), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.unfold_more));
+    await steady(tester);
+    expect(find.text('Lake, please'), findsOneWidget);
+
     // Everything reaches the friend, who can read the thread; it never
     // appears in the public forum list.
     await tester.runAsync(() => syncPair(node, friend));

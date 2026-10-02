@@ -257,7 +257,7 @@ class _Tree {
     var depth = 0;
     final seen = <String>{id};
     var up = parent[id];
-    while (up != null && seen.add(up) && depth < 8) {
+    while (up != null && seen.add(up) && depth < 64) {
       depth++;
       up = parent[up];
     }

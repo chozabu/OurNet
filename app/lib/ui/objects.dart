@@ -19,14 +19,28 @@ extension _ObjectsPages on _OurNetAppState {
         Icons.notes,
       );
     }
+    // An open discussion reads as a tree: compact rows with thread lines,
+    // whose branches can be folded.
+    final rows =
+        thread != null &&
+            objects.every((o) => o.kind == 'post' || o.kind == 'room_post')
+        ? threadRows(
+            objects,
+            (o) => forum?.depth(o) ?? replyDepth(o),
+            collapsedPosts,
+          )
+        : null;
+    final levels = MediaQuery.sizeOf(context).width < 600 ? 5 : 12;
     return ListView.builder(
       controller: controller,
       key: PageStorageKey(
         forum?.key ?? 'objects/$tab/$contact/$space/$selectedThread',
       ),
-      itemCount: objects.length,
+      padding: rows == null ? null : const EdgeInsets.symmetric(horizontal: 4),
+      itemCount: rows?.length ?? objects.length,
       itemBuilder: (context, index) {
-        final o = objects[index];
+        final row = rows?[index];
+        final o = row?.object ?? objects[index];
         return FutureBuilder<Json?>(
           future: node.content(o),
           builder: (context, snapshot) {
@@ -43,13 +57,62 @@ extension _ObjectsPages on _OurNetAppState {
                   ? p['sent'] as int? ?? o.created
                   : o.created,
             );
+            final unread =
+                author != node.person &&
+                node.store.setting(
+                      '${o.kind == 'message' ? 'read' : 'seen'}/${o.id}',
+                    ) !=
+                    true;
+            if (row != null) {
+              return ForumComment(
+                key: ValueKey('comment/${o.id}'),
+                id: o.id,
+                depth: row.depth,
+                ancestors: row.ancestors,
+                author: name(author),
+                initial: name(author).substring(0, 1),
+                written: written,
+                unread: unread,
+                collapsed: row.collapsed,
+                hasChildren: row.hasChildren,
+                hidden: row.hidden,
+                maxLevels: levels,
+                title: p['title'] as String?,
+                scope: row.depth == 0 ? scopeLabel(o) : null,
+                onToggle: toggleCollapsed,
+                onReply: () => forum != null
+                    ? forum.reply(o.id)
+                    : update(() {
+                        selectedThread ??= o.id;
+                        replyTo = o.id;
+                      }),
+                menu: postMenu(
+                  o,
+                  author,
+                  child: const SizedBox(
+                    width: 32,
+                    height: 28,
+                    child: Icon(Icons.more_horiz, size: 18),
+                  ),
+                  provenanceItem: true,
+                ),
+                body: [
+                  if (isImagePayload(p))
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: postImage(o, p),
+                    ),
+                  if ((p['text'] ?? '').toString().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 2),
+                      child: SelectableText(p['text']),
+                    ),
+                  ...postAttachment(context, o, p),
+                ],
+              );
+            }
             return Card(
-              color:
-                  author != node.person &&
-                      node.store.setting(
-                            '${o.kind == 'message' ? 'read' : 'seen'}/${o.id}',
-                          ) !=
-                          true
+              color: unread
                   ? Theme.of(context).colorScheme.secondaryContainer
                   : null,
               margin: EdgeInsets.only(
@@ -81,45 +144,7 @@ extension _ObjectsPages on _OurNetAppState {
                           written.toLocal().toString().substring(0, 16),
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
-                        if (isPost)
-                          PopupMenuButton<String>(
-                            tooltip: 'Discussion options',
-                            onSelected: (action) {
-                              if (action == 'hide') {
-                                node.store.set('hidden/${o.id}', true);
-                                searchIndex = null;
-                                refresh();
-                              }
-                              if (action == 'block') {
-                                node.block(author, true);
-                                searchIndex = null;
-                                refresh();
-                              }
-                              if (action == 'moderate') {
-                                act(() async {
-                                  await node.publish('forum_hide', {
-                                    'object': o.id,
-                                  }, space: o.space);
-                                });
-                              }
-                            },
-                            itemBuilder: (_) => [
-                              const PopupMenuItem(
-                                value: 'hide',
-                                child: Text('Hide for me'),
-                              ),
-                              if (author != node.person)
-                                const PopupMenuItem(
-                                  value: 'block',
-                                  child: Text('Block author'),
-                                ),
-                              if (ownsForum(o.space))
-                                const PopupMenuItem(
-                                  value: 'moderate',
-                                  child: Text('Remove from forum'),
-                                ),
-                            ],
-                          ),
+                        if (isPost) postMenu(o, author),
                         IconButton(
                           tooltip: 'Inspect provenance',
                           onPressed: () => provenance(context, o),
@@ -138,13 +163,7 @@ extension _ObjectsPages on _OurNetAppState {
                     if (isImagePayload(p))
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: InlineImage(
-                          key: ValueKey(o.id),
-                          files: files,
-                          object: o,
-                          payload: p,
-                          online: network.running,
-                        ),
+                        child: postImage(o, p),
                       ),
                     if (p['parent'] != null)
                       Text(
@@ -156,22 +175,7 @@ extension _ObjectsPages on _OurNetAppState {
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         child: SelectableText(p['text']),
                       ),
-                    if (p['chunks'] != null)
-                      OutlinedButton.icon(
-                        onPressed: fileProgress.containsKey(o.id)
-                            ? null
-                            : () => saveFile(context, o, p),
-                        icon: const Icon(Icons.download),
-                        label: Text(
-                          fileProgress.containsKey(o.id)
-                              ? '${p['name']} · preparing ${(fileProgress[o.id]! * 100).round()}%'
-                              : fileErrors.containsKey(o.id)
-                              ? '${p['name']} · Retry download'
-                              : '${p['name']} · ${p['size']} bytes',
-                        ),
-                      ),
-                    if (fileErrors[o.id] case final error?)
-                      Text('$error · Verified chunks are kept for retry.'),
+                    ...postAttachment(context, o, p),
                     if (isPost && thread == null)
                       TextButton.icon(
                         onPressed: forum != null
@@ -214,11 +218,7 @@ extension _ObjectsPages on _OurNetAppState {
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         Text(
-                          o.isPublic
-                              ? 'Public'
-                              : o.kind == 'room_post'
-                              ? 'Encrypted · group members'
-                              : 'Encrypted · selected people',
+                          scopeLabel(o),
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
@@ -232,6 +232,89 @@ extension _ObjectsPages on _OurNetAppState {
       },
     );
   }
+
+  String scopeLabel(SignedObject o) => o.isPublic
+      ? 'Public'
+      : o.kind == 'room_post'
+      ? 'Encrypted · group members'
+      : 'Encrypted · selected people';
+
+  void toggleCollapsed(String id) => update(() {
+    if (!collapsedPosts.remove(id)) collapsedPosts.add(id);
+  });
+
+  Widget postImage(SignedObject o, Json p) => InlineImage(
+    key: ValueKey(o.id),
+    files: files,
+    object: o,
+    payload: p,
+    online: network.running,
+  );
+
+  /// The download button for a post's attached file, and its last error.
+  List<Widget> postAttachment(BuildContext context, SignedObject o, Json p) => [
+    if (p['chunks'] != null)
+      OutlinedButton.icon(
+        onPressed: fileProgress.containsKey(o.id)
+            ? null
+            : () => saveFile(context, o, p),
+        icon: const Icon(Icons.download),
+        label: Text(
+          fileProgress.containsKey(o.id)
+              ? '${p['name']} · preparing ${(fileProgress[o.id]! * 100).round()}%'
+              : fileErrors.containsKey(o.id)
+              ? '${p['name']} · Retry download'
+              : '${p['name']} · ${p['size']} bytes',
+        ),
+      ),
+    if (fileErrors[o.id] case final error?)
+      Text('$error · Verified chunks are kept for retry.'),
+  ];
+
+  /// Hide, block and remove actions for a post; [provenanceItem] adds the
+  /// provenance dialog for lists that have no separate button for it.
+  Widget postMenu(
+    SignedObject o,
+    String author, {
+    Widget? child,
+    bool provenanceItem = false,
+  }) => PopupMenuButton<String>(
+    tooltip: 'Discussion options',
+    child: child,
+    onSelected: (action) {
+      if (action == 'hide') {
+        node.store.set('hidden/${o.id}', true);
+        searchIndex = null;
+        refresh();
+      }
+      if (action == 'block') {
+        node.block(author, true);
+        searchIndex = null;
+        refresh();
+      }
+      if (action == 'moderate') {
+        act(() async {
+          await node.publish('forum_hide', {'object': o.id}, space: o.space);
+        });
+      }
+      if (action == 'provenance') provenance(context, o);
+    },
+    itemBuilder: (_) => [
+      const PopupMenuItem(value: 'hide', child: Text('Hide for me')),
+      if (author != node.person)
+        const PopupMenuItem(value: 'block', child: Text('Block author')),
+      if (ownsForum(o.space))
+        const PopupMenuItem(
+          value: 'moderate',
+          child: Text('Remove from forum'),
+        ),
+      if (provenanceItem)
+        const PopupMenuItem(
+          value: 'provenance',
+          child: Text('Inspect provenance'),
+        ),
+    ],
+  );
 
   String delivery(SignedObject o, {bool attachment = false}) {
     if (node.store.setting('readBy/${o.id}') != null) {

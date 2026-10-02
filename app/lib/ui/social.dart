@@ -329,7 +329,7 @@ extension _SocialPages on _OurNetAppState {
     var depth = 0;
     final seen = <String>{object.id};
     var parent = object.data['payload']['parent'];
-    while (parent is String && seen.add(parent) && depth < 8) {
+    while (parent is String && seen.add(parent) && depth < 64) {
       depth++;
       parent = node.store.get(parent)?.data['payload']['parent'];
     }
