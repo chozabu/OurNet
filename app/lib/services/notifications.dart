@@ -16,11 +16,20 @@ int notificationId(String key, int range) {
 }
 
 const reminderRange = 0x40000000, _chatRange = 0x20000000;
-const _forumRange = 0x10000000, _callId = 1;
+const _forumRange = 0x10000000, _callId = 1, _groupRange = 0x08000000;
 
 /// Arrivals signed longer ago than this are history catching up (a newly
 /// linked device, a friend back after weeks) rather than news.
 const _recent = Duration(days: 2);
+
+/// Whether a private group's record is a new chat message, as opposed to an
+/// edit, a deletion, a pin, a list item or history copied for a new member.
+bool isGroupChatMessage(Json p) =>
+    p['type'] != 'pin' &&
+    p['type'] != 'check' &&
+    p['deleted'] != true &&
+    p['edited'] != true &&
+    p['history'] != true;
 
 /// What a button on a notification asks for, or null for a plain tap:
 /// `read <person>` or `reply <person> <text>`. On Android buttons run without
@@ -34,6 +43,14 @@ List<String>? notificationAction(NotificationResponse response) {
     return ['reply', payload.substring(6), '${response.data['message'] ?? ''}'];
   }
   if (payload.startsWith('read:')) return ['read', payload.substring(5)];
+  if (payload.startsWith('readgroup:')) {
+    return ['readGroup', payload.substring(10)];
+  }
+  if (payload.startsWith('group:')) {
+    return response.actionId == 'read'
+        ? ['readGroup', payload.substring(6)]
+        : null;
+  }
   if (!payload.startsWith('chat:')) return null;
   final peer = payload.substring(5);
   return switch (response.actionId) {
@@ -51,6 +68,8 @@ Future<void> runNotificationAction(Node node, List<String> action) async {
       await node.markConversationRead(peer);
     case ['read', final peer]:
       await node.markConversationRead(peer);
+    case ['readGroup', final space]:
+      await node.markRoomRead(space);
   }
 }
 
@@ -72,6 +91,7 @@ class Notifications {
   bool ready = false;
   void Function(String person)? onOpenChat;
   void Function(String space)? onOpenForum;
+  void Function(String space)? onOpenGroup;
   void Function(String note)? onOpenNote;
   void Function()? onCallOpen;
   void Function(String)? onError;
@@ -181,6 +201,8 @@ class Notifications {
         onOpenChat?.call(key);
       case 'forum':
         onOpenForum?.call(key);
+      case 'group':
+        onOpenGroup?.call(key);
       case 'note':
         onOpenNote?.call(key);
       case 'call':
@@ -249,18 +271,38 @@ class Notifications {
     final recent = DateTime.now().subtract(_recent).millisecondsSinceEpoch;
     final chats = <String>{};
     final forums = <String, List<SignedObject>>{};
+    final groups = <String, List<(SignedObject, Json)>>{};
+    final readElsewhere = <String>{};
     while (true) {
       final arrived = node.store.insertedAfter(cursor, [
         'message',
         'post',
+        'room_item',
+        'room_read',
       ], limit: page);
       for (final (sequence, o) in arrived) {
         cursor = sequence;
+        if (o.kind == 'room_read') {
+          // Read on another device: what it covered is no longer news.
+          if (o.author != node.person) continue;
+          final read = await node.content(o);
+          final space = read?['space'], upTo = read?['upTo'];
+          if (space is! String || upTo is! int) continue;
+          groups[space]?.removeWhere((g) => g.$1.created <= upTo);
+          readElsewhere.add(space);
+          continue;
+        }
         if (o.author == node.person || !node.visible(o) || o.created < recent) {
           continue;
         }
         if (o.kind == 'message') {
           if (!chatMuted(node, o.author)) chats.add(o.author);
+        } else if (o.kind == 'room_item') {
+          if (!enabled || chatMuted(node, o.space) || o.isPublic) continue;
+          final payload = await node.content(o);
+          if (payload != null && isGroupChatMessage(payload)) {
+            (groups[o.space] ??= []).add((o, payload));
+          }
         } else if (node.subscriptions.contains(o.space)) {
           (forums[o.space] ??= []).add(o);
         }
@@ -272,9 +314,27 @@ class Notifications {
       if (arrived.length < page) break;
     }
     if (cursor < target) cursor = target;
+    for (final space in readElsewhere) {
+      await dismiss('group:$space');
+    }
     if (enabled) {
       for (final peer in chats) {
         if (showing?.call('chat:$peer') != true) await _showChat(peer);
+      }
+      if (groups.isNotEmpty) {
+        final names = {
+          for (final room in await Everyday(node).rooms())
+            if (room.data['note'] != true)
+              room.object.space: '${room.data['name']}',
+        };
+        for (final MapEntry(key: space, value: items) in groups.entries) {
+          final name = names[space];
+          if (name != null &&
+              items.isNotEmpty &&
+              showing?.call('group:$space') != true) {
+            await _showGroup(space, name, items);
+          }
+        }
       }
       for (final MapEntry(key: space, value: posts) in forums.entries) {
         if (showing?.call('forum:$space') != true) {
@@ -374,6 +434,50 @@ class Notifications {
     _chats.add(peer);
   }
 
+  /// One notification per private group, counting messages since the group
+  /// was last opened. A burst replaces it rather than stacking.
+  Future<void> _showGroup(
+    String space,
+    String group,
+    List<(SignedObject, Json)> items,
+  ) async {
+    final key = 'groupAlerts/$space';
+    final count = (node.store.setting(key) as int? ?? 0) + items.length;
+    node.store.set(key, count);
+    final (latest, payload) = items.reduce(
+      (a, b) => b.$1.created >= a.$1.created ? b : a,
+    );
+    final author = profileName(node, latest.author) ?? 'A member';
+    final line = previews
+        ? '$author: ${_orNew(contentPreview(payload))}'
+        : 'New message from $author';
+    await plugin.show(
+      id: notificationId(space, _groupRange),
+      title: group,
+      body: count == 1 ? line : '$count new messages · $line',
+      payload: 'group:$space',
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          'messages',
+          'Messages',
+          channelDescription: 'Private messages from friends',
+          importance: Importance.high,
+          priority: Priority.high,
+          category: AndroidNotificationCategory.message,
+          visibility: NotificationVisibility.private,
+          number: count,
+          actions: const [AndroidNotificationAction('read', 'Mark read')],
+        ),
+        windows: WindowsNotificationDetails(
+          timestamp: DateTime.fromMillisecondsSinceEpoch(latest.created),
+          actions: [
+            WindowsAction(content: 'Mark read', arguments: 'readgroup:$space'),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// One notification per forum, counting posts since the forum was last
   /// opened. It sounds once while shown, and only for replies to this person.
   Future<void> _showForum(String space, List<SignedObject> posts) async {
@@ -453,6 +557,10 @@ class Notifications {
       final peer = payload.substring(5);
       if (!_chats.remove(peer)) return;
       await plugin.cancel(id: notificationId(peer, _chatRange));
+    } else if (payload.startsWith('group:')) {
+      final space = payload.substring(6);
+      node.store.set('groupAlerts/$space', null);
+      await plugin.cancel(id: notificationId(space, _groupRange));
     } else if (payload.startsWith('forum:')) {
       final space = payload.substring(6);
       final key = 'postAlerts/$space';

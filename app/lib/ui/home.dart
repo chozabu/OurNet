@@ -158,18 +158,13 @@ extension _HomePages on _OurNetAppState {
                               ).where((o) => o.space == room.data['room']),
                             ),
                             selected: activeRoom?.object.id == room.object.id,
-                            onTap: () => update(() {
-                              for (final item
-                                  in node.store
-                                      .objects(kind: 'room_item')
-                                      .where(
-                                        (o) => o.space == room.data['room'],
-                                      )) {
-                                node.store.set('seen/${item.id}', true);
-                              }
-                              activeRoom = room;
-                              everydaySection = 'Conversation';
-                            }),
+                            onTap: () {
+                              update(() {
+                                activeRoom = room;
+                                everydaySection = 'Conversation';
+                              });
+                              markRoomSeen('${room.data['room']}');
+                            },
                           ),
                       ],
                     ),

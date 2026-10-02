@@ -86,6 +86,64 @@ void main() {
     expect(calls.map((c) => c.method), contains('cancel'));
   });
 
+  test('a private group message notifies once and opens the group', () async {
+    final room = await Everyday(a).createRoom('Club', [b.person]);
+    await syncPair(a, b);
+    await settle();
+    calls.clear();
+    final theirs = (await Everyday(b).rooms()).single;
+    final write = Everyday(b);
+    await write.write({'type': 'note', 'text': 'Hi all'}, room: theirs);
+    await write.write({'type': 'note', 'text': 'Anyone?'}, room: theirs);
+    await syncPair(a, b);
+    await settle();
+    final group = shown().last;
+    expect(group['title'], 'Club');
+    expect(group['body'], startsWith('2 new messages · Bea: '));
+    expect(group['payload'], 'group:${room.object.space}');
+
+    // Opening the group in the app clears it.
+    calls.clear();
+    await notifications.dismiss('group:${room.object.space}');
+    expect(calls.map((c) => c.method), contains('cancel'));
+    expect(a.store.setting('groupAlerts/${room.object.space}'), isNull);
+
+    // Reading it elsewhere (the marker is what other devices receive)
+    // clears it, and the button maps to the same action.
+    expect(
+      notificationAction(
+        NotificationResponse(
+          notificationResponseType:
+              NotificationResponseType.selectedNotificationAction,
+          actionId: 'read',
+          payload: 'group:${room.object.space}',
+        ),
+      ),
+      ['readGroup', room.object.space],
+    );
+    await a.publish(
+      'message',
+      {'text': 'x'},
+      space: '_messages',
+      audience: [b.person],
+    );
+    await syncPair(a, b);
+    await write.write({'type': 'note', 'text': 'Again'}, room: theirs);
+    await syncPair(a, b);
+    await settle();
+    expect(a.store.unread('room_item', a.person), isNotEmpty);
+    calls.clear();
+    await a.markRoomRead(room.object.space);
+    await settle();
+    expect(a.store.unread('room_item', a.person), isEmpty);
+    expect(calls.map((c) => c.method), contains('cancel'));
+
+    // Edits and pins are not new messages.
+    expect(isGroupChatMessage({'type': 'note', 'edited': true}), isFalse);
+    expect(isGroupChatMessage({'type': 'pin'}), isFalse);
+    expect(isGroupChatMessage({'type': 'note', 'text': 'x'}), isTrue);
+  });
+
   test('nothing is shown for the chat on screen or without previews', () async {
     notifications.showing = (payload) => payload == 'chat:${b.person}';
     await message('Seen already');

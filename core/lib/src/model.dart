@@ -204,6 +204,8 @@ bool validContent(String kind, Json p) {
               p['objects'] is List &&
                   (p['objects'] as List).length <= 200 &&
                   (p['objects'] as List).every((v) => v is String)),
+    // This person's other devices learn which of a group's messages are read.
+    'room_read' => p['space'] is String && p['upTo'] is int,
     // An empty emoji withdraws the author's reaction.
     'reaction' =>
       p['object'] is String &&

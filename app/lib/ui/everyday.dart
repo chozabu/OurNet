@@ -348,6 +348,17 @@ extension _EverydayPages on _OurNetAppState {
                         ),
                       ),
                       IconButton(
+                        tooltip: chatMuted(node, room.object.space)
+                            ? 'Unmute notifications'
+                            : 'Mute notifications',
+                        onPressed: () => toggleGroupMute(room.object.space),
+                        icon: Icon(
+                          chatMuted(node, room.object.space)
+                              ? Icons.volume_off_outlined
+                              : Icons.volume_up_outlined,
+                        ),
+                      ),
+                      IconButton(
                         tooltip: 'Group members',
                         onPressed: busy
                             ? null

@@ -1068,6 +1068,12 @@ class Node {
         }
       }
     }
+    if (o.kind == 'room_read' && o.author == person) {
+      final payload = await content(o);
+      if (payload != null) {
+        _applyRoomRead(payload['space'] as String, payload['upTo'] as int);
+      }
+    }
     for (final h in handoffs) {
       if (all.values.any(
         (e) =>
@@ -1119,6 +1125,41 @@ class Node {
       }
     }
     if (byAuthor.isNotEmpty) notify();
+  }
+
+  /// Marks everything in a private group up to [upTo] (all of it, when null)
+  /// read, and tells this person's other devices. Returns once the local marks
+  /// are set; the announcement follows.
+  Future<void> markRoomRead(String space, {int? upTo}) {
+    var newest = 0;
+    final marked = _applyRoomRead(space, upTo, newest: (c) => newest = c);
+    return marked == 0
+        ? Future.value()
+        : publish(
+            'room_read',
+            {'space': space, 'upTo': newest},
+            space: '_inbox',
+            audience: [person],
+          ).then<void>((_) {});
+  }
+
+  /// Sets the local read marks for [space] and returns how many were new.
+  int _applyRoomRead(String space, int? upTo, {void Function(int)? newest}) {
+    var count = 0, latest = 0;
+    store.batch(() {
+      for (final o in store.allOf(kinds: ['room_item'], space: space)) {
+        if (upTo != null && o.created > upTo) continue;
+        if (o.created > latest) latest = o.created;
+        if (o.author == person || store.setting('seen/${o.id}') == true) {
+          continue;
+        }
+        store.set('seen/${o.id}', true);
+        count++;
+      }
+    });
+    newest?.call(latest);
+    if (count > 0) notify();
+    return count;
   }
 
   /// Marks every unread message from [peer] read.

@@ -403,7 +403,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
             });
           }
           ..onOpenChat = openConversation
-          ..onOpenForum = openForum;
+          ..onOpenForum = openForum
+          ..onOpenGroup = (space) => unawaited(openGroup(space));
     _deliveryRefresh = CoalescedTask(loadDeliveryLabels, (e) => notice('$e'));
     _dataRefresh = CoalescedTask(() async {
       await messageUpdates.catchUp();
@@ -595,6 +596,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       switch (tab) {
         Destination.messages => payload == 'chat:$contact',
         Destination.forums => payload == 'forum:$space',
+        Destination.groups =>
+          activeRoom != null &&
+              everydaySection == 'Conversation' &&
+              payload == 'group:${activeRoom!.object.space}',
         _ => false,
       };
 
@@ -603,6 +608,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     final payload = switch (tab) {
       Destination.messages when contact != null => 'chat:$contact',
       Destination.forums => 'forum:$space',
+      Destination.groups when activeRoom != null =>
+        'group:${activeRoom!.object.space}',
       _ => null,
     };
     if (payload != null && widget.enablePlatform) {
@@ -612,18 +619,31 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
 
   void openConversation(String person) {
     if (!people.contains(person)) return;
+    // Opening a chat with new messages (e.g. from a notification) shows them:
+    // a retained scroll position or held-back arrivals would hide them, and
+    // unseen messages are never built, so never marked read.
+    final hasNew = node.store.conversationUnread(node.person, peer: person) > 0;
     update(() {
       if (contact != person) {
         selectedMessages.clear();
         searchingConversation = false;
       }
       if (contact != person || !showConversation) unreadMarkerPeer = null;
+      if (hasNew || conversations.hasPending(person)) {
+        conversations.showLatest(person);
+      }
       tab = Destination.messages;
       contact = person;
       showConversation = true;
       replyTo = null;
       node.store.set('chatUnread/$person', null);
     });
+    if (hasNew) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final scroll = conversations.scrollFor(person);
+        if (scroll.hasClients) scroll.jumpTo(0);
+      });
+    }
     dismissShownNotification();
   }
 

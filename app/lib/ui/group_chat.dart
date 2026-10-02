@@ -45,6 +45,66 @@ extension _GroupChat on _OurNetAppState {
     }
   }
 
+  /// Opens a private group's conversation at its newest message, as a
+  /// notification does.
+  Future<void> openGroup(String space) async {
+    final room = (await Everyday(
+      node,
+    ).rooms()).where((r) => r.object.space == space && r.data['note'] != true);
+    if (!mounted || room.isEmpty) return;
+    update(() {
+      tab = Destination.groups;
+      activeRoom = room.first;
+      everydaySection = 'Conversation';
+    });
+    markRoomSeen(space);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (groupChatScroll.hasClients) groupChatScroll.jumpTo(0);
+    });
+  }
+
+  /// Marks everything in a group read and clears its notification. What
+  /// opening the group, or reading its newest messages, does.
+  void markRoomSeen(String space) {
+    unawaited(
+      node.markRoomRead(space).catchError((Object e) {
+        notice('Could not mark read: $e');
+      }),
+    );
+    redraw();
+    if (widget.enablePlatform) {
+      unawaited(
+        notifications.dismiss('group:$space').catchError((Object _) {}),
+      );
+    }
+  }
+
+  /// Stops or resumes notifications for a group.
+  void toggleGroupMute(String space) {
+    final muted = chatMuted(node, space);
+    update(() => node.store.set('chatMuted/$space', muted ? null : true));
+    if (!muted && widget.enablePlatform) {
+      unawaited(
+        notifications.dismiss('group:$space').catchError((Object _) {}),
+      );
+    }
+  }
+
+  /// Whether a newest message the reader can see is unread: the app is in
+  /// front and the list is at its newest end.
+  bool _readingNewestGroupMessages(RoomFeed feed) {
+    if (widget.enablePlatform && !foreground) return false;
+    final c = groupChatScroll;
+    if (c.hasClients && c.positions.length == 1 && c.offset > 16) return false;
+    return feed.items
+        .take(20)
+        .any(
+          (i) =>
+              i.object.author != node.person &&
+              node.store.setting('seen/${i.object.id}') != true,
+        );
+  }
+
   void groupChatScrolled() {
     final c = groupChatScroll;
     if (!c.hasClients || c.positions.length != 1) return;
@@ -116,6 +176,12 @@ extension _GroupChat on _OurNetAppState {
         'Send a message or add the first file.',
         Icons.favorite_border,
       );
+    }
+    if (_readingNewestGroupMessages(feed)) {
+      final space = feed.space;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && activeRoom?.object.space == space) markRoomSeen(space);
+      });
     }
     final byId = {for (final i in messages) i.object.id: i};
     final history = ConversationHistory(
