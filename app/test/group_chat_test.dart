@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ournet/ui/app.dart';
 import 'package:ournet/ui/conversation_history.dart';
@@ -76,6 +77,58 @@ void main() {
     await settled(tester);
     expect(inChat('Hello there'), findsOneWidget);
     expect(inChat('Chatty'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await node.close();
+    await friend.close();
+  });
+
+  testWidgets('group composer: Enter sends, Shift+Enter adds a line', (
+    tester,
+  ) async {
+    wide(tester);
+    final (node, [friend]) = await friends(1);
+    await tester.runAsync(
+      () => Everyday(node).createRoom('Weekend trip', [friend.person]),
+    );
+    await tester.pumpWidget(
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.groups,
+      ),
+    );
+    await settled(tester);
+    await tester.tap(find.text('Weekend trip'));
+    await settled(tester);
+    final composer = find.byType(TextField).last;
+    final controller = tester.widget<TextField>(composer).controller!;
+    await tester.tap(composer);
+    await tester.enterText(composer, 'first');
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(controller.text, 'first\n');
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await settled(tester);
+    expect(inChat('first'), findsOneWidget);
+    expect(controller.text, isEmpty);
+
+    // Send by button keeps the caret in the box.
+    await tester.enterText(composer, 'second');
+    await tester.tap(find.byIcon(Icons.send));
+    await settled(tester);
+    expect(inChat('second'), findsOneWidget);
+    expect(tester.widget<TextField>(composer).focusNode!.hasFocus, isTrue);
+
+    // Up arrow edits the latest message; Esc leaves edit mode.
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await settled(tester);
+    expect(controller.text, 'second');
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await settled(tester);
+    expect(controller.text, isEmpty);
+    expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
     await node.close();
     await friend.close();

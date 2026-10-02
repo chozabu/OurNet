@@ -438,6 +438,33 @@ extension _GroupChat on _OurNetAppState {
         groupDraftBeforeEdit.remove(room.object.id) ?? TextEditingValue.empty;
   }
 
+  /// Esc: leaves edit or reply. False if there was neither.
+  bool cancelGroupMode(EverydayItem room) {
+    final id = room.object.id;
+    if (groupEdit.containsKey(id)) {
+      update(() => cancelGroupEdit(room));
+    } else if (groupReply.containsKey(id)) {
+      update(() => groupReply.remove(id));
+    } else {
+      return false;
+    }
+    return true;
+  }
+
+  /// Up arrow in an empty composer edits this person's latest text message.  Newest first.
+  bool editLastGroupMessage() {
+    final feed = roomFeed;
+    if (feed == null) return false;
+    for (final item in groupMessages(feed)) {
+      final author = (item.data['originalAuthor'] ?? item.object.author);
+      if (author != node.person || item.data['type'] == 'file') continue;
+      if (item.data['deleted'] == true) continue;
+      startGroupEdit(item);
+      return true;
+    }
+    return false;
+  }
+
   /// Above the composer: what is being replied to, or that a message is
   /// being edited.
   Widget groupComposerBar(BuildContext context, EverydayItem room) {

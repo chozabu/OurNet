@@ -489,11 +489,24 @@ extension _EverydayPages on _OurNetAppState {
                   if (chat) groupComposerBar(context, room),
                   Focus(
                     canRequestFocus: false,
-                    onKeyEvent: (_, event) => enterSends(
-                      inboxComposer,
-                      event,
-                      savingNote ? null : sendRoomMessage,
-                    ),
+                    onKeyEvent: (_, event) {
+                      if (chat && event is KeyDownEvent) {
+                        if (event.logicalKey == LogicalKeyboardKey.escape &&
+                            cancelGroupMode(room)) {
+                          return KeyEventResult.handled;
+                        }
+                        if (event.logicalKey == LogicalKeyboardKey.arrowUp &&
+                            inboxComposer.text.isEmpty &&
+                            editLastGroupMessage()) {
+                          return KeyEventResult.handled;
+                        }
+                      }
+                      return enterSends(
+                        inboxComposer,
+                        event,
+                        savingNote ? null : sendRoomMessage,
+                      );
+                    },
                     child: TextField(
                       controller: inboxComposer,
                       focusNode: inboxFocus,
