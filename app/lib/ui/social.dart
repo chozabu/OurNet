@@ -834,24 +834,6 @@ extension _SocialPages on _OurNetAppState {
       }
     }
 
-    // Ctrl/Cmd+V: send a clipboard image, otherwise paste text as usual.
-    Future<void> pasteIntoComposer(Future<void> Function() sendImage) async {
-      if (busy) return;
-      if (await clipboardImage() != null) {
-        await act(sendImage);
-        return;
-      }
-      final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-      if (text == null || text.isEmpty) return;
-      final selection = composer.selection;
-      final start = selection.isValid ? selection.start : composer.text.length;
-      final end = selection.isValid ? selection.end : start;
-      composer.value = TextEditingValue(
-        text: composer.text.replaceRange(start, end, text),
-        selection: TextSelection.collapsed(offset: start + text.length),
-      );
-    }
-
     final key =
         draftKey ??
         (tab == Destination.messages
@@ -864,12 +846,39 @@ extension _SocialPages on _OurNetAppState {
       composer.value = drafts[key] ?? TextEditingValue.empty;
       switchingDraft = false;
     }
+    if (chat) {
+      final peer = contact!;
+      return ChatComposer(
+        controller: composer,
+        focusNode: composerFocus,
+        hint: messageEdit.containsKey(peer) ? 'Edit message' : 'Message',
+        onSend: sendDisabled ? null : send,
+        contextBar: composerContextBar(context),
+        onAttach: attach == null || busy ? null : attach,
+        onPasteButton: attach == null || busy ? null : () => act(pasteImage),
+        onPasteShortcut: attach == null
+            ? null
+            : () {
+                if (!busy) {
+                  unawaited(pasteIntoComposer(composer, () => act(pasteImage)));
+                }
+              },
+        onImageInserted: attach == null
+            ? null
+            : (bytes, mime) {
+                if (!busy) unawaited(act(() => pasteImage(bytes, mime)));
+              },
+        hasVoice: true,
+        onVoice: voice,
+        onEscape: cancelComposerMode,
+        onEditLast: editLastMessage,
+      );
+    }
     return Padding(
-      padding: EdgeInsets.only(top: chat ? 6 : 12),
+      padding: const EdgeInsets.only(top: 12),
       child: Column(
         children: [
-          if (chat) ?composerContextBar(context),
-          if (!chat && (replying ?? replyTo) != null)
+          if ((replying ?? replyTo) != null)
             Row(
               children: [
                 Expanded(
@@ -891,172 +900,31 @@ extension _SocialPages on _OurNetAppState {
                   onPressed: busy ? null : attach,
                   icon: const Icon(Icons.attach_file),
                 ),
-              if (attach != null && chat)
-                IconButton(
-                  tooltip: 'Paste image',
-                  onPressed: busy ? null : () => act(pasteImage),
-                  icon: const Icon(Icons.content_paste),
-                ),
               Expanded(
-                child: Shortcuts(
-                  // The text field consumes Ctrl+V before a Focus ancestor
-                  // sees it, so claim the shortcut nearer to the field.
-                  shortcuts: {
-                    if (chat && attach != null) ...{
-                      const SingleActivator(
-                        LogicalKeyboardKey.keyV,
-                        control: true,
-                      ): const _PasteIntent(),
-                      const SingleActivator(
-                        LogicalKeyboardKey.keyV,
-                        meta: true,
-                      ): const _PasteIntent(),
-                    },
-                  },
-                  child: Actions(
-                    actions: {
-                      _PasteIntent: CallbackAction<_PasteIntent>(
-                        onInvoke: (_) {
-                          unawaited(pasteIntoComposer(pasteImage));
-                          return null;
-                        },
-                      ),
-                    },
-                    child: Focus(
-                      onKeyEvent: (_, event) {
-                        if (chat && event is KeyDownEvent) {
-                          if (event.logicalKey == LogicalKeyboardKey.escape &&
-                              cancelComposerMode()) {
-                            return KeyEventResult.handled;
-                          }
-                          if (event.logicalKey == LogicalKeyboardKey.arrowUp &&
-                              composer.text.isEmpty &&
-                              editLastMessage()) {
-                            return KeyEventResult.handled;
-                          }
-                        }
-                        return enterSends(
-                          composer,
-                          event,
-                          sendDisabled ? null : send,
-                        );
-                      },
-                      child: TextField(
-                        controller: composer,
-                        focusNode: composerFocus,
-                        minLines: 1,
-                        maxLines: 5,
-                        // Images from the Android keyboard (stickers, GIFs, clipboard).
-                        contentInsertionConfiguration: chat && attach != null
-                            ? ContentInsertionConfiguration(
-                                allowedMimeTypes: const [
-                                  'image/png',
-                                  'image/jpeg',
-                                  'image/gif',
-                                  'image/webp',
-                                ],
-                                onContentInserted: (content) {
-                                  final bytes = content.data;
-                                  if (bytes == null || busy) return;
-                                  unawaited(
-                                    act(
-                                      () => pasteImage(bytes, content.mimeType),
-                                    ),
-                                  );
-                                },
-                              )
-                            : null,
-                        decoration: chat
-                            ? InputDecoration(
-                                hintText:
-                                    contact != null &&
-                                        messageEdit.containsKey(contact)
-                                    ? 'Edit message'
-                                    : 'Message',
-                                filled: true,
-                                fillColor: Theme.of(
-                                  context,
-                                ).colorScheme.surface,
-                                isDense: true,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 12,
-                                ),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(24),
-                                  borderSide: BorderSide.none,
-                                ),
-                              )
-                            : InputDecoration(
-                                helperText: desktop ? sendHint : null,
-                                hintText: 'Start a discussion in this forum…',
-                              ),
-                      ),
+                child: Focus(
+                  onKeyEvent: (_, event) =>
+                      enterSends(composer, event, busy ? null : send),
+                  child: TextField(
+                    controller: composer,
+                    focusNode: composerFocus,
+                    minLines: 1,
+                    maxLines: 5,
+                    decoration: InputDecoration(
+                      helperText: desktop ? sendHint : null,
+                      hintText: 'Start a discussion in this forum…',
                     ),
                   ),
                 ),
               ),
-              if (chat) ...[
-                const SizedBox(width: 2),
-                IconButton(
-                  tooltip: 'Record voice message',
-                  onPressed: voice,
-                  icon: const Icon(Icons.mic_none),
-                ),
-              ],
               const SizedBox(width: 6),
-              chat
-                  ? IconButton.filled(
-                      tooltip: desktop ? 'Send · $sendHint' : 'Send',
-                      style: IconButton.styleFrom(
-                        minimumSize: const Size.square(46),
-                      ),
-                      onPressed: sendDisabled ? null : sendKeepingFocus,
-                      icon: const Icon(Icons.send),
-                    )
-                  : FilledButton(
-                      onPressed: sendDisabled ? null : sendKeepingFocus,
-                      child: const Icon(Icons.send),
-                    ),
+              FilledButton(
+                onPressed: busy ? null : sendKeepingFocus,
+                child: const Icon(Icons.send),
+              ),
             ],
           ),
         ],
       ),
     );
   }
-}
-
-/// Composer key handling: Enter sends, Shift+Enter adds a line. Enter that
-/// confirms an input-method composition is left alone. [send] null means
-/// sending is unavailable, but Enter still never inserts a newline.
-KeyEventResult enterSends(
-  TextEditingController controller,
-  KeyEvent event,
-  VoidCallback? send,
-) {
-  if (event.logicalKey != LogicalKeyboardKey.enter ||
-      (controller.value.composing.isValid &&
-          !controller.value.composing.isCollapsed)) {
-    return KeyEventResult.ignored;
-  }
-  if (HardwareKeyboard.instance.isShiftPressed) {
-    if (event is KeyDownEvent) {
-      final selection = controller.selection;
-      final start = selection.isValid
-          ? selection.start
-          : controller.text.length;
-      final end = selection.isValid ? selection.end : start;
-      controller.value = TextEditingValue(
-        text: controller.text.replaceRange(start, end, '\n'),
-        selection: TextSelection.collapsed(offset: start + 1),
-      );
-    }
-    return KeyEventResult.handled;
-  }
-  if (event is KeyDownEvent) send?.call();
-  return KeyEventResult.handled;
-}
-
-class _PasteIntent extends Intent {
-  const _PasteIntent();
 }

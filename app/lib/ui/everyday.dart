@@ -488,7 +488,15 @@ extension _EverydayPages on _OurNetAppState {
                     },
                   ),
           ),
-          if (!forumTab && !notesTab)
+          if (chat)
+            ColoredBox(
+              color: colors.surfaceContainer,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+                child: groupComposer(context, room, sendRoomMessage),
+              ),
+            )
+          else if (!forumTab && !notesTab)
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
@@ -497,27 +505,13 @@ extension _EverydayPages on _OurNetAppState {
               ),
               child: Column(
                 children: [
-                  if (chat) groupComposerBar(context, room),
                   Focus(
                     canRequestFocus: false,
-                    onKeyEvent: (_, event) {
-                      if (chat && event is KeyDownEvent) {
-                        if (event.logicalKey == LogicalKeyboardKey.escape &&
-                            cancelGroupMode(room)) {
-                          return KeyEventResult.handled;
-                        }
-                        if (event.logicalKey == LogicalKeyboardKey.arrowUp &&
-                            inboxComposer.text.isEmpty &&
-                            editLastGroupMessage()) {
-                          return KeyEventResult.handled;
-                        }
-                      }
-                      return enterSends(
-                        inboxComposer,
-                        event,
-                        savingNote ? null : sendRoomMessage,
-                      );
-                    },
+                    onKeyEvent: (_, event) => enterSends(
+                      inboxComposer,
+                      event,
+                      savingNote ? null : sendRoomMessage,
+                    ),
                     child: TextField(
                       controller: inboxComposer,
                       focusNode: inboxFocus,
@@ -536,28 +530,9 @@ extension _EverydayPages on _OurNetAppState {
                         tooltip: 'Add original file',
                         onPressed: addingAttachment
                             ? null
-                            : () => attachmentAct(() async {
-                                final picker = widget.pickAttachment;
-                                if (picker != null) {
-                                  final file = await picker();
-                                  if (file != null) {
-                                    await addEverydayFile(
-                                      file.path,
-                                      name: file.name,
-                                      room: room,
-                                    );
-                                  }
-                                  return;
-                                }
-                                final selected = await FilePicker.pickFile();
-                                if (selected?.path != null) {
-                                  await addEverydayFile(
-                                    selected!.path!,
-                                    name: selected.name,
-                                    room: room,
-                                  );
-                                }
-                              }),
+                            : () => attachmentAct(
+                                () => pickGroupAttachment(room),
+                              ),
                         icon: const Icon(Icons.attach_file),
                       ),
                       IconButton(
@@ -570,11 +545,8 @@ extension _EverydayPages on _OurNetAppState {
                       const Spacer(),
                       FilledButton.icon(
                         onPressed: savingNote ? null : sendRoomMessage,
-                        icon: Icon(
-                          chat ? Icons.send : Icons.arrow_upward,
-                          size: 18,
-                        ),
-                        label: Text(chat ? 'Send' : 'Add'),
+                        icon: const Icon(Icons.arrow_upward, size: 18),
+                        label: const Text('Add'),
                       ),
                     ],
                   ),

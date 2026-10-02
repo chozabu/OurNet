@@ -531,6 +531,81 @@ extension _GroupChat on _OurNetAppState {
     return false;
   }
 
+  /// The group's message box: the same one direct messages use.
+  Widget groupComposer(
+    BuildContext context,
+    EverydayItem room,
+    VoidCallback send,
+  ) {
+    final id = room.object.id;
+    final editing = groupEdit.containsKey(id);
+    return ChatComposer(
+      controller: inboxComposer,
+      focusNode: inboxFocus,
+      hint: editing ? 'Edit message' : 'Message',
+      onSend: savingNote ? null : send,
+      contextBar: editing || groupReply.containsKey(id)
+          ? Padding(
+              padding: const EdgeInsets.fromLTRB(8, 6, 0, 0),
+              child: groupComposerBar(context, room),
+            )
+          : null,
+      onAttach: addingAttachment
+          ? null
+          : () => attachmentAct(() => pickGroupAttachment(room)),
+      onPasteButton: addingAttachment ? null : () => attachmentAct(pasteInbox),
+      onPasteShortcut: () => unawaited(
+        pasteIntoComposer(inboxComposer, () => attachmentAct(pasteInbox)),
+      ),
+      onImageInserted: (bytes, mime) {
+        if (!addingAttachment) {
+          attachmentAct(() => addGroupImage(room, bytes, mime));
+        }
+      },
+      onEscape: () => cancelGroupMode(room),
+      onEditLast: editLastGroupMessage,
+    );
+  }
+
+  /// Picks a file and adds the original to the group.
+  Future<void> pickGroupAttachment(EverydayItem room) async {
+    final picker = widget.pickAttachment;
+    if (picker != null) {
+      final file = await picker();
+      if (file != null) {
+        await addEverydayFile(file.path, name: file.name, room: room);
+      }
+      return;
+    }
+    final selected = await FilePicker.pickFile();
+    if (selected?.path != null) {
+      await addEverydayFile(selected!.path!, name: selected.name, room: room);
+    }
+  }
+
+  /// Adds an image from the keyboard (a sticker or GIF) to the group.
+  Future<void> addGroupImage(
+    EverydayItem room,
+    Uint8List bytes,
+    String? mime,
+  ) async {
+    final extension = switch (mime) {
+      'image/jpeg' => 'jpg',
+      'image/gif' => 'gif',
+      'image/webp' => 'webp',
+      _ => 'png',
+    };
+    final temp = File(
+      '${(await getTemporaryDirectory()).path}/${randomId()}.$extension',
+    );
+    try {
+      await temp.writeAsBytes(bytes);
+      await addEverydayFile(temp.path, name: 'Image.$extension', room: room);
+    } finally {
+      if (await temp.exists()) await temp.delete();
+    }
+  }
+
   /// Above the composer: what is being replied to, or that a message is
   /// being edited.
   Widget groupComposerBar(BuildContext context, EverydayItem room) {
