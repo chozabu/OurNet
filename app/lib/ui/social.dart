@@ -247,32 +247,46 @@ extension _SocialPages on _OurNetAppState {
           ),
         ],
       ),
-      Expanded(child: objectList(context, discussionObjects())),
-      if (selectedThread != null)
-        compose(
+      Expanded(
+        child: objectList(
           context,
-          () => act(() async {
-            final draftKey = composerContext;
-            final submitted = composer.text;
-            if (submitted.trim().isEmpty) return;
-            await node.publish('post', {
-              'text': submitted.trim(),
-              'parent': replyTo ?? selectedThread,
-            }, space: space);
-            await finishDraft(draftKey, submitted);
-            update(() => replyTo = null);
-          }),
-          attach: () => pickFile(
-            [],
-            postSpace: space,
-            postData: {
-              'parent': replyTo ?? selectedThread,
-              'text': composer.text.trim(),
-            },
-          ),
+          discussionObjects(),
+          inline: selectedThread == null
+              ? null
+              : InlineReply(replyTo ?? selectedThread!, publicReplyBox),
         ),
+      ),
     ],
   );
+
+  Widget publicReplyBox(BuildContext context) {
+    final root = replyTo == null || replyTo == selectedThread;
+    return compose(
+      context,
+      () => act(() async {
+        final draftKey = composerContext;
+        final submitted = composer.text;
+        if (submitted.trim().isEmpty) return;
+        await node.publish('post', {
+          'text': submitted.trim(),
+          'parent': replyTo ?? selectedThread,
+        }, space: space);
+        await finishDraft(draftKey, submitted);
+        update(() => replyTo = null);
+      }),
+      attach: () => pickFile(
+        [],
+        postSpace: space,
+        postData: {
+          'parent': replyTo ?? selectedThread,
+          'text': composer.text.trim(),
+        },
+      ),
+      inline: true,
+      hint: root ? 'Add a comment…' : 'Write a reply…',
+      cancelReply: root ? null : () => update(() => replyTo = null),
+    );
+  }
 
   Widget unreadBadge(Iterable<SignedObject> unread) {
     final count = unread.length;
@@ -795,6 +809,10 @@ extension _SocialPages on _OurNetAppState {
     String? draftKey,
     String? replying,
     VoidCallback? cancelReply,
+
+    /// The reply box that opens under a post in a discussion.
+    bool inline = false,
+    String? hint,
   }) {
     final chat = tab == Destination.messages;
     final desktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
@@ -872,6 +890,72 @@ extension _SocialPages on _OurNetAppState {
         onVoice: voice,
         onEscape: cancelComposerMode,
         onEditLast: editLastMessage,
+      );
+    }
+    if (inline) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2, bottom: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Focus(
+              onKeyEvent: (_, event) {
+                if (event is KeyDownEvent &&
+                    event.logicalKey == LogicalKeyboardKey.escape &&
+                    cancelReply != null) {
+                  cancelReply();
+                  return KeyEventResult.handled;
+                }
+                return enterSends(composer, event, busy ? null : send);
+              },
+              child: TextField(
+                controller: composer,
+                focusNode: composerFocus,
+                minLines: 2,
+                maxLines: 8,
+                decoration: InputDecoration(
+                  hintText: hint ?? 'Write a reply…',
+                  isDense: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                if (attach != null)
+                  IconButton(
+                    tooltip: 'Attach file',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: busy ? null : attach,
+                    icon: const Icon(Icons.attach_file),
+                  ),
+                if (desktop)
+                  Expanded(
+                    child: Text(
+                      sendHint,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  )
+                else
+                  const Spacer(),
+                if (cancelReply != null)
+                  TextButton(
+                    onPressed: cancelReply,
+                    child: const Text('Cancel'),
+                  ),
+                const SizedBox(width: 4),
+                FilledButton(
+                  onPressed: busy ? null : send,
+                  child: const Text('Comment'),
+                ),
+              ],
+            ),
+          ],
+        ),
       );
     }
     return Padding(

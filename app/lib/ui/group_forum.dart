@@ -131,48 +131,63 @@ extension _GroupForum on _OurNetAppState {
                 groupReplies[space] = id;
               }),
             ),
+            inline: thread == null
+                ? null
+                : InlineReply(
+                    replying ?? thread,
+                    (context) =>
+                        groupReplyBox(context, forum, space, thread, replying),
+                  ),
           ),
         ),
-        if (thread != null)
-          compose(
-            context,
-            () => act(() async {
-              final draftKey = composerContext;
-              final submitted = composer.text;
-              if (submitted.trim().isEmpty) return;
-              await forum.publish({
-                'text': submitted.trim(),
-                'parent': replying ?? thread,
-              });
-              await finishDraft(draftKey, submitted);
-              await forum.refresh();
-              if (mounted) update(() => groupReplies.remove(space));
-            }),
-            draftKey: 'groupforum/$space/$thread',
-            replying: replying,
-            cancelReply: () => update(() => groupReplies.remove(space)),
-            attach: () => act(() async {
-              final result = await FilePicker.pickFile();
-              final path = result?.path;
-              if (path == null) return;
-              if ((result!.lengthSync() ?? 0) > Files.maxSize) {
-                throw StateError('Prototype file limit is 64 MiB');
-              }
-              await files.publish(
-                path,
-                postSpace: space,
-                audience: await forum.audience(),
-                kind: 'room_post',
-                post: {
-                  'parent': replying ?? thread,
-                  'text': composer.text.trim(),
-                },
-              );
-              await forum.refresh();
-              if (mounted) update(() {});
-            }),
-          ),
       ],
+    );
+  }
+
+  /// The reply box that opens under the post being answered.
+  Widget groupReplyBox(
+    BuildContext context,
+    RoomForum forum,
+    String space,
+    String thread,
+    String? replying,
+  ) {
+    final root = replying == null || replying == thread;
+    return compose(
+      context,
+      () => act(() async {
+        final draftKey = composerContext;
+        final submitted = composer.text;
+        if (submitted.trim().isEmpty) return;
+        await forum.publish({
+          'text': submitted.trim(),
+          'parent': replying ?? thread,
+        });
+        await finishDraft(draftKey, submitted);
+        await forum.refresh();
+        if (mounted) update(() => groupReplies.remove(space));
+      }),
+      draftKey: 'groupforum/$space/$thread',
+      inline: true,
+      hint: root ? 'Add a comment…' : 'Write a reply…',
+      cancelReply: root ? null : () => update(() => groupReplies.remove(space)),
+      attach: () => act(() async {
+        final result = await FilePicker.pickFile();
+        final path = result?.path;
+        if (path == null) return;
+        if ((result!.lengthSync() ?? 0) > Files.maxSize) {
+          throw StateError('Prototype file limit is 64 MiB');
+        }
+        await files.publish(
+          path,
+          postSpace: space,
+          audience: await forum.audience(),
+          kind: 'room_post',
+          post: {'parent': replying ?? thread, 'text': composer.text.trim()},
+        );
+        await forum.refresh();
+        if (mounted) update(() {});
+      }),
     );
   }
 }

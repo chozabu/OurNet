@@ -48,6 +48,16 @@ void main() {
       false,
     ]);
 
+    // A line carries on past a row only while another reply is still to come.
+    expect(open.map((r) => r.through), [
+      <bool>[],
+      [true],
+      [true, false],
+      [true, false, false],
+      [false],
+      [false, false],
+    ]);
+
     final folded = threadRows(posts, depthOf, {posts[1].id});
     expect(folded.map((r) => r.object.id), [
       posts[0].id,

@@ -78,21 +78,31 @@ void main() {
     await steady(tester);
     expect(find.byTooltip('All discussions'), findsOneWidget);
     await tester.enterText(find.byType(TextField).last, 'Lake, please');
-    await tester.tap(find.byIcon(Icons.send));
+    await tester.tap(find.text('Comment'));
     await steady(tester);
     expect(find.text('Lake, please'), findsOneWidget);
 
     // Replies are compact rows; folding one hides its text and counts what
     // sits beneath it, and unfolding brings it back.
     expect(find.text('Reply'), findsWidgets);
-    expect(find.byIcon(Icons.unfold_less), findsOneWidget);
-    await tester.tap(find.byIcon(Icons.unfold_less));
+    expect(find.byIcon(Icons.remove_circle_outline), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.remove_circle_outline));
     await steady(tester);
     expect(find.text('Lake, please'), findsNothing);
-    expect(find.byIcon(Icons.unfold_more), findsOneWidget);
-    await tester.tap(find.byIcon(Icons.unfold_more));
+    expect(find.byIcon(Icons.add_circle_outline), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.add_circle_outline));
     await steady(tester);
     expect(find.text('Lake, please'), findsOneWidget);
+
+    // Replying to a reply opens the box under it; Cancel returns it to the top.
+    expect(find.text('Cancel'), findsNothing);
+    await tester.tap(find.text('Reply').last);
+    await steady(tester);
+    expect(find.text('Cancel'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await steady(tester);
+    expect(find.text('Cancel'), findsNothing);
+    expect(find.text('Comment'), findsOneWidget);
 
     // Everything reaches the friend, who can read the thread; it never
     // appears in the public forum list.

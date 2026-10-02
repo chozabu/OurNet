@@ -174,7 +174,7 @@ void main() {
       find.byType(TextField).last,
       'A reply within this discussion',
     );
-    await tester.tap(find.byIcon(Icons.send));
+    await tester.tap(find.text('Comment'));
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 300)),
     );

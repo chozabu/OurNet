@@ -9,6 +9,10 @@ extension _ObjectsPages on _OurNetAppState {
     /// Set for a private group's forum, which keeps its own open discussion
     /// and reply target; otherwise the public forum's are used.
     ForumScope? forum,
+
+    /// The reply box of an open discussion, which opens under the post it
+    /// answers instead of at the bottom of the page.
+    InlineReply? inline,
   }) {
     final thread = forum != null ? forum.thread : selectedThread;
     objects = objects.where(contentVisible).toList();
@@ -31,6 +35,13 @@ extension _ObjectsPages on _OurNetAppState {
           )
         : null;
     final levels = MediaQuery.sizeOf(context).width < 600 ? 5 : 12;
+    // If the post being answered is folded away, the box shows under the
+    // first post rather than vanishing.
+    final answering = rows == null || inline == null
+        ? null
+        : rows.any((r) => r.object.id == inline.target)
+        ? inline.target
+        : rows.first.object.id;
     return ListView.builder(
       controller: controller,
       key: PageStorageKey(
@@ -69,6 +80,7 @@ extension _ObjectsPages on _OurNetAppState {
                 id: o.id,
                 depth: row.depth,
                 ancestors: row.ancestors,
+                through: row.through,
                 author: name(author),
                 initial: name(author).substring(0, 1),
                 written: written,
@@ -80,12 +92,9 @@ extension _ObjectsPages on _OurNetAppState {
                 title: p['title'] as String?,
                 scope: row.depth == 0 ? scopeLabel(o) : null,
                 onToggle: toggleCollapsed,
-                onReply: () => forum != null
-                    ? forum.reply(o.id)
-                    : update(() {
-                        selectedThread ??= o.id;
-                        replyTo = o.id;
-                      }),
+                replying: answering == o.id,
+                reply: answering == o.id ? inline!.box(context) : null,
+                onReply: () => answerPost(forum, o.id),
                 menu: postMenu(
                   o,
                   author,
@@ -95,6 +104,7 @@ extension _ObjectsPages on _OurNetAppState {
                     child: Icon(Icons.more_horiz, size: 18),
                   ),
                   provenanceItem: true,
+                  copy: p['text'] as String?,
                 ),
                 body: [
                   if (isImagePayload(p))
@@ -105,7 +115,7 @@ extension _ObjectsPages on _OurNetAppState {
                   if ((p['text'] ?? '').toString().isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 2),
-                      child: SelectableText(p['text']),
+                      child: SelectionArea(child: MessageText(p['text'])),
                     ),
                   ...postAttachment(context, o, p),
                 ],
@@ -194,12 +204,7 @@ extension _ObjectsPages on _OurNetAppState {
                       children: [
                         if (isPost)
                           TextButton.icon(
-                            onPressed: forum != null
-                                ? () => forum.reply(o.id)
-                                : () => update(() {
-                                    selectedThread ??= o.id;
-                                    replyTo = o.id;
-                                  }),
+                            onPressed: () => answerPost(forum, o.id),
                             icon: const Icon(Icons.reply, size: 16),
                             label: const Text('Reply'),
                           ),
@@ -230,6 +235,22 @@ extension _ObjectsPages on _OurNetAppState {
           },
         );
       },
+    );
+  }
+
+  /// Chooses [id] as the post to answer, and puts the cursor in the reply box
+  /// once it has moved there.
+  void answerPost(ForumScope? forum, String id) {
+    if (forum != null) {
+      forum.reply(id);
+    } else {
+      update(() {
+        selectedThread ??= id;
+        replyTo = id;
+      });
+    }
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => composerFocus.requestFocus(),
     );
   }
 
@@ -278,6 +299,7 @@ extension _ObjectsPages on _OurNetAppState {
     String author, {
     Widget? child,
     bool provenanceItem = false,
+    String? copy,
   }) => PopupMenuButton<String>(
     tooltip: 'Discussion options',
     child: child,
@@ -298,6 +320,7 @@ extension _ObjectsPages on _OurNetAppState {
         });
       }
       if (action == 'provenance') provenance(context, o);
+      if (action == 'copy') Clipboard.setData(ClipboardData(text: copy!));
     },
     itemBuilder: (_) => [
       const PopupMenuItem(value: 'hide', child: Text('Hide for me')),
@@ -308,6 +331,8 @@ extension _ObjectsPages on _OurNetAppState {
           value: 'moderate',
           child: Text('Remove from forum'),
         ),
+      if (copy != null && copy.isNotEmpty)
+        const PopupMenuItem(value: 'copy', child: Text('Copy text')),
       if (provenanceItem)
         const PopupMenuItem(
           value: 'provenance',
@@ -538,6 +563,14 @@ extension _ObjectsPages on _OurNetAppState {
       Expanded(child: objectList(context, publicFileObjects())),
     ],
   );
+}
+
+/// Where the reply box of an open discussion goes: [target] is the id of the
+/// post being answered, and [box] builds the box itself.
+class InlineReply {
+  final String target;
+  final Widget Function(BuildContext) box;
+  const InlineReply(this.target, this.box);
 }
 
 /// What a private group's forum needs from [objectList] beyond the posts:
