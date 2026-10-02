@@ -80,6 +80,50 @@ not advertise unrelated private object IDs. Public profiles and revocations have
 special propagation handling. Expired/blocked objects are excluded from views
 and forwarding; expiry cannot erase recipients' copies.
 
+## Calendar
+
+Events are two private kinds, ignored by builds that do not know them (they
+store and pass them on unread, like any unknown kind):
+
+- `cal_event`: an event, a changed occurrence of a repeating event (an
+  *override*), or a record that either was deleted. Payload: `event` (stable
+  entry ID), `clock` (Lamport counter), optional `deleted`, `title`, `desc`,
+  `loc`, `url`, `allDay`, `start`/`end` (milliseconds since the epoch) or
+  `day`/`days` for all-day events, `repeat` (`freq`, `interval`, `days`,
+  `monthly`, `until`, `count`), `reminders` (minutes before, up to five),
+  `color`, `busy`, `sent`, and for an override `series` and `instance`. A voice
+  note is the usual `chunks`/`key`/`size`/`name` file fields plus `audio` and
+  `transcript`. Entries with the same `event` are versions of one thing: the
+  higher `clock` wins and ties break on object ID. An override has the fixed
+  entry ID `<series>~<instance>`, where `instance` is the occurrence's original
+  start in milliseconds (the date for all-day events), so two people changing
+  different occurrences never conflict.
+- `cal_rsvp`: `event`, optional `instance`, and `response` (`yes`, `no`,
+  `maybe`, `none`). Each person's newest answer counts, and an answer for one
+  occurrence overrides their answer for the series.
+
+A person's own calendar is `cal_event` in the space `_calendar`, encrypted to
+their own devices only: it counts only when written by that person for that
+person alone. A private group's calendar is the same kind in the group's room
+space, encrypted to its members, accepted from a member and with every
+audience member in the room record. Like the group forum it has no epochs:
+whoever is a member now reads what members wrote. History shared with a new
+member, and events by someone who has been removed, are republished by the
+group's owner as copies carrying `history: true` and `originalAuthor`; copies
+count only from the owner. A new device of the owner is handed the group's
+events by the same re-issue as its posts, and one of any person's devices
+gets their personal calendar from [history sharing](#identity-and-admission).
+
+Which group calendars show in a person's own calendar, calendar colours and
+a person's own reminders for an event are personal state (`note_self`
+registers `calShow`, `calColor`, `calRemind`), which syncs between their own
+devices only.
+
+Event links are `ournet://event/<calendar>/<entry>` with an optional
+`?at=<occurrence>`; the calendar is `_calendar` or a room ID, percent-encoded.
+They are text, resolved against the events a device holds: a link to an event
+a device cannot read shows as unavailable.
+
 ## Handoff evidence
 
 Evidence is separate from content. A sender signs a handoff naming the object,

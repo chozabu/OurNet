@@ -35,13 +35,64 @@ class Files {
     List<String> via = const [],
     void Function(int completed, int total)? onProgress,
   }) async {
+    final stored = await store(
+      path,
+      encrypt: audience.isNotEmpty,
+      onProgress: onProgress,
+    );
+    return await node.publish(
+      kind ??
+          (postSpace != null
+              ? 'post'
+              : everyday != null
+              ? (room == null ? 'inbox' : 'room_item')
+              : drive != null
+              ? 'drive'
+              : audience.isEmpty
+              ? 'file'
+              : 'message'),
+      {
+        'text': text,
+        'name': name ?? stored['name'],
+        'size': stored['size'],
+        'chunks': stored['chunks'],
+        'chunkBytes': chunkSize,
+        'key': stored['key'],
+        if (drive != null) ...drive,
+        if (everyday != null) ...everyday,
+        if (post != null) ...post,
+        ...?extra,
+      },
+      space:
+          postSpace ??
+          (everyday != null
+              ? (room ?? '_inbox')
+              : drive != null
+              ? '_drive'
+              : audience.isEmpty
+              ? 'files'
+              : '_messages'),
+      audience: audience,
+      via: via,
+    );
+  }
+
+  /// Encrypts [path] into stored chunks without publishing anything, and
+  /// returns the payload fields that describe it (`name`, `size`, `chunks`,
+  /// `chunkBytes`, `key`). For objects that carry a file among other things,
+  /// such as a calendar event's voice note.
+  Future<Json> store(
+    String path, {
+    bool encrypt = true,
+    void Function(int completed, int total)? onProgress,
+  }) async {
     final trace = TimelineTask()..start('attachment.import');
     try {
       final file = File(path);
       final size = await file.length();
       if (size > maxSize) throw StateError('Prototype file limit is 64 MiB');
       final key = await Chacha20.poly1305Aead().newSecretKey();
-      final keyBytes = audience.isEmpty ? null : await key.extractBytes();
+      final keyBytes = encrypt ? await key.extractBytes() : null;
       final chunks = <String>[];
       var completed = 0;
       onProgress?.call(0, size);
@@ -62,41 +113,13 @@ class Files {
         await handle.close();
       }
       if (completed != size) throw StateError('File changed during import');
-      return await node.publish(
-        kind ??
-            (postSpace != null
-                ? 'post'
-                : everyday != null
-                ? (room == null ? 'inbox' : 'room_item')
-                : drive != null
-                ? 'drive'
-                : audience.isEmpty
-                ? 'file'
-                : 'message'),
-        {
-          'text': text,
-          'name': name ?? file.uri.pathSegments.last,
-          'size': size,
-          'chunks': chunks,
-          'chunkBytes': chunkSize,
-          'key': keyBytes == null ? null : b64(keyBytes),
-          if (drive != null) ...drive,
-          if (everyday != null) ...everyday,
-          if (post != null) ...post,
-          ...?extra,
-        },
-        space:
-            postSpace ??
-            (everyday != null
-                ? (room ?? '_inbox')
-                : drive != null
-                ? '_drive'
-                : audience.isEmpty
-                ? 'files'
-                : '_messages'),
-        audience: audience,
-        via: via,
-      );
+      return {
+        'name': file.uri.pathSegments.last,
+        'size': size,
+        'chunks': chunks,
+        'chunkBytes': chunkSize,
+        'key': keyBytes == null ? null : b64(keyBytes),
+      };
     } finally {
       trace.finish();
     }

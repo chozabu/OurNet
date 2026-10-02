@@ -26,6 +26,12 @@ transfer is in `transport`. Preserve the separation between these packages.
   same on a long history as on a new profile: keep incremental state instead of
   rescanning, and never re-verify or re-hash stored records. Extend
   `integration_test/note_history_test.dart` for sync and editor changes.
+- The calendar reads through `Calendar.refresh()` and its in-memory index
+  (insertion cursors, times worked out once per event, layout built outside a
+  frame by `Calendar.warm`); never scan history for it. Extend
+  `core/test/calendar_test.dart` and
+  `integration_test/calendar_history_test.dart` for calendar changes (see
+  `CALENDAR.md`).
 - Android profile runs install as `org.chozabu.ournet.profile`; never run
   measurement builds under the everyday application ID. Extend
   `integration_test/photo_scroll_test.dart` for list/image changes.

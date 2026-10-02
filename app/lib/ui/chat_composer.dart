@@ -31,6 +31,9 @@ class ChatComposer extends StatelessWidget {
   final bool hasVoice;
   final VoidCallback? onVoice;
 
+  /// Mention a calendar event: puts a link to one into the message.
+  final VoidCallback? onEvent;
+
   /// Esc: true when it left a reply or edit.
   final bool Function()? onEscape;
 
@@ -49,6 +52,7 @@ class ChatComposer extends StatelessWidget {
     this.onImageInserted,
     this.hasVoice = false,
     this.onVoice,
+    this.onEvent,
     this.onEscape,
     this.onEditLast,
   });
@@ -81,6 +85,12 @@ class ChatComposer extends StatelessWidget {
                   tooltip: 'Paste image',
                   onPressed: onPasteButton,
                   icon: const Icon(Icons.content_paste),
+                ),
+              if (onEvent != null)
+                IconButton(
+                  tooltip: 'Mention a calendar event',
+                  onPressed: onEvent,
+                  icon: const Icon(Icons.event_outlined),
                 ),
               Expanded(
                 child: Shortcuts(

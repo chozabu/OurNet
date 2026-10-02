@@ -92,6 +92,9 @@ class Notifications {
   void Function(String person)? onOpenChat;
   void Function(String space)? onOpenForum;
   void Function(String space)? onOpenGroup;
+
+  /// Opens the event a reminder was for, by its link.
+  void Function(String link)? onOpenEvent;
   void Function(String note)? onOpenNote;
   void Function()? onCallOpen;
   void Function(String)? onError;
@@ -205,6 +208,8 @@ class Notifications {
         onOpenGroup?.call(key);
       case 'note':
         onOpenNote?.call(key);
+      case 'event':
+        onOpenEvent?.call(key);
       case 'call':
         onCallOpen?.call();
     }

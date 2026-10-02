@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'calendar.dart';
 import 'model.dart';
 import 'node.dart';
 import 'notes.dart';
@@ -106,6 +107,12 @@ class Everyday {
         );
         count++;
       }
+      final readers = await members(current);
+      count += await Calendar.reshare(
+        node,
+        current,
+        audience: (_) => readers,
+      );
     }
     return count;
   }
@@ -429,6 +436,26 @@ class Everyday {
         audience: readers,
       );
     }
+    // The calendar works the same way: events are not epoch-bound, so only
+    // people joining need copies, and people leaving take their events with
+    // them unless the owner passes those on as its own.
+    final leaving = before.where((p) => !nextMembers.contains(p)).toSet();
+    await Calendar.reshare(
+      node,
+      room,
+      into: id,
+      audience: (e) {
+        if (id != room.object.space) {
+          return shareHistory
+              ? nextMembers
+              : nextMembers.where(e.object.audience.contains).toList();
+        }
+        return [
+          if (shareHistory) ...joining,
+          if (leaving.contains(e.author)) ...nextMembers,
+        ];
+      },
+    );
     await beforePublish?.call(data, nextMembers);
     final next = EverydayItem(
       await node.publish('room', data, space: id, audience: audience),

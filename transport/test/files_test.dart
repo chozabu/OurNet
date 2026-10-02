@@ -26,6 +26,44 @@ void main() {
     }
   });
 
+  test('a file can be stored for an object that carries it among other things', () async {
+    final directory = await Directory.systemTemp.createTemp('ournet-store-');
+    final node = Node(await LocalIdentity.create(), Store());
+    final files = Files(node, PeerNetwork(node));
+    try {
+      final path = '${directory.path}/note.m4a';
+      final bytes = Uint8List.fromList([for (var i = 0; i < 300000; i++) i % 251]);
+      await File(path).writeAsBytes(bytes);
+      final stored = await files.store(path);
+      expect(stored['name'], 'note.m4a');
+      expect(stored['size'], bytes.length);
+      expect((stored['chunks'] as List), hasLength(3));
+      expect(stored['key'], isNotNull);
+      // Published inside a calendar event, the chunks read back whole.
+      final object = await node.publish(
+        Calendar.eventKind,
+        {
+          'event': 'e1',
+          'clock': 1,
+          'title': 'Voice',
+          'start': 1000,
+          'end': 2000,
+          ...stored,
+          'audio': {'mime': 'audio/mp4', 'duration': 3000},
+        },
+        space: Calendar.personal,
+        audience: [node.person],
+      );
+      expect(files.cached((await node.content(object))!), isTrue);
+      expect(await files.readBytes(object, limit: 1 << 20), bytes);
+      // And without a key when nobody else needs to read it.
+      expect((await files.store(path, encrypt: false))['key'], isNull);
+    } finally {
+      await node.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
   for (final disk in [false, true]) {
     test('local preview validates actual size (disk: $disk)', () async {
       final directory = await Directory.systemTemp.createTemp('ournet-size-');

@@ -59,6 +59,12 @@ import 'package:animations/animations.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import '../services/note_widgets.dart';
 import '../services/reminders.dart';
+import '../services/calendar_reminders.dart';
+import '../controllers/calendar_controller.dart';
+import 'calendar_dates.dart' show eventTitle;
+import 'calendar_flows.dart';
+import 'calendar_page.dart';
+import 'event_links.dart';
 import '../services/speech.dart';
 import 'drawing.dart';
 import 'note_markup.dart';
@@ -75,6 +81,7 @@ part 'everyday.dart';
 part 'group_chat.dart';
 part 'group_forum.dart';
 part 'group_notes.dart';
+part 'calendar_screens.dart';
 part 'social.dart';
 part 'conversation.dart';
 part 'objects.dart';
@@ -99,7 +106,8 @@ enum Destination {
   settings(8, 'Settings', Icons.settings_outlined),
   notes(9, 'Notes', Icons.note_alt_outlined),
   groups(10, 'Private groups', Icons.people_outline),
-  search(11, 'Search', Icons.search);
+  search(11, 'Search', Icons.search),
+  calendar(12, 'Calendar', Icons.calendar_month_outlined);
 
   final int id;
   final String title;
@@ -107,7 +115,7 @@ enum Destination {
   const Destination(this.id, this.title, this.icon);
 
   /// The main navigation list, in order.
-  static const navigation = [notes, messages, groups, forums, files];
+  static const navigation = [notes, calendar, messages, groups, forums, files];
 
   /// Where back leads from a sub-page, which is also what is remembered.
   Destination? get parent => switch (this) {
@@ -150,6 +158,14 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   NoteWidgets? noteWidgets;
   late final Speech speech;
   NoteReminders? reminders;
+  CalendarReminders? calendarReminders;
+
+  /// The calendar, set up when first needed (the Calendar screen, a link to
+  /// an event, or reminders): reading its history costs time on a large
+  /// profile, and most sessions never ask.
+  CalendarController? calendarControllerOrNull;
+  CalendarFlows? calendarFlowsOrNull;
+  final groupCalendars = <String, CalendarController>{};
 
   /// Sent messages without receipts; only where this isolate owns the
   /// profile (Android).
@@ -412,7 +428,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           }
           ..onOpenChat = openConversation
           ..onOpenForum = openForum
-          ..onOpenGroup = (space) => unawaited(openGroup(space));
+          ..onOpenGroup = (space) {
+            unawaited(openGroup(space));
+          }
+          ..onOpenEvent = (link) {
+            unawaited(openEventLink(link));
+          };
     _deliveryRefresh = CoalescedTask(loadDeliveryLabels, (e) => notice('$e'));
     _dataRefresh = CoalescedTask(() async {
       await messageUpdates.catchUp();
@@ -523,6 +544,15 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         reminders!.start().catchError(
           (Object e) => notice('Reminders unavailable: $e'),
         ),
+      );
+      // Event reminders wait a moment so opening the app is not slowed by
+      // reading the calendar.
+      unawaited(
+        Future<void>.delayed(const Duration(seconds: 4), () async {
+          if (!mounted) return;
+          calendarReminders = CalendarReminders(calendarController, notifications);
+          await calendarReminders!.start();
+        }).catchError((Object e) => notice('Event reminders unavailable: $e')),
       );
       unawaited(
         calls.initialise().catchError(
@@ -895,6 +925,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     shareInbox?.close();
     noteWidgets?.close();
     reminders?.close();
+    calendarReminders?.close();
+    calendarControllerOrNull?.dispose();
+    for (final c in groupCalendars.values) {
+      c.dispose();
+    }
     undelivered?.close();
     speech
       ..removeListener(refresh)
@@ -1015,6 +1050,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) => MaterialApp(
     navigatorKey: noteNavigator,
+    builder: (context, child) => EventLinks(
+      controller: () => calendarController,
+      open: (context, link) => calendarFlows.openLink(context, link),
+      child: child ?? const SizedBox.shrink(),
+    ),
     debugShowCheckedModeBanner: false,
     scaffoldMessengerKey: messenger,
     title: 'OurNet',
@@ -1270,6 +1310,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     Destination.notes => everydayPage(context),
     Destination.groups => groupsPage(context),
     Destination.search => searchPage(context),
+    Destination.calendar => calendarScreen(context),
   };
 
   Widget navBadge(String kind) {

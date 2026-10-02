@@ -888,6 +888,7 @@ extension _SocialPages on _OurNetAppState {
               },
         hasVoice: true,
         onVoice: voice,
+        onEvent: () => unawaited(insertEventLink(context, composer)),
         onEscape: cancelComposerMode,
         onEditLast: editLastMessage,
       );
@@ -932,6 +933,14 @@ extension _SocialPages on _OurNetAppState {
                     onPressed: busy ? null : attach,
                     icon: const Icon(Icons.attach_file),
                   ),
+                IconButton(
+                  tooltip: 'Mention a calendar event',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: busy
+                      ? null
+                      : () => unawaited(insertEventLink(context, composer)),
+                  icon: const Icon(Icons.event_outlined),
+                ),
                 if (desktop)
                   Expanded(
                     child: Text(
@@ -984,6 +993,13 @@ extension _SocialPages on _OurNetAppState {
                   onPressed: busy ? null : attach,
                   icon: const Icon(Icons.attach_file),
                 ),
+              IconButton(
+                tooltip: 'Mention a calendar event',
+                onPressed: busy
+                    ? null
+                    : () => unawaited(insertEventLink(context, composer)),
+                icon: const Icon(Icons.event_outlined),
+              ),
               Expanded(
                 child: Focus(
                   onKeyEvent: (_, event) =>

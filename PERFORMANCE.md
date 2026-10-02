@@ -613,3 +613,31 @@ budget (build p95 38.8 ms, maximum 51 ms) because each page of earlier messages
 is built in one frame after a jump to the end; it is not a figure for normal
 scrolling. No physical Android device was connected; Android timing is
 unvalidated. The other four journeys were not re-run for this change.
+
+## Calendar journey, 2 October 2026
+
+`integration_test/calendar_history_test.dart` opens the Calendar screen over two
+disk profiles holding 3,000 events (about eight years, 120 of them in a shared
+group, 30 repeating), then pages forward and back through 30 weeks, switches
+between month, year, schedule and week views, and finally opens the new-event
+form and types while a friend adds twelve events to the group. It asserts the
+draft survives. It is part of `tool/check.ps1 -Performance`.
+
+Reading is incremental (an insertion cursor into `cal_event` objects) and the
+calendar is laid out once per change, outside a frame (`Calendar.warm`): the
+first run of this journey, before that, had a 714 ms frame when the first
+query laid out 3,000 events, and 50 ms per week of paging because every event's
+time was rebuilt on each query. Both were fixed by working times out once per
+event and by skipping repeating series that ended before the time shown.
+
+On this Windows reference machine (profile, one run, enforced budgets of one
+frame at p95 and two at p99, 100 ms event-loop delay): the calendar showed
+today's week 280 ms after it was opened. Paging: 436 frames, frame-stage p95
+11.5 ms, p99 15.3 ms, maximum 16.6 ms, none over budget; maximum event-loop
+delay 23 ms. Switching views: 524 frames, p95 2.6 ms, p99 13.9 ms, maximum 75.7
+ms (the year view, which expands every repeating series for the year), five
+over budget. Typing while events arrived: 337 frames, p95 10.4 ms, p99 15.8 ms,
+one over budget, maximum event-loop delay 21.9 ms. Report:
+`app/build/calendar_history_test-windows.json`. No physical Android device was
+connected; Android timing is unvalidated. The other journeys were not re-run
+for this change.

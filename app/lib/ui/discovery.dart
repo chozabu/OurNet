@@ -54,6 +54,24 @@ extension _DiscoveryPages on _OurNetAppState {
         );
       }
     }
+    // Events come from the calendar's own index, so they cost no scan.
+    final calendar = calendarController;
+    await calendar.refresh();
+    for (final e in calendar.calendar.events()) {
+      result.add(
+        _SearchHit(
+          EverydayItem(e.object, {
+            ...e.data,
+            'text': [e.description, e.location, e.transcript]
+                .where((t) => t.isNotEmpty)
+                .join(' · '),
+            'title': eventTitle(e),
+          }),
+          'Calendar',
+          'Calendar · ${calendar.nameOf(e.calendar)}',
+        ),
+      );
+    }
     // Newest first in pages: searching reads as much history as it needs
     // rather than a fixed slice of it, and holds only the page.
     await for (final object in scanHistory(const ['message', 'post', 'file'])) {
@@ -86,6 +104,10 @@ extension _DiscoveryPages on _OurNetAppState {
       return;
     }
     final o = item.object;
+    if (o.kind == Calendar.eventKind) {
+      await openEventLink(Calendar.link(o.space, item.data['event'] as String));
+      return;
+    }
     if (o.kind == 'room_item' && room == null) {
       room = (await Everyday(
         node,
@@ -153,6 +175,7 @@ extension _DiscoveryPages on _OurNetAppState {
               'Groups',
               'Forums',
               'Files',
+              'Calendar',
             ])
               Padding(
                 padding: const EdgeInsets.only(right: 8),

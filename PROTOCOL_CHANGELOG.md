@@ -7,6 +7,20 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: calendar
+
+Additive. Builds without it store and relay these unread.
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `cal_event` | new object kind, space `_calendar` (personal) or a group's room ID | An event, an override of one occurrence of a repeating event, or a deletion. See PROTOCOL.md, Calendar. | Store, relay and ignore. |
+| `cal_rsvp` | new object kind, a group's room ID | A member's answer to an event. | Store, relay and ignore. |
+| `calShow`, `calColor`, `calRemind` | `note_self` registers (target: calendar or event) | Which calendars the personal view shows, their colours, a person's own reminders. | Keep, replicate and do not display (unknown registers are accepted). |
+| `ournet://event/...` | text in messages and posts | A link to an event. | Shown as written, not tappable. |
+
+Repeats are expanded on the reader's side from one record, so a series costs one
+object however long it runs. Nothing is stored per occurrence except changes.
+
 ## 0.2.11
 
 No wire or database change. A blocked person is labelled "(blocked)" wherever their

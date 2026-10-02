@@ -91,6 +91,11 @@ extension _ForumFeatures on _OurNetAppState {
                   ),
                   const SizedBox(height: 12),
                   OutlinedButton.icon(
+                    onPressed: () => unawaited(insertEventLink(context, body)),
+                    icon: const Icon(Icons.event_outlined),
+                    label: const Text('Mention a calendar event'),
+                  ),
+                  OutlinedButton.icon(
                     onPressed: () async {
                       final picked = await FilePicker.pickFile();
                       if (context.mounted && picked != null) {

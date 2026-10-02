@@ -1,6 +1,9 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:ournet_core/ournet_core.dart' show Calendar;
 import 'package:url_launcher/url_launcher.dart';
+
+import 'event_links.dart';
 
 /// Message text with tappable links and light formatting, as other
 /// messengers write it: `*bold*`, `_italic_`, `~strike~` and `` `code` ``.
@@ -45,10 +48,12 @@ class MessageText extends StatefulWidget {
   }
 
   /// [text] without formatting markers, for previews and copies.
-  static String plain(String text) => text.replaceAllMapped(
-    _format,
-    (m) => m.group(1) ?? m.group(2) ?? m.group(3) ?? m.group(4) ?? '',
-  );
+  static String plain(String text) => text
+      .replaceAll(Calendar.linkPattern, '📅 Calendar event')
+      .replaceAllMapped(
+        _format,
+        (m) => m.group(1) ?? m.group(2) ?? m.group(3) ?? m.group(4) ?? '',
+      );
 
   /// The distinct web links in [text], in order.
   static List<Uri> links(String text) => {
@@ -108,26 +113,16 @@ class _MessageTextState extends State<MessageText> {
     return spans;
   }
 
-  @override
-  Widget build(BuildContext context) {
-    _clear();
-    final theme = Theme.of(context);
-    final base = widget.style ?? DefaultTextStyle.of(context).style;
-    if (MessageText.onlyEmoji(widget.text)) {
-      return Text(
-        widget.text.trim(),
-        style: base.copyWith(fontSize: (base.fontSize ?? 16) * 2.4),
-      );
-    }
-    final code = theme.colorScheme.onSurface.withValues(alpha: 0.08);
-    final link = base.copyWith(
-      color: theme.colorScheme.primary,
-      decoration: TextDecoration.underline,
-      decorationColor: theme.colorScheme.primary,
-    );
+  TextStyle _linkStyle(ThemeData theme, TextStyle base) => base.copyWith(
+    color: theme.colorScheme.primary,
+    decoration: TextDecoration.underline,
+    decorationColor: theme.colorScheme.primary,
+  );
+
+  /// Web links and light formatting in [text].
+  List<InlineSpan> _text(String text, TextStyle base, Color code, {required TextStyle link}) {
     final children = <InlineSpan>[];
     var at = 0;
-    final text = widget.text;
     for (final m in MessageText._link.allMatches(text)) {
       final uri = MessageText.linkUri(m.group(0)!);
       if (uri == null) continue;
@@ -153,6 +148,43 @@ class _MessageTextState extends State<MessageText> {
     if (at < text.length) {
       children.addAll(_formatted(text.substring(at), base, code));
     }
+    return children;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _clear();
+    final theme = Theme.of(context);
+    final base = widget.style ?? DefaultTextStyle.of(context).style;
+    if (MessageText.onlyEmoji(widget.text)) {
+      return Text(
+        widget.text.trim(),
+        style: base.copyWith(fontSize: (base.fontSize ?? 16) * 2.4),
+      );
+    }
+    final code = theme.colorScheme.onSurface.withValues(alpha: 0.08);
+    final text = widget.text;
+    final children = <InlineSpan>[];
+    // Event links become cards; everything between them is ordinary text.
+    var from = 0;
+    // Most messages hold no event link: look for the scheme before the
+    // pattern, as this runs for every message each time it is drawn.
+    final Iterable<Match> links = text.contains('ournet://event/')
+        ? Calendar.linkPattern.allMatches(text)
+        : const <Match>[];
+    for (final m in links) {
+      final link = m.group(0)!;
+      if (Calendar.parseLink(link) == null) continue;
+      children.addAll(_text(text.substring(from, m.start), base, code, link: _linkStyle(theme, base)));
+      children.add(
+        WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: EventLinkChip(link, style: base),
+        ),
+      );
+      from = m.end;
+    }
+    children.addAll(_text(text.substring(from), base, code, link: _linkStyle(theme, base)));
     return Text.rich(TextSpan(style: base, children: children));
   }
 }

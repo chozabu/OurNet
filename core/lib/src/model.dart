@@ -5,6 +5,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as digest;
 import 'package:cryptography/cryptography.dart';
+import 'recurrence.dart' show Repeat;
 
 typedef Json = Map<String, dynamic>;
 
@@ -189,6 +190,15 @@ bool validContent(String kind, Json p) {
           (p['originalAuthor'] == null || p['originalAuthor'] is String) &&
           (p['copyOf'] == null || p['copyOf'] is String) &&
           (p['sent'] == null || p['sent'] is int),
+    // A calendar event, or a new version of one: see `Calendar`. Anything an
+    // older build does not know is kept and passed on without being read.
+    'cal_event' => _calEvent(p),
+    'cal_rsvp' =>
+      p['event'] is String &&
+          (p['event'] as String).length <= 160 &&
+          ['yes', 'no', 'maybe', 'none'].contains(p['response']) &&
+          (p['instance'] == null ||
+              p['instance'] is String && (p['instance'] as String).length <= 40),
     'message' =>
       (p['text'] is String || p['chunks'] is List) &&
           (p['reply'] == null || p['reply'] is String) &&
@@ -220,6 +230,62 @@ bool validContent(String kind, Json p) {
           (double.tryParse(p['lng'])?.abs() ?? double.infinity) <= 180,
     _ => true,
   };
+}
+
+final _calDay = RegExp(r'^\d{4}-\d{2}-\d{2}$');
+
+bool _calEvent(Json p) {
+  bool within(String key, int limit) =>
+      p[key] == null || p[key] is String && (p[key] as String).length <= limit;
+  if (p['event'] is! String ||
+      (p['event'] as String).isEmpty ||
+      (p['event'] as String).length > 160 ||
+      p['clock'] is! int ||
+      p['clock'] < 0 ||
+      p['clock'] >= 9007199254740991 ||
+      (p['deleted'] != null && p['deleted'] is! bool) ||
+      !within('title', 300) ||
+      !within('desc', 8000) ||
+      !within('loc', 300) ||
+      !within('url', 500) ||
+      !within('tz', 64) ||
+      !within('transcript', 65536) ||
+      (p['color'] != null &&
+          !(p['color'] is String && _colorName.hasMatch(p['color']))) ||
+      (p['busy'] != null && p['busy'] is! bool) ||
+      (p['sent'] != null && p['sent'] is! int) ||
+      (p['history'] != null && p['history'] is! bool) ||
+      (p['originalAuthor'] != null && p['originalAuthor'] is! String) ||
+      (p['series'] == null) != (p['instance'] == null) ||
+      !within('series', 160) ||
+      !within('instance', 40) ||
+      (p['repeat'] != null && !(p['repeat'] is Map && Repeat.valid(p['repeat']))) ||
+      (p['reminders'] != null &&
+          !(p['reminders'] is List &&
+              (p['reminders'] as List).length <= 5 &&
+              (p['reminders'] as List).every(
+                (m) => m is int && m >= 0 && m <= 40320 * 4,
+              ))) ||
+      (p['audio'] != null && p['audio'] is! Map) ||
+      (p['audio'] != null && p['chunks'] is! List)) {
+    return false;
+  }
+  if (p['deleted'] == true) return true;
+  if (p['allDay'] == true) {
+    final day = p['day'];
+    if (day is! String || !_calDay.hasMatch(day)) return false;
+    final parsed = DateTime.tryParse(day);
+    return parsed != null &&
+        p['days'] is int &&
+        p['days'] >= 1 &&
+        p['days'] <= 3660;
+  }
+  return p['start'] is int &&
+      p['end'] is int &&
+      p['start'] >= 0 &&
+      p['end'] >= p['start'] &&
+      p['end'] < 253402300799999 &&
+      p['end'] - p['start'] <= 3660 * 86400000;
 }
 
 /// Register fields: a name, or `name:<id>:name` for per-item values. Names

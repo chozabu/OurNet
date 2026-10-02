@@ -562,6 +562,7 @@ extension _GroupChat on _OurNetAppState {
           attachmentAct(() => addGroupImage(room, bytes, mime));
         }
       },
+      onEvent: () => unawaited(insertEventLink(context, inboxComposer)),
       onEscape: () => cancelGroupMode(room),
       onEditLast: editLastGroupMessage,
     );

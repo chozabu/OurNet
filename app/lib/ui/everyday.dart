@@ -283,6 +283,7 @@ extension _EverydayPages on _OurNetAppState {
     final notesTab = everydaySection == 'Notes';
     final chat = everydaySection == 'Conversation';
     final forumTab = everydaySection == 'Forum';
+    final calendarTab = everydaySection == 'Calendar';
     ensureRoomForum(room);
     void sendRoomMessage() {
       unawaited(
@@ -394,10 +395,13 @@ extension _EverydayPages on _OurNetAppState {
                     'Forum',
                     'Files',
                     'Notes',
+                    'Calendar',
                   ])
                     Padding(
-                      padding: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.only(right: 6),
                       child: ChoiceChip(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
                         label: section == 'Forum'
                             ? Badge.count(
                                 count: groupForumUnread(),
@@ -423,6 +427,8 @@ extension _EverydayPages on _OurNetAppState {
                 ? groupChatView(context, room)
                 : forumTab
                 ? groupForumView(context, room)
+                : calendarTab
+                ? groupCalendarView(context, room)
                 : notesTab
                 ? groupNotesView(context, room)
                 : FutureBuilder<List<EverydayItem>>(
@@ -496,7 +502,7 @@ extension _EverydayPages on _OurNetAppState {
                 child: groupComposer(context, room, sendRoomMessage),
               ),
             )
-          else if (!forumTab && !notesTab)
+          else if (!forumTab && !notesTab && !calendarTab)
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(

@@ -5,6 +5,7 @@ import 'model.dart';
 import 'everyday.dart';
 import 'node.dart';
 import 'notes.dart';
+import 'calendar.dart';
 
 /// Hands this person's other devices everything earlier that they could not
 /// read on their own: chats (by key grant), and files, inbox, groups and notes
@@ -47,6 +48,10 @@ Future<int> shareAllHistory(Node node, {void Function(int)? progress}) async {
   // space they have no record for.
   await step('groups', () => Everyday(node).shareRooms());
   await step('notes', () => Notes(node).shareNotes());
+  await step('calendar', () {
+    final notes = Notes(node);
+    return Calendar(node, notes.state).shareAll();
+  });
   if (failures.isEmpty) markHistoryOffered(node);
   if (failures.isNotEmpty) {
     throw StateError(
