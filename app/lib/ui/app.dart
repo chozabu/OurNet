@@ -206,6 +206,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   Future<List<EverydayItem>>? roomsView;
   Future<List<(EverydayItem, String)>>? attachmentsView;
   final inboxComposer = TextEditingController();
+  final inboxFocus = FocusNode();
   final groupChatScroll = ScrollController();
   String everydaySection = 'Conversation';
   bool inboxDragging = false;
@@ -217,6 +218,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   String? contact;
   String? replyTo;
   final composer = TextEditingController();
+  final composerFocus = FocusNode();
   bool switchingDraft = false;
   late final DraftStore draftStore;
   final drafts = <String, TextEditingValue>{};
@@ -876,10 +878,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     unawaited(folderSync.close());
     unawaited(notifications.close());
     inboxComposer.dispose();
+    inboxFocus.dispose();
     groupChatScroll
       ..removeListener(groupChatScrolled)
       ..dispose();
     composer.dispose();
+    composerFocus.dispose();
     search.dispose();
     fileSearch.dispose();
     super.dispose();

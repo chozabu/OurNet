@@ -815,6 +815,11 @@ extension _SocialPages on _OurNetAppState {
     final desktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
     const sendHint = 'Enter sends · Shift+Enter adds a line';
     final sendDisabled = chat ? sending : busy;
+    void sendKeepingFocus() {
+      send();
+      composerFocus.requestFocus();
+    }
+
     Future<void> pasteImage([Uint8List? given, String? mime]) async {
       final draftKey = composerContext;
       final submitted = composer.text;
@@ -945,38 +950,15 @@ extension _SocialPages on _OurNetAppState {
                             return KeyEventResult.handled;
                           }
                         }
-                        if (event.logicalKey != LogicalKeyboardKey.enter ||
-                            (composer.value.composing.isValid &&
-                                !composer.value.composing.isCollapsed)) {
-                          return KeyEventResult.ignored;
-                        }
-                        if (HardwareKeyboard.instance.isShiftPressed) {
-                          if (event is KeyDownEvent) {
-                            final selection = composer.selection;
-                            final start = selection.isValid
-                                ? selection.start
-                                : composer.text.length;
-                            final end = selection.isValid
-                                ? selection.end
-                                : start;
-                            composer.value = TextEditingValue(
-                              text: composer.text.replaceRange(
-                                start,
-                                end,
-                                '\n',
-                              ),
-                              selection: TextSelection.collapsed(
-                                offset: start + 1,
-                              ),
-                            );
-                          }
-                          return KeyEventResult.handled;
-                        }
-                        if (event is KeyDownEvent && !sendDisabled) send();
-                        return KeyEventResult.handled;
+                        return enterSends(
+                          composer,
+                          event,
+                          sendDisabled ? null : send,
+                        );
                       },
                       child: TextField(
                         controller: composer,
+                        focusNode: composerFocus,
                         minLines: 1,
                         maxLines: 5,
                         // Images from the Android keyboard (stickers, GIFs, clipboard).
@@ -1044,11 +1026,11 @@ extension _SocialPages on _OurNetAppState {
                       style: IconButton.styleFrom(
                         minimumSize: const Size.square(46),
                       ),
-                      onPressed: sendDisabled ? null : send,
+                      onPressed: sendDisabled ? null : sendKeepingFocus,
                       icon: const Icon(Icons.send),
                     )
                   : FilledButton(
-                      onPressed: sendDisabled ? null : send,
+                      onPressed: sendDisabled ? null : sendKeepingFocus,
                       child: const Icon(Icons.send),
                     ),
             ],
@@ -1057,6 +1039,37 @@ extension _SocialPages on _OurNetAppState {
       ),
     );
   }
+}
+
+/// Composer key handling: Enter sends, Shift+Enter adds a line. Enter that
+/// confirms an input-method composition is left alone. [send] null means
+/// sending is unavailable, but Enter still never inserts a newline.
+KeyEventResult enterSends(
+  TextEditingController controller,
+  KeyEvent event,
+  VoidCallback? send,
+) {
+  if (event.logicalKey != LogicalKeyboardKey.enter ||
+      (controller.value.composing.isValid &&
+          !controller.value.composing.isCollapsed)) {
+    return KeyEventResult.ignored;
+  }
+  if (HardwareKeyboard.instance.isShiftPressed) {
+    if (event is KeyDownEvent) {
+      final selection = controller.selection;
+      final start = selection.isValid
+          ? selection.start
+          : controller.text.length;
+      final end = selection.isValid ? selection.end : start;
+      controller.value = TextEditingValue(
+        text: controller.text.replaceRange(start, end, '\n'),
+        selection: TextSelection.collapsed(offset: start + 1),
+      );
+    }
+    return KeyEventResult.handled;
+  }
+  if (event is KeyDownEvent) send?.call();
+  return KeyEventResult.handled;
 }
 
 class _PasteIntent extends Intent {

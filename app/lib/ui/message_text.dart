@@ -50,6 +50,12 @@ class MessageText extends StatefulWidget {
     (m) => m.group(1) ?? m.group(2) ?? m.group(3) ?? m.group(4) ?? '',
   );
 
+  /// The distinct web links in [text], in order.
+  static List<Uri> links(String text) => {
+    for (final m in _link.allMatches(text))
+      ?linkUri(m.group(0)!),
+  }.toList();
+
   static Uri? linkUri(String link) {
     final uri = Uri.tryParse(link.startsWith('www.') ? 'https://$link' : link);
     return uri != null && (uri.scheme == 'https' || uri.scheme == 'http')

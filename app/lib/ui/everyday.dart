@@ -284,6 +284,25 @@ extension _EverydayPages on _OurNetAppState {
     final chat = everydaySection == 'Conversation';
     final forumTab = everydaySection == 'Forum';
     ensureRoomForum(room);
+    void sendRoomMessage() {
+      unawaited(
+        noteAction(
+          chat
+              ? () => sendGroupMessage(room, draftKey)
+              : () async {
+                  final submitted = inboxComposer.text;
+                  final text = submitted.trim();
+                  if (text.isEmpty) return;
+                  await Everyday(
+                    node,
+                  ).write({'type': 'note', 'text': text}, room: room);
+                  await finishDraft(draftKey, submitted, notes: true);
+                },
+        ),
+      );
+      inboxFocus.requestFocus();
+    }
+
     return DropTarget(
       enable: widget.enablePlatform && !addingAttachment,
       onDragEntered: (_) => update(() => inboxDragging = true),
@@ -468,14 +487,23 @@ extension _EverydayPages on _OurNetAppState {
               child: Column(
                 children: [
                   if (chat) groupComposerBar(context, room),
-                  TextField(
-                    controller: inboxComposer,
-                    minLines: 1,
-                    maxLines: 4,
-                    decoration: InputDecoration(
-                      hintText: 'Write a message…',
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
+                  Focus(
+                    canRequestFocus: false,
+                    onKeyEvent: (_, event) => enterSends(
+                      inboxComposer,
+                      event,
+                      savingNote ? null : sendRoomMessage,
+                    ),
+                    child: TextField(
+                      controller: inboxComposer,
+                      focusNode: inboxFocus,
+                      minLines: 1,
+                      maxLines: 4,
+                      decoration: InputDecoration(
+                        hintText: 'Write a message…',
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                      ),
                     ),
                   ),
                   Row(
@@ -517,26 +545,7 @@ extension _EverydayPages on _OurNetAppState {
                       ),
                       const Spacer(),
                       FilledButton.icon(
-                        onPressed: savingNote
-                            ? null
-                            : chat
-                            ? () => noteAction(
-                                () => sendGroupMessage(room, draftKey),
-                              )
-                            : () => noteAction(() async {
-                                final submitted = inboxComposer.text;
-                                final text = submitted.trim();
-                                if (text.isEmpty) return;
-                                await Everyday(node).write({
-                                  'type': 'note',
-                                  'text': text,
-                                }, room: room);
-                                await finishDraft(
-                                  draftKey,
-                                  submitted,
-                                  notes: true,
-                                );
-                              }),
+                        onPressed: savingNote ? null : sendRoomMessage,
                         icon: Icon(
                           chat ? Icons.send : Icons.arrow_upward,
                           size: 18,

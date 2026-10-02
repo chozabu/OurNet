@@ -2128,6 +2128,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
                                               hintText: 'Note',
                                             ),
                                       ),
+                                    if (showText) NoteLinks(input('text')),
                                     if (showText && checklistMode)
                                       const SizedBox(height: 8),
                                   ],

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'message_text.dart';
 
 /// Lightweight formatting for notes whose `format` register is `markup`:
 /// `**bold**`, `*italic*`, `__underline__`, and lines starting `# ` or `## `
@@ -213,6 +215,45 @@ class MarkupEditingController extends TextEditingController {
       ).colorScheme.onSurfaceVariant.withValues(alpha: .45),
     );
   }
+}
+
+/// Tappable chips for the web links written in a note's text, since tapping
+/// inside an editable field places the caret rather than following a link.
+class NoteLinks extends StatelessWidget {
+  final TextEditingController controller;
+  const NoteLinks(this.controller, {super.key});
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: controller,
+    builder: (context, _) {
+      final links = MessageText.links(controller.text);
+      if (links.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            for (final uri in links.take(8))
+              ActionChip(
+                avatar: const Icon(Icons.open_in_new, size: 16),
+                label: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 260),
+                  child: Text(
+                    uri.toString().replaceFirst(RegExp(r'^https?://'), ''),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                onPressed: () => launchUrl(
+                  uri,
+                  mode: LaunchMode.externalApplication,
+                ).catchError((Object _) => false),
+              ),
+          ],
+        ),
+      );
+    },
+  );
 }
 
 /// Read-only formatted text for cards.
