@@ -1601,6 +1601,39 @@ class _QuickReactionsState extends State<_QuickReactions> {
   );
 }
 
+/// What every conversation, direct or group, sits on: a faint tint with a
+/// staggered dot pattern that keeps bubbles legible in light and dark themes.
+/// [children] are stacked over it.
+class ChatBackdrop extends StatelessWidget {
+  final List<Widget> children;
+  const ChatBackdrop({super.key, required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ColoredBox(
+      color: Color.alphaBlend(
+        scheme.primary.withValues(alpha: 0.05),
+        scheme.surfaceContainerLow,
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: RepaintBoundary(
+              child: CustomPaint(
+                painter: ChatWallpaper(
+                  scheme.onSurface.withValues(alpha: 0.05),
+                ),
+              ),
+            ),
+          ),
+          ...children,
+        ],
+      ),
+    );
+  }
+}
+
 /// Faint staggered dot pattern behind a conversation.
 class ChatWallpaper extends CustomPainter {
   final Color color;

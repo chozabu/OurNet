@@ -203,6 +203,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   String searchScope = 'All';
   Future<List<_SearchHit>>? searchIndex;
   EverydayItem? activeRoom;
+
+  /// The group last open, which the Groups destination returns to.
+  EverydayItem? lastRoom;
   Future<List<EverydayItem>>? everydayView;
   Future<List<EverydayItem>>? roomsView;
   Future<List<(EverydayItem, String)>>? attachmentsView;
@@ -578,6 +581,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       setState(() {
         final previousRoom = activeRoom?.object.id, previousTab = tab;
         action();
+        if (activeRoom != null) lastRoom = activeRoom;
         // Filters, drag feedback and delivery labels do not change the data.
         // Keep the loaded items when only presentation state changes.
         if (previousRoom != activeRoom?.object.id) everydayView = null;
@@ -1063,9 +1067,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                         onTap: () {
                           update(() {
                             tab = d;
-                            if (d == Destination.notes ||
-                                d == Destination.groups) {
+                            if (d == Destination.notes) {
                               activeRoom = null;
+                            } else if (d == Destination.groups && wide) {
+                              // Back where the person last was, as with chats.
+                              activeRoom ??= lastRoom;
                             }
                             showConversation = false;
                             showForum = false;

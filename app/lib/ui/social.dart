@@ -644,77 +644,62 @@ extension _SocialPages on _OurNetAppState {
               ),
             ),
           );
-    Widget history = ColoredBox(
-      color: Color.alphaBlend(
-        scheme.primary.withValues(alpha: 0.05),
-        scheme.surfaceContainerLow,
-      ),
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: RepaintBoundary(
-              child: CustomPaint(
-                painter: ChatWallpaper(
-                  scheme.onSurface.withValues(alpha: 0.05),
-                ),
+    Widget history = ChatBackdrop(
+      children: [
+        Positioned.fill(
+          child: conversationList(context, objects, controller: scroll),
+        ),
+        if (objects.isNotEmpty && conversations.hasOlder(peer))
+          Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: ActionChip(
+                avatar: const Icon(Icons.history, size: 18),
+                label: const Text('Load older messages'),
+                onPressed: () => update(() => conversations.loadOlder(peer)),
               ),
             ),
           ),
-          Positioned.fill(
-            child: conversationList(context, objects, controller: scroll),
-          ),
-          if (objects.isNotEmpty && conversations.hasOlder(peer))
-            Align(
-              alignment: Alignment.topCenter,
-              child: Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: ActionChip(
-                  avatar: const Icon(Icons.history, size: 18),
-                  label: const Text('Load older messages'),
-                  onPressed: () => update(() => conversations.loadOlder(peer)),
-                ),
-              ),
-            ),
-          Positioned(
-            right: 12,
-            bottom: 12,
-            child: JumpToLatest(
-              controller: scroll,
-              pending: conversations.hasPending(peer),
-              unread: unreadCount,
-              onPressed: () {
-                if (conversations.hasPending(peer)) {
-                  update(() => conversations.showLatest(peer));
-                }
-                if (!scroll.hasClients) return;
-                if (scroll.offset > 3000) {
-                  scroll.jumpTo(0);
-                } else {
-                  unawaited(
-                    scroll.animateTo(
-                      0,
-                      duration: const Duration(milliseconds: 250),
-                      curve: Curves.easeOut,
-                    ),
-                  );
-                }
-              },
-            ),
-          ),
-          if (chatDragging)
-            Positioned.fill(
-              child: ColoredBox(
-                color: scheme.primary.withValues(alpha: 0.12),
-                child: Center(
-                  child: Text(
-                    'Drop to send to ${name(peer)}',
-                    style: Theme.of(context).textTheme.titleMedium,
+        Positioned(
+          right: 12,
+          bottom: 12,
+          child: JumpToLatest(
+            controller: scroll,
+            pending: conversations.hasPending(peer),
+            unread: unreadCount,
+            onPressed: () {
+              if (conversations.hasPending(peer)) {
+                update(() => conversations.showLatest(peer));
+              }
+              if (!scroll.hasClients) return;
+              if (scroll.offset > 3000) {
+                scroll.jumpTo(0);
+              } else {
+                unawaited(
+                  scroll.animateTo(
+                    0,
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeOut,
                   ),
+                );
+              }
+            },
+          ),
+        ),
+        if (chatDragging)
+          Positioned.fill(
+            child: ColoredBox(
+              color: scheme.primary.withValues(alpha: 0.12),
+              child: Center(
+                child: Text(
+                  'Drop to send to ${name(peer)}',
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
             ),
-        ],
-      ),
+          ),
+      ],
     );
     if (desktop) {
       history = DropTarget(

@@ -213,7 +213,7 @@ extension _GroupChat on _OurNetAppState {
         groupStart: groupStart,
       ),
     );
-    return Stack(
+    return ChatBackdrop(
       children: [
         Positioned.fill(child: history),
         Positioned(
