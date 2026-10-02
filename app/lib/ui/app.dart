@@ -1,5 +1,6 @@
 import 'conversation_history.dart';
 import 'conversation_search.dart';
+import 'chat_bubble.dart';
 import 'message_text.dart';
 import '../services/typing.dart';
 import '../controllers/notes_home_controller.dart';

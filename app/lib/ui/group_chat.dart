@@ -186,42 +186,22 @@ extension _GroupChat on _OurNetAppState {
     final attachment = p['type'] == 'file';
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final time = DateTime.fromMillisecondsSinceEpoch(
-      Everyday.sentOf(item),
-    ).toLocal();
-    final clock =
-        '${time.hour.toString().padLeft(2, '0')}:'
-        '${time.minute.toString().padLeft(2, '0')}';
-    const round = Radius.circular(16);
-    const tail = Radius.circular(4);
+    final clock = messageClock(Everyday.sentOf(item));
     final body = attachment ? '' : (p['text'] ?? '').toString();
     final reactions = messageUpdates.reactionsFor(
       Everyday.reactionTarget(item),
       _groupPeople(feed),
     );
     final highlighted = highlightedMessage == o.id;
-    final base = mine ? scheme.primaryContainer : scheme.surface;
     final bubble = AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       constraints: const BoxConstraints(minWidth: 72),
       padding: const EdgeInsets.fromLTRB(10, 6, 8, 5),
-      decoration: BoxDecoration(
-        color: highlighted
-            ? Color.alphaBlend(scheme.primary.withValues(alpha: .25), base)
-            : base,
-        borderRadius: BorderRadius.only(
-          topLeft: !mine && groupStart ? tail : round,
-          topRight: mine && groupStart ? tail : round,
-          bottomLeft: round,
-          bottomRight: round,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 1,
-            offset: const Offset(0, 1),
-          ),
-        ],
+      decoration: bubbleDecoration(
+        scheme,
+        mine: mine,
+        groupStart: groupStart,
+        highlighted: highlighted,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -327,8 +307,6 @@ extension _GroupChat on _OurNetAppState {
 
   /// The message a reply answers, if it is within what has been loaded.
   Widget groupReplyQuote(BuildContext context, RoomFeed feed, String entry) {
-    final scheme = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
     final target = feed.entry(entry);
     final removed = target != null && target.data['deleted'] == true;
     final who = target == null
@@ -343,36 +321,10 @@ extension _GroupChat on _OurNetAppState {
         : MessageText.plain('${target.data['text'] ?? ''}');
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
-      child: Material(
-        color: scheme.onSurface.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(8),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => unawaited(jumpToGroupMessage(entry)),
-          child: Container(
-            decoration: BoxDecoration(
-              border: Border(left: BorderSide(color: scheme.primary, width: 3)),
-            ),
-            padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (who.isNotEmpty)
-                  Text(
-                    who,
-                    style: text.labelMedium?.copyWith(color: scheme.primary),
-                  ),
-                Text(
-                  preview.isEmpty ? '…' : preview,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: text.bodySmall,
-                ),
-              ],
-            ),
-          ),
-        ),
+      child: QuoteFrame(
+        author: who,
+        preview: preview.isEmpty ? '…' : preview,
+        onTap: () => unawaited(jumpToGroupMessage(entry)),
       ),
     );
   }

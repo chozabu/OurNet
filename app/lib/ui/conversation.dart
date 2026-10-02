@@ -589,39 +589,11 @@ extension _ConversationPages on _OurNetAppState {
 
   /// The quoted message a reply answers; tapping it goes there.
   Widget replyQuote(BuildContext context, String id, {required bool mine}) {
-    final scheme = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
     final target = node.store.get(id);
-    Widget frame(String author, String preview) => Material(
-      color: scheme.onSurface.withValues(alpha: 0.06),
-      borderRadius: BorderRadius.circular(8),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: target == null ? null : () => unawaited(jumpToMessage(id)),
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border(left: BorderSide(color: scheme.primary, width: 3)),
-          ),
-          padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (author.isNotEmpty)
-                Text(
-                  author,
-                  style: text.labelMedium?.copyWith(color: scheme.primary),
-                ),
-              Text(
-                preview,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: text.bodySmall,
-              ),
-            ],
-          ),
-        ),
-      ),
+    Widget frame(String author, String preview) => QuoteFrame(
+      author: author,
+      preview: preview,
+      onTap: target == null ? null : () => unawaited(jumpToMessage(id)),
     );
     if (target == null || !contentVisible(target)) {
       return Padding(
@@ -725,17 +697,12 @@ extension _ConversationPages on _OurNetAppState {
     if (!mine && node.store.setting('read/${o.id}') != true) queueRead(o);
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final time = DateTime.fromMillisecondsSinceEpoch(o.created).toLocal();
-    final clock =
-        '${time.hour.toString().padLeft(2, '0')}:'
-        '${time.minute.toString().padLeft(2, '0')}';
+    final clock = messageClock(o.created);
     final selecting = selectedMessages.isNotEmpty;
     final selected = selectedMessages.contains(o.id);
     void toggleSelected() => update(() {
       if (!selectedMessages.remove(o.id)) selectedMessages.add(o.id);
     });
-    const round = Radius.circular(16);
-    const tail = Radius.circular(4);
     return FutureBuilder<Json?>(
       future: node.content(o),
       builder: (context, snapshot) {
@@ -784,27 +751,14 @@ extension _ConversationPages on _OurNetAppState {
             ],
           ],
         );
-        final base = mine ? scheme.primaryContainer : scheme.surface;
         final bubble = AnimatedContainer(
           duration: const Duration(milliseconds: 300),
           constraints: const BoxConstraints(minWidth: 72),
-          decoration: BoxDecoration(
-            color: highlighted
-                ? Color.alphaBlend(scheme.primary.withValues(alpha: .25), base)
-                : base,
-            borderRadius: BorderRadius.only(
-              topLeft: !mine && groupStart ? tail : round,
-              topRight: mine && groupStart ? tail : round,
-              bottomLeft: round,
-              bottomRight: round,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.08),
-                blurRadius: 1,
-                offset: const Offset(0, 1),
-              ),
-            ],
+          decoration: bubbleDecoration(
+            scheme,
+            mine: mine,
+            groupStart: groupStart,
+            highlighted: highlighted,
           ),
           padding: const EdgeInsets.fromLTRB(10, 6, 8, 5),
           child: Column(
