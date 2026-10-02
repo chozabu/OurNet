@@ -6,6 +6,7 @@ import 'package:cryptography/cryptography.dart';
 import 'model.dart';
 import 'store.dart';
 import 'blob_worker.dart';
+import 'locations.dart';
 
 class Node {
   /// Replaced only by [updateIdentity], when this same device seals its root.
@@ -13,6 +14,9 @@ class Node {
   LocalIdentity _identity;
   final Store store;
   late final blobs = BlobWorker(store);
+  /// Last known positions; set up when first asked for.
+  Locations get locations => _locations ??= Locations(store, clock: () => now());
+  Locations? _locations;
   final int Function() now;
   final changes = StreamController<void>.broadcast();
   final Map<String, DeviceCertificate> contacts = {};
@@ -1180,6 +1184,7 @@ class Node {
       await blobs.close();
     } finally {
       await changes.close();
+      await _locations?.close();
       store.close();
     }
   }

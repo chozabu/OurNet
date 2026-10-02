@@ -7,6 +7,17 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: maps and live location
+
+Additive. No new object kind and no change to existing ones.
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `position` | new request type over `ournet/2`, to one device | A live position: integer `lat`, `lng` (1e-7 degrees), `at`, optional `acc`, `hdg`, `spd`. Never stored as an object or forwarded. See PROTOCOL.md, Locations. | Answer `Unknown request`; the sender stops asking that device for the run. |
+| `positions` | new table in the profile database | The last known position of each person, one row, replaced in place. | Never read; not part of the schema version. |
+| `shareLocation`, `mapOnline`, `mapStyle`, `mapFriends`, `mapCamera` | settings | Pause sharing, allow map downloads, map type, show friends, last view. | Ignored. |
+| `<profile>-tiles.db` | new file beside the profile | Cached and saved map tiles. Safe to delete. | Not present. |
+
 ## Unreleased: calendar
 
 Additive. Builds without it store and relay these unread.

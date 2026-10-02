@@ -60,7 +60,22 @@ class ConnectionService : Service() {
             .setShowWhen(false)
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            val special = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            var started = false
+            if (locationAllowed()) {
+                // Lets live location sharing keep reading the position while
+                // the app is in the background. Android refuses this when the
+                // service is started with the app out of sight (after a
+                // restart); then it runs as before and location resumes the
+                // next time the app is opened.
+                try {
+                    startForeground(NOTIFICATION, notification, special or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+                    started = true
+                } catch (e: Exception) {
+                    Log.w("OurNet", "Location service type refused: $e")
+                }
+            }
+            if (!started) startForeground(NOTIFICATION, notification, special)
         } else {
             startForeground(NOTIFICATION, notification)
         }
@@ -68,6 +83,10 @@ class ConnectionService : Service() {
         engine(applicationContext)
         return START_STICKY
     }
+
+    private fun locationAllowed(): Boolean =
+        checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+            checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
     override fun onDestroy() {
         running = false
@@ -97,8 +116,9 @@ class ConnectionService : Service() {
         private fun setEnabled(context: Context, on: Boolean) =
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("enabled", on).apply()
 
-        private fun start(context: Context) {
-            if (running || !enabled(context)) return
+        /** [force] runs the service's start again while it is running, so it can take on a type it could not before (location, once permitted). */
+        private fun start(context: Context, force: Boolean = false) {
+            if ((running && !force) || !enabled(context)) return
             try {
                 val intent = Intent(context, ConnectionService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
@@ -137,7 +157,7 @@ class ConnectionService : Service() {
                         "start" -> {
                             setEnabled(context, true)
                             FlutterEngineCache.getInstance().put(ENGINE, engine)
-                            start(context)
+                            start(context, force = true)
                             result.success(null)
                         }
                         "stop" -> {

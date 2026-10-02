@@ -43,7 +43,13 @@ dependencies:
   ffi: ^2.1.4
   archive: ^4.0.7
   workmanager: ^0.10.10
-
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+  vector_map_tiles: ^8.0.0
+  vector_map_tiles_pmtiles: ^1.5.0
+  geolocator: ^14.1.1
+  http: ^1.6.0
+  vector_tile_renderer: ^5.2.1
 dev_dependencies:
   integration_test:
     sdk: flutter
@@ -56,7 +62,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/maps/world_land.geojson
+    - assets/maps/
 
 # The Windows MSIX package, built by tool/package.ps1 -Msix. The identity is
 # Partner Center's Product identity page for the Store listing (9N6P4X13QG9M);
@@ -69,7 +75,7 @@ msix_config:
   publisher: CN=30BA6359-7C85-4DB7-96B1-937D4F790B29
   logo_path: ../store/ournet-icon-512.png
   languages: en-gb, en-us
-  capabilities: internetClient,internetClientServer,privateNetworkClientServer,microphone,webcam
+  capabilities: internetClient,internetClientServer,privateNetworkClientServer,microphone,webcam,location
   build_windows: false
   install_certificate: false
   # Off until chosen in Settings; SystemTray looks it up by this id.

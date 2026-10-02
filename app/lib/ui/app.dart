@@ -4,6 +4,9 @@ import 'conversation_search.dart';
 import 'chat_bubble.dart';
 import 'message_text.dart';
 import '../services/typing.dart';
+import '../services/location_share.dart';
+import '../services/map_tiles.dart';
+import 'map_page.dart';
 import '../controllers/notes_home_controller.dart';
 import '../controllers/conversation_controller.dart';
 import '../services/background_sync.dart';
@@ -107,7 +110,8 @@ enum Destination {
   notes(9, 'Notes', Icons.note_alt_outlined),
   groups(10, 'Private groups', Icons.people_outline),
   search(11, 'Search', Icons.search),
-  calendar(12, 'Calendar', Icons.calendar_month_outlined);
+  calendar(12, 'Calendar', Icons.calendar_month_outlined),
+  maps(13, 'Maps', Icons.map_outlined);
 
   final int id;
   final String title;
@@ -115,7 +119,15 @@ enum Destination {
   const Destination(this.id, this.title, this.icon);
 
   /// The main navigation list, in order.
-  static const navigation = [notes, calendar, messages, groups, forums, files];
+  static const navigation = [
+    notes,
+    calendar,
+    maps,
+    messages,
+    groups,
+    forums,
+    files,
+  ];
 
   /// Where back leads from a sub-page, which is also what is remembered.
   Destination? get parent => switch (this) {
@@ -275,6 +287,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   late final ConversationController conversations;
   late final MessageUpdates messageUpdates;
   late final Typing typing;
+  late final LocationShare locationShare;
+  late final MapTiles mapTiles;
   final messageErrors = <String, String>{};
 
   /// Per conversation: messages shown at once while they are being saved
@@ -393,6 +407,25 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     accent = node.store.setting('accent') as int? ?? 0xff137d72;
     network = Network(node)..addListener(refresh);
     typing = Typing(network)..addListener(redraw);
+    locationShare = LocationShare(
+      network,
+      onReading: () {
+        if (stayConnected) unawaited(keepConnected(true).catchError((Object _) {}));
+      },
+    )..addListener(redraw);
+    final tilePath = node.store.path;
+    mapTiles = MapTiles(
+      TileStore(
+        path: tilePath == null || !widget.enablePlatform
+            ? null
+            : '${tilePath.replaceFirst(RegExp(r'\.db$'), '')}-tiles.db',
+      ),
+      allowed: () => node.store.setting('mapOnline') != false,
+    );
+    // Only where the person has already allowed it: asking waits for the map.
+    if (widget.enablePlatform && node.locations.sharing) {
+      unawaited(locationShare.start());
+    }
     files = Files(node, network);
     speech = Speech(notes, files)..addListener(refresh);
     everydaySync = EverydaySync(
@@ -917,6 +950,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     typing
       ..removeListener(redraw)
       ..dispose();
+    locationShare
+      ..removeListener(redraw)
+      ..dispose();
+    mapTiles.dispose();
+    mapTiles.store.close();
     conversations.dispose();
     _deliveryRefresh.close();
     imports.dispose();
@@ -1250,7 +1288,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                         ),
                         Expanded(
                           child: Padding(
-                            padding: EdgeInsets.all(wide ? 24 : 12),
+                            padding: tab == Destination.maps
+                                ? EdgeInsets.zero
+                                : EdgeInsets.all(wide ? 24 : 12),
                             child: page(context),
                           ),
                         ),
@@ -1311,6 +1351,13 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     Destination.groups => groupsPage(context),
     Destination.search => searchPage(context),
     Destination.calendar => calendarScreen(context),
+    Destination.maps => MapPage(
+      node: node,
+      tiles: mapTiles,
+      share: locationShare,
+      nameOf: name,
+      onMessage: openConversation,
+    ),
   };
 
   Widget navBadge(String kind) {

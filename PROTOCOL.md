@@ -124,6 +124,31 @@ Event links are `ournet://event/<calendar>/<entry>` with an optional
 They are text, resolved against the events a device holds: a link to an event
 a device cannot read shows as unavailable.
 
+## Locations
+
+Live position sharing is not an object kind. A position is a request, like a
+typing indicator: `{type: "position", fix: {...}}` over the admitted, encrypted
+connection to one device, answered with `{}`. It is never signed, stored as an
+object, indexed in an inventory or forwarded by a friend, so it cannot grow a
+history or travel by relay. The fix is all integers: `lat` and `lng` in
+ten-millionths of a degree, `at` (the device's clock, milliseconds), and
+optionally `acc` (metres), `hdg` (degrees) and `spd` (centimetres per second).
+A receiver ignores a fix that is out of range, more than ten minutes ahead of
+its own clock, or not newer than the one it holds for that person.
+
+A device sends its position to every admitted device of its person's friends
+and of its own person that it has heard from in the last ten minutes, when it
+has moved about 20 m (at most one per device every five seconds, the latest
+always sent), and every fifteen minutes while still. A device that has just
+synced with it is sent the current position at once, which is how a returning
+friend catches up. Builds without the request answer `Unknown request`; the
+sender stops asking that device for the run.
+
+Each device keeps one row per person (`positions`: person, fix, device label)
+replaced in place, and never expires it. Sharing is on for all admitted
+friends unless the person pauses it (`shareLocation` setting, per device).
+The map's tiles are public data and live in a separate file (`-tiles.db`).
+
 ## Handoff evidence
 
 Evidence is separate from content. A sender signs a handoff naming the object,

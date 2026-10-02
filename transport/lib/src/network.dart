@@ -86,6 +86,20 @@ class PeerNetwork {
   /// Whether this network uses relays and address lookup.
   bool local = false;
 
+  final Map<String, DateTime> _heardAt = {};
+
+  /// Tells [peerSeen] about a device that is syncing with this one, at most
+  /// once a minute each. Only syncs count: a position or typing request does
+  /// not, or two devices would answer each other for ever.
+  void _heard(String device) {
+    final now = DateTime.now(), last = _heardAt[device];
+    if (peerSeen == null || last != null && now.difference(last).inSeconds < 60) {
+      return;
+    }
+    _heardAt[device] = now;
+    peerSeen!(device);
+  }
+
   void _remember(String device) {
     final synced = lastSync[device];
     final build = peerBuilds[device];
@@ -161,6 +175,15 @@ class PeerNetwork {
   /// Only ever sent live; nothing is stored. Builds without it refuse the
   /// request, which the sender ignores.
   void Function(String device)? typing;
+
+  /// Called when a friend's device (or one of this person's own) reports a
+  /// position: the device and the fix as sent. Live only, never stored as an
+  /// object or forwarded; builds without it refuse the request.
+  void Function(String device, Object? fix)? position;
+
+  /// Called when a device has just been heard from after being quiet, so
+  /// whatever should reach it on reconnecting (a last position) can be sent.
+  void Function(String device)? peerSeen;
   static final _alpn = utf8.encode('ournet/2');
 
   void log(String message) {
@@ -432,6 +455,7 @@ class PeerNetwork {
       }
       syncErrors.remove(device);
       lastSync[device] = DateTime.now();
+      _heard(device);
       _remember(device);
       _failures.remove(device);
       _retry.remove(device)?.cancel();
@@ -526,6 +550,7 @@ class PeerNetwork {
         switch (j['type']) {
           case 'pull':
             _notePeer(peer, j);
+            _heard(peer);
             final items = await node.offer(peer, j['inventory']);
             await _learnAddresses(peer, j['addresses']);
             reply = {
@@ -548,6 +573,7 @@ class PeerNetwork {
             };
           case 'push':
             _notePeer(peer, j);
+            _heard(peer);
             reply = {'changed': await node.receive(peer, j['items'])};
           case 'blob':
             // Require a referenced object that this peer is allowed to receive.
@@ -567,6 +593,10 @@ class PeerNetwork {
             reply = {'bytes': blob == null ? null : b64(blob)};
           case 'typing':
             typing?.call(peer);
+            reply = {};
+          case 'position':
+            if (position == null) throw StateError('Unknown request');
+            position!(peer, j['fix']);
             reply = {};
           case 'signal':
             if (signal == null) throw StateError('Calling unavailable');
