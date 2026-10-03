@@ -66,6 +66,19 @@ extension _SocialPages on _OurNetAppState {
           Expanded(
             child: ListView(
               children: [
+                if (forums.isNotEmpty)
+                  ListTile(
+                    leading: const Icon(Icons.dynamic_feed_outlined),
+                    title: const Text('All forums'),
+                    subtitle: const Text('Latest discussions from every forum'),
+                    trailing: unreadBadge(
+                      unreadObjects(
+                        'post',
+                      ).where((o) => forums.contains(o.space)),
+                    ),
+                    selected: space == _OurNetAppState.allForums,
+                    onTap: () => openForum(_OurNetAppState.allForums),
+                  ),
                 for (final forum in forums)
                   ListTile(
                     leading: const Icon(Icons.forum_outlined),
@@ -87,7 +100,7 @@ extension _SocialPages on _OurNetAppState {
           ),
         ],
       ),
-      detail: forums.contains(space)
+      detail: forums.contains(space) || space == _OurNetAppState.allForums
           ? forumDetail(context)
           : empty(
               'Find your discussions',
@@ -155,57 +168,63 @@ extension _SocialPages on _OurNetAppState {
     );
   }
 
-  Widget forumDetail(BuildContext context) => Column(
+  Widget forumDetail(BuildContext context) {
+    final all = space == _OurNetAppState.allForums;
+    return _forumDetail(context, all);
+  }
+
+  Widget _forumDetail(BuildContext context, bool all) => Column(
     children: [
       Row(
         children: [
           Expanded(
             child: Text(
-              forumName(space),
+              all ? 'All forums' : forumName(space),
               style: Theme.of(context).textTheme.titleLarge,
             ),
           ),
-          PopupMenuButton<String>(
-            tooltip: 'Forum options',
-            onSelected: (action) {
-              if (action == 'copy') {
-                Clipboard.setData(ClipboardData(text: space));
-                notice('Forum address copied');
-              }
-              if (action == 'edit') act(() => forumSettings(context));
-              if (action == 'leave') {
-                act(() => notes.state.subscribe(space, false));
-                update(() {
-                  space =
-                      node.subscriptions
-                          .where((s) => !s.startsWith('_') && s != 'files')
-                          .firstOrNull ??
-                      'general';
-                  showForum = false;
-                });
-              }
-            },
-            itemBuilder: (_) => [
-              const PopupMenuItem(
-                value: 'copy',
-                child: Text('Copy forum address'),
-              ),
-              if (ownsForum(space))
+          if (!all)
+            PopupMenuButton<String>(
+              tooltip: 'Forum options',
+              onSelected: (action) {
+                if (action == 'copy') {
+                  Clipboard.setData(ClipboardData(text: space));
+                  notice('Forum address copied');
+                }
+                if (action == 'edit') act(() => forumSettings(context));
+                if (action == 'leave') {
+                  act(() => notes.state.subscribe(space, false));
+                  update(() {
+                    space =
+                        node.subscriptions
+                            .where((s) => !s.startsWith('_') && s != 'files')
+                            .firstOrNull ??
+                        'general';
+                    showForum = false;
+                  });
+                }
+              },
+              itemBuilder: (_) => [
                 const PopupMenuItem(
-                  value: 'edit',
-                  child: Text('Edit description'),
+                  value: 'copy',
+                  child: Text('Copy forum address'),
                 ),
-              const PopupMenuItem(value: 'leave', child: Text('Leave forum')),
-            ],
-          ),
+                if (ownsForum(space))
+                  const PopupMenuItem(
+                    value: 'edit',
+                    child: Text('Edit description'),
+                  ),
+                const PopupMenuItem(value: 'leave', child: Text('Leave forum')),
+              ],
+            ),
         ],
       ),
-      if (forumInfo(space)?['description'] != null)
+      if (!all && forumInfo(space)?['description'] != null)
         Align(
           alignment: Alignment.centerLeft,
           child: Text(forumInfo(space)!['description']),
         ),
-      if (selectedThread == null)
+      if (selectedThread == null && !all)
         Align(
           alignment: Alignment.centerLeft,
           child: FilledButton.icon(
@@ -307,15 +326,28 @@ extension _SocialPages on _OurNetAppState {
       memo('discussion/$space/$selectedThread', _discussionObjects);
 
   List<SignedObject> _discussionObjects() {
+    final all = space == _OurNetAppState.allForums;
+    final joined = node.subscriptions.toSet();
     final posts = node.store
         .objects(kind: 'post', limit: 10000)
-        .where((o) => o.space == space && o.isPublic && contentVisible(o))
+        .where(
+          (o) =>
+              (all
+                  ? !o.space.startsWith('_') &&
+                        o.space != 'files' &&
+                        joined.contains(o.space)
+                  : o.space == space) &&
+              o.isPublic &&
+              contentVisible(o),
+        )
         .toList();
     final ids = posts.map((o) => o.id).toSet();
     if (selectedThread == null) {
-      return posts
+      final roots = posts
           .where((o) => !ids.contains(o.data['payload']['parent']))
           .toList();
+      if (all) roots.sort((a, b) => b.created.compareTo(a.created));
+      return roots;
     }
     final children = <String, List<SignedObject>>{};
     for (final o in posts) {

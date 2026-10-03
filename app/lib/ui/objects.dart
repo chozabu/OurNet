@@ -121,7 +121,13 @@ extension _ObjectsPages on _OurNetAppState {
                 ],
               );
             }
-            return Card(
+            // In a forum's list of discussions the whole card opens the
+            // discussion, so it needs no reply or download buttons.
+            final listed = isPost && thread == null;
+            final replies = forum?.replies(o) ?? replyCounts()[o.id] ?? 0;
+            final small = Theme.of(context).textTheme.bodySmall;
+            final card = Card(
+              clipBehavior: Clip.antiAlias,
               color: unread
                   ? Theme.of(context).colorScheme.secondaryContainer
                   : null,
@@ -132,106 +138,140 @@ extension _ObjectsPages on _OurNetAppState {
                     ? (forum?.depth(o) ?? replyDepth(o)).clamp(0, 4) * 16.0
                     : 0,
               ),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 15,
-                          child: Text(name(author).substring(0, 1)),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            name(author),
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+              child: InkWell(
+                onTap: !listed
+                    ? null
+                    : forum != null
+                    ? () => forum.open(o.id)
+                    : () => update(() {
+                        // From the all-forums view, the discussion opens in
+                        // the forum it belongs to.
+                        if (space == _OurNetAppState.allForums) space = o.space;
+                        selectedThread = o.id;
+                        replyTo = null;
+                      }),
+                child: Padding(
+                  padding: EdgeInsets.all(listed ? 12 : 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 15,
+                            child: Text(name(author).substring(0, 1)),
                           ),
-                        ),
-                        Text(
-                          written.toLocal().toString().substring(0, 16),
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                        if (isPost) postMenu(o, author),
-                        IconButton(
-                          tooltip: 'Inspect provenance',
-                          onPressed: () => provenance(context, o),
-                          icon: const Icon(Icons.verified_outlined, size: 20),
-                        ),
-                      ],
-                    ),
-                    if (isPost && p['title'] != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: Text(
-                          p['title'],
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                      ),
-                    if (isImagePayload(p))
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: postImage(o, p),
-                      ),
-                    if (p['parent'] != null)
-                      Text(
-                        'Reply to ${short(p['parent'])}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    if ((p['text'] ?? '').toString().isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: SelectableText(p['text']),
-                      ),
-                    ...postAttachment(context, o, p),
-                    if (isPost && thread == null)
-                      TextButton.icon(
-                        onPressed: forum != null
-                            ? () => forum.open(o.id)
-                            : () => update(() {
-                                selectedThread = o.id;
-                                replyTo = null;
-                              }),
-                        icon: const Icon(Icons.forum_outlined),
-                        label: Text(
-                          'Open discussion · ${forum?.replies(o) ?? replyCounts()[o.id] ?? 0} direct replies',
-                        ),
-                      ),
-                    Wrap(
-                      spacing: 8,
-                      children: [
-                        if (isPost)
-                          TextButton.icon(
-                            onPressed: () => answerPost(forum, o.id),
-                            icon: const Icon(Icons.reply, size: 16),
-                            label: const Text('Reply'),
-                          ),
-                        if (o.kind == 'message' && o.author != node.person)
-                          TextButton(
-                            onPressed: () => act(() => node.markRead(o.id)),
-                            child: Text(
-                              node.store.setting('read/${o.id}') == true
-                                  ? 'Read'
-                                  : 'Mark read',
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text.rich(
+                              TextSpan(
+                                text: name(author),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                children: [
+                                  if (listed &&
+                                      forum == null &&
+                                      space == _OurNetAppState.allForums)
+                                    TextSpan(
+                                      text: ' · ${forumName(o.space)}',
+                                      style: small?.copyWith(
+                                        fontWeight: FontWeight.normal,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.primary,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                        if (o.kind == 'message' && o.author == node.person)
                           Text(
-                            delivery(o, attachment: p['chunks'] is List),
-                            style: Theme.of(context).textTheme.bodySmall,
+                            written.toLocal().toString().substring(0, 16),
+                            style: small,
                           ),
+                          if (isPost) postMenu(o, author),
+                          IconButton(
+                            tooltip: 'Inspect provenance',
+                            onPressed: () => provenance(context, o),
+                            icon: const Icon(Icons.verified_outlined, size: 20),
+                          ),
+                        ],
+                      ),
+                      if (isPost && p['title'] != null)
+                        Padding(
+                          padding: EdgeInsets.only(top: listed ? 6 : 12),
+                          child: Text(
+                            p['title'],
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                        ),
+                      if (isImagePayload(p))
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            vertical: listed ? 6 : 12,
+                          ),
+                          child: postImage(o, p),
+                        ),
+                      if (p['parent'] != null)
                         Text(
-                          scopeLabel(o),
+                          'Reply to ${short(p['parent'])}',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
-                      ],
-                    ),
-                  ],
+                      if ((p['text'] ?? '').toString().isNotEmpty)
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            vertical: listed ? 6 : 12,
+                          ),
+                          child: listed
+                              ? Text(p['text'])
+                              : SelectableText(p['text']),
+                        ),
+                      if (!listed) ...postAttachment(context, o, p),
+                      if (listed && p['chunks'] != null && !isImagePayload(p))
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text('📎 ${p['name']} · ${p['size']} bytes'),
+                        ),
+                      if (listed)
+                        Text(
+                          '$replies ${replies == 1 ? 'reply' : 'replies'} · ${scopeLabel(o)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: small,
+                        ),
+                      if (!listed)
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            if (o.kind == 'message' && o.author != node.person)
+                              TextButton(
+                                onPressed: () => act(() => node.markRead(o.id)),
+                                child: Text(
+                                  node.store.setting('read/${o.id}') == true
+                                      ? 'Read'
+                                      : 'Mark read',
+                                ),
+                              ),
+                            if (o.kind == 'message' && o.author == node.person)
+                              Text(
+                                delivery(o, attachment: p['chunks'] is List),
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            Text(
+                              scopeLabel(o),
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                    ],
+                  ),
                 ),
               ),
             );
+            return card;
           },
         );
       },

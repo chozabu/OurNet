@@ -117,7 +117,10 @@ extension _HomePages on _OurNetAppState {
       return browsePane(
         context,
         selected: activeRoom != null,
-        back: () => update(() => activeRoom = null),
+        back: () => update(() {
+          activeRoom = null;
+          lastRoom = null;
+        }),
         list: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

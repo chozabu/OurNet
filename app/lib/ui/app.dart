@@ -247,6 +247,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   bool dark = false, busy = false;
   bool compact = false;
   int accent = 0xff137d72;
+
+  /// Stands in for a forum id while the forums tab shows the latest
+  /// discussions from every subscribed forum. Underscore ids are never forums.
+  static const allForums = '_all';
   String space = 'general';
   String? selectedThread;
   String? contact;
@@ -1152,8 +1156,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                             tab = d;
                             if (d == Destination.notes) {
                               activeRoom = null;
-                            } else if (d == Destination.groups && wide) {
-                              // Back where the person last was, as with chats.
+                            } else if (d == Destination.groups) {
+                              // Back where the person last was, with the same
+                              // section (conversation, forum, notes…) open.
                               activeRoom ??= lastRoom;
                             }
                             showConversation = false;
@@ -1329,7 +1334,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   VoidCallback? backDestination() {
     if (tab.parent case final parent?) return () => tab = parent;
     return switch (tab) {
-      Destination.groups when activeRoom != null => () => activeRoom = null,
+      // Backing out to the list is a choice to leave the group.
+      Destination.groups when activeRoom != null => () {
+        activeRoom = null;
+        lastRoom = null;
+      },
       Destination.messages when showConversation =>
         () => showConversation = false,
       Destination.forums when showForum => () => showForum = false,
