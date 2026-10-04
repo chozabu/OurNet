@@ -370,6 +370,8 @@ bool _selfValue(String field, Object? v) => switch (field) {
   'pin' || 'archive' || 'labelDeleted' => v is bool,
   // The removal (operation ID) this person emptied from Removed.
   'purged' => v is String && v.length <= 128,
+  // The device that shares this person's position with friends ('' for none).
+  'locationPrimary' => v is String && v.length <= 128,
   'order' || 'rank' => v is String && _orderKey.hasMatch(v),
   'labelName' => v is String && v.trim().isNotEmpty && v.length <= 50,
   'labels' =>

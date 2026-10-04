@@ -93,11 +93,15 @@ class PeerNetwork {
   /// not, or two devices would answer each other for ever.
   void _heard(String device) {
     final now = DateTime.now(), last = _heardAt[device];
-    if (peerSeen == null || last != null && now.difference(last).inSeconds < 60) {
+    if (peerSeen == null && peerSeenListeners.isEmpty ||
+        last != null && now.difference(last).inSeconds < 60) {
       return;
     }
     _heardAt[device] = now;
-    peerSeen!(device);
+    peerSeen?.call(device);
+    for (final listener in peerSeenListeners.toList()) {
+      listener(device);
+    }
   }
 
   void _remember(String device) {
@@ -184,6 +188,14 @@ class PeerNetwork {
   /// Called when a device has just been heard from after being quiet, so
   /// whatever should reach it on reconnecting (a last position) can be sent.
   void Function(String device)? peerSeen;
+
+  /// More [peerSeen] listeners, for features that share the one hook.
+  final List<void Function(String device)> peerSeenListeners = [];
+
+  /// Called with a friend's group-call message (presence, join, signalling):
+  /// the device and the payload, returning the reply. Live only, never stored;
+  /// builds without it refuse the request.
+  Future<Json> Function(String device, Json payload)? groupCall;
   static final _alpn = utf8.encode('ournet/2');
 
   void log(String message) {
@@ -598,6 +610,9 @@ class PeerNetwork {
             if (position == null) throw StateError('Unknown request');
             position!(peer, j['fix']);
             reply = {};
+          case 'groupcall':
+            if (groupCall == null) throw StateError('Unknown request');
+            reply = await groupCall!(peer, j['payload']);
           case 'signal':
             if (signal == null) throw StateError('Calling unavailable');
             reply = await signal!(peer, j['payload']);

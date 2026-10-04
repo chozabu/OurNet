@@ -155,10 +155,23 @@ extension _HomePages on _OurNetAppState {
                                   const [],
                               '${room.object.audience.length} members · Private',
                             ),
-                            trailing: unreadBadge(
-                              unreadObjects(
-                                'room_item',
-                              ).where((o) => o.space == room.data['room']),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (groupCalls.infoFor(room.object.space)
+                                    case final call?)
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: 8),
+                                    child: GroupCallChip(
+                                      people: call.people.length,
+                                    ),
+                                  ),
+                                unreadBadge(
+                                  unreadObjects(
+                                    'room_item',
+                                  ).where((o) => o.space == room.data['room']),
+                                ),
+                              ],
                             ),
                             selected: activeRoom?.object.id == room.object.id,
                             onTap: () {

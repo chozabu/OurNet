@@ -71,8 +71,8 @@ void main() {
     await steady(tester);
     expect(find.text('Food'), findsOneWidget);
 
-    // Open the friend's discussion and reply.
-    final open = find.textContaining('Open discussion').last;
+    // Open the friend's discussion (tapping its card) and reply.
+    final open = find.text('Lake or forest?');
     await tester.ensureVisible(open);
     await tester.tap(open);
     await steady(tester);

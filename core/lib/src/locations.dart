@@ -109,11 +109,13 @@ class Fix {
 ///
 /// Positions travel only over live connections between admitted devices (see
 /// the transport's `position` request), which are already encrypted. A person's
-/// own devices share them too, so a desktop can show where the phone is.
+/// own devices share them too, so a desktop can show where the phone is; those
+/// are kept per device as well as per person.
 class Locations {
   final Store store;
   final int Function() now;
   final _byPerson = <String, Fix>{};
+  final _byDevice = <String, Fix>{};
   final _changes = StreamController<void>.broadcast();
   Locations(this.store, {int Function()? clock})
     : now = clock ?? (() => DateTime.now().millisecondsSinceEpoch) {
@@ -121,14 +123,24 @@ class Locations {
       'CREATE TABLE IF NOT EXISTS positions('
       'person TEXT PRIMARY KEY, fix TEXT NOT NULL, device TEXT NOT NULL)',
     );
-    for (final row in store.db.select('SELECT person,fix,device FROM positions')) {
+    // One row per device, kept only for this person's own devices.
+    store.db.execute(
+      'CREATE TABLE IF NOT EXISTS device_positions('
+      'device TEXT PRIMARY KEY, fix TEXT NOT NULL, label TEXT NOT NULL)',
+    );
+    _load('SELECT person,fix,device FROM positions', 'person', 'device', _byPerson);
+    _load('SELECT device,fix,label FROM device_positions', 'device', 'label', _byDevice);
+  }
+
+  void _load(String sql, String key, String label, Map<String, Fix> into) {
+    for (final row in store.db.select(sql)) {
       try {
         final fix = Fix.parse(
           jsonDecode(row['fix'] as String),
           now: 1 << 52,
-          device: row['device'] as String,
+          device: row[label] as String,
         );
-        if (fix != null) _byPerson[row['person'] as String] = fix;
+        if (fix != null) into[row[key] as String] = fix;
       } on FormatException {
         // A damaged row is ignored; the next fix replaces it.
       }
@@ -144,13 +156,29 @@ class Locations {
   bool get sharing => store.setting('shareLocation') != false;
   set sharing(bool value) => store.set('shareLocation', value);
 
+  /// Whether this device tells this person's other devices where it is. On
+  /// unless switched off (a spare phone, to save its battery). Friends are
+  /// separate: see [sharing] and the primary device.
+  bool get showToOwnDevices => store.setting('shareOwnDevices') != false;
+  set showToOwnDevices(bool value) => store.set('shareOwnDevices', value);
+
   Fix? of(String person) => _byPerson[person];
   Map<String, Fix> get all => Map.unmodifiable(_byPerson);
+
+  /// Where one of this person's own devices last was, by device ID.
+  Fix? ofDevice(String device) => _byDevice[device];
+  Map<String, Fix> get devices => Map.unmodifiable(_byDevice);
 
   /// Takes in a fix from [person]'s [device]. Older fixes than the one held
   /// are ignored, so a late delivery cannot move someone back. Returns whether
   /// the stored position changed.
   bool update(String person, Fix fix) {
+    if (!_setPerson(person, fix)) return false;
+    if (!_changes.isClosed) _changes.add(null);
+    return true;
+  }
+
+  bool _setPerson(String person, Fix fix) {
     final held = _byPerson[person];
     if (held != null && fix.at <= held.at) return false;
     _byPerson[person] = fix;
@@ -159,8 +187,35 @@ class Locations {
       'SET fix=excluded.fix, device=excluded.device',
       [person, jsonEncode(fix.toJson()), fix.device],
     );
-    if (!_changes.isClosed) _changes.add(null);
     return true;
+  }
+
+  /// Takes in a fix from one of this person's own devices. The device keeps
+  /// its own row (a person's devices are shown separately to themselves), and
+  /// the newest of them stands for the person like any friend's last place.
+  bool updateDevice(String device, Fix fix, {required String person}) {
+    final held = _byDevice[device];
+    var changed = false;
+    if (held == null || fix.at > held.at) {
+      _byDevice[device] = fix;
+      store.db.execute(
+        'INSERT INTO device_positions VALUES (?,?,?) ON CONFLICT(device) '
+        'DO UPDATE SET fix=excluded.fix, label=excluded.label',
+        [device, jsonEncode(fix.toJson()), fix.device],
+      );
+      changed = true;
+    }
+    if (_setPerson(person, fix)) changed = true;
+    if (changed && !_changes.isClosed) _changes.add(null);
+    return changed;
+  }
+
+  /// Drops what is held for one of this person's devices (one that was
+  /// removed).
+  void forgetDevice(String device) {
+    if (_byDevice.remove(device) == null) return;
+    store.db.execute('DELETE FROM device_positions WHERE device=?', [device]);
+    if (!_changes.isClosed) _changes.add(null);
   }
 
   /// Drops what is held for [person] (a friend removed or blocked).

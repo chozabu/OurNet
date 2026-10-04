@@ -216,6 +216,73 @@ class _LocationSharingPageState extends State<LocationSharingPage> {
       'This device cannot report its own position. It still shows where your other devices are.',
   };
 
+  /// Which of this person's devices friends see, and where the others are.
+  List<Widget> _devices(BuildContext context) {
+    final share = widget.share, node = widget.node;
+    final self = node.identity.device;
+    final others = share.otherDevices;
+    final primary = share.primary;
+    String when(String device) {
+      final fix = node.locations.ofDevice(device);
+      return fix == null ? 'No position yet' : 'Updated ${ago(fix.at)}';
+    }
+
+    Widget tile(String id, String label, String detail, {required bool me}) =>
+        ListTile(
+          leading: Icon(
+            primary == id ? Icons.share_location : Icons.devices_other,
+            color: primary == id ? _googleBlue : null,
+          ),
+          title: Text(me ? '$label (this device)' : label),
+          subtitle: Text(
+            [if (primary == id) 'Friends see this device', detail].join(' · '),
+          ),
+          trailing: primary == id
+              ? null
+              : TextButton(
+                  onPressed: () => share.makePrimary(id),
+                  child: const Text('Use for friends'),
+                ),
+        );
+
+    return [
+      const Padding(
+        padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+        child: Text(
+          'Your devices',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+        child: Text(
+          primary == null
+              ? 'Every device that can read its position tells your friends '
+                    'where you are. Choose one, usually your phone, so a '
+                    'laptop left at home does not.'
+              : 'Only the device chosen here tells your friends where you '
+                    'are. Your own devices always see each other.',
+        ),
+      ),
+      tile(
+        self,
+        node.identity.certificate.label,
+        when(self),
+        me: true,
+      ),
+      for (final c in others) tile(c.device, c.label, when(c.device), me: false),
+      SwitchListTile(
+        title: const Text('Show this device to my other devices'),
+        subtitle: const Text(
+          'Turn off on a spare phone to save its battery. Friends are not '
+          'affected.',
+        ),
+        value: share.sendsToOwnDevices,
+        onChanged: share.setShowToOwnDevices,
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final share = widget.share, node = widget.node;
@@ -317,6 +384,7 @@ class _LocationSharingPageState extends State<LocationSharingPage> {
               'someone, remove them as a friend or block them on this device.',
             ),
           ),
+          ..._devices(context),
           ListTile(
             leading: const Icon(Icons.delete_outline),
             title: const Text('Forget saved positions'),

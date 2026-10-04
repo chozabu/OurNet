@@ -35,6 +35,8 @@ import 'package:ournet_transport/ournet_transport.dart'
 import '../services/network.dart';
 import '../services/files.dart';
 import '../services/calls.dart';
+import '../services/group_calls.dart';
+import 'group_call_screen.dart';
 import '../services/messaging.dart';
 import '../services/notifications.dart';
 import '../services/connection_service.dart';
@@ -187,6 +189,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   String? driveFolder;
   bool publicFiles = false;
   late final Calls calls;
+  late final GroupCalls groupCalls;
+  bool callScreenOpen = false;
+
+  /// Group names by space, for the call bar; filled as membership is looked up.
+  final groupNames = <String, String>{};
   late final Notifications notifications;
 
   /// Whether OurNet starts into the tray at sign-in (Windows, main profile).
@@ -413,6 +420,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     typing = Typing(network)..addListener(redraw);
     locationShare = LocationShare(
       network,
+      state: notes.state,
       onReading: () {
         if (stayConnected) unawaited(keepConnected(true).catchError((Object _) {}));
       },
@@ -427,7 +435,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       allowed: () => node.store.setting('mapOnline') != false,
     );
     // Only where the person has already allowed it: asking waits for the map.
-    if (widget.enablePlatform && node.locations.sharing) {
+    if (widget.enablePlatform &&
+        (node.locations.sharing || node.locations.showToOwnDevices)) {
       unawaited(locationShare.start());
     }
     files = Files(node, network);
@@ -449,6 +458,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       automatic: widget.enablePlatform,
     );
     calls = Calls(network)..addListener(refresh);
+    groupCalls = GroupCalls(
+      network,
+      members: groupPeople,
+      otherCallActive: () => calls.phase != 'idle',
+    )..addListener(refresh);
+    calls.busyElsewhere = () => groupCalls.active;
     notifications =
         Notifications(
             node,
@@ -864,6 +879,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         !stayConnected &&
         !foreground &&
         calls.phase == 'idle' &&
+        !groupCalls.active &&
         network.friendInvitation?.available != true &&
         network.pairing?.available != true) {
       await network.stop();
@@ -912,6 +928,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _pausedStop?.cancel();
     if (state == AppLifecycleState.paused &&
         calls.phase == 'idle' &&
+        !groupCalls.active &&
         !stayConnected &&
         !keepInTray) {
       final open =
@@ -933,7 +950,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         _pausedStop = Timer(
           expires.difference(DateTime.now()) + const Duration(seconds: 5),
           () {
-            if (calls.phase == 'idle') unawaited(network.stop());
+            if (calls.phase == 'idle' && !groupCalls.active) {
+              unawaited(network.stop());
+            }
           },
         );
       }
@@ -979,7 +998,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     notesController.dispose();
     network.removeListener(refresh);
     calls.removeListener(refresh);
-    if (widget.enablePlatform) unawaited(calls.close());
+    groupCalls.removeListener(refresh);
+    if (widget.enablePlatform) {
+      unawaited(calls.close());
+      unawaited(groupCalls.close());
+    }
     unawaited(network.stop());
     unawaited(driveSync.close());
     unawaited(folderSync.close());
@@ -1240,6 +1263,33 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                       },
                       icon: Icon(dark ? Icons.light_mode : Icons.dark_mode),
                     ),
+                  if (tab == Destination.groups &&
+                      activeRoom != null &&
+                      groupCalls.infoFor(activeRoom!.object.space) == null) ...[
+                    // A call is the group's to start; once one is going the
+                    // group page offers Join instead.
+                    IconButton(
+                      tooltip: 'Start a voice call',
+                      onPressed: groupCalls.active
+                          ? null
+                          : () => joinGroupCall(
+                              context,
+                              activeRoom!.object.space,
+                            ),
+                      icon: const Icon(Icons.call_outlined),
+                    ),
+                    IconButton(
+                      tooltip: 'Start a video call',
+                      onPressed: groupCalls.active
+                          ? null
+                          : () => joinGroupCall(
+                              context,
+                              activeRoom!.object.space,
+                              video: true,
+                            ),
+                      icon: const Icon(Icons.videocam_outlined),
+                    ),
+                  ],
                   IconButton(
                     tooltip: 'Search everything',
                     onPressed: () => update(() => tab = Destination.search),
@@ -1264,6 +1314,13 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                       children: [
                         if (calls.phase != 'idle' || calls.error != null)
                           callPanel(),
+                        if (groupCalls.active && !callScreenOpen)
+                          GroupCallBar(
+                            calls: groupCalls,
+                            title: groupCallTitle(groupCalls.space),
+                            onOpen: () => openGroupCall(context),
+                            onLeave: () => callAct(groupCalls.leave),
+                          ),
                         ValueListenableBuilder(
                           valueListenable: imports,
                           builder: (context, jobs, _) {

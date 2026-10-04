@@ -33,6 +33,13 @@ Future<void> publishDiscussion(WidgetTester tester, String text) async {
   await tester.pumpAndSettle();
 }
 
+/// The forum list opens a discussion when its card is tapped; replying
+/// happens inside it.
+Future<void> openDiscussion(WidgetTester tester, String text) async {
+  await tester.tap(find.text(text).first);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   setUpAll(() async {
     // Real fonts make local Windows QA captures readable. Other hosts keep the
@@ -168,6 +175,7 @@ void main() {
     expect(node.store.objects(kind: 'post').length, 1);
     expect(find.text('An independently verifiable post'), findsOneWidget);
     await snapshot(tester, 'desktop-discussions');
+    await openDiscussion(tester, 'An independently verifiable post');
     await tester.tap(find.text('Reply').first);
     await tester.pumpAndSettle();
     await tester.enterText(
@@ -206,6 +214,7 @@ void main() {
       await tester.tap(find.text('Forums').first);
       await tester.pumpAndSettle();
       await publishDiscussion(tester, 'Root discussion');
+      await openDiscussion(tester, 'Root discussion');
       await tester.tap(find.text('Reply').first);
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).last, 'First line');
@@ -273,6 +282,7 @@ void main() {
     await tester.tap(find.text('Forums').first);
     await tester.pumpAndSettle();
     await publishDiscussion(tester, 'Root for draft test');
+    await openDiscussion(tester, 'Root for draft test');
     await tester.tap(find.text('Reply').first);
     await tester.pumpAndSettle();
     expect(

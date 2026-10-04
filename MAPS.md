@@ -40,10 +40,19 @@ is deliberately not there yet.
 - **Last known never expires.** A friend who goes offline stays where they were,
   with "Updated 3 h ago" so nobody mistakes it for now. A friend who reconnects
   is sent your current place when you next sync.
-- **Phone to desktop.** Android reads its position (with the "stay connected"
-  service so it continues in the background once location is allowed);
-  Windows can report its own too. Each device shows the newest of your devices'
-  positions as you.
+- **Your devices.** Every device that can read a position tells your other
+  devices where it is, and the map shows each of them (a badge with the
+  device's name; the blue dot is always this device). Android reads its
+  position (with the "stay connected" service so it continues in the
+  background once location is allowed); Windows can too. A spare phone can
+  stop doing this with *Show this device to my other devices*.
+- **Primary device.** Only one device tells friends where you are, so a laptop
+  left at home never overrides the phone in your pocket. It is chosen in
+  *Location sharing* (*Your devices*, *Use for friends*) and syncs between your
+  devices. A phone that finds none chosen, after syncing with your other
+  devices, takes it once; it never takes it again, so a later choice sticks.
+  Until one is chosen every device tells friends, as before. Pausing stops
+  sending to friends only.
 - The wire format and rollout are in [PROTOCOL.md](PROTOCOL.md#locations) and
   [PROTOCOL_CHANGELOG.md](PROTOCOL_CHANGELOG.md).
 

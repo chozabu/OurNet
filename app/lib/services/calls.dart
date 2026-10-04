@@ -16,6 +16,16 @@ const defaultIceServers = [
 List<Object?> iceServers(Object? configured, {required bool local}) =>
     configured is List ? configured : (local ? const [] : defaultIceServers);
 
+/// Whether remote video is shown from the stream WebRTC announces
+/// (`onAddStream`) rather than by adding received tracks to a stream of our
+/// own. On Android, adding a received track makes the plugin list the
+/// connection's transceivers, which frees the track objects listed before
+/// (including ones a renderer is drawing) and races WebRTC's signalling thread
+/// listing them for the next track: that thread then throws "RtpTransceiver
+/// has been disposed" inside a native callback and the process aborts.
+bool get androidRemoteStreams =>
+    defaultTargetPlatform == TargetPlatform.android;
+
 /// Media uses WebRTC. Only signalling crosses the authenticated iroh link.
 class Calls extends ChangeNotifier {
   final Network network;
@@ -48,6 +58,24 @@ class Calls extends ChangeNotifier {
   bool _signallingReady = false;
   final List<RTCIceCandidate> _outgoing = [];
   Timer? _ringTimeout;
+
+  /// Set by whatever else uses the microphone (a group call): while it
+  /// returns true this service neither places nor accepts a call.
+  bool Function()? busyElsewhere;
+
+  /// Whether the other side takes candidates in batches (`v: 2`). Learned
+  /// from its offer or answer; until then every candidate goes on its own, as
+  /// older builds expect.
+  bool _peerBatches = false;
+  final List<RTCIceCandidate> _batch = [];
+  Timer? _batchTimer;
+  bool _offerer = false;
+  Timer? _disconnectTimer;
+  bool _restarting = false;
+  int _restarts = 0;
+
+  /// When media first flowed, for the call timer.
+  DateTime? connectedAt;
   bool _initialised = false;
   Future<void>? _initialising;
   Future<void>? _ending;
@@ -77,12 +105,44 @@ class Calls extends ChangeNotifier {
       throw StateError('Call cancelled');
     }
     _pc = pc;
-    final received = await createLocalMediaStream('local');
-    if (generation != _generation) {
-      await received.dispose();
-      throw StateError('Call cancelled');
+    if (androidRemoteStreams) {
+      // The stream WebRTC announces keeps its own track objects, so showing it
+      // needs no track lookup (see [androidRemoteStreams]).
+      pc.onAddStream = (stream) {
+        if (generation != _generation) return;
+        remote.srcObject = stream;
+        notifyListeners();
+      };
+    } else {
+      final received = await createLocalMediaStream('local');
+      if (generation != _generation) {
+        await received.dispose();
+        throw StateError('Call cancelled');
+      }
+      _remoteMedia = received;
+      _pc!.onTrack = (event) {
+        if (generation != _generation) return;
+        // Register received tracks in a native stream of our own. Desktop's
+        // Unified Plan onTrack stream is not always in the renderer's registry.
+        // This also handles streamless tracks and audio/video arriving separately.
+        if (_remoteTracks.length >= 2 || !_remoteTracks.add(event.track.id!)) {
+          return;
+        }
+        _tracksReady = _tracksReady
+            .then((_) async {
+              if (generation != _generation) return;
+              await received.addTrack(event.track);
+              if (generation != _generation) return;
+              remote.srcObject = received;
+              notifyListeners();
+            })
+            .catchError((Object e) {
+              if (generation != _generation) return;
+              error = 'Could not attach remote media: $e';
+              notifyListeners();
+            });
+      };
     }
-    _remoteMedia = received;
     _pc!.onIceCandidate = (candidate) {
       if (generation != _generation) return;
       if (peer != null && candidate.candidate != null) {
@@ -90,61 +150,50 @@ class Calls extends ChangeNotifier {
           if (_outgoing.length < 64) _outgoing.add(candidate);
           return;
         }
-        final ringing = _ringing.isNotEmpty;
-        for (final device in _recipients) {
-          unawaited(
-            network
-                .request(device, {
-                  'type': 'signal',
-                  'payload': {
-                    'type': 'ice',
-                    'session': _session,
-                    'candidate': candidate.toMap(),
-                  },
-                })
-                .catchError((Object e) {
-                  // One unreachable ringing device must not fail the call.
-                  if (generation != _generation || ringing) {
-                    return <String, dynamic>{};
-                  }
-                  error = '$e';
-                  notifyListeners();
-                  return <String, dynamic>{};
-                }),
-          );
+        if (!_peerBatches) {
+          _sendIce([candidate], generation);
+          return;
         }
+        // Gathering produces a burst; one request carries it, instead of a
+        // connection to the peer for each candidate.
+        _batch.add(candidate);
+        _batchTimer ??= Timer(const Duration(milliseconds: 60), () {
+          _batchTimer = null;
+          final batch = _batch.toList();
+          _batch.clear();
+          if (batch.isNotEmpty && generation == _generation) {
+            _sendIce(batch, generation);
+          }
+        });
       }
-    };
-    _pc!.onTrack = (event) {
-      if (generation != _generation) return;
-      // Register received tracks in a native stream of our own. Desktop's
-      // Unified Plan onTrack stream is not always in the renderer's registry.
-      // This also handles streamless tracks and audio/video arriving separately.
-      if (_remoteTracks.length >= 2 || !_remoteTracks.add(event.track.id!)) {
-        return;
-      }
-      _tracksReady = _tracksReady
-          .then((_) async {
-            if (generation != _generation) return;
-            await received.addTrack(event.track);
-            if (generation != _generation) return;
-            remote.srcObject = received;
-            notifyListeners();
-          })
-          .catchError((Object e) {
-            if (generation != _generation) return;
-            error = 'Could not attach remote media: $e';
-            notifyListeners();
-          });
     };
     _pc!.onConnectionState = (state) {
       if (generation != _generation) return;
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        _disconnectTimer?.cancel();
+        _restarts = 0;
         phase = 'connected';
+        connectedAt ??= DateTime.now();
+      }
+      if (state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected &&
+          phase == 'connected') {
+        // Often a moment's loss that heals itself; if not, the caller starts
+        // new candidates (a phone moving from Wi-Fi to mobile data).
+        phase = 'reconnecting';
+        _disconnectTimer?.cancel();
+        _disconnectTimer = Timer(const Duration(seconds: 3), () {
+          if (generation == _generation) unawaited(_restartIce(generation));
+        });
       }
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
-        phase = 'failed';
-        error = 'Media connection failed; check ICE server configuration';
+        _disconnectTimer?.cancel();
+        if (_offerer && _restarts < 2 && phase != 'ending') {
+          phase = 'reconnecting';
+          unawaited(_restartIce(generation));
+        } else {
+          phase = 'failed';
+          unawaited(_failed(generation));
+        }
       }
       notifyListeners();
     };
@@ -221,6 +270,82 @@ class Calls extends ChangeNotifier {
     if (generation == _generation) notifyListeners();
   }
 
+  void _sendIce(List<RTCIceCandidate> candidates, int generation) {
+    final ringing = _ringing.isNotEmpty;
+    for (final device in _recipients) {
+      for (final payload in _icePayloads(candidates)) {
+        unawaited(
+          network
+              .request(device, {'type': 'signal', 'payload': payload})
+              .catchError((Object e) {
+                // One unreachable ringing device must not fail the call.
+                if (generation != _generation || ringing) {
+                  return <String, dynamic>{};
+                }
+                error = '$e';
+                notifyListeners();
+                return <String, dynamic>{};
+              }),
+        );
+      }
+    }
+  }
+
+  List<Json> _icePayloads(List<RTCIceCandidate> candidates) => _peerBatches
+      ? [
+          {
+            'type': 'ice',
+            'session': _session,
+            'candidates': [for (final c in candidates) c.toMap()],
+          },
+        ]
+      : [
+          for (final c in candidates)
+            {'type': 'ice', 'session': _session, 'candidate': c.toMap()},
+        ];
+
+  /// Offers new candidates over the same session. Only the caller can: it
+  /// made the first offer, so there is no clash over who renegotiates.
+  Future<void> _restartIce(int generation) async {
+    final pc = _pc;
+    if (!_offerer ||
+        pc == null ||
+        _restarting ||
+        generation != _generation ||
+        peer == null ||
+        phase == 'connected') {
+      return;
+    }
+    _restarting = true;
+    _restarts++;
+    final session = _session, device = peer!;
+    try {
+      final offer = await pc.createOffer({'iceRestart': true});
+      if (_session != session) return;
+      await pc.setLocalDescription(offer);
+      final reply = await network.request(device, {
+        'type': 'signal',
+        'payload': {'type': 'restart', 'session': session, 'sdp': offer.sdp},
+      });
+      if (_session != session || reply['sdp'] is! String) return;
+      await pc.setRemoteDescription(
+        RTCSessionDescription(reply['sdp'], 'answer'),
+      );
+    } catch (_) {
+      // An older build refuses; the connection state decides what happens.
+    } finally {
+      _restarting = false;
+    }
+  }
+
+  /// The media connection could not be recovered: end the call, and say why.
+  Future<void> _failed(int generation) async {
+    if (generation != _generation) return;
+    await hangup();
+    error = 'Call ended: the connection was lost';
+    notifyListeners();
+  }
+
   bool isOwnDevice(String device) =>
       device != network.node.identity.device &&
       network.node.allowedPeer(device) &&
@@ -274,7 +399,9 @@ class Calls extends ChangeNotifier {
       callDevices([device], video: video);
 
   Future<void> callDevices(List<String> devices, {bool video = false}) async {
-    if (phase != 'idle') throw StateError('A call is already active');
+    if (phase != 'idle' || busyElsewhere?.call() == true) {
+      throw StateError('A call is already active');
+    }
     if (devices.isEmpty) throw StateError('No devices to call');
     for (final device in devices) {
       if (device == network.node.identity.device ||
@@ -283,6 +410,7 @@ class Calls extends ChangeNotifier {
       }
     }
     peer = devices.first;
+    _offerer = true;
     _ringing
       ..clear()
       ..addAll(devices);
@@ -312,6 +440,7 @@ class Calls extends ChangeNotifier {
                   'session': session,
                   'sdp': offer.sdp,
                   'video': video,
+                  'v': 2,
                 },
               })
               .then<void>(
@@ -358,8 +487,12 @@ class Calls extends ChangeNotifier {
     }
     switch (message['type']) {
       case 'offer':
-        if (phase != 'idle') throw StateError('Busy');
+        if (phase != 'idle' || busyElsewhere?.call() == true) {
+          throw StateError('Busy');
+        }
         peer = device;
+        _offerer = false;
+        _peerBatches = message['v'] == 2;
         _session = message['session'];
         _signallingReady = false;
         _offer = message;
@@ -382,6 +515,7 @@ class Calls extends ChangeNotifier {
         _ringTimeout?.cancel();
         final session = _session;
         peer = device;
+        _peerBatches = message['v'] == 2;
         final others = _ringing.where((d) => d != device).toList();
         _ringing.clear();
         // This device took the call; stop the others ringing.
@@ -403,17 +537,33 @@ class Calls extends ChangeNotifier {
         await _flush();
       case 'ice':
         if (device != peer || _ringing.isNotEmpty) return {};
-        final j = message['candidate'] as Json;
-        final candidate = RTCIceCandidate(
-          j['candidate'],
-          j['sdpMid'],
-          j['sdpMLineIndex'],
-        );
-        if (_remoteReady && _pc != null) {
-          await _pc!.addCandidate(candidate);
-        } else if (_pending.length < 64) {
-          _pending.add(candidate);
+        final list = message['candidates'] is List
+            ? (message['candidates'] as List).take(64)
+            : [message['candidate']];
+        for (final j in list.whereType<Map>()) {
+          final candidate = RTCIceCandidate(
+            j['candidate'],
+            j['sdpMid'],
+            j['sdpMLineIndex'],
+          );
+          if (_remoteReady && _pc != null) {
+            await _pc!.addCandidate(candidate);
+          } else if (_pending.length < 64) {
+            _pending.add(candidate);
+          }
         }
+      case 'restart':
+        // The caller is replacing its candidates after a network change.
+        final pc = _pc;
+        if (pc == null || !_remoteReady || message['sdp'] is! String) {
+          throw StateError('Unexpected restart');
+        }
+        await pc.setRemoteDescription(
+          RTCSessionDescription(message['sdp'], 'offer'),
+        );
+        final reply = await pc.createAnswer();
+        await pc.setLocalDescription(reply);
+        return {'ok': true, 'sdp': reply.sdp};
       case 'hangup':
         // A decline from any ringing device ends the call on all of them.
         if (device == peer || _ringing.contains(device)) {
@@ -447,16 +597,10 @@ class Calls extends ChangeNotifier {
     final candidates = _outgoing.toList();
     _outgoing.clear();
     Future<void> send(String device) async {
-      for (final candidate in candidates) {
+      if (candidates.isEmpty) return;
+      for (final payload in _icePayloads(candidates)) {
         if (_session != session) return;
-        await network.request(device, {
-          'type': 'signal',
-          'payload': {
-            'type': 'ice',
-            'session': session,
-            'candidate': candidate.toMap(),
-          },
-        });
+        await network.request(device, {'type': 'signal', 'payload': payload});
       }
     }
 
@@ -490,7 +634,12 @@ class Calls extends ChangeNotifier {
       if (_session != session) return;
       await network.request(peer!, {
         'type': 'signal',
-        'payload': {'type': 'answer', 'session': _session, 'sdp': answer.sdp},
+        'payload': {
+          'type': 'answer',
+          'session': _session,
+          'sdp': answer.sdp,
+          'v': 2,
+        },
       });
       if (_session != session) return;
       await _flushOutgoing();
@@ -525,6 +674,15 @@ class Calls extends ChangeNotifier {
     error = null;
     _generation++;
     _ringTimeout?.cancel();
+    _disconnectTimer?.cancel();
+    _batchTimer?.cancel();
+    _batchTimer = null;
+    _batch.clear();
+    _peerBatches = false;
+    _offerer = false;
+    _restarting = false;
+    _restarts = 0;
+    connectedAt = null;
     _outgoing.clear();
     _signallingReady = false;
     final notify = notifyPeer

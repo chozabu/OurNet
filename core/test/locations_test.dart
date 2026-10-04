@@ -107,6 +107,49 @@ void main() {
       store.close();
     });
 
+    test('own devices keep a row each, and the newest stands for the person', () {
+      final dir = Directory.systemTemp.createTempSync('ournet_loc');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final path = '${dir.path}/p.db';
+      var store = Store(path: path);
+      var l = Locations(store, clock: () => t);
+      Fix on(String label, double lat, int at) =>
+          Fix(lat: lat, lng: 0, at: at, device: label);
+      expect(l.updateDevice('d1', on('Pixel', 1, t), person: 'me'), isTrue);
+      expect(l.updateDevice('d2', on('Desk', 2, t + 5), person: 'me'), isTrue);
+      // A late fix from a device changes neither its row nor the person's.
+      expect(l.updateDevice('d1', on('Pixel', 9, t - 5), person: 'me'), isFalse);
+      expect(l.ofDevice('d1')!.lat, 1);
+      expect(l.ofDevice('d2')!.device, 'Desk');
+      expect(l.of('me')!.lat, 2);
+      // The phone moving again is newer than the laptop's confirmation.
+      l.updateDevice('d1', on('Pixel', 3, t + 9), person: 'me');
+      expect(l.of('me')!.device, 'Pixel');
+      expect(l.devices.length, 2);
+      store.close();
+
+      store = Store(path: path);
+      l = Locations(store, clock: () => t + 86400000);
+      expect(l.ofDevice('d2')!.lat, 2);
+      expect(l.of('me')!.lat, 3);
+      l.forgetDevice('d2');
+      expect(l.ofDevice('d2'), isNull);
+      expect(
+        store.db.select('SELECT COUNT(*) c FROM device_positions').first['c'],
+        1,
+      );
+      store.close();
+    });
+
+    test('sending to own devices is on until switched off', () {
+      final store = Store();
+      final l = Locations(store);
+      expect(l.showToOwnDevices, isTrue);
+      l.showToOwnDevices = false;
+      expect(l.showToOwnDevices, isFalse);
+      store.close();
+    });
+
     test('sharing is on until switched off', () {
       final store = Store();
       final l = Locations(store);

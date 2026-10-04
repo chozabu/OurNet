@@ -21,19 +21,9 @@ extension _NetworkPages on _OurNetAppState {
             label: const Text('Copy your contact card'),
           ),
           OutlinedButton.icon(
-            onPressed: () => act(() async {
-              final card = await ask(
-                context,
-                'Add a friend’s device',
-                hint: 'Paste their contact card',
-                lines: 4,
-              );
-              if (card != null) {
-                await network.addCard(card);
-              }
-            }),
+            onPressed: () => addFriend(context),
             icon: const Icon(Icons.person_add_alt),
-            label: const Text('Add contact'),
+            label: const Text('Add friend'),
           ),
         ],
       ),
@@ -49,7 +39,7 @@ extension _NetworkPages on _OurNetAppState {
       ),
       const SizedBox(height: 12),
       const Text(
-        'A contact card binds a device to its owner. Confirm the identity with your friend. Both sides must add the other.',
+        'Add friend connects both of you at once: scan a QR code, find them on the same Wi-Fi, or paste an invitation. A contact card binds a device to its owner; if you use one instead, both sides must add the other.',
       ),
       const SizedBox(height: 16),
       SizedBox(

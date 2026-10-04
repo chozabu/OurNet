@@ -145,8 +145,16 @@ friend catches up. Builds without the request answer `Unknown request`; the
 sender stops asking that device for the run.
 
 Each device keeps one row per person (`positions`: person, fix, device label)
-replaced in place, and never expires it. Sharing is on for all admitted
-friends unless the person pauses it (`shareLocation` setting, per device).
+replaced in place, and never expires it. A person's own devices also get a row
+each (`device_positions`: device, fix, label), so they can see one another.
+Sharing with friends is on unless the person pauses it (`shareLocation`
+setting, per device). Only the person's primary device sends to friends: it is
+a personal-state register (`note_self` field `locationPrimary`, target `self`,
+value a device ID, `''` for none) that syncs between the person's own devices.
+While none is chosen every device sends to friends, as builds before it did;
+builds that predate the register store it and ignore it. Sending to the
+person's own devices is separate and on unless switched off on that device
+(`shareOwnDevices` setting).
 The map's tiles are public data and live in a separate file (`-tiles.db`).
 
 ## Handoff evidence
@@ -232,6 +240,44 @@ A call to a person sends the same offer (one session id) to each of their
 admitted devices. The first `answer` binds the call to that device; the caller
 sends `hangup` for the session to the others and ignores their later signals.
 A `hangup` from any still-ringing device ends the call for all of them.
+
+One to one calls take candidates in batches when both sides say so: an `offer`
+or `answer` carrying `v: 2` means the sender accepts `ice` messages with a
+`candidates` list (otherwise one `candidate` per message, as before), and a
+caller whose connection drops sends `restart` (a new offer with fresh ICE
+credentials) and gets the answer in the reply. Builds without these ignore
+`v` and refuse `restart` (`Unknown call signal`), which ends in a plain hang up.
+
+### Group calls
+
+A private group's call is a mesh of one to one WebRTC connections, kept
+together by a request type `groupcall` over `ournet/2` whose `payload` has an
+`op` and the group's `space`. It is live only: nothing is stored, nothing is
+relayed, and builds without it answer `Unknown request` (the sender stops
+asking that device for the run). Every message is refused unless the sender is
+an admitted device of a person in the group's `members` and so is this device.
+
+A call is identified by a random `call` id and has a host: the first device to
+join. The host numbers devices as they join (`seq`, 0 for the host) and keeps
+the roster. Whoever is lowest in the roster is the host, so when the host
+leaves the next device takes over without any exchange. At most 8 devices.
+
+| `op` | From | Meaning |
+| --- | --- | --- |
+| `ask` | anyone | Is a call going? Reply `{info}`: `{call, host, rev, members:[{d, s, m, v}]}` or null. |
+| `join` | joiner → host | Reply `{ok, seq, call, host, rev, members}`, `{ok:false, host}` from a device that is not the host, or `{full}`. |
+| `presence` | host → every group device | The roster, `rev` increasing; empty `members` means the call has ended. Sent on every change and every 30 s; a call not renewed for 80 s has lapsed. |
+| `offer` | later joiner → earlier | `{call, sdp, seq, muted, video}`; the reply is `{sdp}`, the answer. The device that joined later always offers. |
+| `restart` | the offerer | A new offer for the same link with fresh candidates; reply `{sdp}`. |
+| `ice` | either | `{call, candidates:[...]}`, in bursts. |
+| `state` | participant → the others | `{muted, video}`. |
+| `beat` | participant → host | Every 20 s; the host drops a device silent for 80 s. |
+| `leave` | participant → the others | The device is out. |
+
+Two calls started at once (neither device had heard of the other's) are
+resolved by the lower `call` id winning; the other side leaves and joins it.
+Each link carries one audio and one video transceiver from the start, so a
+camera is switched on or off by swapping the track, with no renegotiation.
 
 Voice messages are ordinary encrypted `message` attachments whose payload also
 carries `audio: {mime, duration}` (milliseconds) and an optional `transcript`,

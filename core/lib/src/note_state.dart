@@ -180,6 +180,17 @@ class NoteState {
   Future<void> set(String field, String target, Object value) =>
       setAll([(field, target, value)]);
 
+  /// The device ID that shares this person's position with their friends, or
+  /// null when none was chosen. It syncs between this person's devices; builds
+  /// that predate it store the value and ignore it.
+  String? get locationPrimary {
+    final v = value('locationPrimary', 'self');
+    return v is String && v.isNotEmpty ? v : null;
+  }
+
+  Future<void> setLocationPrimary(String? device) =>
+      set('locationPrimary', 'self', device ?? '');
+
   bool pinned(String note) => value('pin', note) == true;
   bool archived(String note) => value('archive', note) == true;
 

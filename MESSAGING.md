@@ -1,5 +1,49 @@
 # Messaging and calls
 
+## Group calls
+
+Every private group can have a call, in the manner of a voice channel: nobody
+is rung. A call is simply there while anyone is in it. The group's page shows
+"Call in progress · 3 people" with the names and a **Join** button (voice) or a
+camera button (join with video), and the group list shows a small marker with
+the head count. The first person in starts the call from the phone and video
+icons at the top of the group. Leaving is the red button; the call carries on
+for the others and ends when the last one leaves.
+
+How it works without a server:
+
+- **Mesh, not relay.** Every device connects directly to every other, with
+  ordinary WebRTC. A voice stream is about 30 kbit/s, so even eight people cost
+  each device about 200 kbit/s up, and nobody's home connection carries the
+  whole call. Routing everyone's media through the first person in would put
+  all of the group's upload on one phone and add a hop of delay; it would also
+  make that person's battery and data plan the group's. Video is the thing a
+  mesh cannot do much of, so the camera's bitrate and size to each device are
+  cut as the call fills (about 1.2 Mbit/s in total however many are in), and
+  a call holds at most 8 devices.
+- **A host, as coordinator.** The first device in is the host. It numbers
+  devices as they join, keeps the roster and tells the rest of the group (that
+  is what makes "3 in call" appear for people who are not in it), and is where a
+  joiner asks to be let in. It carries no media. If it leaves (or goes quiet
+  for 80 s) the next-lowest device takes over, which every device works out for
+  itself.
+- **One request per pair.** A device offers to each that was already in; the
+  answer is the reply. Candidates go in bursts, not one connection each.
+- **Lost links heal.** The device that offered replaces the candidates on the
+  same link when the connection drops (a phone moving from Wi‑Fi to mobile
+  data), and starts again with a new link if that does not work. The same
+  applies to one to one calls.
+
+Limits and what it does not do yet: a pair of devices that cannot reach each
+other directly (both behind carrier-grade NAT, no TURN configured) cannot
+hear each other, which the screen shows as "Cannot connect" on that tile. The
+host is the obvious relay for exactly those pairs (it can see both), and is
+the planned fix alongside "call media over iroh" in
+[CONNECTIVITY.md](CONNECTIVITY.md). There is no notification for a call
+starting, and Android only keeps the microphone while the app is in front or
+"Stay connected" is on. See [PROTOCOL.md](PROTOCOL.md#group-calls) for the
+messages.
+
 ## Direction
 
 Prioritise reliability, ease of use and independence from mandatory servers.

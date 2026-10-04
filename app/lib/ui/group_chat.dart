@@ -29,6 +29,71 @@ extension _GroupChat on _OurNetAppState {
   Set<String> _groupPeople(RoomFeed feed) =>
       (feed.room.data['members'] as List).cast<String>().toSet();
 
+  /// The people in a group, or null when this device is not in it. What group
+  /// calls check every message against.
+  Future<Set<String>?> groupPeople(String space) async {
+    final rooms = await Everyday(node).rooms();
+    final room = rooms
+        .where((r) => r.object.space == space && r.data['note'] != true)
+        .firstOrNull;
+    if (room == null) return null;
+    groupNames[space] = '${room.data['name']}';
+    return (room.data['members'] as List).cast<String>().toSet();
+  }
+
+  String groupCallTitle(String? space) => groupNames[space] ?? 'Group call';
+
+  /// How someone on a group call is named: you, one of your own devices, or
+  /// a friend.
+  String callLabel(String device, String person) {
+    if (device == node.identity.device) return 'You';
+    final contact = node.contacts[device];
+    if (person == node.person) return contact?.label ?? 'Your device';
+    return name(person);
+  }
+
+  /// Joins the call in a group (starting it if none is going) and opens it.
+  /// Nobody is rung: others see it in the group and join when they like.
+  void joinGroupCall(BuildContext context, String space, {bool video = false}) {
+    callAct(() async {
+      if (!network.running) await network.start();
+      await groupCalls.join(space, video: video);
+      if (context.mounted) unawaited(openGroupCall(context));
+    });
+  }
+
+  Future<void> openGroupCall(BuildContext context) async {
+    if (callScreenOpen || !groupCalls.active) return;
+    callScreenOpen = true;
+    final space = groupCalls.space;
+    try {
+      await Navigator.of(context, rootNavigator: true).push<void>(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (_) => GroupCallScreen(
+            calls: groupCalls,
+            title: groupCallTitle(space),
+            label: (p) => callLabel(p.device, p.person),
+            act: callAct,
+          ),
+        ),
+      );
+    } finally {
+      callScreenOpen = false;
+      redraw();
+    }
+  }
+
+  /// "3 in call" with Join, for the group on screen; nothing when no call.
+  Widget groupCallBanner(BuildContext context, String space) => GroupCallBanner(
+    calls: groupCalls,
+    space: space,
+    label: (m) => callLabel(m.device, m.person),
+    onJoin: () => joinGroupCall(context, space),
+    onJoinVideo: () => joinGroupCall(context, space, video: true),
+    onOpen: () => unawaited(openGroupCall(context)),
+  );
+
   /// Takes in what arrived since the last look. Cheap when nothing did.
   Future<void> refreshGroupChat() async {
     final feed = roomFeed;

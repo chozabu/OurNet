@@ -131,7 +131,7 @@ extension _SocialPages on _OurNetAppState {
             child: people.isEmpty
                 ? empty(
                     'Start a conversation',
-                    'Add a friend using their contact card.',
+                    'Add a friend by QR code, on the same Wi-Fi, or with an invitation.',
                     Icons.chat_bubble_outline,
                   )
                 : Builder(

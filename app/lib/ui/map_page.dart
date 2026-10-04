@@ -263,6 +263,13 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
 
   Fix? get _me => share.own ?? node.locations.of(node.person);
 
+  /// This person's other devices that have reported a position, still
+  /// admitted, as (device ID, fix).
+  List<(String, Fix)> get _otherDevices => [
+    for (final c in share.otherDevices)
+      if (node.locations.ofDevice(c.device) case final fix?) (c.device, fix),
+  ];
+
   void _select(String? person) {
     setState(() {
       _selected = person;
@@ -314,7 +321,6 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
       _style = widget.tiles.style(dark: dark);
     }
     final start = _start;
-    final me = _me;
     final here = share.own;
     final showFriends = node.store.setting('mapFriends') != false;
     final people = showFriends ? _people : <(String, Fix)>[];
@@ -409,15 +415,26 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
                         onTap: () => _select(person),
                       ),
                     ),
-                  if (me != null)
+                  for (final (device, fix) in _otherDevices)
                     Marker(
-                      point: LatLng(me.lat, me.lng),
+                      point: LatLng(fix.lat, fix.lng),
+                      width: 110,
+                      height: 52,
+                      alignment: Alignment.topCenter,
+                      child: _DeviceMarker(
+                        label: fix.device.isEmpty ? 'Your device' : fix.device,
+                        stale: _stale(fix),
+                        primary: share.primary == device,
+                      ),
+                    ),
+                  if (here != null)
+                    Marker(
+                      point: LatLng(here.lat, here.lng),
                       width: 40,
                       height: 40,
                       child: _MyDot(
-                        heading: here?.heading,
-                        moving: (here?.speed ?? 0) > 1,
-                        label: here == null ? me.device : null,
+                        heading: here.heading,
+                        moving: (here.speed ?? 0) > 1,
                       ),
                     ),
                 ],
@@ -910,15 +927,64 @@ class _Point extends CustomPainter {
   bool shouldRepaint(_Point old) => old.color != color;
 }
 
-/// The blue dot for where this person is.
+/// One of this person's other devices: a small blue badge with its name, and a
+/// filled one for the primary device, which is what friends see.
+class _DeviceMarker extends StatelessWidget {
+  final String label;
+  final bool stale, primary;
+  const _DeviceMarker({
+    required this.label,
+    required this.stale,
+    required this.primary,
+  });
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: primary ? '$label (what friends see)' : label,
+    child: Column(
+      children: [
+        Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: stale ? _googleBlue.withValues(alpha: .5) : _googleBlue,
+            border: Border.all(color: Colors.white, width: 2.5),
+            boxShadow: const [BoxShadow(blurRadius: 4, color: Colors.black38)],
+          ),
+          child: Icon(
+            primary ? Icons.share_location : Icons.devices_other,
+            size: 15,
+            color: Colors.white,
+          ),
+        ),
+        Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: Color(0xff202124),
+            shadows: [
+              Shadow(color: Colors.white, blurRadius: 3),
+              Shadow(color: Colors.white, blurRadius: 3),
+              Shadow(color: Colors.white, blurRadius: 3),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+/// The blue dot for where this device is.
 class _MyDot extends StatelessWidget {
   final double? heading;
   final bool moving;
-  final String? label;
-  const _MyDot({this.heading, this.moving = false, this.label});
+  const _MyDot({this.heading, this.moving = false});
   @override
   Widget build(BuildContext context) => Tooltip(
-    message: label == null || label!.isEmpty ? 'You' : 'You, from $label',
+    message: 'You',
     child: Stack(
       alignment: Alignment.center,
       children: [

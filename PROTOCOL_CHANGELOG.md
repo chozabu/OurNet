@@ -7,6 +7,16 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: group calls and call robustness
+
+Additive. Builds without it never see the new traffic.
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `groupcall` | new request type over `ournet/2`, to one device | Group call presence, joining and signalling. Live only, never stored. See PROTOCOL.md, Group calls. | Answer `Unknown request`; the sender stops asking that device for the run. |
+| `v: 2` | `offer` / `answer` signals of one to one calls | The sender accepts `ice` messages carrying a `candidates` list. | Ignored; candidates then go one to a message as before. |
+| `restart` | new one to one call signal | A new offer with fresh candidates after a network change; the answer is in the reply. | `Unknown call signal`; the call ends when the connection is lost, as before. |
+
 ## Unreleased: maps and live location
 
 Additive. No new object kind and no change to existing ones.
@@ -17,6 +27,9 @@ Additive. No new object kind and no change to existing ones.
 | `positions` | new table in the profile database | The last known position of each person, one row, replaced in place. | Never read; not part of the schema version. |
 | `shareLocation`, `mapOnline`, `mapStyle`, `mapFriends`, `mapCamera` | settings | Pause sharing, allow map downloads, map type, show friends, last view. | Ignored. |
 | `<profile>-tiles.db` | new file beside the profile | Cached and saved map tiles. Safe to delete. | Not present. |
+| `device_positions` | new table in the profile database | The last known position of each of this person's own devices. | Never read. |
+| `locationPrimary` | `note_self` register (field), value a device ID or `''` | The device that sends this person's position to friends. Syncs between their own devices. | Stored and ignored: every device keeps sending to friends until the build is updated. |
+| `shareOwnDevices` | setting | Whether this device sends its position to the person's other devices. | Ignored. |
 
 ## Unreleased: calendar
 

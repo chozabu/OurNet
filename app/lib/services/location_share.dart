@@ -95,10 +95,17 @@ class DevicePositionSource implements PositionSource {
   }
 }
 
-/// Live location sharing: this device's position goes to every friend's
-/// devices and to this person's other devices as it changes, and theirs come
-/// in the same way. Nothing is kept but each person's last known position
-/// (see [Locations]): no trail, no history, and a position does not expire.
+/// Live location sharing: this device's position goes to this person's other
+/// devices as it changes, and to friends' devices when this is the person's
+/// primary device; theirs come in the same way. Nothing is kept but each
+/// person's last known position, and each of this person's own devices' (see
+/// [Locations]): no trail, no history, and a position does not expire.
+///
+/// A person has one primary device, which syncs between their devices
+/// (`NoteState.locationPrimary`) and is the only one that tells friends where
+/// they are, so a laptop left at home never overrides the phone in a pocket.
+/// While none has been chosen every device does, as before; a phone that
+/// finds none after syncing with its sibling devices claims it once.
 ///
 /// Positions are sent only to devices heard from recently, which keeps a
 /// walk across town from dialling every sleeping phone. A device that comes
@@ -106,6 +113,12 @@ class DevicePositionSource implements PositionSource {
 class LocationShare extends ChangeNotifier {
   final PeerNetwork network;
   final PositionSource source;
+
+  /// Where the primary device is kept; null in tests of a single device.
+  final NoteState? state;
+
+  /// Whether this device is a phone, which may claim to be primary once.
+  final bool phone;
 
   /// Movement that is worth telling people about, and how often a still
   /// device confirms it is still there.
@@ -128,13 +141,140 @@ class LocationShare extends ChangeNotifier {
     this.source = const DevicePositionSource(),
     this.onReading,
     this.minGap = const Duration(seconds: 5),
-  }) {
+    this.state,
+    bool? phone,
+  }) : phone = phone ?? (!kIsWeb && Platform.isAndroid) {
     network.position = _received;
     network.peerSeen = _seen;
+    if (state != null) {
+      _updates = network.updates.stream.listen((_) {
+        _primaryCheck?.cancel();
+        _primaryCheck = Timer(const Duration(seconds: 2), () {
+          unawaited(refreshPrimary());
+        });
+      });
+    }
   }
 
   Node get node => network.node;
   Locations get locations => node.locations;
+
+  StreamSubscription<void>? _updates;
+  Timer? _primaryCheck;
+  Future<void>? _refreshingPrimary;
+  String? _primary;
+  bool _primaryKnown = false;
+
+  /// The device that tells friends where this person is, or null when none
+  /// has been chosen (or the one chosen has been removed).
+  String? get primary => _primary;
+  bool get isPrimary => _primary == node.identity.device;
+
+  /// Whether this device sends its position to friends: sharing is not
+  /// paused, and this is the primary device (or none is chosen). Until the
+  /// primary is known this stays quiet, so a laptop starting up does not
+  /// announce itself before it has heard that the phone is the primary.
+  bool get sendsToFriends =>
+      sharing && (state == null || _primaryKnown) && (_primary == null || isPrimary);
+
+  /// Whether this device tells this person's other devices where it is.
+  bool get sendsToOwnDevices => locations.showToOwnDevices;
+
+  /// Whether this device should be reading its position at all.
+  bool get wanted => sendsToFriends || sendsToOwnDevices;
+
+  /// This person's other devices that are still admitted.
+  List<DeviceCertificate> get otherDevices => [
+    for (final c in node.contacts.values)
+      if (c.person == node.person &&
+          c.device != node.identity.device &&
+          node.allowedPeer(c.device))
+        c,
+  ]..sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
+
+  bool _mine(String device) =>
+      device == node.identity.device ||
+      node.contacts[device]?.person == node.person &&
+          !node.revoked.contains(device);
+
+  /// Reads the primary device from this person's synced state, and acts on a
+  /// change: starts or stops reading, and tells friends at once when this
+  /// device has just become the primary.
+  Future<void> refreshPrimary() =>
+      _refreshingPrimary ??= _refreshPrimary().whenComplete(
+        () => _refreshingPrimary = null,
+      );
+
+  Future<void> _refreshPrimary() async {
+    final state = this.state;
+    if (state == null || _disposed) return;
+    try {
+      await state.refresh();
+      var id = state.locationPrimary;
+      if (id != null && !_mine(id)) id = null;
+      if (id == null && await _claim(state)) id = node.identity.device;
+      _setPrimary(id);
+    } catch (_) {
+      // The state could not be read: behave as before it existed.
+      _setPrimary(_primary);
+    }
+  }
+
+  /// A phone with no primary chosen takes the role, once per profile, after it
+  /// has heard from this person's other devices (or has none): otherwise a
+  /// newly linked phone could take it before the existing choice arrived.
+  Future<bool> _claim(NoteState state) async {
+    if (!phone || node.store.setting('locationAutoPrimary') == true) return false;
+    final others = otherDevices;
+    if (others.isNotEmpty &&
+        !others.any((c) => network.lastSync[c.device] != null)) {
+      return false;
+    }
+    node.store.set('locationAutoPrimary', true);
+    await state.setLocationPrimary(node.identity.device);
+    return true;
+  }
+
+  void _setPrimary(String? id) {
+    if (_disposed) return;
+    final friendsBefore = sendsToFriends;
+    _primary = id;
+    _primaryKnown = true;
+    _applyRole(friendsBefore);
+  }
+
+  /// Makes [device] (one of this person's devices) the one that tells friends
+  /// where they are. Syncs to the others.
+  Future<void> makePrimary(String device) async {
+    final state = this.state;
+    if (state == null || !_mine(device)) return;
+    await state.setLocationPrimary(device);
+    _setPrimary(device);
+  }
+
+  /// Starts or stops reading to match the role, and sends the current place
+  /// to friends when this device has just started to.
+  void _applyRole(bool friendsBefore) {
+    if (wanted && _stream == null && access == LocationAccess.granted) {
+      unawaited(start());
+    } else if (!wanted && _stream != null) {
+      unawaited(stop());
+    }
+    final fix = own ?? locations.ofDevice(node.identity.device);
+    if (!friendsBefore && sendsToFriends && fix != null) {
+      _broadcast(fix, force: true);
+    }
+    notifyListeners();
+  }
+
+  /// Turns sending to this person's other devices on or off.
+  void setShowToOwnDevices(bool value) {
+    final friendsBefore = sendsToFriends;
+    locations.showToOwnDevices = value;
+    _applyRole(friendsBefore);
+    final fix = own;
+    if (value && fix != null) _broadcast(fix, force: true);
+  }
 
   LocationAccess access = LocationAccess.denied;
 
@@ -162,9 +302,11 @@ class LocationShare extends ChangeNotifier {
   /// system permission prompt; without it a missing permission is only noted.
   Future<void> start({bool request = false}) async {
     if (_disposed || _stream != null) return;
+    if (!_primaryKnown) await refreshPrimary();
     access = await source.access(request: request);
     notifyListeners();
-    if (access != LocationAccess.granted || _disposed) return;
+    if (access != LocationAccess.granted || _disposed || _stream != null) return;
+    if (!wanted && !request) return;
     _stream = source.fixes().listen(_moved, onError: (Object _) => _stopped());
     _resetHeartbeat();
     onReading?.call();
@@ -193,7 +335,7 @@ class LocationShare extends ChangeNotifier {
     if (value) {
       if (_stream == null) await start(request: request);
       final fix = own;
-      if (fix != null) _broadcast(fix, force: true);
+      if (fix != null && sendsToFriends) _broadcast(fix, force: true);
     }
   }
 
@@ -216,13 +358,17 @@ class LocationShare extends ChangeNotifier {
     own = fix;
     final sent = _sent;
     final far = sent == null || fix.distanceTo(sent.lat, sent.lng) >= minMove;
-    if (sharing && (far || heartbeat)) {
+    if (wanted && (far || heartbeat)) {
       _sent = fix;
       _broadcast(fix);
     }
-    // Kept as this person's last known place too, so their other devices'
-    // maps and the next start have it. Pausing stops only the sending.
-    locations.update(node.person, _labelled(fix, node.identity.certificate.label));
+    // Kept as this device's last known place too, so the next start and this
+    // person's other devices' maps have it. Pausing stops only the sending.
+    locations.updateDevice(
+      node.identity.device,
+      _labelled(fix, node.identity.certificate.label),
+      person: node.person,
+    );
     notifyListeners();
   }
 
@@ -243,11 +389,19 @@ class LocationShare extends ChangeNotifier {
     }
   }
 
+  /// Whether this device may tell [device] where it is: this person's own
+  /// devices unless switched off here, friends only from the primary device.
+  bool _mayTell(String device) {
+    final contact = node.contacts[device];
+    if (contact == null) return false;
+    return contact.person == node.person ? sendsToOwnDevices : sendsToFriends;
+  }
+
   void _send(String device, Fix fix, {bool force = false}) {
     if (device == node.identity.device ||
         _refused.contains(device) ||
         !node.allowedPeer(device) ||
-        !sharing) {
+        !_mayTell(device)) {
       return;
     }
     final now = DateTime.now();
@@ -286,8 +440,8 @@ class LocationShare extends ChangeNotifier {
 
   /// A device has just synced with this one: tell it where this person is.
   void _seen(String device) {
-    final fix = own ?? locations.of(node.person);
-    if (fix == null || !sharing) return;
+    final fix = own ?? locations.ofDevice(node.identity.device);
+    if (fix == null) return;
     _send(device, fix, force: true);
   }
 
@@ -299,12 +453,19 @@ class LocationShare extends ChangeNotifier {
       now: DateTime.now().millisecondsSinceEpoch,
       device: contact.label,
     );
-    if (fix != null) locations.update(contact.person, fix);
+    if (fix == null) return;
+    if (contact.person == node.person) {
+      locations.updateDevice(device, fix, person: contact.person);
+    } else {
+      locations.update(contact.person, fix);
+    }
   }
 
   @override
   void dispose() {
     _disposed = true;
+    _updates?.cancel();
+    _primaryCheck?.cancel();
     _stream?.cancel();
     _heartbeat?.cancel();
     for (final timer in _later.values) {

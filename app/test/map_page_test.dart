@@ -69,7 +69,10 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final me = Node(await LocalIdentity.create(label: 'Desk'), Store());
-    final anna = Node(await LocalIdentity.create(label: 'Annas phone'), Store());
+    final anna = Node(
+      await LocalIdentity.create(label: 'Annas phone'),
+      Store(),
+    );
     await me.addContact(anna.identity.certificate);
     final network = Network(me);
     final share = LocationShare(network, source: _NoGps());
@@ -159,7 +162,8 @@ void main() {
     expect(find.text('Bob'), findsOneWidget);
     expect(find.text('Not sharing with you yet'), findsOneWidget);
     expect(me.locations.sharing, isTrue);
-    await tester.tap(find.byType(Switch));
+    // The first switch is the pause for friends; the last is for own devices.
+    await tester.tap(find.byType(Switch).first);
     await tester.pump();
     expect(me.locations.sharing, isFalse);
     expect(find.textContaining('Paused'), findsOneWidget);
@@ -179,7 +183,12 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: MapPage(node: me, tiles: tiles, share: share, nameOf: (_) => 'x'),
+            body: MapPage(
+              node: me,
+              tiles: tiles,
+              share: share,
+              nameOf: (_) => 'x',
+            ),
           ),
         ),
       );
