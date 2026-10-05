@@ -473,6 +473,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       otherCallActive: () => calls.phase != 'idle',
     )..addListener(refresh);
     calls.busyElsewhere = () => groupCalls.active;
+    // Rebuilding the endpoint would cut a call's signalling.
+    network.canRestart = () => calls.phase == 'idle' && !groupCalls.active;
+    if (widget.enablePlatform && Platform.isAndroid) {
+      onNetworkChanged(network.networkChanged);
+    }
     // Each call this device places goes in the chat's history.
     calls.onRecord = (record) => unawaited(
       sendCallRecord(
@@ -576,9 +581,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         if (ownsProfile) {
           undelivered = Undelivered(node)..start();
           unawaited(
-            keepConnected(stayConnected).catchError(
-              (Object e) => network.log('Could not stay connected: $e'),
-            ),
+            keepConnected(stayConnected)
+                .then((_) => checkConnectionService())
+                .catchError(
+                  (Object e) => network.log('Could not stay connected: $e'),
+                ),
           );
         }
         unawaited(
@@ -930,6 +937,35 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     }
   }
 
+  /// What Android last said about the "stay connected" service.
+  ConnectionStatus? serviceStatus;
+
+  /// Reads the service's state, and starts it again while OurNet is open
+  /// when Android has stopped it, or restarted it out of sight without
+  /// background location (then the position stops updating once OurNet is
+  /// in the background).
+  Future<void> checkConnectionService() async {
+    if (!Platform.isAndroid || !widget.enablePlatform || !ownsProfile) return;
+    try {
+      var status = await connectionStatus();
+      if (stayConnected &&
+          status != null &&
+          (!status.running || locationShare.active && !status.location)) {
+        network.log(
+          status.running
+              ? 'Stay connected had no background location; restarting it'
+              : 'Stay connected had stopped; restarting it',
+        );
+        await keepConnected(true);
+        await Future<void>.delayed(const Duration(seconds: 1));
+        status = await connectionStatus();
+      }
+      if (!mounted) return;
+      serviceStatus = status;
+      redraw();
+    } catch (_) {}
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Messages on screen are marked read as they are shown, which only
@@ -963,6 +999,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       unawaited(
         network.start().catchError((Object e) => notice('Sync will retry: $e')),
       );
+      unawaited(checkConnectionService());
     }
     // A deliberate low-power default: no background relay work on a sleeping
     // phone. Incoming calls while suspended need a future wakeup integration.

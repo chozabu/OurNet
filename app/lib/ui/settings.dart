@@ -373,8 +373,42 @@ extension _SettingsPages on _OurNetAppState {
               : (v) => act(() async {
                   node.store.set('stayConnected', v);
                   await keepConnected(v);
+                  await checkConnectionService();
                   refresh();
                 }),
+        ),
+      if (Platform.isAndroid &&
+          stayConnected &&
+          serviceStatus?.batteryRestricted == true)
+        ListTile(
+          leading: const Icon(Icons.battery_alert_outlined),
+          title: const Text('Battery optimisation may cut OurNet off'),
+          subtitle: const Text(
+            'With the screen off, this phone may stop OurNet or hold back its network, so messages and your location stop reaching friends. In OurNet’s settings, set Battery to Unrestricted.',
+          ),
+          trailing: OutlinedButton(
+            onPressed: () => act(() async {
+              if (!await openBatterySettings()) {
+                notice('Open Android Settings › Apps › OurNet › Battery');
+              }
+            }),
+            child: const Text('Open'),
+          ),
+        ),
+      if (Platform.isAndroid &&
+          stayConnected &&
+          serviceStatus != null &&
+          !serviceStatus!.running)
+        ListTile(
+          leading: const Icon(Icons.cloud_off_outlined),
+          title: const Text('Android stopped the connection'),
+          subtitle: const Text(
+            'OurNet is not staying connected in the background right now.',
+          ),
+          trailing: OutlinedButton(
+            onPressed: () => act(checkConnectionService),
+            child: const Text('Reconnect'),
+          ),
         ),
       if (Platform.isWindows)
         SwitchListTile(

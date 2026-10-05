@@ -115,20 +115,56 @@ void main() {
   );
 
   test(
-    'a friend who reconnects is told where you are',
+    'a move reaches a friend who has not been heard from lately',
     () async {
       await pair();
       await sa.start();
-      // Nobody has been heard from yet, so this goes nowhere.
+      // No sync, no message: someone out for the day with nothing to say.
       source.controller.add(at(48.85, 2.35));
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      expect(b.locations.of(a.person), isNull);
-      // The first sync between them hands it over.
-      await na.sync(b.identity.device);
       await until(() => b.locations.of(a.person) != null);
       expect(b.locations.of(a.person)!.lng, 2.35);
     },
     timeout: const Timeout(Duration(seconds: 60)),
+  );
+
+  test(
+    'a friend out of reach is tried later, and told on reconnecting',
+    () async {
+      await pair();
+      final c = Node(await LocalIdentity.create(label: 'Away'), Store());
+      var nc = Network(c);
+      addTearDown(() async {
+        await nc.stop();
+        await c.close();
+      });
+      await nc.start(local: true);
+      await na.addCard(nc.contactCard());
+      await nc.addCard(na.contactCard());
+      await nc.stop();
+
+      await sa.start();
+      source.controller.add(at(48.85, 2.35));
+      await until(() => sa.backingOff(c.identity.device), ms: 30000);
+      expect(sa.backingOff(c.identity.device), isTrue);
+      // The friend who could be reached heard at once.
+      expect(b.locations.of(a.person)!.lng, 2.35);
+
+      // Back in signal: its first sync hands the place over.
+      nc = Network(c);
+      final sc = LocationShare(
+        nc,
+        source: FakeSource(LocationAccess.unsupported),
+      );
+      addTearDown(sc.dispose);
+      await nc.start(local: true);
+      await na.addCard(nc.contactCard());
+      await nc.sync(a.identity.device);
+      await until(() => c.locations.of(a.person) != null);
+      expect(c.locations.of(a.person)!.lng, 2.35);
+      await until(() => !sa.backingOff(c.identity.device));
+      expect(sa.backingOff(c.identity.device), isFalse);
+    },
+    timeout: const Timeout(Duration(seconds: 90)),
   );
 
   test(

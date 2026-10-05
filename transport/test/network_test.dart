@@ -51,6 +51,90 @@ void main() {
     );
   }
 
+  test(
+    'a restart rebuilds the endpoint, and peers keep syncing with it',
+    () async {
+      final a = Node(await LocalIdentity.create(), Store());
+      final b = Node(await LocalIdentity.create(), Store());
+      final na = PeerNetwork(a), nb = PeerNetwork(b);
+      addTearDown(() async {
+        await na.stop();
+        await nb.stop();
+        await a.close();
+        await b.close();
+      });
+      await na.start(local: true, automatic: false);
+      await nb.start(local: true, automatic: false);
+      await na.addCard(nb.contactCard());
+      await nb.addCard(na.contactCard());
+      await na.sync(b.identity.device);
+
+      // Not during a call.
+      var allowed = false;
+      na.canRestart = () => allowed;
+      await na.restart('test');
+      expect(na.events.where((e) => e.contains('Restarting')), isEmpty);
+
+      allowed = true;
+      await na.restart('test');
+      expect(na.running, isTrue);
+      expect(na.local, isTrue);
+      expect(
+        na.events.where((e) => e.contains('Restarting network: test')),
+        hasLength(1),
+      );
+      // A fresh endpoint learns its local sockets just after binding; its
+      // address is only worth sharing once it has.
+      await Future<void>.delayed(const Duration(seconds: 1));
+      final post = await a.publish('post', {'text': 'after the restart'});
+      await na.sync(b.identity.device);
+      expect(b.store.get(post.id), isNotNull, reason: na.events.join('\n'));
+      // The sync told b the new address, so it reaches the new endpoint too.
+      final reply = await b.publish('post', {'text': 'and back'});
+      await nb.sync(a.identity.device);
+      expect(a.store.get(reply.id), isNotNull, reason: nb.events.join('\n'));
+    },
+    timeout: const Timeout(Duration(seconds: 90)),
+  );
+
+  test(
+    'a network change restarts once it settles, and not when stopped',
+    () async {
+      final node = Node(await LocalIdentity.create(), Store());
+      final network = PeerNetwork(node);
+      addTearDown(() async {
+        await network.stop();
+        await node.close();
+      });
+      network.networkChanged();
+      await Future<void>.delayed(
+        PeerNetwork.networkSettle + const Duration(milliseconds: 500),
+      );
+      expect(network.running, isFalse);
+
+      await network.start(local: true, automatic: false);
+      // A burst of changes (Wi-Fi flapping) is one restart.
+      network
+        ..networkChanged()
+        ..networkChanged()
+        ..networkChanged();
+      final end = DateTime.now().add(const Duration(seconds: 15));
+      while (!network.events.any((e) => e.contains('network changed')) &&
+          DateTime.now().isBefore(end)) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      await Future<void>.delayed(const Duration(seconds: 1));
+      expect(
+        network.events.where(
+          (e) => e.contains('Restarting network: network changed'),
+        ),
+        hasLength(1),
+      );
+      expect(network.running, isTrue);
+    },
+    timeout: const Timeout(Duration(seconds: 60)),
+  );
+
   test('overlapping lifecycle transitions leave one usable endpoint', () async {
     final node = Node(await LocalIdentity.create(), Store());
     final network = PeerNetwork(node);

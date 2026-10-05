@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:math' show min;
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:ournet_core/ournet_core.dart';
@@ -107,9 +108,11 @@ class DevicePositionSource implements PositionSource {
 /// While none has been chosen every device does, as before; a phone that
 /// finds none after syncing with its sibling devices claims it once.
 ///
-/// Positions are sent only to devices heard from recently, which keeps a
-/// walk across town from dialling every sleeping phone. A device that comes
-/// back is sent the last position when it next syncs.
+/// A device that does not answer is tried again after a back-off that grows
+/// to [maxBackoff], with the latest place, until one reaches it; so a walk
+/// across town does not keep dialling a friend whose phone is off, and a
+/// friend out of signal still hears within minutes of coming back. A device
+/// that syncs with this one is sent the current place at once.
 class LocationShare extends ChangeNotifier {
   final PeerNetwork network;
   final PositionSource source;
@@ -125,8 +128,11 @@ class LocationShare extends ChangeNotifier {
   static const minMove = 20.0;
   static const heartbeat = Duration(minutes: 15);
 
-  /// Devices are sent to only if heard from within this long.
-  static const recent = Duration(minutes: 10);
+  /// How long to wait before trying again a device that did not answer,
+  /// doubling with each failure up to [maxBackoff].
+  static const firstBackoff = Duration(seconds: 30);
+  static const maxBackoff = Duration(minutes: 15);
+  static const maxRetries = 8;
 
   /// Called when this device starts reading its position, so the Android
   /// service that keeps the app running can take on the location type.
@@ -286,6 +292,12 @@ class LocationShare extends ChangeNotifier {
   final _lastTo = <String, DateTime>{};
   final _refused = <String>{};
   final _later = <String, Timer>{};
+  final _retry = <String, Timer>{};
+  final _inFlight = <String>{};
+  final _backoff = <String, ({DateTime until, int failures})>{};
+
+  /// When the place each device last received was taken.
+  final _delivered = <String, int>{};
   bool _disposed = false;
 
   /// Opens the system page where location permission is granted.
@@ -404,15 +416,13 @@ class LocationShare extends ChangeNotifier {
         !_mayTell(device)) {
       return;
     }
+    if (_inFlight.contains(device)) {
+      // Sent when the request on its way finishes, if this is newer.
+      return;
+    }
     final now = DateTime.now();
-    final heard = [
-      network.lastInbound[device],
-      network.lastSync[device],
-    ].whereType<DateTime>().fold<DateTime?>(
-      null,
-      (a, b) => a == null || b.isAfter(a) ? b : a,
-    );
-    if (!force && (heard == null || now.difference(heard) > recent)) return;
+    final waiting = _backoff[device];
+    if (!force && waiting != null && now.isBefore(waiting.until)) return;
     final last = _lastTo[device];
     if (!force && last != null && now.difference(last) < minGap) {
       _later[device] ??= Timer(minGap - now.difference(last), () {
@@ -422,20 +432,60 @@ class LocationShare extends ChangeNotifier {
       });
       return;
     }
+    _later.remove(device)?.cancel();
+    _retry.remove(device)?.cancel();
     _lastTo[device] = now;
+    _inFlight.add(device);
     unawaited(
       network
-          .request(device, {
-            'type': 'position',
-            'fix': fix.toJson(),
-          })
+          .request(device, {'type': 'position', 'fix': fix.toJson()})
           .then<void>(
-            (_) {},
+            (_) {
+              _inFlight.remove(device);
+              _backoff.remove(device);
+              _delivered[device] = fix.at;
+              _sendNewer(device);
+            },
             onError: (Object e) {
-              if ('$e'.contains('Unknown request')) _refused.add(device);
+              _inFlight.remove(device);
+              if ('$e'.contains('Unknown request')) {
+                _refused.add(device);
+                return;
+              }
+              _failed(device);
             },
           ),
     );
+  }
+
+  /// Whether [device] failed to answer and is waiting to be tried again.
+  @visibleForTesting
+  bool backingOff(String device) => _backoff.containsKey(device);
+
+  /// Sends the latest place to [device] if it is newer than what reached it.
+  void _sendNewer(String device) {
+    final latest = _sent ?? own;
+    if (_disposed || latest == null) return;
+    if (latest.at > (_delivered[device] ?? 0)) _send(device, latest);
+  }
+
+  /// [device] did not answer (switched off, or out of signal): wait before
+  /// trying it again, twice as long each time it fails, and then send the
+  /// latest place. Once a place has reached it nothing more is retried, so a
+  /// still phone does not keep dialling friends who are away.
+  void _failed(String device) {
+    if (_disposed) return;
+    final failures = (_backoff[device]?.failures ?? 0) + 1;
+    var wait = firstBackoff * (1 << min(failures - 1, 6));
+    if (wait > maxBackoff) wait = maxBackoff;
+    _backoff[device] = (until: DateTime.now().add(wait), failures: failures);
+    _retry.remove(device)?.cancel();
+    // About an hour of trying; after that it hears when it next syncs.
+    if (failures > maxRetries) return;
+    _retry[device] = Timer(wait, () {
+      _retry.remove(device);
+      _sendNewer(device);
+    });
   }
 
   /// A device has just synced with this one: tell it where this person is.
@@ -468,7 +518,7 @@ class LocationShare extends ChangeNotifier {
     _primaryCheck?.cancel();
     _stream?.cancel();
     _heartbeat?.cancel();
-    for (final timer in _later.values) {
+    for (final timer in [..._later.values, ..._retry.values]) {
       timer.cancel();
     }
     if (network.position == _received) network.position = null;

@@ -46,6 +46,12 @@ class PeerNetwork {
   StreamSubscription<void>? _relayStatus;
   Timer? _debounce;
   final Map<String, Timer> _retry = {};
+  bool _automatic = true;
+  Timer? _networkChange;
+  Timer? _watchdog;
+  DateTime? _relaysDownSince;
+  DateTime? _restartedAt;
+  int _watchdogRestarts = 0;
   final Map<String, int> _failures = {};
   final Map<
     String,
@@ -229,17 +235,27 @@ class PeerNetwork {
       );
       error = null;
       this.local = local;
+      _automatic = automatic;
+      _restartFailed = false;
       acceptFailures = 0;
       lastAcceptError = null;
       relays = const [];
+      _relaysDownSince = null;
       if (!local) {
         _relayStatus = _endpoint!.homeRelayStatus().listen((status) {
           relays = [
             for (final r in status)
               (url: r.url, connected: r.connected, error: r.lastError),
           ];
+          if (relays.any((r) => r.connected)) {
+            _relaysDownSince = null;
+            _watchdogRestarts = 0;
+          } else if (relays.isNotEmpty) {
+            _relaysDownSince ??= DateTime.now();
+          }
           notifyListeners();
         }, onError: (Object _) {});
+        _watchdog = Timer.periodic(watchdogInterval, (_) => _checkRelays());
       }
       if (automatic)
         _changes = node.changes.stream.listen((_) {
@@ -649,11 +665,102 @@ class PeerNetwork {
     }
   }
 
-  Future<void> stop() => _transition(_stop);
+  Future<void> stop() {
+    _restartFailed = false;
+    return _transition(_stop);
+  }
+
+  /// Whether the endpoint may be rebuilt now; the app says no during a call,
+  /// whose signalling would be cut. An open pairing or invitation also blocks
+  /// it, since stopping closes them.
+  bool Function()? canRestart;
+
+  bool get _restartable =>
+      running &&
+      pairing?.available != true &&
+      friendInvitation?.available != true &&
+      (canRestart?.call() ?? true);
+
+  /// How long a network change settles before the endpoint is rebuilt, and
+  /// the least time between two rebuilds for network changes.
+  static const networkSettle = Duration(seconds: 3);
+  static const networkChangeGap = Duration(seconds: 30);
+
+  /// How often the relay connection is checked, and how long it may be down
+  /// before the endpoint is rebuilt (doubling after each rebuild that does
+  /// not bring it back, up to [watchdogMaxWait]).
+  static const watchdogInterval = Duration(seconds: 30);
+  static const watchdogWait = Duration(seconds: 90);
+  static const watchdogMaxWait = Duration(minutes: 15);
+
+  /// The device moved to another network (Wi-Fi to mobile data, say). The
+  /// endpoint is rebuilt once the change settles, so its sockets and home
+  /// relay belong to the new network; otherwise a phone that left home could
+  /// stay unreachable until OurNet was reopened.
+  void networkChanged() {
+    if (_restartFailed) {
+      _restartFailed = false;
+      unawaited(
+        start(local: local, automatic: _automatic).catchError((Object _) {
+          _restartFailed = true;
+        }),
+      );
+      return;
+    }
+    if (!running) return;
+    _networkChange?.cancel();
+    _networkChange = Timer(networkSettle, () {
+      _networkChange = null;
+      final last = _restartedAt;
+      if (last != null && DateTime.now().difference(last) < networkChangeGap) {
+        // Several changes in a row (Wi-Fi flapping): try again after the gap.
+        _networkChange = Timer(
+          networkChangeGap - DateTime.now().difference(last),
+          networkChanged,
+        );
+        return;
+      }
+      unawaited(restart('network changed').catchError((Object _) {}));
+    });
+  }
+
+  void _checkRelays() {
+    final since = _relaysDownSince;
+    if (since == null) return;
+    var wait = watchdogWait * (1 << min(_watchdogRestarts, 4));
+    if (wait > watchdogMaxWait) wait = watchdogMaxWait;
+    if (DateTime.now().difference(since) < wait) return;
+    _watchdogRestarts++;
+    unawaited(restart('relay unreachable').catchError((Object _) {}));
+  }
+
+  /// Rebuilds the endpoint (same identity, same automatic syncing) and syncs
+  /// with everyone, unless [canRestart] or an open pairing says not now.
+  Future<void> restart(String reason) => _transition(() async {
+    if (!_restartable) return;
+    _restartedAt = DateTime.now();
+    final automatic = _automatic, wasLocal = local;
+    await _stop();
+    log('Restarting network: $reason');
+    try {
+      await _start(local: wasLocal, automatic: automatic);
+    } catch (_) {
+      // No network to bind to yet: the next network change starts it.
+      _restartFailed = true;
+      rethrow;
+    }
+  });
+
+  bool _restartFailed = false;
 
   Future<void> _stop() async {
     pairing?.close();
     friendInvitation?.close();
+    _networkChange?.cancel();
+    _networkChange = null;
+    _watchdog?.cancel();
+    _watchdog = null;
+    _relaysDownSince = null;
     final endpoint = _endpoint;
     _endpoint = null;
     await _changes?.cancel();

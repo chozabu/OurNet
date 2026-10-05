@@ -40,6 +40,13 @@ is deliberately not there yet.
 - **Last known never expires.** A friend who goes offline stays where they were,
   with "Updated 3 h ago" so nobody mistakes it for now. A friend who reconnects
   is sent your current place when you next sync.
+- **Who is sent a move.** Every friend (and own device) is sent each move,
+  whether or not you have been in touch lately. A device that does not answer
+  is tried again with the latest place after 30 seconds, doubling to 15
+  minutes, for about an hour; after that it hears when it next syncs. Once a
+  place has reached a device nothing is retried, so a still phone does not keep
+  dialling friends who are away. (Until 0.2.14 only devices heard from in the
+  last 10 minutes were sent anything, so a quiet day out showed you at home.)
 - **Your devices.** Every device that can read a position tells your other
   devices where it is, and the map shows each of them (a badge with the
   device's name; the blue dot is always this device). Android reads its

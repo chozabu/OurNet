@@ -146,6 +146,25 @@ The cost is battery (an idle iroh connection to a relay) and a permanent,
 minimised notification. It can be turned off in Settings, which leaves
 background sync and staying online after sending.
 
+Staying reachable after the phone changes network. iroh's own network
+monitoring does not always notice Android moving from Wi-Fi to mobile data,
+and the binding has no `network_change()`, so a phone that left home could
+stay unreachable (no messages, no position) until OurNet was reopened. The
+service now reports default-network changes (`ConnectivityManager`), and
+`PeerNetwork.networkChanged` rebuilds the endpoint three seconds after a
+change settles (at most every 30 seconds), then syncs with everyone. A
+watchdog also rebuilds it when every home relay has been down for 90
+seconds, backing off to 15 minutes while it stays down. Neither happens
+during a call, or while a pairing or invitation is open; peers find the new
+endpoint by its ID through iroh's address lookup.
+
+Android may still stop the service, or restart it out of sight (then it has
+no background location). Opening OurNet checks and starts it again, and
+Settings warns when it has stopped or when battery optimisation applies to
+OurNet, with a button to OurNet's system page (Battery: Unrestricted). It
+does not ask with the direct battery-optimisation prompt, whose permission
+Play reserves for a few kinds of app.
+
 ### Windows notification area (implemented)
 
 On Windows, closing the window hides it and OurNet keeps running from an icon
