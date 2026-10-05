@@ -248,6 +248,22 @@ caller whose connection drops sends `restart` (a new offer with fresh ICE
 credentials) and gets the answer in the reply. Builds without these ignore
 `v` and refuse `restart` (`Unknown call signal`), which ends in a plain hang up.
 
+A device the offer cannot reach (offline, or a phone asleep) is offered the
+same session again every 3 seconds for 30 seconds; it gets every candidate
+found so far once the offer arrives. A device that refuses (`Busy`, not
+admitted, calling unavailable) is not asked again. Once a call is answered
+either side may send `state` (`muted`, `camera`: booleans) when it mutes or
+pauses its camera, so the other shows that rather than silence or a black
+picture. Builds without it refuse `state` (`Unknown call signal`), which the
+sender ignores.
+
+When a one to one call it placed ends, the caller records it in the chat as an
+ordinary `message` to the person called: `text` describes it ("Missed call",
+"Video call · 12 min") for builds that know nothing of calls, and `call` holds
+`video`, `outcome` (`answered`, `missed`, `declined` or `failed`) and, when
+answered, `seconds`. Calls between a person's own devices are not recorded.
+Only a missed call is notified; the others are marked read on arrival.
+
 ### Group calls
 
 A private group's call is a mesh of one to one WebRTC connections, kept

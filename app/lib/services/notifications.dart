@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'messaging.dart';
@@ -96,7 +97,10 @@ class Notifications {
   /// Opens the event a reminder was for, by its link.
   void Function(String link)? onOpenEvent;
   void Function(String note)? onOpenNote;
-  void Function()? onCallOpen;
+
+  /// A call notification was tapped ([action] null) or one of its buttons
+  /// pressed (`answer` or `decline`).
+  void Function(String? action)? onCallOpen;
   void Function(String)? onError;
 
   /// Called first when a notification is tapped, to bring the app forward.
@@ -152,15 +156,18 @@ class Notifications {
       onDidReceiveBackgroundNotificationResponse: onAction,
     );
     ready = true;
-    // Replaced by per-chat and per-forum channels.
-    unawaited(
-      plugin
-          .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin
-          >()
-          ?.deleteNotificationChannel(channelId: 'activity')
-          .catchError((Object _) {}),
-    );
+    // Replaced by per-chat and per-forum channels, and by a call channel
+    // that vibrates (a channel's sound and vibration cannot be changed).
+    for (final old in ['activity', 'calls']) {
+      unawaited(
+        plugin
+            .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >()
+            ?.deleteNotificationChannel(channelId: old)
+            .catchError((Object _) {}),
+      );
+    }
     try {
       // Chats shown by an earlier run or by background sync.
       for (final active in await plugin.getActiveNotifications()) {
@@ -211,7 +218,7 @@ class Notifications {
       case 'event':
         onOpenEvent?.call(key);
       case 'call':
-        onCallOpen?.call();
+        onCallOpen?.call(response.actionId);
     }
   }
 
@@ -369,6 +376,11 @@ class Notifications {
       final payload = await node.content(o);
       final current = payload == null ? null : updates.current(o, payload);
       if (payload != null && current == null) continue;
+      // A call they took or declined is history, not news.
+      if (quietCallEntry(current)) {
+        await node.markRead(o.id);
+        continue;
+      }
       unread.add(o);
       texts.add(_orNew(contentPreview(current)));
     }
@@ -582,24 +594,51 @@ class Notifications {
     await _checking;
   }
 
-  Future<void> incomingCall(String? caller) async {
+  /// Shows an incoming call with Answer and Decline buttons. The app plays
+  /// the ringtone itself (see `Ringer`); on Android this vibrates until the
+  /// call is answered or ends.
+  Future<void> incomingCall(String? caller, {bool video = false}) async {
     if (!ready || !enabled) return;
+    final kind = video ? 'video call' : 'call';
     await plugin.show(
       id: _callId,
       title: caller == null
-          ? 'Incoming OurNet call'
-          : 'Incoming call from ${profileName(node, caller) ?? 'a friend'}',
-      body: 'Open OurNet to answer or decline.',
+          ? 'Incoming OurNet $kind'
+          : 'Incoming $kind from ${profileName(node, caller) ?? 'a friend'}',
+      body: 'Tap to open, or answer here.',
       payload: 'call',
-      notificationDetails: const NotificationDetails(
+      notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
-          'calls',
+          'incoming_calls',
           'Incoming calls',
+          channelDescription: 'Vibrates while a friend is calling',
           importance: Importance.max,
-          priority: Priority.high,
+          priority: Priority.max,
           category: AndroidNotificationCategory.call,
+          playSound: false,
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 900, 700, 900, 1500]),
+          // FLAG_INSISTENT: repeat the vibration until cancelled.
+          additionalFlags: Int32List.fromList([4]),
+          ongoing: true,
+          autoCancel: false,
+          timeoutAfter: 70000,
+          actions: const [
+            AndroidNotificationAction(
+              'decline',
+              'Decline',
+              showsUserInterface: true,
+              cancelNotification: true,
+            ),
+            AndroidNotificationAction(
+              'answer',
+              'Answer',
+              showsUserInterface: true,
+              cancelNotification: true,
+            ),
+          ],
         ),
-        windows: WindowsNotificationDetails(),
+        windows: const WindowsNotificationDetails(),
       ),
     );
   }

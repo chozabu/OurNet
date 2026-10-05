@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ournet/services/calls.dart';
 import 'package:ournet/services/network.dart';
+import 'package:ournet/ui/call_screen.dart';
 import 'package:ournet_core/ournet_core.dart';
 
 class CallNetwork extends Network {
@@ -438,9 +440,211 @@ void main() {
     await calls.callPerson(friend.person);
     expect(calls.phase, 'calling');
     expect(calls.peer, friendPhone.device);
-    network.unreachable.add(friendPhone.device);
     await calls.hangup();
-    await expectLater(calls.callPerson(friend.person), throwsStateError);
+  });
+
+  test('a device that cannot be reached yet rings once it can', () async {
+    calls.reachEvery = const Duration(milliseconds: 20);
+    network.unreachable.add(friend.device);
+    await calls.call(friend.device, video: true);
+    // Still trying, but nothing is ringing yet.
+    expect(calls.phase, 'calling');
+    expect(calls.rung, isFalse);
+    expect(sentTo('ice'), isEmpty);
+    await event({
+      'event': 'onCandidate',
+      'candidate': {'candidate': 'c1', 'sdpMid': '0', 'sdpMLineIndex': 0},
+    });
+    expect(sentTo('ice'), isEmpty);
+
+    // The phone wakes: the offer arrives, then what was found meanwhile.
+    network.unreachable.clear();
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(calls.rung, isTrue);
+    expect(sentTo('offer'), [friend.device]);
+    expect(sentTo('ice'), [friend.device]);
+    final offers = sentTo('offer').length;
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(sentTo('offer'), hasLength(offers));
+    await calls.hangup();
+  });
+
+  test('the caller gives up on a device it never reaches', () async {
+    calls.reachEvery = const Duration(milliseconds: 20);
+    calls.reachFor = const Duration(milliseconds: 100);
+    network.unreachable.add(friend.device);
+    await calls.call(friend.device);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
     expect(calls.phase, 'idle');
+    expect(calls.error, contains('Could not reach'));
+    // Nothing reached it, so there is nobody to tell.
+    expect(sentTo('hangup'), isEmpty);
+  });
+
+  test('a busy device is not offered the call again', () async {
+    calls.reachEvery = const Duration(milliseconds: 20);
+    network.onRequest = (payload) async {
+      if (payload['type'] == 'offer') throw StateError('Busy');
+    };
+    await expectLater(calls.call(friend.device), throwsStateError);
+    expect(calls.phase, 'idle');
+    expect(calls.error, contains('Busy'));
+  });
+
+  group('call history', () {
+    final records = <CallRecord>[];
+    setUp(() {
+      records.clear();
+      calls.onRecord = records.add;
+    });
+
+    test('an answered call records how long it lasted', () async {
+      await calls.call(friend.device, video: true);
+      await network.signal!(friend.device, {
+        'type': 'answer',
+        'session': network.sent.first['session'],
+        'sdp': 'answer-sdp',
+      });
+      await event({'event': 'peerConnectionState', 'state': 'connected'});
+      await calls.hangup();
+      expect(records.single.person, friend.person);
+      expect(records.single.video, isTrue);
+      expect(records.single.outcome, 'answered');
+    });
+
+    test('a call nobody answered is missed', () async {
+      await calls.callPerson(friend.person);
+      await calls.hangup();
+      expect(records.single.outcome, 'missed');
+    });
+
+    test('a call turned down is declined', () async {
+      await calls.callPerson(friend.person);
+      await network.signal!(friendPhone.device, {
+        'type': 'hangup',
+        'session': network.sent.first['session'],
+      });
+      expect(records.single.outcome, 'declined');
+    });
+
+    test('only the caller records; own devices are not recorded', () async {
+      await offer(friend.device);
+      await calls.hangup();
+      await calls.call(own.device);
+      await calls.hangup();
+      expect(records, isEmpty);
+    });
+  });
+
+  test(
+    'each side tells the other when it mutes or pauses its camera',
+    () async {
+      await calls.call(friend.device, video: true);
+      final session = network.sent.first['session'];
+      await network.signal!(friend.device, {
+        'type': 'answer',
+        'session': session,
+        'sdp': 'answer-sdp',
+      });
+      calls.mute();
+      calls.toggleCamera();
+      await pumpEventQueue();
+      final states = network.sent.where((m) => m['type'] == 'state').toList();
+      expect(states.last, containsPair('muted', true));
+      expect(states.last, containsPair('camera', false));
+
+      await network.signal!(friend.device, {
+        'type': 'state',
+        'session': session,
+        'muted': true,
+        'camera': false,
+      });
+      expect(calls.remoteMuted, isTrue);
+      expect(calls.remoteCameraOff, isTrue);
+      // Another device cannot speak for the peer.
+      await network.signal!(friendPhone.device, {
+        'type': 'state',
+        'session': session,
+        'muted': false,
+      });
+      expect(calls.remoteMuted, isTrue);
+      await calls.hangup();
+      expect(calls.remoteMuted, isFalse);
+    },
+  );
+
+  test('the caller knows once the call is ringing elsewhere', () async {
+    expect(calls.rung, isFalse);
+    await calls.call(friend.device);
+    expect(calls.rung, isTrue);
+    await calls.hangup();
+    expect(calls.rung, isFalse);
+  });
+
+  test('the camera pauses and resumes without renegotiating', () async {
+    await calls.call(friend.device, video: true);
+    final offers = network.sent.where((m) => m['type'] == 'offer').length;
+    calls.toggleCamera();
+    expect(calls.cameraOff, isTrue);
+    await pumpEventQueue();
+    expect(
+      methods
+          .lastWhere((m) => m.method == 'mediaStreamTrackSetEnable')
+          .arguments,
+      containsPair('enabled', false),
+    );
+    calls.toggleCamera();
+    expect(calls.cameraOff, isFalse);
+    expect(network.sent.where((m) => m['type'] == 'offer'), hasLength(offers));
+    calls.toggleCamera();
+    await calls.hangup();
+    // The next call starts with the camera on.
+    expect(calls.cameraOff, isFalse);
+  });
+
+  testWidgets('an incoming call shows who and can be declined', (tester) async {
+    await offer(friend.device, video: true);
+    var opened = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                await Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => CallScreen(
+                      calls: calls,
+                      name: 'Sam',
+                      act: (action) => action(),
+                    ),
+                  ),
+                );
+                opened = false;
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Sam'), findsOneWidget);
+    expect(find.text('Incoming video call'), findsOneWidget);
+    expect(find.byTooltip('Answer'), findsOneWidget);
+    await tester.runAsync(() async {
+      await tester.tap(find.byTooltip('Decline'));
+      await pumpEventQueue(times: 50);
+    });
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(calls.phase, 'idle');
+    expect(network.sent.last['type'], 'hangup');
+    // The call ended, so the screen closed itself.
+    expect(opened, isFalse);
+    // Set by setUp for the call service; the widget test must leave it unset.
+    debugDefaultTargetPlatformOverride = null;
   });
 }

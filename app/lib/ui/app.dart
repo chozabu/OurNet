@@ -28,7 +28,6 @@ import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:app_badge_plus/app_badge_plus.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart'
     show DriveSync, FolderSync;
@@ -37,6 +36,8 @@ import '../services/files.dart';
 import '../services/calls.dart';
 import '../services/group_calls.dart';
 import 'group_call_screen.dart';
+import 'call_screen.dart';
+import '../services/ringer.dart';
 import '../services/messaging.dart';
 import '../services/notifications.dart';
 import '../services/connection_service.dart';
@@ -191,6 +192,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   late final Calls calls;
   late final GroupCalls groupCalls;
   bool callScreenOpen = false;
+
+  /// Whether the one-to-one call screen is showing.
+  bool directCallOpen = false;
+  String _callPhase = 'idle';
+  String? _callError;
+  final ringer = Ringer();
 
   /// Group names by space, for the call bar; filled as membership is looked up.
   final groupNames = <String, String>{};
@@ -422,7 +429,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       network,
       state: notes.state,
       onReading: () {
-        if (stayConnected) unawaited(keepConnected(true).catchError((Object _) {}));
+        if (stayConnected) {
+          unawaited(keepConnected(true).catchError((Object _) {}));
+        }
       },
     )..addListener(redraw);
     final tilePath = node.store.path;
@@ -464,6 +473,16 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       otherCallActive: () => calls.phase != 'idle',
     )..addListener(refresh);
     calls.busyElsewhere = () => groupCalls.active;
+    // Each call this device places goes in the chat's history.
+    calls.onRecord = (record) => unawaited(
+      sendCallRecord(
+        node,
+        record.person,
+        video: record.video,
+        outcome: record.outcome,
+        seconds: record.seconds,
+      ).then<void>((_) {}, onError: (Object e) => network.log('$e')),
+    );
     notifications =
         Notifications(
             node,
@@ -472,11 +491,15 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           )
           ..onError = notice
           ..showing = showingNotification
-          ..onCallOpen = () {
-            update(() {
-              tab = Destination.messages;
-              showConversation = true;
-            });
+          ..onCallOpen = (action) {
+            switch (action) {
+              case 'answer':
+                unawaited(callAct(calls.answer));
+              case 'decline':
+                unawaited(callAct(calls.hangup));
+                return;
+            }
+            openCall();
           }
           ..onOpenChat = openConversation
           ..onOpenForum = openForum
@@ -602,7 +625,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       unawaited(
         Future<void>.delayed(const Duration(seconds: 4), () async {
           if (!mounted) return;
-          calendarReminders = CalendarReminders(calendarController, notifications);
+          calendarReminders = CalendarReminders(
+            calendarController,
+            notifications,
+          );
           await calendarReminders!.start();
         }).catchError((Object e) => notice('Event reminders unavailable: $e')),
       );
@@ -789,14 +815,32 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   void refresh() {
     if (!mounted) return;
     setState(() {});
+    final phase = calls.phase;
+    if (phase != _callPhase) {
+      // A call starting or coming in opens the call screen.
+      if (_callPhase == 'idle' && (phase == 'calling' || phase == 'ringing')) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => openCall());
+      }
+      _callPhase = phase;
+    }
+    if (calls.error != _callError) {
+      _callError = calls.error;
+      if (_callError != null && !directCallOpen) notice(_callError!);
+    }
     if (widget.enablePlatform) {
-      final ringing = calls.phase == 'ringing';
+      ringer.play(switch (phase) {
+        'ringing' => RingSound.incoming,
+        'calling' when calls.rung => RingSound.ringback,
+        _ => null,
+      });
+      final ringing = phase == 'ringing';
       if (ringing != _ringing) {
         _ringing = ringing;
         unawaited(
           (ringing
                   ? notifications.incomingCall(
                       node.contacts[calls.peer]?.person,
+                      video: calls.video,
                     )
                   : notifications.clearCall())
               .catchError((Object e) => notice('$e')),
@@ -1002,6 +1046,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     if (widget.enablePlatform) {
       unawaited(calls.close());
       unawaited(groupCalls.close());
+      unawaited(ringer.close());
     }
     unawaited(network.stop());
     unawaited(driveSync.close());
@@ -1312,8 +1357,13 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                   Expanded(
                     child: Column(
                       children: [
-                        if (calls.phase != 'idle' || calls.error != null)
-                          callPanel(),
+                        if (calls.phase != 'idle' && !directCallOpen)
+                          CallBar(
+                            calls: calls,
+                            name: callPeerName(),
+                            onOpen: openCall,
+                            act: callAct,
+                          ),
                         if (groupCalls.active && !callScreenOpen)
                           GroupCallBar(
                             calls: groupCalls,
@@ -1450,103 +1500,40 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       ),
     ),
   );
-  Widget callPanel() => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '${calls.phase} · ${calls.peer == null
-                      ? ''
-                      : calls.isOwnDevice(calls.peer!)
-                      ? node.contacts[calls.peer]!.label
-                      : name(node.contacts[calls.peer]?.person ?? calls.peer!)}',
-                ),
-              ),
-              if (calls.phase == 'ringing')
-                FilledButton(
-                  onPressed: () => callAct(calls.answer),
-                  child: const Text('Answer'),
-                ),
-              IconButton(
-                tooltip: 'Mute microphone',
-                onPressed: calls.mute,
-                icon: Icon(calls.muted ? Icons.mic_off : Icons.mic),
-              ),
-              IconButton(
-                tooltip: 'Hang up',
-                onPressed: () => callAct(calls.hangup),
-                icon: const Icon(Icons.call_end, color: Colors.red),
-              ),
-            ],
+
+  /// Who the one-to-one call is with: one of your devices, or a friend.
+  String callPeerName() {
+    final peer = calls.peer;
+    if (peer == null) return 'Call';
+    if (calls.isOwnDevice(peer)) {
+      return node.contacts[peer]?.label ?? 'Your device';
+    }
+    return name(node.contacts[peer]?.person ?? peer);
+  }
+
+  /// Shows the one-to-one call full screen, until it ends or is put away.
+  Future<void> openCall() async {
+    final navigator = noteNavigator.currentState;
+    if (directCallOpen || calls.phase == 'idle' || navigator == null) return;
+    update(() => directCallOpen = true);
+    final peer = calls.peer;
+    try {
+      await navigator.push<void>(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (_) => CallScreen(
+            calls: calls,
+            name: callPeerName(),
+            seed: node.contacts[peer]?.person ?? peer,
+            act: callAct,
           ),
-          if (calls.error != null) Text(calls.error!),
-          if (calls.phase != 'idle' && (Platform.isAndroid || Platform.isIOS))
-            TextButton.icon(
-              onPressed: () => callAct(calls.toggleSpeaker),
-              icon: Icon(calls.speaker ? Icons.volume_up : Icons.hearing),
-              label: Text(calls.speaker ? 'Speaker on' : 'Speaker off'),
-            ),
-          if (calls.audioOutputs.isNotEmpty)
-            DropdownButton<String>(
-              isExpanded: true,
-              hint: const Text('Audio output'),
-              value: calls.audioOutput,
-              items: [
-                for (final output in calls.audioOutputs)
-                  DropdownMenuItem(
-                    value: output.deviceId,
-                    child: Text(
-                      output.label.isEmpty ? output.deviceId : output.label,
-                    ),
-                  ),
-              ],
-              onChanged: (device) {
-                if (device != null) {
-                  callAct(() => calls.selectAudioOutput(device));
-                }
-              },
-            ),
-          if (calls.audioInputs.isNotEmpty)
-            DropdownButton<String>(
-              isExpanded: true,
-              hint: const Text('Microphone'),
-              value: calls.audioInput,
-              items: [
-                for (final input in calls.audioInputs)
-                  DropdownMenuItem(
-                    value: input.deviceId,
-                    child: Text(
-                      input.label.isEmpty ? input.deviceId : input.label,
-                    ),
-                  ),
-              ],
-              onChanged: (device) {
-                if (device != null) {
-                  callAct(() => calls.selectAudioInput(device));
-                }
-              },
-            ),
-          if (calls.video && calls.local.srcObject != null)
-            SizedBox(
-              height: 180,
-              child: Row(
-                children: [
-                  Expanded(child: RTCVideoView(calls.remote)),
-                  SizedBox(
-                    width: 120,
-                    child: RTCVideoView(calls.local, mirror: true),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    ),
-  );
+        ),
+      );
+    } finally {
+      directCallOpen = false;
+      redraw();
+    }
+  }
 }
 
 class NetworkPainter extends CustomPainter {

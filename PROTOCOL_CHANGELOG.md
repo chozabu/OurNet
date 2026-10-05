@@ -7,6 +7,16 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.14: call history, retrying unreachable devices, call state
+
+Additive. Builds without it show call entries as plain messages.
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `call` | `message` payload (space `_messages`) | A one to one call entry: `video`, `outcome` (`answered`, `missed`, `declined`, `failed`), `seconds` when answered. Written by the caller when the call ends. | Show the message's `text` ("Missed call", "Call · 4 min"). |
+| `state` | new one to one call signal | `muted` and `camera` booleans, sent after an answer when either changes. | `Unknown call signal`; the sender ignores the refusal. |
+| repeated `offer` | one to one call signal | The same session offered again to a device that could not be reached, for up to 30 s. | Rings when it arrives, as any offer. |
+
 ## Unreleased: group calls and call robustness
 
 Additive. Builds without it never see the new traffic.

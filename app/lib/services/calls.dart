@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:ournet_core/ournet_core.dart';
+import 'messaging.dart' show profileName;
 import 'network.dart';
 
 /// Used until the user configures ICE servers. STUN only reveals the public
@@ -26,6 +27,35 @@ List<Object?> iceServers(Object? configured, {required bool local}) =>
 bool get androidRemoteStreams =>
     defaultTargetPlatform == TargetPlatform.android;
 
+/// How a one-to-one call went, for the chat's call history. The caller
+/// records it, so each call is recorded once.
+class CallRecord {
+  /// The person called.
+  final String person;
+  final bool video;
+
+  /// `answered`, `missed` (nobody answered, or the caller gave up),
+  /// `declined`, or `failed` (answered, but media never connected).
+  final String outcome;
+
+  /// How long the call lasted, when answered.
+  final int seconds;
+  const CallRecord({
+    required this.person,
+    required this.video,
+    required this.outcome,
+    this.seconds = 0,
+  });
+}
+
+/// Errors from a device that will not ring however often it is asked.
+const _refusals = {
+  'Busy',
+  'Device not admitted',
+  'Calling unavailable',
+  'Unknown request',
+};
+
 /// Media uses WebRTC. Only signalling crosses the authenticated iroh link.
 class Calls extends ChangeNotifier {
   final Network network;
@@ -47,10 +77,42 @@ class Calls extends ChangeNotifier {
 
   /// Caller side: devices still ringing. Cleared once one of them answers.
   final Set<String> _ringing = {};
+
+  /// Caller side: devices among [_ringing] the offer has not reached yet
+  /// (offline, or a phone that is asleep). Offered again until one answers
+  /// or [reachFor] passes.
+  final Set<String> _unreached = {};
+
+  /// Every candidate this side has found, for a device reached late.
+  final List<RTCIceCandidate> _found = [];
+
+  /// How often, and for how long, the caller retries devices it cannot reach.
+  Duration reachEvery = const Duration(seconds: 3);
+  Duration reachFor = const Duration(seconds: 30);
+
+  /// Called when a call this side placed ends, to record it in the chat.
+  void Function(CallRecord record)? onRecord;
+  String? _callee;
+  bool _answered = false;
+  bool _declined = false;
+
+  /// What the other side says it is doing: muted, or its camera paused.
+  /// Older builds do not say, so these stay false with them.
+  bool remoteMuted = false;
+  bool remoteCameraOff = false;
   String phase = 'idle';
   String? error;
   Json? _offer;
   bool muted = false;
+
+  /// In a video call: this side's camera is paused (its track sends black).
+  bool cameraOff = false;
+
+  /// Which way the local camera faces, for mirroring the self-view.
+  bool frontCamera = true;
+
+  /// Caller side: the offer reached at least one device, which is ringing.
+  bool rung = false;
   final local = RTCVideoRenderer(), remote = RTCVideoRenderer();
   final List<RTCIceCandidate> _pending = [];
   bool _remoteReady = false;
@@ -146,6 +208,7 @@ class Calls extends ChangeNotifier {
     _pc!.onIceCandidate = (candidate) {
       if (generation != _generation) return;
       if (peer != null && candidate.candidate != null) {
+        if (_found.length < 64) _found.add(candidate);
         if (!_signallingReady) {
           if (_outgoing.length < 64) _outgoing.add(candidate);
           return;
@@ -173,6 +236,8 @@ class Calls extends ChangeNotifier {
         _disconnectTimer?.cancel();
         _restarts = 0;
         phase = 'connected';
+        // Muted or camera paused before the call connected: say so now.
+        if (connectedAt == null && (muted || cameraOff)) _tellState();
         connectedAt ??= DateTime.now();
       }
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected &&
@@ -273,6 +338,8 @@ class Calls extends ChangeNotifier {
   void _sendIce(List<RTCIceCandidate> candidates, int generation) {
     final ringing = _ringing.isNotEmpty;
     for (final device in _recipients) {
+      // A device not yet reached gets every candidate when it is.
+      if (_unreached.contains(device)) continue;
       for (final payload in _icePayloads(candidates)) {
         unawaited(
           network
@@ -411,9 +478,11 @@ class Calls extends ChangeNotifier {
     }
     peer = devices.first;
     _offerer = true;
+    _callee = network.node.contacts[devices.first]?.person;
     _ringing
       ..clear()
       ..addAll(devices);
+    _unreached.clear();
     this.video = video;
     _session = randomId();
     final session = _session;
@@ -429,39 +498,42 @@ class Calls extends ChangeNotifier {
       if (_session != session) return;
       await pc.setLocalDescription(offer);
       if (_session != session) return;
-      final failures = <Object>[];
+      final payload = <String, dynamic>{
+        'type': 'offer',
+        'session': session,
+        'sdp': offer.sdp,
+        'video': video,
+        'v': 2,
+      };
+      final refusals = <Object>[];
       await Future.wait([
         for (final device in devices)
           network
-              .request(device, {
-                'type': 'signal',
-                'payload': {
-                  'type': 'offer',
-                  'session': session,
-                  'sdp': offer.sdp,
-                  'video': video,
-                  'v': 2,
-                },
-              })
+              .request(device, {'type': 'signal', 'payload': payload})
               .then<void>(
                 (_) {},
                 onError: (Object e) {
-                  failures.add(e);
-                  if (_session == session) _ringing.remove(device);
+                  if (_session != session) return;
+                  if (e is StateError && _refusals.contains(e.message)) {
+                    refusals.add(e);
+                    _ringing.remove(device);
+                  } else {
+                    _unreached.add(device);
+                  }
                 },
               ),
       ]);
       if (_session != session) return;
-      if (failures.length == devices.length) throw failures.first;
-      if (_ringing.isNotEmpty && !_ringing.contains(peer)) {
-        peer = _ringing.first;
-        notifyListeners();
-      }
+      if (_ringing.isEmpty) throw refusals.first;
+      _choosePeer();
+      rung = _unreached.length < _ringing.length;
+      notifyListeners();
       await _flushOutgoing();
       if (_session != session) return;
       _ringTimeout = Timer(const Duration(seconds: 60), () {
         if (_session == session && phase == 'calling') unawaited(hangup());
       });
+      if (_unreached.isNotEmpty) unawaited(_reach(session!, payload));
     } catch (e) {
       if (_session == session) {
         await hangup();
@@ -470,6 +542,102 @@ class Calls extends ChangeNotifier {
       }
       rethrow;
     }
+  }
+
+  /// The device signalling goes to before anyone answers: one the offer
+  /// reached, if any did.
+  void _choosePeer() {
+    if (_ringing.isEmpty) return;
+    if (peer == null || !_ringing.contains(peer) || _unreached.contains(peer)) {
+      peer = _ringing.firstWhere(
+        (d) => !_unreached.contains(d),
+        orElse: () => _ringing.first,
+      );
+    }
+  }
+
+  /// Offers the call again to devices it has not reached, so a phone that
+  /// wakes or comes back online in the next [reachFor] still rings. Gives
+  /// up, and says so, if nothing has been reached by then.
+  Future<void> _reach(String session, Json offer) async {
+    final until = DateTime.now().add(reachFor);
+    bool live() => _session == session && phase == 'calling' && !_answered;
+    while (live() && _unreached.isNotEmpty) {
+      if (DateTime.now().isAfter(until)) {
+        _unreached.clear();
+        if (!rung) {
+          final callee = _callee;
+          final who = callee == null
+              ? 'them'
+              : (profileName(network.node, callee) ?? 'them');
+          await hangup();
+          error = 'Could not reach $who. They may be offline.';
+          notifyListeners();
+        }
+        return;
+      }
+      await Future<void>.delayed(reachEvery);
+      await Future.wait([
+        for (final device in _unreached.toList())
+          network
+              .request(device, {'type': 'signal', 'payload': offer})
+              .then<void>(
+                (_) async {
+                  if (!live()) return;
+                  _unreached.remove(device);
+                  rung = true;
+                  _choosePeer();
+                  notifyListeners();
+                  final found = _found.toList();
+                  for (final payload
+                      in found.isEmpty ? const <Json>[] : _icePayloads(found)) {
+                    await network.request(device, {
+                      'type': 'signal',
+                      'payload': payload,
+                    });
+                  }
+                },
+                onError: (Object e) {
+                  if (!live()) return;
+                  if (e is! StateError || !_refusals.contains(e.message)) {
+                    return;
+                  }
+                  _unreached.remove(device);
+                  _ringing.remove(device);
+                  if (_ringing.isNotEmpty) {
+                    _choosePeer();
+                    return;
+                  }
+                  unawaited(
+                    hangup().then((_) {
+                      error = 'Call failed: ${e.message}';
+                      notifyListeners();
+                    }),
+                  );
+                },
+              ),
+      ]);
+    }
+  }
+
+  /// Tells the other side whether this one is muted or has paused its
+  /// camera. Older builds refuse the signal, which is harmless.
+  void _tellState() {
+    final device = peer;
+    if (device == null || _session == null || _ringing.isNotEmpty) return;
+    unawaited(
+      network
+          .request(device, {
+            'type': 'signal',
+            'payload': {
+              'type': 'state',
+              'session': _session,
+              'muted': muted,
+              'camera': !cameraOff,
+            },
+          })
+          .catchError((Object _) => <String, dynamic>{}),
+    );
   }
 
   Future<Json> _signal(String device, Json message) async {
@@ -515,9 +683,13 @@ class Calls extends ChangeNotifier {
         _ringTimeout?.cancel();
         final session = _session;
         peer = device;
+        _answered = true;
         _peerBatches = message['v'] == 2;
-        final others = _ringing.where((d) => d != device).toList();
+        final others = _ringing
+            .where((d) => d != device && !_unreached.contains(d))
+            .toList();
         _ringing.clear();
+        _unreached.clear();
         // This device took the call; stop the others ringing.
         for (final other in others) {
           unawaited(
@@ -564,9 +736,15 @@ class Calls extends ChangeNotifier {
         final reply = await pc.createAnswer();
         await pc.setLocalDescription(reply);
         return {'ok': true, 'sdp': reply.sdp};
+      case 'state':
+        if (device != peer) return {'ignored': true};
+        remoteMuted = message['muted'] == true;
+        remoteCameraOff = message['camera'] == false;
+        notifyListeners();
       case 'hangup':
         // A decline from any ringing device ends the call on all of them.
         if (device == peer || _ringing.contains(device)) {
+          if (_offerer && !_answered) _declined = true;
           await hangup(except: device);
         }
       default:
@@ -654,11 +832,34 @@ class Calls extends ChangeNotifier {
     }
   }
 
+  /// Pauses or resumes sending video, without renegotiating the call.
+  void toggleCamera() {
+    final tracks = _media?.getVideoTracks() ?? [];
+    if (tracks.isEmpty) return;
+    cameraOff = !cameraOff;
+    for (final track in tracks) {
+      track.enabled = !cameraOff;
+    }
+    _tellState();
+    notifyListeners();
+  }
+
+  Future<void> switchCamera() async {
+    final generation = _generation;
+    final tracks = _media?.getVideoTracks() ?? [];
+    if (tracks.isEmpty) return;
+    final front = await Helper.switchCamera(tracks.first);
+    if (generation != _generation) return;
+    frontCamera = front;
+    notifyListeners();
+  }
+
   void mute() {
     muted = !muted;
     for (final track in _media?.getAudioTracks() ?? []) {
       track.enabled = !muted;
     }
+    _tellState();
     notifyListeners();
   }
 
@@ -671,6 +872,34 @@ class Calls extends ChangeNotifier {
       ).whenComplete(() => _ending = null);
 
   Future<void> _hangup({required bool notifyPeer, String? except}) async {
+    final callee = _callee;
+    if (_offerer &&
+        callee != null &&
+        callee != network.node.person &&
+        _session != null) {
+      final since = connectedAt;
+      onRecord?.call(
+        CallRecord(
+          person: callee,
+          video: video,
+          outcome: since != null
+              ? 'answered'
+              : _answered
+              ? 'failed'
+              : _declined
+              ? 'declined'
+              : 'missed',
+          seconds: since == null
+              ? 0
+              : DateTime.now().difference(since).inSeconds,
+        ),
+      );
+    }
+    _callee = null;
+    _answered = false;
+    _declined = false;
+    remoteMuted = false;
+    remoteCameraOff = false;
     error = null;
     _generation++;
     _ringTimeout?.cancel();
@@ -686,9 +915,13 @@ class Calls extends ChangeNotifier {
     _outgoing.clear();
     _signallingReady = false;
     final notify = notifyPeer
-        ? ({?peer, ..._ringing}..remove(except))
+        ? ({?peer, ..._ringing}
+            ..remove(except)
+            ..removeAll(_unreached))
         : <String>{};
     _ringing.clear();
+    _unreached.clear();
+    _found.clear();
     final session = _session;
     _session = null;
     peer = null;
@@ -723,6 +956,9 @@ class Calls extends ChangeNotifier {
     _pending.clear();
     _offer = null;
     muted = false;
+    cameraOff = false;
+    frontCamera = true;
+    rung = false;
     audioOutputs = [];
     audioInputs = [];
     audioOutput = null;

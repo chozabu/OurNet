@@ -556,6 +556,8 @@ extension _ConversationPages on _OurNetAppState {
     required IconData icon,
     required String text,
     String? time,
+    Color? iconColor,
+    Widget? trailing,
   }) {
     final scheme = Theme.of(context).colorScheme;
     final style = Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -574,13 +576,14 @@ extension _ConversationPages on _OurNetAppState {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 14, color: scheme.onSurfaceVariant),
+            Icon(icon, size: 14, color: iconColor ?? scheme.onSurfaceVariant),
             const SizedBox(width: 6),
             Flexible(child: Text(text, style: style)),
             if (time != null) ...[
               const SizedBox(width: 8),
               Text(time, style: Theme.of(context).textTheme.labelSmall),
             ],
+            ?trailing,
           ],
         ),
       ),
@@ -730,6 +733,42 @@ extension _ConversationPages on _OurNetAppState {
                     ? 'You deleted this message'
                     : 'This message was deleted',
                 time: clock,
+              ),
+            ),
+          );
+        }
+        if (callEntry(p) case final call?) {
+          final video = call['video'] == true;
+          final missed = call['outcome'] != 'answered';
+          return GestureDetector(
+            onTap: selecting ? toggleSelected : null,
+            onLongPress: toggleSelected,
+            child: Container(
+              color: selected ? scheme.primary.withValues(alpha: .12) : null,
+              padding: EdgeInsets.only(top: groupStart ? 6 : 2),
+              child: noticeBubble(
+                context,
+                mine: mine,
+                icon: missed && !mine
+                    ? Icons.call_missed
+                    : mine
+                    ? Icons.call_made
+                    : Icons.call_received,
+                iconColor: missed && !mine ? scheme.error : null,
+                text: callSummary(call, mine: mine),
+                time: clock,
+                trailing: selecting || contact == null
+                    ? null
+                    : Padding(
+                        padding: const EdgeInsets.only(left: 4),
+                        child: IconButton(
+                          tooltip: video ? 'Video call back' : 'Call back',
+                          visualDensity: VisualDensity.compact,
+                          iconSize: 18,
+                          onPressed: () => startCall(video),
+                          icon: Icon(video ? Icons.videocam : Icons.call),
+                        ),
+                      ),
               ),
             ),
           );

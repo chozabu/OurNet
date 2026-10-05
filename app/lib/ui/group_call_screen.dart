@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/call_link.dart';
 import '../services/group_calls.dart';
+import 'call_widgets.dart';
 
 /// "3 in call" and a way in, for a group whose call is going. Nobody is rung:
 /// the call is just there, as a voice channel is, and anyone in the group can
@@ -241,6 +241,9 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   Timer? _clock;
   bool _closing = false;
 
+  /// The device shown large, picked by tapping its tile.
+  String? _pinned;
+
   GroupCalls get calls => widget.calls;
 
   @override
@@ -269,30 +272,17 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     setState(() {});
   }
 
-  String get _duration {
-    final since = calls.joinedAt;
-    if (since == null) return '';
-    final s = DateTime.now().difference(since).inSeconds.clamp(0, 359999);
-    final h = s ~/ 3600, m = (s % 3600) ~/ 60, sec = s % 60;
-    String two(int n) => n.toString().padLeft(2, '0');
-    return h > 0 ? '$h:${two(m)}:${two(sec)}' : '${two(m)}:${two(sec)}';
-  }
+  String get _duration => callDuration(calls.joinedAt);
 
   @override
   Widget build(BuildContext context) {
     final people = calls.participants;
-    final theme = ThemeData(
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xff137d72),
-        brightness: Brightness.dark,
-      ),
-      useMaterial3: true,
-    );
+    final theme = callTheme();
     final mobile = DeviceMedia.mobile;
     return Theme(
       data: theme,
       child: Scaffold(
-        backgroundColor: const Color(0xff0e1214),
+        backgroundColor: callBackground,
         body: SafeArea(
           child: Column(
             children: [
@@ -302,7 +292,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
                   child: people.isEmpty
                       ? const Center(child: CircularProgressIndicator())
-                      : _grid(people),
+                      : _stage(people),
                 ),
               ),
               if (calls.error != null)
@@ -382,24 +372,49 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     );
   }
 
-  Widget _grid(List<CallParticipant> people) => LayoutBuilder(
+  /// Tapping a tile pins that person large; tapping again unpins.
+  Widget _tile(CallParticipant p, {bool small = false, bool whole = false}) =>
+      GestureDetector(
+        onTap: () =>
+            setState(() => _pinned = _pinned == p.device ? null : p.device),
+        child: _Tile(
+          key: ValueKey(p.device),
+          participant: p,
+          label: widget.label(p),
+          small: small,
+          whole: whole,
+        ),
+      );
+
+  /// Everyone fitted to the screen. With two, the other person fills it and
+  /// you float in a corner; with someone pinned, they fill it and everyone
+  /// else runs along a strip.
+  Widget _stage(List<CallParticipant> people) => LayoutBuilder(
     builder: (context, box) {
-      final n = people.length;
-      final wide = box.maxWidth > box.maxHeight;
-      final columns = n <= 1
-          ? 1
-          : n == 2
-          ? (wide ? 2 : 1)
-          : n <= 4
-          ? 2
-          : n <= 6
-          ? (wide ? 3 : 2)
-          : (wide ? 4 : 3);
-      final rows = (n / columns).ceil();
-      const gap = 8.0;
-      final w = (box.maxWidth - gap * (columns - 1)) / columns;
-      final h = (box.maxHeight - gap * (rows - 1)) / rows;
-      return Wrap(
+      final pinned = people.where((p) => p.device == _pinned).firstOrNull;
+      if (pinned != null && people.length > 1) {
+        return _spotlight(pinned, people, box.biggest);
+      }
+      final self = people.where((p) => p.self).firstOrNull;
+      if (people.length == 2 && self != null) {
+        final other = people.firstWhere((p) => !p.self);
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            _tile(other, whole: !DeviceMedia.mobile),
+            FloatingView(child: _tile(self, small: true)),
+          ],
+        );
+      }
+      return _grid(people, box.biggest);
+    },
+  );
+
+  Widget _grid(List<CallParticipant> people, Size box) {
+    const gap = 8.0;
+    final (columns, tile) = gridFor(people.length, box, gap: gap);
+    return Center(
+      child: Wrap(
         spacing: gap,
         runSpacing: gap,
         alignment: WrapAlignment.center,
@@ -407,21 +422,60 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
         children: [
           for (final p in people)
             SizedBox(
-              width: max(1, w - .01),
-              height: max(1, h),
-              child: _Tile(
-                key: ValueKey(p.device),
-                participant: p,
-                label: widget.label(p),
-              ),
+              width: max(1, tile.width - .01),
+              height: max(1, tile.height),
+              child: _tile(p, small: columns > 2),
             ),
         ],
-      );
-    },
-  );
+      ),
+    );
+  }
+
+  Widget _spotlight(
+    CallParticipant pinned,
+    List<CallParticipant> people,
+    Size box,
+  ) {
+    final others = [
+      for (final p in people)
+        if (p.device != pinned.device) p,
+    ];
+    final wide = box.width > box.height * 1.2;
+    const gap = 8.0;
+    // Thumbnails beside the pinned person (landscape) or below (portrait).
+    final side = wide
+        ? (box.width * .18).clamp(110.0, 220.0)
+        : (box.height * .14).clamp(80.0, 140.0);
+    final thumb = wide ? Size(side, side * 3 / 4) : Size(side * 4 / 3, side);
+    final strip = ListView.separated(
+      scrollDirection: wide ? Axis.vertical : Axis.horizontal,
+      itemCount: others.length,
+      separatorBuilder: (_, _) => const SizedBox.square(dimension: gap),
+      itemBuilder: (_, i) => SizedBox(
+        width: thumb.width,
+        height: thumb.height,
+        child: _tile(others[i], small: true),
+      ),
+    );
+    final main = _tile(pinned, whole: true);
+    return wide
+        ? Row(
+            children: [
+              Expanded(child: main),
+              const SizedBox(width: gap),
+              SizedBox(width: thumb.width, child: strip),
+            ],
+          )
+        : Column(
+            children: [
+              Expanded(child: main),
+              const SizedBox(height: gap),
+              SizedBox(height: thumb.height, child: strip),
+            ],
+          );
+  }
 
   Widget _controls(BuildContext context, bool mobile) {
-    final scheme = Theme.of(context).colorScheme;
     Widget round({
       required IconData icon,
       required String tooltip,
@@ -429,17 +483,13 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
       bool on = false,
       Color? background,
       Color? foreground,
-    }) => IconButton.filled(
+    }) => CallButton(
+      icon: icon,
       tooltip: tooltip,
       onPressed: onPressed,
-      iconSize: 26,
-      style: IconButton.styleFrom(
-        minimumSize: const Size(56, 56),
-        backgroundColor:
-            background ?? (on ? Colors.white : scheme.surfaceContainerHighest),
-        foregroundColor: foreground ?? (on ? Colors.black87 : Colors.white),
-      ),
-      icon: Icon(icon),
+      on: on,
+      background: background,
+      foreground: foreground,
     );
     return Wrap(
       alignment: WrapAlignment.center,
@@ -490,76 +540,55 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     );
   }
 
-  Future<void> _devices(BuildContext context) => showModalBottomSheet<void>(
-    context: context,
-    builder: (context) => ListenableBuilder(
-      listenable: calls,
-      builder: (context, _) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (calls.audioInputs.isNotEmpty)
-                DropdownButtonFormField<String>(
-                  isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'Microphone'),
-                  initialValue: calls.audioInput,
-                  items: [
-                    for (final d in calls.audioInputs)
-                      DropdownMenuItem(
-                        value: d.deviceId,
-                        child: Text(d.label.isEmpty ? d.deviceId : d.label),
-                      ),
-                  ],
-                  onChanged: (id) {
-                    if (id != null) {
-                      widget.act(() => calls.selectAudioInput(id));
-                    }
-                  },
-                ),
-              const SizedBox(height: 12),
-              if (calls.audioOutputs.isNotEmpty)
-                DropdownButtonFormField<String>(
-                  isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'Speakers'),
-                  initialValue: calls.audioOutput,
-                  items: [
-                    for (final d in calls.audioOutputs)
-                      DropdownMenuItem(
-                        value: d.deviceId,
-                        child: Text(d.label.isEmpty ? d.deviceId : d.label),
-                      ),
-                  ],
-                  onChanged: (id) {
-                    if (id != null) {
-                      widget.act(() => calls.selectAudioOutput(id));
-                    }
-                  },
-                ),
-            ],
-          ),
-        ),
-      ),
-    ),
+  Future<void> _devices(BuildContext context) => showCallDevices(
+    context,
+    listenable: calls,
+    inputs: () => calls.audioInputs,
+    outputs: () => calls.audioOutputs,
+    input: () => calls.audioInput,
+    output: () => calls.audioOutput,
+    selectInput: (id) => widget.act(() => calls.selectAudioInput(id)),
+    selectOutput: (id) => widget.act(() => calls.selectAudioOutput(id)),
   );
+}
+
+/// Columns, and the size of each tile, that show [count] tiles of a call as
+/// large as they can be in [box]. Tiles stay between portrait 3:4 and
+/// widescreen 16:9, so nobody is shown as a sliver.
+(int, Size) gridFor(int count, Size box, {double gap = 8}) {
+  var best = (1, Size.zero);
+  var bestArea = -1.0;
+  for (var columns = 1; columns <= max(1, count); columns++) {
+    final rows = (count / columns).ceil();
+    var w = (box.width - gap * (columns - 1)) / columns;
+    var h = (box.height - gap * (rows - 1)) / rows;
+    if (w <= 0 || h <= 0) continue;
+    if (w / h > 16 / 9) w = h * 16 / 9;
+    if (w / h < 3 / 4) h = w * 4 / 3;
+    if (w * h > bestArea + .5) {
+      bestArea = w * h;
+      best = (columns, Size(w, h));
+    }
+  }
+  return best;
 }
 
 class _Tile extends StatelessWidget {
   final CallParticipant participant;
   final String label;
-  const _Tile({super.key, required this.participant, required this.label});
 
-  static const _palette = [
-    Color(0xff137d72),
-    Color(0xff5c6bc0),
-    Color(0xffc2185b),
-    Color(0xffef6c00),
-    Color(0xff6a1b9a),
-    Color(0xff2e7d32),
-    Color(0xff0277bd),
-    Color(0xff8d6e63),
-  ];
+  /// A thumbnail: a smaller name and status.
+  final bool small;
+
+  /// Shows the whole picture rather than filling the tile.
+  final bool whole;
+  const _Tile({
+    super.key,
+    required this.participant,
+    required this.label,
+    this.small = false,
+    this.whole = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -568,14 +597,13 @@ class _Tile extends StatelessWidget {
         p.video &&
         p.renderer != null &&
         (p.self || p.link == LinkState.connected);
-    final colour = _palette[p.person.hashCode.abs() % _palette.length];
-    final initial = label.trim().isEmpty ? '?' : label.trim()[0].toUpperCase();
     final status = switch (p.link) {
       LinkState.connecting => 'Connecting…',
       LinkState.reconnecting => 'Reconnecting…',
       LinkState.failed => 'Cannot connect',
       _ => null,
     };
+    final inset = small ? 4.0 : 8.0;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 150),
       decoration: BoxDecoration(
@@ -592,43 +620,21 @@ class _Tile extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             if (showVideo)
-              RTCVideoView(
-                p.renderer!,
-                mirror: p.self,
-                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-              )
+              CallVideo(p.renderer!, mirror: p.self, whole: whole)
             else
               Center(
                 child: LayoutBuilder(
-                  builder: (context, box) {
-                    final size = min(
-                      96.0,
-                      min(box.maxWidth, box.maxHeight) * .5,
-                    );
-                    return Container(
-                      width: size,
-                      height: size,
-                      decoration: BoxDecoration(
-                        color: colour,
-                        shape: BoxShape.circle,
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        initial,
-                        style: TextStyle(
-                          fontSize: size * .45,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                        ),
-                      ),
-                    );
-                  },
+                  builder: (context, box) => CallAvatar(
+                    label: label,
+                    seed: p.person,
+                    size: min(96.0, min(box.maxWidth, box.maxHeight) * .5),
+                  ),
                 ),
               ),
             if (status != null)
               Positioned(
-                top: 8,
-                right: 8,
+                top: inset,
+                right: inset,
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,
@@ -646,30 +652,50 @@ class _Tile extends StatelessWidget {
                           dimension: 12,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         ),
-                      if (p.link != LinkState.failed) const SizedBox(width: 6),
-                      Text(status, style: const TextStyle(fontSize: 12)),
+                      if (p.link != LinkState.failed && !small)
+                        const SizedBox(width: 6),
+                      if (!small)
+                        Text(status, style: const TextStyle(fontSize: 12)),
                     ],
                   ),
                 ),
               ),
             Positioned(
-              left: 8,
-              bottom: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (p.muted) ...[
-                      const Icon(Icons.mic_off, size: 14, color: Colors.white),
-                      const SizedBox(width: 4),
+              left: inset,
+              right: inset,
+              bottom: inset,
+              child: Align(
+                alignment: Alignment.bottomLeft,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (p.muted) ...[
+                        const Icon(
+                          Icons.mic_off,
+                          size: 14,
+                          color: Colors.white,
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      Flexible(
+                        child: Text(
+                          label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: small ? 12 : 13),
+                        ),
+                      ),
                     ],
-                    Text(label, style: const TextStyle(fontSize: 13)),
-                  ],
+                  ),
                 ),
               ),
             ),

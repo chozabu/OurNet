@@ -365,7 +365,7 @@ extension _SettingsPages on _OurNetAppState {
         SwitchListTile(
           title: const Text('Stay connected'),
           subtitle: const Text(
-            'Keep a connection to friends open while OurNet is closed, so messages and calls arrive straight away. Android shows a notification while it is on, and it uses more battery.',
+            'Keep a connection to friends open while OurNet is closed, so messages and calls arrive straight away. Without it, calls ring only while OurNet is open. Android shows a notification while it is on, and it uses more battery.',
           ),
           value: stayConnected,
           onChanged: node.store.setting('autoConnect') == false

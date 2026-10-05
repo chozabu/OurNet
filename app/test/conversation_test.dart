@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ournet/services/messaging.dart';
 import 'package:ournet/ui/app.dart';
 import 'package:ournet/ui/conversation_history.dart';
 import 'package:ournet_core/ournet_core.dart';
@@ -135,6 +136,35 @@ void main() {
     expect(find.byTooltip('Play'), findsOneWidget);
     expect(find.text('Voice message.m4a'), findsNothing);
     expect(find.byTooltip('Record voice message'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await node.close();
+  });
+
+  testWidgets('calls show in the chat with a way to call back', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final node = Node(await LocalIdentity.create(), Store());
+    final friend = await LocalIdentity.create(label: 'Friend');
+    await node.addContact(friend.certificate);
+    await sendCallRecord(
+      node,
+      friend.person,
+      video: true,
+      outcome: 'answered',
+      seconds: 754,
+    );
+    await tester.pumpWidget(
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.messages,
+      ),
+    );
+    await settled(tester);
+    expect(find.text('Outgoing video call · 12 min'), findsOneWidget);
+    expect(find.byTooltip('Video call back'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
     await node.close();
   });
