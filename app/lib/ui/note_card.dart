@@ -281,6 +281,9 @@ class _NoteCardState extends State<NoteCard> {
                                       PersonAvatar(
                                         name: widget.personName(person),
                                         radius: 12,
+                                        avatar: widget.files?.node.avatars.of(
+                                          person,
+                                        ),
                                       ),
                                   if (p['conflicts'] == true)
                                     Tooltip(

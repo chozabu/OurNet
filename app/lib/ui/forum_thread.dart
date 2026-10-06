@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:ournet_core/ournet_core.dart';
 
+import 'avatar.dart';
+
 /// One visible line of an open discussion, in reading order.
 class ThreadRow {
   final SignedObject object;
@@ -110,6 +112,9 @@ class ForumComment extends StatelessWidget {
   final List<String> ancestors;
   final List<bool> through;
   final String author, initial;
+
+  /// The author's profile picture, shown instead of [initial].
+  final Avatar? avatar;
   final DateTime written;
   final bool unread, collapsed, hasChildren, replying;
   final int hidden;
@@ -133,6 +138,7 @@ class ForumComment extends StatelessWidget {
     required this.through,
     required this.author,
     required this.initial,
+    this.avatar,
     required this.written,
     required this.onToggle,
     this.unread = false,
@@ -255,14 +261,12 @@ class ForumComment extends StatelessWidget {
                 ),
                 child: collapsed
                     ? foldButton()
-                    : CircleAvatar(
+                    : ProfileAvatar(
+                        avatar: avatar,
+                        label: initial,
                         radius: _avatar,
                         backgroundColor: scheme.secondaryContainer,
                         foregroundColor: scheme.onSecondaryContainer,
-                        child: Text(
-                          initial,
-                          style: const TextStyle(fontSize: 11),
-                        ),
                       ),
               ),
             ),

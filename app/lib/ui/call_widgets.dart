@@ -1,6 +1,10 @@
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:ournet_core/ournet_core.dart' show Avatar;
+
+import 'avatar.dart';
 
 /// The dark look both call screens share.
 ThemeData callTheme() => ThemeData(
@@ -22,14 +26,23 @@ String callDuration(DateTime? since) {
   return h > 0 ? '$h:${two(m)}:${two(sec)}' : '${two(m)}:${two(sec)}';
 }
 
-/// A coloured initial for someone on a call without video.
+/// Someone's picture, or a coloured initial, on a call without video.
 class CallAvatar extends StatelessWidget {
   final String label;
 
   /// Picks the colour, so a person keeps theirs across tiles and screens.
   final Object? seed;
   final double size;
-  const CallAvatar({super.key, required this.label, this.seed, this.size = 96});
+
+  /// Their profile picture, drawn over the initial once decoded.
+  final Avatar? avatar;
+  const CallAvatar({
+    super.key,
+    required this.label,
+    this.seed,
+    this.size = 96,
+    this.avatar,
+  });
 
   static const palette = [
     Color(0xff137d72),
@@ -44,7 +57,8 @@ class CallAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final initial = label.trim().isEmpty ? '?' : label.trim()[0].toUpperCase();
+    final initial = ProfileAvatar.initial(label);
+    final image = AvatarImage.sized(context, avatar, size);
     return Container(
       width: size,
       height: size,
@@ -53,13 +67,28 @@ class CallAvatar extends StatelessWidget {
         shape: BoxShape.circle,
       ),
       alignment: Alignment.center,
-      child: Text(
-        initial,
-        style: TextStyle(
-          fontSize: size * .45,
-          fontWeight: FontWeight.w700,
-          color: Colors.white,
-        ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Center(
+            child: Text(
+              initial,
+              style: TextStyle(
+                fontSize: size * .45,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+            ),
+          ),
+          if (image != null)
+            Image(
+              image: image,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              errorBuilder: (_, _, _) => const SizedBox.shrink(),
+            ),
+        ],
       ),
     );
   }
@@ -271,14 +300,48 @@ class CallVideo extends StatelessWidget {
     this.whole = false,
   });
 
+  /// The Windows and Linux renderer hands over frames already turned
+  /// upright, yet still reports the sender's rotation, so [RTCVideoView]
+  /// swaps width and height a second time and stretches a phone's portrait
+  /// picture across a landscape box.
+  static bool get _uprightFrames =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.linux);
+
   @override
-  Widget build(BuildContext context) => RTCVideoView(
-    renderer,
-    mirror: mirror,
-    objectFit: whole
-        ? RTCVideoViewObjectFit.RTCVideoViewObjectFitContain
-        : RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-  );
+  Widget build(BuildContext context) {
+    if (!_uprightFrames) {
+      return RTCVideoView(
+        renderer,
+        mirror: mirror,
+        objectFit: whole
+            ? RTCVideoViewObjectFit.RTCVideoViewObjectFitContain
+            : RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+      );
+    }
+    return ValueListenableBuilder<RTCVideoValue>(
+      valueListenable: renderer,
+      builder: (context, value, _) {
+        final id = renderer.textureId;
+        if (!value.renderVideo || id == null) return const SizedBox.expand();
+        return ClipRect(
+          child: FittedBox(
+            fit: whole ? BoxFit.contain : BoxFit.cover,
+            child: SizedBox(
+              width: value.width,
+              height: value.height,
+              child: Transform(
+                transform: Matrix4.identity()..rotateY(mirror ? -pi : 0.0),
+                alignment: FractionalOffset.center,
+                child: Texture(textureId: id),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 /// Microphone and speaker choice on desktop.

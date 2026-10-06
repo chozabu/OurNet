@@ -50,33 +50,105 @@ extension _NetworkPages on _OurNetAppState {
         onDevice: (device) => unawaited(showDeviceDetails(context, device)),
       ),
       const SizedBox(height: 8),
-      if (activeDevices(node.person) case final own when own.isNotEmpty)
-        deviceGroup(
-          context,
-          leading: const Icon(Icons.devices),
-          title: 'My devices (${own.length})',
-          devices: own,
+      ...newDeviceBanners(context),
+      myDevicesRow(context),
+      const Divider(),
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: TextField(
+          controller: networkSearch,
+          decoration: const InputDecoration(
+            prefixIcon: Icon(Icons.search),
+            hintText: 'Search friends',
+            isDense: true,
+            border: OutlineInputBorder(),
+          ),
+          onChanged: (_) => update(() {}),
         ),
-      for (final person in friendsByName)
-        deviceGroup(
-          context,
-          leading: conversationAvatar(person),
-          title: name(person),
-          since: personAddedText(person),
-          devices: activeDevices(person),
-          person: person,
-        ),
-      if (node.contacts.values
-              .where((c) => node.revoked.contains(c.device))
-              .toList()
-          case final removed when removed.isNotEmpty)
+      ),
+      Wrap(
+        spacing: 8,
+        children: [
+          for (final (value, label) in const [
+            ('all', 'All'),
+            ('connected', 'Connected'),
+            ('unreachable', 'Can’t reach'),
+          ])
+            ChoiceChip(
+              label: Text(label),
+              selected: networkFilter == value,
+              onSelected: (_) => update(() => networkFilter = value),
+            ),
+        ],
+      ),
+      const SizedBox(height: 4),
+      if (shownFriends.isEmpty)
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            friendsByName.isEmpty
+                ? 'No friends yet. Add one with Add friend above.'
+                : 'No friends match.',
+          ),
+        )
+      else
+        for (final person in shownFriends) friendRow(context, person),
+      if (node.blocked.where((p) => p != node.person).toList()
+          case final blocked when blocked.isNotEmpty)
         ExpansionTile(
           leading: const Icon(Icons.block),
-          title: Text('Removed devices (${removed.length})'),
-          children: [for (final c in removed) networkDeviceTile(context, c)],
+          title: Text('Blocked (${blocked.length})'),
+          subtitle: const Text(
+            'Remembered, but nothing of theirs is shown or exchanged',
+          ),
+          children: [
+            for (final person in blocked)
+              ListTile(
+                leading: conversationAvatar(person),
+                title: Text(name(person)),
+                subtitle: node.forgotten.contains(person)
+                    ? const Text('Also disconnected')
+                    : null,
+                trailing: TextButton(
+                  onPressed: () => unawaited(setBlocked(person, false)),
+                  child: const Text('Unblock'),
+                ),
+                onTap: () => unawaited(showPersonDetails(context, person)),
+              ),
+          ],
         ),
     ],
   );
+
+  /// This person's devices are managed under Profile and devices; here they
+  /// are one line of connection status.
+  Widget myDevicesRow(BuildContext context) {
+    final own = activeDevices(node.person);
+    final quiet = own.where((c) => quietText(c.device) != null).length;
+    return ListTile(
+      leading: const Icon(Icons.devices),
+      title: const Text('My devices'),
+      subtitle: NetworkHealthBuilder(
+        network: network,
+        builder: (context) {
+          final live = own
+              .where((c) => recentlyConnected(network, c.device))
+              .length;
+          return Text(
+            own.isEmpty
+                ? 'Only this device'
+                : [
+                    'This device and ${own.length} more',
+                    '$live connected',
+                    if (quiet > 0) '$quiet not seen lately',
+                  ].join(' · '),
+          );
+        },
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => update(() => tab = Destination.profile),
+    );
+  }
 
   /// Devices of [person] that still have access, as linked.
   List<DeviceCertificate> activeDevices(String person) => [
@@ -84,137 +156,160 @@ extension _NetworkPages on _OurNetAppState {
       if (c.person == person && !node.revoked.contains(c.device)) c,
   ];
 
-  /// Friends with a device that still has access, by name.
+  /// Friends with a device that still has access, by name. Blocked people
+  /// are listed apart.
   List<String> get friendsByName => memo(
     'friendsByName',
     () =>
         {
           for (final c in node.contacts.values)
-            if (c.person != node.person && !node.revoked.contains(c.device))
+            if (c.person != node.person &&
+                !node.revoked.contains(c.device) &&
+                !node.forgotten.contains(c.person) &&
+                !node.blocked.contains(c.person))
               c.person,
         }.toList()..sort(
           (a, b) => name(a).toLowerCase().compareTo(name(b).toLowerCase()),
         ),
   );
 
-  /// One person's devices folded under a single row that says how many are
-  /// connected now. [person] adds a way to their details.
-  Widget deviceGroup(
-    BuildContext context, {
-    required Widget leading,
-    required String title,
-    required List<DeviceCertificate> devices,
-    String? since,
-    String? person,
-  }) => ExpansionTile(
-    key: PageStorageKey('devices/${person ?? 'mine'}'),
-    leading: leading,
-    title: Text(title),
-    // Blocking is about the person, and undoing it stays one tap away.
-    trailing: person == null || !node.blocked.contains(person)
-        ? null
-        : IconButton(
-            tooltip: 'Unblock ${name(person)}',
-            onPressed: () => toggleBlock(person),
-            icon: const Icon(Icons.undo),
-          ),
-    subtitle: NetworkHealthBuilder(
-      network: network,
-      builder: (context) {
-        final live = devices
-            .where((c) => recentlyConnected(network, c.device))
-            .length;
-        return Text(
-          [
-            devices.length == 1 ? '1 device' : '${devices.length} devices',
-            '$live connected',
-            ?since,
-          ].join(' · '),
-        );
-      },
-    ),
-    children: [
-      for (final c in devices) networkDeviceTile(context, c, owner: false),
-      if (person != null)
+  /// [friendsByName] narrowed by the search box and filter.
+  List<String> get shownFriends {
+    final query = networkSearch.text.trim().toLowerCase();
+    return [
+      for (final person in friendsByName)
+        if ((query.isEmpty || name(person).toLowerCase().contains(query)) &&
+            switch (networkFilter) {
+              'connected' => activeDevices(
+                person,
+              ).any((c) => recentlyConnected(network, c.device)),
+              'unreachable' => reachText(person) != null,
+              _ => true,
+            })
+          person,
+    ];
+  }
+
+  /// One friend: how many of their devices are connected, or why they
+  /// cannot be reached. Their devices fold away beneath.
+  Widget friendRow(BuildContext context, String person) {
+    final devices = activeDevices(person);
+    final reach = reachText(person);
+    final theme = Theme.of(context);
+    return ExpansionTile(
+      key: PageStorageKey('devices/$person'),
+      leading: conversationAvatar(person),
+      title: Text(name(person)),
+      subtitle: NetworkHealthBuilder(
+        network: network,
+        builder: (context) {
+          final live = devices
+              .where((c) => recentlyConnected(network, c.device))
+              .length;
+          return Text(
+            [
+              if (live > 0)
+                '$live of ${devices.length} connected'
+              else
+                reach ?? 'Not connected now',
+              ?personAddedText(person),
+            ].join(' · '),
+            style: live == 0 && reach != null
+                ? theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.error,
+                  )
+                : null,
+          );
+        },
+      ),
+      children: [
+        for (final c in devices) networkDeviceTile(context, c),
         ListTile(
           leading: const Icon(Icons.info_outline),
           title: Text('About ${name(person)}'),
+          subtitle: const Text('Message, block or disconnect'),
           onTap: () => unawaited(showPersonDetails(context, person)),
         ),
-    ],
-  );
-
-  Widget networkDeviceTile(
-    BuildContext context,
-    DeviceCertificate c, {
-    bool owner = true,
-  }) {
-    final removed = node.revoked.contains(c.device);
-    final added = addedText(c.device);
-    return ListTile(
-      leading: Icon(removed ? Icons.block : Icons.devices),
-      title: Text(
-        owner ? '${name(c.person)} · ${deviceLabel(c)}' : deviceLabel(c),
-      ),
-      subtitle: removed
-          ? Text([short(c.device), removedText(c.device), ?added].join(' · '))
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                DeviceHealthText(
-                  network: network,
-                  device: c.device,
-                  prefix: short(c.device),
-                ),
-                if (added != null)
-                  Text(added, style: Theme.of(context).textTheme.bodySmall),
-              ],
-            ),
-      isThreeLine: !removed,
-      onTap: () => unawaited(showDeviceDetails(context, c)),
-      trailing: removed
-          ? null
-          : Wrap(
-              children: [
-                IconButton(
-                  tooltip: 'Sync this device',
-                  onPressed: () => act(() => syncNow(c.device)),
-                  icon: const Icon(Icons.sync),
-                ),
-                if (c.person == node.person && c.device != node.identity.device)
-                  IconButton(
-                    tooltip: 'Share your history with this device',
-                    onPressed: () => act(() => shareHistoryWith(c)),
-                    icon: const Icon(Icons.history),
-                  ),
-                if (c.person == node.person && node.identity.holdsRoot)
-                  IconButton(
-                    tooltip: 'Remove device access',
-                    onPressed: () => act(() => removeDeviceAccess(context, c)),
-                    icon: const Icon(Icons.phonelink_erase),
-                  ),
-                if (owner && c.person != node.person)
-                  IconButton(
-                    tooltip: 'Block or unblock person',
-                    onPressed: () => toggleBlock(c.person),
-                    icon: Icon(
-                      node.blocked.contains(c.person)
-                          ? Icons.undo
-                          : Icons.block,
-                    ),
-                  ),
-              ],
-            ),
+      ],
     );
   }
 
-  void toggleBlock(String person) {
-    final unblock = node.blocked.contains(person);
-    node.block(person, !unblock);
-    // What was refused while blocked arrives on the next sync.
-    if (unblock && network.running) unawaited(network.syncAll());
+  /// A friend's device, with how it is doing.
+  Widget networkDeviceTile(BuildContext context, DeviceCertificate c) {
+    final quiet = quietText(c.device);
+    final added = addedText(c.device);
+    final small = Theme.of(context).textTheme.bodySmall;
+    return ListTile(
+      contentPadding: const EdgeInsets.only(left: 32, right: 16),
+      leading: const Icon(Icons.devices),
+      title: Text(deviceLabel(c)),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DeviceHealthText(network: network, device: c.device),
+          if (quiet != null) Text(quiet, style: small),
+          if (added != null) Text(added, style: small),
+        ],
+      ),
+      isThreeLine: true,
+      onTap: () => unawaited(showDeviceDetails(context, c)),
+      trailing: IconButton(
+        tooltip: 'Sync this device',
+        onPressed: () => act(() => syncNow(c.device)),
+        icon: const Icon(Icons.sync),
+      ),
+    );
+  }
+
+  /// Own devices this one has not been told about yet, when they were added
+  /// elsewhere. Empty until devices are first recorded here, so a new
+  /// install does not announce every device it finds.
+  List<DeviceCertificate> get newOwnDevices {
+    final known = node.store.setting('knownOwnDevices');
+    final own = activeDevices(node.person);
+    if (known is! List) {
+      node.store.set('knownOwnDevices', [for (final c in own) c.device]);
+      return const [];
+    }
+    return [
+      for (final c in own)
+        if (!known.contains(c.device) &&
+            c.data['approvedBy'] != node.identity.device)
+          c,
+    ];
+  }
+
+  void acknowledgeOwnDevice(String device) {
+    final known = [
+      ...?(node.store.setting('knownOwnDevices') as List?)?.cast<String>(),
+      device,
+    ];
+    node.store.set('knownOwnDevices', known);
     refresh();
   }
+
+  /// A device added to this person's account somewhere else: shown until
+  /// looked at, since an unexpected one is how a mistake or a stolen phrase
+  /// shows itself.
+  List<Widget> newDeviceBanners(BuildContext context) => [
+    for (final c in newOwnDevices)
+      Card(
+        color: Theme.of(context).colorScheme.tertiaryContainer,
+        child: ListTile(
+          leading: const Icon(Icons.new_releases_outlined),
+          title: Text('New device on your account: ${deviceLabel(c)}'),
+          subtitle: Text(
+            '${addedText(c.device) ?? 'Added from another of your devices'}. '
+            'Not you? Remove its access.',
+          ),
+          onTap: () => unawaited(showDeviceDetails(context, c)),
+          trailing: TextButton(
+            onPressed: () => acknowledgeOwnDevice(c.device),
+            child: const Text('OK'),
+          ),
+        ),
+      ),
+  ];
 
   /// Lets [device], one of this person's own, read the chats, groups and
   /// notes that were written before it was added.

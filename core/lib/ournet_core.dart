@@ -22,3 +22,4 @@ export 'src/note_state.dart';
 export 'src/keep_import.dart';
 export 'src/backup.dart';
 export 'src/history.dart';
+export 'src/avatars.dart';

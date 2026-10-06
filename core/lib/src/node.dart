@@ -7,6 +7,24 @@ import 'model.dart';
 import 'store.dart';
 import 'blob_worker.dart';
 import 'locations.dart';
+import 'avatars.dart';
+
+/// What a person chose about someone else, kept alike on all their devices.
+/// Blocking and disconnecting are independent: each choice settles one of
+/// them, except [friend], which settles both.
+enum ContactState {
+  /// Connected and not blocked: what adding someone again on purpose says.
+  friend,
+
+  /// Nothing of theirs is shown or exchanged, but they are remembered.
+  blocked,
+
+  /// No longer blocked; a disconnect stays.
+  unblocked,
+
+  /// Disconnected: their devices are forgotten. A block stays.
+  forgotten,
+}
 
 class Node {
   /// Replaced only by [updateIdentity], when this same device seals its root.
@@ -14,6 +32,9 @@ class Node {
   LocalIdentity _identity;
   final Store store;
   late final blobs = BlobWorker(store);
+
+  /// Profile pictures, cached per person.
+  late final avatars = Avatars(this);
 
   /// Last known positions; set up when first asked for.
   Locations get locations =>
@@ -24,6 +45,10 @@ class Node {
   final Map<String, DeviceCertificate> contacts = {};
   final Set<String> subscriptions = {};
   final Set<String> blocked = {};
+
+  /// People this person disconnected from: their devices were forgotten and
+  /// are not learned again from others, until one is added on purpose.
+  final Set<String> forgotten = {};
   final Set<String> revoked = {};
   Future<void> _publications = Future.value();
   int _pendingPublications = 0;
@@ -65,6 +90,9 @@ class Node {
     }
     subscriptions.addAll(store.subscribedSpaces());
     blocked.addAll((store.setting('blocked') as List? ?? []).cast<String>());
+    forgotten.addAll(
+      (store.setting('forgotten') as List? ?? []).cast<String>(),
+    );
     revoked.addAll(store.revokedDevices());
     // Profiles that applied revocations before withdrawal existed.
     if (canonical(store.setting('revokedWithdrawn')) !=
@@ -89,13 +117,77 @@ class Node {
     if (!changes.isClosed) changes.add(null);
   }
 
-  Future<void> addContact(DeviceCertificate certificate) async {
+  /// Admits [certificate]. [explicit] is false where a device is admitted
+  /// as a side effect (a shared group's members): that does not reconnect
+  /// someone this person disconnected from, while adding them on purpose
+  /// (an invitation or contact card) does, on all of this person's devices.
+  Future<void> addContact(
+    DeviceCertificate certificate, {
+    bool explicit = true,
+  }) async {
     if (!await certificate.valid())
       throw StateError('Invalid device certificate');
     if (revoked.contains(certificate.device))
       throw StateError('Device revoked');
     contacts[certificate.device] = certificate;
     store.putContact(certificate, now());
+    if (explicit &&
+        certificate.person != person &&
+        forgotten.contains(certificate.person)) {
+      await setContactState(certificate.person, ContactState.friend);
+    }
+    notify();
+  }
+
+  /// Blocks, unblocks or disconnects from [other] on every one of this
+  /// person's devices: a `contact_state` only they can read, newest wins.
+  /// Builds before it ignore it and keep their own block list.
+  Future<void> setContactState(String other, ContactState state) async {
+    if (other == person) throw StateError('That is you');
+    final object = await publish(
+      'contact_state',
+      {'person': other, 'state': state.name},
+      space: '_contacts',
+      audience: [person],
+    );
+    _applyContactState(other, state, object.created);
+  }
+
+  void _applyContactState(String other, ContactState state, int at) {
+    final states = {...?(store.setting('contactStates') as Map?)};
+    // Whether the choice about [flag] made at [at] is the newest one.
+    bool newest(String flag) {
+      final key = '$other/$flag';
+      if (states[key] case final int prior when prior > at) return false;
+      states[key] = at;
+      return true;
+    }
+
+    final block = switch (state) {
+      ContactState.blocked => true,
+      ContactState.unblocked || ContactState.friend => false,
+      ContactState.forgotten => null,
+    };
+    final forget = switch (state) {
+      ContactState.forgotten => true,
+      ContactState.friend => false,
+      _ => null,
+    };
+    if (block != null && newest('block')) {
+      block ? blocked.add(other) : blocked.remove(other);
+    }
+    if (forget != null && newest('forget')) {
+      if (forget) {
+        forgotten.add(other);
+        contacts.removeWhere((_, c) => c.person == other);
+        store.removeContacts(other);
+      } else {
+        forgotten.remove(other);
+      }
+    }
+    store.set('contactStates', states);
+    store.set('blocked', blocked.toList()..sort());
+    store.set('forgotten', forgotten.toList()..sort());
     notify();
   }
 
@@ -207,6 +299,7 @@ class Node {
       throw StateError('This device has been revoked');
     }
     store.put(object);
+    if (kind == 'avatar') avatars.changed(person);
     notify();
     return object;
   }
@@ -531,6 +624,19 @@ class Node {
     return names;
   }
 
+  /// When each device last did anything this device knows of: the newest
+  /// object it signed, or the last sync with it.
+  int? lastSeen(String device) {
+    final synced = store.setting('peerHealth');
+    final at = synced is Map && synced[device] is Map
+        ? synced[device]['synced'] as int?
+        : null;
+    final wrote = store.lastSignedBy(device);
+    if (at == null) return wrote;
+    if (wrote == null) return at;
+    return at > wrote ? at : wrote;
+  }
+
   /// When each removed device lost access: the earliest revocation of it
   /// this node applied. A device removed before its revocation arrived here
   /// has none.
@@ -748,6 +854,7 @@ class Node {
             revoked.contains(c.device) ||
             (known != null && known.signature == c.signature) ||
             (peer.person != person && c.person != peer.person) ||
+            forgotten.contains(c.person) ||
             // Keep an existing binding unless the owner re-certified it.
             (known != null && known.person != c.person) ||
             !await c.valid())
@@ -793,6 +900,7 @@ class Node {
     // again, so nothing older than them ever reached it.
     return o.kind == 'revoke' ||
         o.kind == 'profile' ||
+        o.kind == 'avatar' ||
         o.kind == 'device_name' ||
         wanted.contains(o.space) ||
         (peer.person == person && o.author == person);
@@ -1039,7 +1147,7 @@ class Node {
         !(o.data['via'] as List).contains(person))
       return 0;
     if (o.isPublic &&
-        !['profile', 'revoke', 'device_name'].contains(o.kind) &&
+        !['profile', 'avatar', 'revoke', 'device_name'].contains(o.kind) &&
         !subscriptions.contains(o.space) &&
         o.author != person)
       return 0;
@@ -1112,6 +1220,7 @@ class Node {
         for (final e in incoming) store.putEvidence(e),
       ].where((added) => added).length,
     );
+    if (o.kind == 'avatar') avatars.changed(o.author);
     if (o.kind == 'read') {
       final payload = await content(o);
       final ids = <Object?>{
@@ -1127,6 +1236,14 @@ class Node {
             original.audience.contains(o.author)) {
           store.set('readBy/${original.id}', o.author);
         }
+      }
+    }
+    if (o.kind == 'contact_state' && o.author == person) {
+      final payload = await content(o);
+      final state = ContactState.values.asNameMap()[payload?['state']];
+      if (payload?['person'] case final String other
+          when state != null && other != person) {
+        _applyContactState(other, state, o.created);
       }
     }
     if (o.kind == 'room_read' && o.author == person) {

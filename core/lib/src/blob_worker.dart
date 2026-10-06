@@ -206,6 +206,35 @@ class BlobWorker {
     return encoded;
   }
 
+  /// A profile picture from straight RGBA pixels: JPEG over white, at the
+  /// best quality that fits [maxBytes]. Runs in a short-lived isolate.
+  Future<Uint8List> encodeAvatar(
+    Uint8List rgba,
+    int width,
+    int height, {
+    required int maxBytes,
+  }) async {
+    if (width <= 0 ||
+        height <= 0 ||
+        width > 1024 ||
+        height > 1024 ||
+        rgba.length != width * height * 4) {
+      throw StateError('Invalid picture pixels');
+    }
+    final pixels = TransferableTypedData.fromList([rgba]);
+    final encoded = await Isolate.run(
+      () => _encodeAvatar(
+        pixels.materialize().asUint8List(),
+        width,
+        height,
+        maxBytes,
+      ),
+      debugName: 'ournet-avatar-encode',
+    );
+    if (encoded == null) throw StateError('That picture is too detailed');
+    return encoded;
+  }
+
   Future<void> close() => _closeFuture ??= _close();
 
   Future<void> _close() async {
@@ -394,4 +423,23 @@ Uint8List _encodePreview(Uint8List rgba, int width, int height) {
   return opaque
       ? img.encodeJpg(image, quality: 82)
       : img.encodePng(image, level: 3);
+}
+
+Uint8List? _encodeAvatar(Uint8List rgba, int width, int height, int maxBytes) {
+  final image = img.Image.fromBytes(
+    width: width,
+    height: height,
+    bytes: rgba.buffer,
+    bytesOffset: rgba.offsetInBytes,
+    numChannels: 4,
+  );
+  // Transparent parts of a drawing or logo would turn black in a JPEG.
+  final flat = img.Image(width: width, height: height)
+    ..clear(img.ColorRgb8(255, 255, 255));
+  img.compositeImage(flat, image);
+  for (final quality in [86, 76, 64, 50, 36]) {
+    final jpeg = img.encodeJpg(flat, quality: quality);
+    if (jpeg.length <= maxBytes) return jpeg;
+  }
+  return null;
 }

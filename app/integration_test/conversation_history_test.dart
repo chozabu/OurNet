@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -29,6 +30,16 @@ void main() {
       try {
         await local.addContact(remote.identity.certificate);
         await remote.addContact(local.identity.certificate);
+        // Most friends have a picture, shown in the list and the header.
+        await remote.publish('profile', {
+          'name': 'Friend',
+        }, space: '_identity');
+        await remote.avatars.set(
+          Uint8List(Avatars.edge * Avatars.edge * 4)
+            ..fillRange(0, Avatars.edge * Avatars.edge * 4, 200),
+          Avatars.edge,
+          Avatars.edge,
+        );
         for (var i = 0; i < 1005; i++) {
           await remote.publish(
             'message',
@@ -38,6 +49,7 @@ void main() {
           );
         }
         await syncPair(local, remote, rounds: 1000);
+        expect(local.avatars.of(remote.person), isNotNull);
         binding.testTextInput.register();
         addTearDown(binding.testTextInput.unregister);
         await tester.pumpWidget(

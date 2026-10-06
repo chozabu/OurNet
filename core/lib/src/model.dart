@@ -171,6 +171,11 @@ bool validContent(String kind, Json p) {
           p['deleted'] is bool &&
           ['file', 'folder'].contains(p['type']) &&
           (p['type'] == 'folder' || p['chunks'] is List),
+    // Blocking or disconnecting, shared among the author's own devices.
+    'contact_state' =>
+      p['person'] is String &&
+          (p['person'] as String).length <= 64 &&
+          ['friend', 'blocked', 'unblocked', 'forgotten'].contains(p['state']),
     // A newer name for one of the author's devices: see `Node.renameDevice`.
     'device_name' =>
       p['device'] is String &&
@@ -178,6 +183,12 @@ bool validContent(String kind, Json p) {
           p['label'] is String &&
           (p['label'] as String).trim().isNotEmpty &&
           (p['label'] as String).length <= 100,
+    // A profile picture: see `Avatars`. One without an image removes it.
+    'avatar' =>
+      p['image'] == null ||
+          (p['image'] is String &&
+              (p['image'] as String).length <= 64 * 1024 &&
+              ['image/jpeg', 'image/png'].contains(p['type'])),
     'profile' =>
       p['name'] is String &&
           (p['name'] as String).isNotEmpty &&
@@ -734,7 +745,14 @@ class LocalIdentity {
       throw StateError('That root is not this person');
     }
     if (!await request.valid()) throw StateError('Invalid enrolment request');
-    final data = <String, dynamic>{...request.data, 'person': person};
+    final data = <String, dynamic>{
+      ...request.data,
+      'person': person,
+      // Optional, for showing who added a device and when; earlier builds
+      // verify the signature over them like any other field.
+      'approvedBy': device,
+      'approved': DateTime.now().millisecondsSinceEpoch,
+    };
     return DeviceCertificate(data, await sign(data, key));
   }
 

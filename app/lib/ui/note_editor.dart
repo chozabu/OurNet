@@ -11,6 +11,7 @@ import '../services/coalesced_task.dart';
 import '../services/drafts.dart';
 import '../services/image_text.dart';
 import '../services/speech.dart';
+import 'avatar.dart';
 import 'drawing.dart';
 import 'note_attachments.dart';
 import 'note_colors.dart';
@@ -959,7 +960,10 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
                 for (final person in current.members)
                   ListTile(
                     dense: true,
-                    leading: PersonAvatar(name: nameOf(person)),
+                    leading: PersonAvatar(
+                      name: nameOf(person),
+                      avatar: widget.notes.node.avatars.of(person),
+                    ),
                     title: Text(nameOf(person)),
                     subtitle: person == current.room.data['owner']
                         ? const Text('Group owner')
@@ -1001,7 +1005,10 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
                   })
                     CheckboxListTile(
                       value: selected.contains(person),
-                      secondary: PersonAvatar(name: nameOf(person)),
+                      secondary: PersonAvatar(
+                        name: nameOf(person),
+                        avatar: widget.notes.node.avatars.of(person),
+                      ),
                       title: Text(nameOf(person)),
                       subtitle: person == current.room.data['owner']
                           ? const Text('Owner')
@@ -2327,6 +2334,9 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
                                     child: PersonAvatar(
                                       name: nameOf(person),
                                       radius: 12,
+                                      avatar: widget.notes.node.avatars.of(
+                                        person,
+                                      ),
                                     ),
                                   ),
                               ],
@@ -2486,7 +2496,15 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
 class PersonAvatar extends StatelessWidget {
   final String name;
   final double radius;
-  const PersonAvatar({super.key, required this.name, this.radius = 16});
+
+  /// Their profile picture, drawn over the initial once decoded.
+  final Avatar? avatar;
+  const PersonAvatar({
+    super.key,
+    required this.name,
+    this.radius = 16,
+    this.avatar,
+  });
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
@@ -2495,13 +2513,18 @@ class PersonAvatar extends StatelessWidget {
       colors.secondaryContainer,
       colors.tertiaryContainer,
     ];
-    final initial = name.trim().isEmpty ? '?' : name.trim()[0].toUpperCase();
+    final image = AvatarImage.sized(context, avatar, radius * 2);
     return Tooltip(
       message: name,
       child: CircleAvatar(
         radius: radius,
         backgroundColor: palette[name.hashCode.abs() % palette.length],
-        child: Text(initial, style: TextStyle(fontSize: radius * .9)),
+        foregroundImage: image,
+        onForegroundImageError: image == null ? null : (_, _) {},
+        child: Text(
+          ProfileAvatar.initial(name),
+          style: TextStyle(fontSize: radius * .9),
+        ),
       ),
     );
   }

@@ -21,6 +21,12 @@ app contains no analytics, advertising or crash-reporting SDKs.
 choose to share are sent to the devices of people you have admitted. Content is
 encrypted in transit and carries a signed record of its origin.
 
+**Your name and picture, more widely.** Your display name and profile picture,
+if you add one, are public within OurNet: friends' devices pass them on to
+their friends, so people you have not admitted can see them. You can change or
+remove your picture at any time; devices that already received an earlier one
+keep it in their storage but stop showing it.
+
 **Through relay servers, sometimes.** OurNet uses [iroh](https://iroh.computer)
 for transport. It tries to connect your device directly to your friend's
 device. When a direct connection cannot be established — typically because of

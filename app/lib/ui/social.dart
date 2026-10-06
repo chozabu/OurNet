@@ -604,6 +604,16 @@ extension _SocialPages on _OurNetAppState {
                                           fontStyle: FontStyle.italic,
                                         ),
                                   )
+                                else if (reachText(peer) case final reach?)
+                                  // Nothing sent here arrives until one of
+                                  // their devices is back.
+                                  Text(
+                                    reach,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(color: scheme.error),
+                                  )
                                 else
                                   ConversationDelivery(
                                     key: ValueKey('delivery/$peer'),

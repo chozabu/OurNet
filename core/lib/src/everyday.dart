@@ -311,7 +311,7 @@ class Everyday {
           cert.person != node.person &&
           !node.contacts.containsKey(cert.device) &&
           !node.revoked.contains(cert.device))
-        await node.addContact(cert);
+        await node.addContact(cert, explicit: false);
     }
   }
 

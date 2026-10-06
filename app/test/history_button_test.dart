@@ -104,7 +104,7 @@ void main() {
     await node.close();
   });
 
-  testWidgets('a blocked friend is labelled, and unblocking is one tap', (
+  testWidgets('blocked friends are listed apart, and can be unblocked', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(900, 1600);
@@ -121,8 +121,14 @@ void main() {
     await settle(tester);
     await tester.tap(find.text('Network and connections'));
     await settle(tester);
+    await tester.tap(find.text('Blocked (1)'));
+    await settle(tester);
     expect(find.textContaining('(blocked)'), findsWidgets);
-    await tester.tap(find.byIcon(Icons.undo));
+    await tester.tap(find.text('Unblock'));
+    // Unblocking is published to this person's other devices first.
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 500)),
+    );
     await tester.pump(const Duration(milliseconds: 300));
     expect(node.blocked, isEmpty);
     await tester.pumpWidget(const SizedBox());

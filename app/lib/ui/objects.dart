@@ -82,7 +82,8 @@ extension _ObjectsPages on _OurNetAppState {
                 ancestors: row.ancestors,
                 through: row.through,
                 author: name(author),
-                initial: name(author).substring(0, 1),
+                initial: ProfileAvatar.initial(name(author)),
+                avatar: node.avatars.of(author),
                 written: written,
                 unread: unread,
                 collapsed: row.collapsed,
@@ -157,10 +158,7 @@ extension _ObjectsPages on _OurNetAppState {
                     children: [
                       Row(
                         children: [
-                          CircleAvatar(
-                            radius: 15,
-                            child: Text(name(author).substring(0, 1)),
-                          ),
+                          conversationAvatar(author, radius: 15),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text.rich(
@@ -350,9 +348,8 @@ extension _ObjectsPages on _OurNetAppState {
         refresh();
       }
       if (action == 'block') {
-        node.block(author, true);
         searchIndex = null;
-        refresh();
+        unawaited(setBlocked(author, true));
       }
       if (action == 'moderate') {
         act(() async {

@@ -3,20 +3,49 @@ part of 'app.dart';
 extension _SettingsPages on _OurNetAppState {
   Widget profile(BuildContext context) => ListView(
     children: [
-      Text(name(node.person), style: Theme.of(context).textTheme.headlineLarge),
-      const SizedBox(height: 12),
-      FilledButton(
-        onPressed: () => act(() async {
-          final value = await ask(
-            context,
-            'Display name',
-            initial: name(node.person),
-          );
-          if (value != null && value.isNotEmpty) {
-            await node.publish('profile', {'name': value}, space: '_identity');
-          }
-        }),
-        child: const Text('Edit display name'),
+      Row(
+        children: [
+          profilePicture(context),
+          const SizedBox(width: 20),
+          Expanded(
+            child: Text(
+              name(node.person),
+              style: Theme.of(context).textTheme.headlineLarge,
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 16),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          FilledButton(
+            onPressed: () => act(() async {
+              final value = await ask(
+                context,
+                'Display name',
+                initial: name(node.person),
+              );
+              if (value != null && value.isNotEmpty) {
+                await node.publish('profile', {
+                  'name': value,
+                }, space: '_identity');
+              }
+            }),
+            child: const Text('Edit display name'),
+          ),
+          OutlinedButton(
+            onPressed: savingAvatar
+                ? null
+                : () => unawaited(changeAvatar(context)),
+            child: Text(
+              node.avatars.of(node.person) == null
+                  ? 'Add a picture'
+                  : 'Change picture',
+            ),
+          ),
+        ],
       ),
       const SizedBox(height: 24),
       const Text('Persistent person identity'),
@@ -62,10 +91,13 @@ extension _SettingsPages on _OurNetAppState {
         const Text(
           'This device cannot add or remove devices. Use one of yours that can.',
         ),
+      ...newDeviceBanners(context),
       ListTile(
         leading: const Icon(Icons.devices),
         title: Text(deviceLabel(node.identity.certificate)),
-        subtitle: const Text('This device'),
+        subtitle: Text(
+          ['This device', ?addedText(node.identity.device)].join(' · '),
+        ),
         onTap: () =>
             unawaited(showDeviceDetails(context, node.identity.certificate)),
       ),
@@ -81,6 +113,15 @@ extension _SettingsPages on _OurNetAppState {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   DeviceHealthText(network: network, device: c.device),
+                  // A device nobody has heard from is probably gone, and
+                  // still able to read what arrives for this person.
+                  if (quietText(c.device) case final quiet?)
+                    Text(
+                      '$quiet. If it is gone, remove its access.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
                   if (addedText(c.device) case final added?)
                     Text(added, style: Theme.of(context).textTheme.bodySmall),
                 ],
@@ -127,10 +168,14 @@ extension _SettingsPages on _OurNetAppState {
               ),
             ),
           ),
+      // Removals themselves are kept, or a removed device would be learned
+      // again from others; clearing only stops listing them.
       if (node.contacts.values
               .where(
                 (c) =>
-                    c.person == node.person && node.revoked.contains(c.device),
+                    c.person == node.person &&
+                    node.revoked.contains(c.device) &&
+                    !clearedRemoved.contains(c.device),
               )
               .toList()
           case final removed when removed.isNotEmpty)
@@ -138,6 +183,19 @@ extension _SettingsPages on _OurNetAppState {
           leading: const Icon(Icons.block),
           title: Text('Removed devices (${removed.length})'),
           children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => update(
+                  () => node.store.set('clearedRemoved', [
+                    ...clearedRemoved,
+                    for (final c in removed) c.device,
+                  ]),
+                ),
+                icon: const Icon(Icons.clear_all),
+                label: const Text('Clear list'),
+              ),
+            ),
             for (final c in removed)
               ListTile(
                 leading: const Icon(Icons.block),
@@ -151,12 +209,88 @@ extension _SettingsPages on _OurNetAppState {
         ),
     ],
   );
+
+  /// This person's picture on their profile page: tap to change it.
+  Widget profilePicture(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final has = node.avatars.of(node.person) != null;
+    return Tooltip(
+      message: has ? 'Change picture' : 'Add a picture',
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: savingAvatar ? null : () => unawaited(changeAvatar(context)),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            conversationAvatar(node.person, radius: 40),
+            if (savingAvatar)
+              const SizedBox.square(
+                dimension: 80,
+                child: CircularProgressIndicator(strokeWidth: 3),
+              ),
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: CircleAvatar(
+                radius: 14,
+                backgroundColor: scheme.primary,
+                child: Icon(
+                  Icons.photo_camera_outlined,
+                  size: 16,
+                  color: scheme.onPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Chooses, frames and publishes a new picture, or removes it. Its own
+  /// progress shows on the picture; the rest of the app stays usable.
+  Future<void> changeAvatar(BuildContext context) async {
+    final AvatarChoice? choice;
+    try {
+      choice = await chooseAvatar(
+        context,
+        hasPicture: node.avatars.of(node.person) != null,
+      );
+    } catch (e) {
+      notice('Images are unavailable: $e');
+      return;
+    }
+    if (choice == null || !mounted) return;
+    update(() => savingAvatar = true);
+    try {
+      final rgba = choice.rgba;
+      if (rgba == null) {
+        await node.avatars.clear();
+      } else {
+        await node.avatars.set(rgba, choice.edge, choice.edge);
+      }
+    } catch (e) {
+      notice('Could not save your picture: $e');
+    } finally {
+      if (mounted) update(() => savingAvatar = false);
+    }
+  }
+
+  /// Removed devices no longer listed; they stay removed.
+  Set<String> get clearedRemoved => {
+    ...?(node.store.setting('clearedRemoved') as List?)?.cast<String>(),
+  };
+
   Widget settings(BuildContext context) => ListView(
     children: [
       ListTile(
-        leading: const Icon(Icons.account_circle_outlined),
+        leading: node.avatars.of(node.person) == null
+            ? const Icon(Icons.account_circle_outlined)
+            : conversationAvatar(node.person, radius: 14),
         title: const Text('Profile and devices'),
-        subtitle: const Text('Your name, linked devices and device access'),
+        subtitle: const Text(
+          'Your name, picture, linked devices and device access',
+        ),
         trailing: const Icon(Icons.chevron_right),
         onTap: () => update(() => tab = Destination.profile),
       ),

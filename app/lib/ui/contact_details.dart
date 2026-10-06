@@ -1,5 +1,12 @@
 part of 'app.dart';
 
+/// One of this person's devices quiet for this long is probably gone.
+const _quietDevice = Duration(days: 30);
+
+/// A friend none of whose devices was heard from for this long cannot be
+/// reached: what is sent to them waits.
+const _quietPerson = Duration(days: 14);
+
 /// What is known about a person or one of their devices, from anywhere that
 /// shows them: who it is, when it was added, how it is connected, and what
 /// can be done about it.
@@ -25,11 +32,129 @@ extension _ContactDetails on _OurNetAppState {
 
   /// When [device] was added here, or null when that is not known. Devices
   /// from before this was recorded are dated by their earliest activity.
-  String? addedText(String device) => switch (contactsAdded[device]) {
-    null => null,
-    (added: final at, estimated: true) => 'Active since ${_dateTime(at)}',
-    (added: final at, estimated: false) => 'Added ${_dateTime(at)}',
-  };
+  String? addedText(String device) {
+    final certificate = device == node.identity.device
+        ? node.identity.certificate
+        : node.contacts[device];
+    // Certificates from newer builds say when, and by which device.
+    if (certificate?.data['approved'] case final int at) {
+      final by = certificate!.data['approvedBy'];
+      final approver = by == node.identity.device
+          ? node.identity.certificate
+          : node.contacts[by];
+      return 'Added ${_dateTime(at)}'
+          '${approver == null ? '' : ' by ${deviceLabel(approver)}'}';
+    }
+    return switch (contactsAdded[device]) {
+      null => null,
+      (added: final at, estimated: true) => 'Active since ${_dateTime(at)}',
+      (added: final at, estimated: false) => 'Added ${_dateTime(at)}',
+    };
+  }
+
+  /// When [device] was last heard from: what it last wrote, or the last
+  /// sync or connection with it.
+  int? lastSeenAt(String device) {
+    var seen = memo('lastSeen/$device', () => node.lastSeen(device));
+    for (final t in [network.lastSync[device], network.lastInbound[device]]) {
+      final at = t?.millisecondsSinceEpoch;
+      if (at != null && (seen == null || at > seen)) seen = at;
+    }
+    return seen;
+  }
+
+  /// "Not seen since ..." for a device that has gone quiet, else null.
+  String? quietText(String device) {
+    if (device == node.identity.device || node.revoked.contains(device)) {
+      return null;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final seen = lastSeenAt(device);
+    if (seen == null) {
+      final added = contactsAdded[device]?.added;
+      return added == null || now - added < _quietDevice.inMilliseconds
+          ? null
+          : 'Never seen';
+    }
+    return now - seen < _quietDevice.inMilliseconds
+        ? null
+        : 'Not seen since ${_dateTime(seen)}';
+  }
+
+  /// Why [person] cannot be reached, when none of their devices was heard
+  /// from lately; null while they can be.
+  String? reachText(String person) {
+    final devices = activeDevices(person);
+    if (devices.isEmpty) return 'No devices';
+    final now = DateTime.now().millisecondsSinceEpoch;
+    int? seen, added;
+    for (final c in devices) {
+      final at = lastSeenAt(c.device);
+      if (at != null && (seen == null || at > seen)) seen = at;
+      final since = contactsAdded[c.device]?.added;
+      if (since != null && (added == null || since < added)) added = since;
+    }
+    if (seen == null) {
+      return added == null || now - added < _quietPerson.inMilliseconds
+          ? null
+          : 'Never heard from';
+    }
+    return now - seen < _quietPerson.inMilliseconds
+        ? null
+        : 'No active devices since ${_dateTime(seen)}';
+  }
+
+  /// Blocks or unblocks [person] on all of this person's devices.
+  Future<void> setBlocked(String person, bool block) async {
+    try {
+      await node.setContactState(
+        person,
+        block ? ContactState.blocked : ContactState.unblocked,
+      );
+    } catch (e) {
+      notice('Could not ${block ? 'block' : 'unblock'}: $e');
+      return;
+    }
+    // What was refused while blocked arrives on the next sync.
+    if (!block && network.running) unawaited(network.syncAll());
+    refresh();
+  }
+
+  /// Asks, then disconnects from [person] on all of this person's devices.
+  Future<void> disconnect(BuildContext context, String person) async {
+    final who = name(person);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Disconnect from $who?'),
+        content: Text(
+          'Your devices forget the devices of $who and stop syncing with '
+          'them. Chats you already have stay. To connect again, either of '
+          'you sends a new invitation. To stay connected but see nothing '
+          'from them, block instead.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Disconnect'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await node.setContactState(person, ContactState.forgotten);
+    } catch (e) {
+      notice('Could not disconnect: $e');
+      return;
+    }
+    notice('Disconnected from $who');
+    refresh();
+  }
 
   /// When [device] lost access, as "Removed …"; plain when not known.
   String removedText(String device) =>
@@ -67,6 +192,7 @@ extension _ContactDetails on _OurNetAppState {
         final theme = Theme.of(sheet);
         final since = me ? null : personAddedText(person);
         final blocked = node.blocked.contains(person);
+        final reach = me ? null : reachText(person);
         return SafeArea(
           child: ConstrainedBox(
             constraints: BoxConstraints(
@@ -78,7 +204,20 @@ extension _ContactDetails on _OurNetAppState {
               children: [
                 Row(
                   children: [
-                    conversationAvatar(person, radius: 28),
+                    if (node.avatars.of(person) case final avatar?)
+                      // The picture, larger.
+                      GestureDetector(
+                        onTap: () => unawaited(
+                          showImageViewer(
+                            context,
+                            bytes: Future.value(avatar.bytes),
+                            title: name(person),
+                          ),
+                        ),
+                        child: conversationAvatar(person, radius: 28),
+                      )
+                    else
+                      conversationAvatar(person, radius: 28),
                     const SizedBox(width: 16),
                     Expanded(
                       child: Column(
@@ -86,9 +225,24 @@ extension _ContactDetails on _OurNetAppState {
                         children: [
                           Text(name(person), style: theme.textTheme.titleLarge),
                           Text(
-                            me ? 'You' : since ?? 'Friend',
+                            me
+                                ? 'You'
+                                : [
+                                    if (node.forgotten.contains(person))
+                                      'Disconnected'
+                                    else
+                                      since ?? 'Friend',
+                                    if (blocked) 'Blocked',
+                                  ].join(' · '),
                             style: theme.textTheme.bodyMedium,
                           ),
+                          if (reach != null)
+                            Text(
+                              reach,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.error,
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -112,44 +266,61 @@ extension _ContactDetails on _OurNetAppState {
                       OutlinedButton.icon(
                         onPressed: () {
                           Navigator.pop(sheet);
-                          toggleBlock(person);
+                          unawaited(setBlocked(person, !blocked));
                         },
                         icon: Icon(blocked ? Icons.undo : Icons.block),
                         label: Text(blocked ? 'Unblock' : 'Block'),
                       ),
+                      if (!node.forgotten.contains(person))
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            Navigator.pop(sheet);
+                            unawaited(disconnect(context, person));
+                          },
+                          icon: const Icon(Icons.person_remove_outlined),
+                          label: const Text('Disconnect'),
+                        ),
                     ],
                   ),
                 const SizedBox(height: 8),
-                Text(
-                  me ? 'Your devices' : 'Devices',
-                  style: theme.textTheme.titleMedium,
-                ),
-                for (final c in devices)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(
-                      node.revoked.contains(c.device)
-                          ? Icons.block
-                          : Icons.devices,
-                    ),
-                    title: Text(deviceLabel(c)),
-                    subtitle: Text(
-                      [
-                        if (c.device == node.identity.device)
-                          'This device'
-                        else if (node.revoked.contains(c.device))
-                          removedText(c.device)
-                        else if (recentlyConnected(network, c.device))
-                          'Connected',
-                        ?addedText(c.device),
-                      ].join(' · '),
-                    ),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () {
-                      Navigator.pop(sheet);
-                      unawaited(showDeviceDetails(context, c));
-                    },
+                // Someone's devices are there to look at, not the point.
+                ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: EdgeInsets.zero,
+                  title: Text(
+                    '${me ? 'Your devices' : 'Devices'} (${devices.length})',
                   ),
+                  children: [
+                    for (final c in devices)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(
+                          node.revoked.contains(c.device)
+                              ? Icons.block
+                              : Icons.devices,
+                        ),
+                        title: Text(deviceLabel(c)),
+                        subtitle: Text(
+                          [
+                            if (c.device == node.identity.device)
+                              'This device'
+                            else if (node.revoked.contains(c.device))
+                              removedText(c.device)
+                            else if (recentlyConnected(network, c.device))
+                              'Connected'
+                            else
+                              ?quietText(c.device),
+                            ?addedText(c.device),
+                          ].join(' · '),
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () {
+                          Navigator.pop(sheet);
+                          unawaited(showDeviceDetails(context, c));
+                        },
+                      ),
+                  ],
+                ),
                 const SizedBox(height: 8),
                 _idRow(sheet, 'Person ID', person),
               ],
@@ -232,6 +403,22 @@ extension _ContactDetails on _OurNetAppState {
                       network: network,
                       device: device.device,
                     ),
+                  ),
+                if (quietText(device.device) case final quiet?)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      Icons.warning_amber_outlined,
+                      color: theme.colorScheme.error,
+                    ),
+                    title: Text(quiet),
+                    subtitle: own
+                        ? const Text(
+                            'If it is gone, remove its access: it can still read what arrives for you.',
+                          )
+                        : const Text(
+                            'It may be switched off or no longer used.',
+                          ),
                   ),
                 if (added != null)
                   ListTile(

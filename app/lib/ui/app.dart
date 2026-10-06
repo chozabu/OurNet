@@ -74,6 +74,8 @@ import 'calendar_page.dart';
 import 'event_links.dart';
 import '../services/speech.dart';
 import 'drawing.dart';
+import 'avatar.dart';
+import 'avatar_editor.dart';
 import 'note_markup.dart';
 import 'note_organise.dart';
 import 'speech_settings.dart';
@@ -353,6 +355,13 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   final selectedMessages = <String>{};
   String? highlightedMessage;
   bool searchingConversation = false;
+
+  /// Whether a new profile picture is being compressed and published.
+  bool savingAvatar = false;
+
+  /// The network page's friend search and filter.
+  final networkSearch = TextEditingController();
+  String networkFilter = 'all';
   bool showArchivedChats = false;
 
   /// The oldest message unread when [unreadMarkerPeer]'s chat was opened.
@@ -1099,6 +1108,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     composer.dispose();
     composerFocus.dispose();
     search.dispose();
+    networkSearch.dispose();
     fileSearch.dispose();
     super.dispose();
   }
@@ -1134,7 +1144,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   List<String> get people => node.contacts.values
       .map((c) => c.person)
       .toSet()
-      .where((p) => p != node.person)
+      // Someone disconnected from may still share a group, which keeps
+      // their devices known; they are not offered as a friend.
+      .where((p) => p != node.person && !node.forgotten.contains(p))
       .toList();
 
   /// Visible unread objects of [kind], queried once per build.
@@ -1383,7 +1395,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                     IconButton(
                       tooltip: 'Your profile',
                       onPressed: () => update(() => tab = Destination.profile),
-                      icon: const Icon(Icons.account_circle_outlined),
+                      icon: node.avatars.of(node.person) == null
+                          ? const Icon(Icons.account_circle_outlined)
+                          : conversationAvatar(node.person, radius: 14),
                     ),
                   const SizedBox(width: 12),
                 ],
@@ -1566,6 +1580,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
             calls: calls,
             name: callPeerName(),
             seed: node.contacts[peer]?.person ?? peer,
+            avatar: node.contacts[peer] == null
+                ? null
+                : node.avatars.of(node.contacts[peer]!.person),
             act: callAct,
           ),
         ),

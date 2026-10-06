@@ -80,6 +80,14 @@ not advertise unrelated private object IDs. Public profiles and revocations have
 special propagation handling. Expired/blocked objects are excluded from views
 and forwarding; expiry cannot erase recipients' copies.
 
+Profile pictures are public `avatar` objects in `_identity`, propagated like
+`profile`: payload `image` (base64 JPEG or PNG, at most 64 KiB encoded; builds
+write a 256 pixel square JPEG under 48 KiB) and `type` (`image/jpeg` or
+`image/png`). The newest one by `created` from its author decides; one without
+`image` removes the picture. Readers decode only bytes that start with a JPEG
+or PNG signature. Builds without it drop the kind on receipt, as any public
+object outside the spaces they follow, and do not pass it on.
+
 ## Calendar
 
 Events are two private kinds, ignored by builds that do not know them (they

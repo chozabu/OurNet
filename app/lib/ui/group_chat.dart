@@ -76,6 +76,7 @@ extension _GroupChat on _OurNetAppState {
             calls: groupCalls,
             title: groupCallTitle(space),
             label: (p) => callLabel(p.device, p.person),
+            avatarOf: node.avatars.of,
             act: callAct,
           ),
         ),

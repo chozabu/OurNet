@@ -387,7 +387,12 @@ class Notifications {
     if (unread.isEmpty) return;
     final count = node.store.conversationUnread(node.person, peer: peer);
     final name = profileName(node, peer) ?? 'A friend';
-    final sender = Person(key: peer, name: name);
+    final avatar = node.avatars.of(peer)?.bytes;
+    final sender = Person(
+      key: peer,
+      name: name,
+      icon: avatar == null ? null : ByteArrayAndroidIcon(avatar),
+    );
     final messages = [
       if (previews)
         for (var i = 0; i < unread.length; i++)
@@ -416,6 +421,7 @@ class Notifications {
           category: AndroidNotificationCategory.message,
           visibility: NotificationVisibility.private,
           number: count,
+          largeIcon: avatar == null ? null : ByteArrayAndroidBitmap(avatar),
           styleInformation: previews
               ? MessagingStyleInformation(
                   Person(key: node.person, name: 'You'),
@@ -600,6 +606,7 @@ class Notifications {
   Future<void> incomingCall(String? caller, {bool video = false}) async {
     if (!ready || !enabled) return;
     final kind = video ? 'video call' : 'call';
+    final avatar = caller == null ? null : node.avatars.of(caller)?.bytes;
     await plugin.show(
       id: _callId,
       title: caller == null
@@ -615,6 +622,7 @@ class Notifications {
           importance: Importance.max,
           priority: Priority.max,
           category: AndroidNotificationCategory.call,
+          largeIcon: avatar == null ? null : ByteArrayAndroidBitmap(avatar),
           playSound: false,
           enableVibration: true,
           vibrationPattern: Int64List.fromList([0, 900, 700, 900, 1500]),

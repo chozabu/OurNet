@@ -22,13 +22,14 @@ const _moreReactions = [
 /// and compact delivery ticks. Objects are newest first; the list is reversed
 /// so offset 0 is the latest message at the bottom.
 extension _ConversationPages on _OurNetAppState {
-  Widget conversationAvatar(String person, {double radius = 18}) {
-    final label = name(person).trim();
-    return CircleAvatar(
-      radius: radius,
-      child: Text(label.isEmpty ? '?' : label.substring(0, 1).toUpperCase()),
-    );
-  }
+  /// [person]'s profile picture, or their initial. Pictures are cached per
+  /// person in core, so rows can ask for them on every build.
+  Widget conversationAvatar(String person, {double radius = 18}) =>
+      ProfileAvatar(
+        avatar: node.avatars.of(person),
+        label: _plainName(person),
+        radius: radius,
+      );
 
   /// The sender's name above their message, tinted per person so a busy
   /// group stays readable.

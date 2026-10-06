@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import '../services/call_link.dart';
 import '../services/group_calls.dart';
+import 'package:ournet_core/ournet_core.dart' show Avatar;
 import 'call_widgets.dart';
 
 /// "3 in call" and a way in, for a group whose call is going. Nobody is rung:
@@ -231,7 +232,11 @@ class GroupCallScreen extends StatefulWidget {
     required this.title,
     required this.label,
     required this.act,
+    this.avatarOf,
   });
+
+  /// Each person's profile picture, if they have one.
+  final Avatar? Function(String person)? avatarOf;
 
   @override
   State<GroupCallScreen> createState() => _GroupCallScreenState();
@@ -381,6 +386,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
           key: ValueKey(p.device),
           participant: p,
           label: widget.label(p),
+          avatar: widget.avatarOf?.call(p.person),
           small: small,
           whole: whole,
         ),
@@ -576,6 +582,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
 class _Tile extends StatelessWidget {
   final CallParticipant participant;
   final String label;
+  final Avatar? avatar;
 
   /// A thumbnail: a smaller name and status.
   final bool small;
@@ -586,6 +593,7 @@ class _Tile extends StatelessWidget {
     super.key,
     required this.participant,
     required this.label,
+    this.avatar,
     this.small = false,
     this.whole = false,
   });
@@ -628,6 +636,7 @@ class _Tile extends StatelessWidget {
                     label: label,
                     seed: p.person,
                     size: min(96.0, min(box.maxWidth, box.maxHeight) * .5),
+                    avatar: avatar,
                   ),
                 ),
               ),

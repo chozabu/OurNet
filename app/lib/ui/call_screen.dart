@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/call_link.dart';
 import '../services/calls.dart';
+import 'package:ournet_core/ournet_core.dart' show Avatar;
 import 'call_widgets.dart';
 
 /// A one-to-one call, full screen: who it is with and where it has got to
@@ -16,6 +17,9 @@ class CallScreen extends StatefulWidget {
 
   /// Picks their avatar colour.
   final Object? seed;
+
+  /// The other person's profile picture, if they have one.
+  final Avatar? avatar;
   final Future<void> Function(Future<void> Function()) act;
   const CallScreen({
     super.key,
@@ -23,6 +27,7 @@ class CallScreen extends StatefulWidget {
     required this.name,
     required this.act,
     this.seed,
+    this.avatar,
   });
 
   @override
@@ -221,6 +226,7 @@ class _CallScreenState extends State<CallScreen> {
         label: widget.name,
         seed: widget.seed,
         size: size,
+        avatar: widget.avatar,
       );
       final ringing = calls.phase == 'ringing' || calls.phase == 'calling';
       return Center(

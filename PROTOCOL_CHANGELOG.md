@@ -7,6 +7,18 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.17: profile pictures, blocking on every device
+
+Additive. Builds without it drop the new kinds, show initials as before and
+keep their own block list.
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `avatar` | new public object kind (space `_identity`) | A profile picture: `image` (base64 JPEG/PNG, ≤ 64 KiB encoded) and `type`. Newest wins; no `image` removes it. Offered to every peer, like `profile`. See PROTOCOL.md, Independent objects. | Refuse it on receipt (a public object outside the spaces they follow) and do not relay it. |
+| `contact_state` | new private object kind (space `_contacts`, audience only the author) | Blocking, unblocking or disconnecting from `person` (`state`: `friend`, `blocked`, `unblocked`, `forgotten`), applied on all the author's devices; newest per choice wins. | Store and pass it on unread; their block list stays local. |
+| `approvedBy`, `approved` | device certificate data | Which device added this one, and when. Covered by the root's signature like any other field. | Verify the signature as before; not shown. |
+| `forgotten`, `contactStates`, `clearedRemoved` | settings | People disconnected from, when each choice was made, removed devices no longer listed. | Ignored. |
+
 ## 0.2.14: call history, retrying unreachable devices, call state
 
 Additive. Builds without it show call entries as plain messages.

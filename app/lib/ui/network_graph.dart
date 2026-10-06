@@ -279,7 +279,9 @@ class _GraphPainter extends CustomPainter {
           bold: true,
         );
       }
-      if (layout.labelAll || s.connected || s.own) {
+      // A lone device is the ring itself, which is already named.
+      final lone = s.own && layout.spots.where((o) => o.own).length == 1;
+      if (!lone && (layout.labelAll || s.connected || s.own)) {
         _text(
           canvas,
           s.label,

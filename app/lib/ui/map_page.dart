@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:vector_map_tiles/vector_map_tiles.dart' as vmt;
 import '../services/location_share.dart';
 import '../services/map_tiles.dart';
+import 'avatar.dart';
 
 part 'map_settings.dart';
 
@@ -409,6 +410,7 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
                       alignment: Alignment.topCenter,
                       child: _FriendMarker(
                         name: widget.nameOf(person),
+                        avatar: node.avatars.of(person),
                         color: personColor(person, dark: dark),
                         stale: _stale(fix),
                         selected: _selected == person,
@@ -616,6 +618,7 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
                   leading: _Avatar(
                     name: widget.nameOf(person),
                     color: personColor(person, dark: _dark),
+                    avatar: node.avatars.of(person),
                   ),
                   title: Text(widget.nameOf(person)),
                   subtitle: Text(ago(fix.at)),
@@ -626,6 +629,7 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
                   leading: _Avatar(
                     name: widget.nameOf(person),
                     color: Colors.grey,
+                    avatar: node.avatars.of(person),
                   ),
                   title: Text(widget.nameOf(person)),
                   subtitle: const Text('Has not shared a location yet'),
@@ -677,6 +681,7 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
                             color: personColor(person, dark: _dark),
                             size: 28,
                             faded: _stale(fix),
+                            avatar: node.avatars.of(person),
                           ),
                           const SizedBox(width: 8),
                           Text(widget.nameOf(person)),
@@ -752,6 +757,7 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
           color: personColor(person, dark: _dark),
           size: 44,
           faded: _stale(fix),
+          avatar: node.avatars.of(person),
         ),
         title: widget.nameOf(person),
         subtitle: [
@@ -824,16 +830,21 @@ class _Avatar extends StatelessWidget {
   final Color color;
   final double size;
   final bool faded;
+
+  /// Their profile picture, drawn over the initial once decoded.
+  final Avatar? avatar;
   const _Avatar({
     required this.name,
     required this.color,
     this.size = 40,
     this.faded = false,
+    this.avatar,
   });
   @override
   Widget build(BuildContext context) {
-    final letter = name.trim().isEmpty ? '?' : name.trim().substring(0, 1).toUpperCase();
-    return Container(
+    final letter = ProfileAvatar.initial(name);
+    final image = AvatarImage.sized(context, avatar, size);
+    final initial = Container(
       width: size,
       height: size,
       alignment: Alignment.center,
@@ -850,6 +861,25 @@ class _Avatar extends StatelessWidget {
         ),
       ),
     );
+    if (image == null) return initial;
+    return ClipOval(
+      child: Stack(
+        children: [
+          initial,
+          Positioned.fill(
+            child: Opacity(
+              opacity: faded ? .45 : 1,
+              child: Image(
+                image: image,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                errorBuilder: (_, _, _) => const SizedBox.shrink(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -857,11 +887,13 @@ class _Avatar extends StatelessWidget {
 /// their name underneath. Faded when the position is old.
 class _FriendMarker extends StatelessWidget {
   final String name;
+  final Avatar? avatar;
   final Color color;
   final bool stale, selected;
   final VoidCallback onTap;
   const _FriendMarker({
     required this.name,
+    this.avatar,
     required this.color,
     required this.stale,
     required this.selected,
@@ -884,7 +916,13 @@ class _FriendMarker extends StatelessWidget {
                 BoxShadow(blurRadius: 4, color: Colors.black38, offset: Offset(0, 1)),
               ],
             ),
-            child: _Avatar(name: name, color: color, size: size, faded: stale),
+            child: _Avatar(
+              name: name,
+              color: color,
+              size: size,
+              faded: stale,
+              avatar: avatar,
+            ),
           ),
           CustomPaint(size: const Size(14, 8), painter: _Point(Colors.white)),
           Text(

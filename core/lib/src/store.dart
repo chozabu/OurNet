@@ -191,6 +191,11 @@ class Store {
       'CREATE INDEX IF NOT EXISTS object_routes_sync_cursor ON object_routes(created DESC,id DESC)',
     );
 
+    // For when a device was last active, without walking every object.
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS object_routes_device ON object_routes(device,created)',
+    );
+
     // When each contact device was added here, for showing people and
     // devices. Contacts from before this was recorded are dated, once, by
     // the earliest object their device signed, and marked as estimated.
@@ -353,6 +358,17 @@ class Store {
         estimated: row['estimated'] == 1,
       ),
   };
+
+  /// Forgets every device of [person].
+  void removeContacts(String person) =>
+      _execute('DELETE FROM device_contacts WHERE person=?', [person]);
+
+  /// When [device] signed the newest object held here, if any.
+  int? lastSignedBy(String device) =>
+      _select('SELECT MAX(created) AS at FROM object_routes WHERE device=?', [
+            device,
+          ]).first['at']
+          as int?;
 
   Set<String> revokedDevices() => {
     for (final row in _select('SELECT device FROM device_revoked'))
