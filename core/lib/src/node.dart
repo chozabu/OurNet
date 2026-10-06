@@ -14,8 +14,10 @@ class Node {
   LocalIdentity _identity;
   final Store store;
   late final blobs = BlobWorker(store);
+
   /// Last known positions; set up when first asked for.
-  Locations get locations => _locations ??= Locations(store, clock: () => now());
+  Locations get locations =>
+      _locations ??= Locations(store, clock: () => now());
   Locations? _locations;
   final int Function() now;
   final changes = StreamController<void>.broadcast();
@@ -93,7 +95,7 @@ class Node {
     if (revoked.contains(certificate.device))
       throw StateError('Device revoked');
     contacts[certificate.device] = certificate;
-    store.putContact(certificate);
+    store.putContact(certificate, now());
     notify();
   }
 
@@ -493,6 +495,60 @@ class Node {
     return object;
   }
 
+  /// Gives one of this person's devices a new name. A device's certificate
+  /// keeps the name it was linked with; the newest `device_name` its owner
+  /// published replaces it wherever devices are shown. Builds before this
+  /// ignore it and keep showing the certificate's name.
+  Future<SignedObject> renameDevice(String device, String label) async {
+    label = label.trim();
+    if (label.isEmpty || label.length > 100) {
+      throw StateError('A device name is 1 to 100 characters');
+    }
+    final own = device == identity.device || contacts[device]?.person == person;
+    if (!own) throw StateError('Can only rename your own devices');
+    return publish('device_name', {
+      'device': device,
+      'label': label,
+    }, space: '_identity');
+  }
+
+  /// The names devices were given after linking, by device: the newest
+  /// `device_name` from each device's owner.
+  Map<String, String> deviceNames() {
+    final names = <String, String>{};
+    for (final o in store.objects(kind: 'device_name')) {
+      if (!o.isPublic || !visible(o)) continue;
+      final p = o.data['payload'];
+      if (p is! Map) continue;
+      final (device, label) = (p['device'], p['label']);
+      if (device is! String || label is! String || label.isEmpty) continue;
+      final owner = device == identity.device
+          ? person
+          : contacts[device]?.person;
+      // Newest first: the first name from the owner wins.
+      if (owner == o.author) names.putIfAbsent(device, () => label);
+    }
+    return names;
+  }
+
+  /// When each removed device lost access: the earliest revocation of it
+  /// this node applied. A device removed before its revocation arrived here
+  /// has none.
+  Map<String, int> revokedAt() {
+    final at = <String, int>{};
+    for (final o in store.objects(kind: 'revoke')) {
+      final p = o.data['payload'];
+      if (p is! Map || p['proof'] is! Map) continue;
+      final device = p['proof']['device'];
+      if (device is! String || !revoked.contains(device)) continue;
+      // Only the owner's own counts; another's is stored but never applied.
+      if (o.author != (contacts[device]?.person ?? person)) continue;
+      // Newest first: the last one seen is the earliest.
+      at[device] = o.created;
+    }
+    return at;
+  }
+
   Future<void> applyRevocation(SignedObject object) async {
     if (object.kind != 'revoke' || !object.isPublic) return;
     final p = object.data['payload'] as Json;
@@ -703,7 +759,7 @@ class Node {
     if (added.isNotEmpty) {
       store.batch(() {
         for (final c in added) {
-          store.putContact(c);
+          store.putContact(c, now());
         }
       });
       notify();
@@ -737,6 +793,7 @@ class Node {
     // again, so nothing older than them ever reached it.
     return o.kind == 'revoke' ||
         o.kind == 'profile' ||
+        o.kind == 'device_name' ||
         wanted.contains(o.space) ||
         (peer.person == person && o.author == person);
   }
@@ -982,7 +1039,7 @@ class Node {
         !(o.data['via'] as List).contains(person))
       return 0;
     if (o.isPublic &&
-        !['profile', 'revoke'].contains(o.kind) &&
+        !['profile', 'revoke', 'device_name'].contains(o.kind) &&
         !subscriptions.contains(o.space) &&
         o.author != person)
       return 0;

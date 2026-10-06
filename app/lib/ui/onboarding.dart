@@ -6,6 +6,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
 import '../services/session.dart';
+import '../services/device_model.dart';
 import '../services/pairing_discovery.dart';
 import 'app.dart';
 import 'backup.dart';
@@ -50,6 +51,19 @@ class _SetupPageState extends State<SetupPage> {
   List<String> nearby = [];
   int searches = 0;
   PeerNetwork? network;
+
+  @override
+  void initState() {
+    super.initState();
+    // Several phones all called "My phone" cannot be told apart later.
+    unawaited(
+      deviceModel().then((model) {
+        if (model != null && mounted && device.text == 'My phone') {
+          device.text = model;
+        }
+      }),
+    );
+  }
   Future<void> act(Future<void> Function() action) async {
     setState(() {
       busy = true;

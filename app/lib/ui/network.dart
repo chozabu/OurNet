@@ -42,75 +42,179 @@ extension _NetworkPages on _OurNetAppState {
         'Add friend connects both of you at once: scan a QR code, find them on the same Wi-Fi, or paste an invitation. A contact card binds a device to its owner; if you use one instead, both sides must add the other.',
       ),
       const SizedBox(height: 16),
-      SizedBox(
-        height: 220,
-        child: CustomPaint(
-          painter: NetworkPainter(node.person, node.contacts.values.toList()),
-          child: const SizedBox.expand(),
-        ),
+      NetworkGraph(
+        network: network,
+        name: name,
+        deviceLabel: deviceLabel,
+        onPerson: (person) => unawaited(showPersonDetails(context, person)),
+        onDevice: (device) => unawaited(showDeviceDetails(context, device)),
       ),
-      ...node.contacts.values.map(
-        (c) => ListTile(
-          leading: Icon(
-            node.revoked.contains(c.device) ? Icons.block : Icons.devices,
+      const SizedBox(height: 8),
+      if (activeDevices(node.person) case final own when own.isNotEmpty)
+        deviceGroup(
+          context,
+          leading: const Icon(Icons.devices),
+          title: 'My devices (${own.length})',
+          devices: own,
+        ),
+      for (final person in friendsByName)
+        deviceGroup(
+          context,
+          leading: conversationAvatar(person),
+          title: name(person),
+          since: personAddedText(person),
+          devices: activeDevices(person),
+          person: person,
+        ),
+      if (node.contacts.values
+              .where((c) => node.revoked.contains(c.device))
+              .toList()
+          case final removed when removed.isNotEmpty)
+        ExpansionTile(
+          leading: const Icon(Icons.block),
+          title: Text('Removed devices (${removed.length})'),
+          children: [for (final c in removed) networkDeviceTile(context, c)],
+        ),
+    ],
+  );
+
+  /// Devices of [person] that still have access, as linked.
+  List<DeviceCertificate> activeDevices(String person) => [
+    for (final c in node.contacts.values)
+      if (c.person == person && !node.revoked.contains(c.device)) c,
+  ];
+
+  /// Friends with a device that still has access, by name.
+  List<String> get friendsByName => memo(
+    'friendsByName',
+    () =>
+        {
+          for (final c in node.contacts.values)
+            if (c.person != node.person && !node.revoked.contains(c.device))
+              c.person,
+        }.toList()..sort(
+          (a, b) => name(a).toLowerCase().compareTo(name(b).toLowerCase()),
+        ),
+  );
+
+  /// One person's devices folded under a single row that says how many are
+  /// connected now. [person] adds a way to their details.
+  Widget deviceGroup(
+    BuildContext context, {
+    required Widget leading,
+    required String title,
+    required List<DeviceCertificate> devices,
+    String? since,
+    String? person,
+  }) => ExpansionTile(
+    key: PageStorageKey('devices/${person ?? 'mine'}'),
+    leading: leading,
+    title: Text(title),
+    // Blocking is about the person, and undoing it stays one tap away.
+    trailing: person == null || !node.blocked.contains(person)
+        ? null
+        : IconButton(
+            tooltip: 'Unblock ${name(person)}',
+            onPressed: () => toggleBlock(person),
+            icon: const Icon(Icons.undo),
           ),
-          title: Text('${name(c.person)} · ${c.label}'),
-          subtitle: node.revoked.contains(c.device)
-              ? Text('${short(c.device)} · Access removed')
-              : DeviceHealthText(
+    subtitle: NetworkHealthBuilder(
+      network: network,
+      builder: (context) {
+        final live = devices
+            .where((c) => recentlyConnected(network, c.device))
+            .length;
+        return Text(
+          [
+            devices.length == 1 ? '1 device' : '${devices.length} devices',
+            '$live connected',
+            ?since,
+          ].join(' · '),
+        );
+      },
+    ),
+    children: [
+      for (final c in devices) networkDeviceTile(context, c, owner: false),
+      if (person != null)
+        ListTile(
+          leading: const Icon(Icons.info_outline),
+          title: Text('About ${name(person)}'),
+          onTap: () => unawaited(showPersonDetails(context, person)),
+        ),
+    ],
+  );
+
+  Widget networkDeviceTile(
+    BuildContext context,
+    DeviceCertificate c, {
+    bool owner = true,
+  }) {
+    final removed = node.revoked.contains(c.device);
+    final added = addedText(c.device);
+    return ListTile(
+      leading: Icon(removed ? Icons.block : Icons.devices),
+      title: Text(
+        owner ? '${name(c.person)} · ${deviceLabel(c)}' : deviceLabel(c),
+      ),
+      subtitle: removed
+          ? Text([short(c.device), removedText(c.device), ?added].join(' · '))
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DeviceHealthText(
                   network: network,
                   device: c.device,
                   prefix: short(c.device),
                 ),
-          isThreeLine: true,
-          trailing: Wrap(
-            children: [
-              IconButton(
-                tooltip: 'Sync this device',
-                onPressed: () => act(() => syncNow(c.device)),
-                icon: const Icon(Icons.sync),
-              ),
-              if (c.person == node.person &&
-                  c.device != node.identity.device &&
-                  !node.revoked.contains(c.device))
+                if (added != null)
+                  Text(added, style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
+      isThreeLine: !removed,
+      onTap: () => unawaited(showDeviceDetails(context, c)),
+      trailing: removed
+          ? null
+          : Wrap(
+              children: [
                 IconButton(
-                  tooltip: 'Share your history with this device',
-                  onPressed: () => act(() => shareHistoryWith(c)),
-                  icon: const Icon(Icons.history),
+                  tooltip: 'Sync this device',
+                  onPressed: () => act(() => syncNow(c.device)),
+                  icon: const Icon(Icons.sync),
                 ),
-              if (c.person == node.person && node.identity.holdsRoot)
-                IconButton(
-                  tooltip: 'Revoke this device',
-                  onPressed: () => act(() async {
-                    final root = await unlockRoot(context, node);
-                    if (root != null) {
-                      await node.revoke(c.device, unlocked: root);
-                    }
-                  }),
-                  icon: const Icon(Icons.phonelink_erase),
-                ),
-              if (c.person != node.person)
-                IconButton(
-                  tooltip: 'Block or unblock person',
-                  onPressed: () {
-                    final unblock = node.blocked.contains(c.person);
-                    node.block(c.person, !unblock);
-                    // What was refused while blocked arrives on the next sync.
-                    if (unblock && network.running) {
-                      unawaited(network.sync(c.device));
-                    }
-                    refresh();
-                  },
-                  icon: Icon(
-                    node.blocked.contains(c.person) ? Icons.undo : Icons.block,
+                if (c.person == node.person && c.device != node.identity.device)
+                  IconButton(
+                    tooltip: 'Share your history with this device',
+                    onPressed: () => act(() => shareHistoryWith(c)),
+                    icon: const Icon(Icons.history),
                   ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    ],
-  );
+                if (c.person == node.person && node.identity.holdsRoot)
+                  IconButton(
+                    tooltip: 'Remove device access',
+                    onPressed: () => act(() => removeDeviceAccess(context, c)),
+                    icon: const Icon(Icons.phonelink_erase),
+                  ),
+                if (owner && c.person != node.person)
+                  IconButton(
+                    tooltip: 'Block or unblock person',
+                    onPressed: () => toggleBlock(c.person),
+                    icon: Icon(
+                      node.blocked.contains(c.person)
+                          ? Icons.undo
+                          : Icons.block,
+                    ),
+                  ),
+              ],
+            ),
+    );
+  }
+
+  void toggleBlock(String person) {
+    final unblock = node.blocked.contains(person);
+    node.block(person, !unblock);
+    // What was refused while blocked arrives on the next sync.
+    if (unblock && network.running) unawaited(network.syncAll());
+    refresh();
+  }
 
   /// Lets [device], one of this person's own, read the chats, groups and
   /// notes that were written before it was added.
@@ -122,7 +226,7 @@ extension _NetworkPages on _OurNetAppState {
     final confirmed = await showDialog<bool>(
       context: dialogContext,
       builder: (context) => AlertDialog(
-        title: Text('Share your history with ${device.label}?'),
+        title: Text('Share your history with ${deviceLabel(device)}?'),
         content: const Text(
           'Your devices will be able to read your earlier chats, groups, notes and files, including ones from before they were added. Only do this for a device you trust.',
         ),
@@ -139,13 +243,13 @@ extension _NetworkPages on _OurNetAppState {
       ),
     );
     if (confirmed != true) return;
-    notice('Preparing your history for ${device.label}…');
+    notice('Preparing your history for ${deviceLabel(device)}…');
     final count = await shareAllHistory(node);
     if (count > 0 && network.running) unawaited(network.sync(device.device));
     notice(
       count == 0
-          ? '${device.label} can already read everything this device can'
-          : 'Shared $count items with ${device.label}. They appear there after it syncs.',
+          ? '${deviceLabel(device)} can already read everything this device can'
+          : 'Shared $count items with ${deviceLabel(device)}. They appear there after it syncs.',
     );
   }
 
@@ -208,7 +312,10 @@ extension _NetworkPages on _OurNetAppState {
   /// records rather than throws.
   Future<void> syncNow(String device) async {
     if (!network.running) await network.start();
-    final label = node.contacts[device]?.label ?? 'device';
+    final label = switch (node.contacts[device]) {
+      final c? => deviceLabel(c),
+      null => 'device',
+    };
     notice('Syncing with $label…');
     await network.sync(device);
     final error = network.syncErrors[device];

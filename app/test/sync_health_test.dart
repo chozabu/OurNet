@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ournet/build_info.dart';
 import 'package:ournet/services/network.dart';
 import 'package:ournet/ui/sync_health.dart';
+import 'package:ournet/ui/update_banner.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart' show PeerNetwork;
 
@@ -97,6 +98,53 @@ void main() {
     expect(buildNote(here, friend), 'Runs OurNet 0.10.0, newer than this one');
     expect(newerRelease(here), '0.10.0');
     expect(compareReleases('0.3', '0.3.0'), isNull);
+  });
+
+  test('the newest contact device is where update news comes from', () {
+    final here = PeerNetwork(node, version: '0.3.0');
+    expect(updateSource(here), isNull);
+    here.peerVersions[laptop] = '0.3.0';
+    expect(updateSource(here), isNull);
+    here.peerVersions[laptop] = '0.3.1';
+    here.peerVersions[friend] = '0.4.0';
+    here.peerVersions['unknown-device'] = '9.0.0';
+    expect(updateSource(here)?.device, friend);
+    expect(updateSource(here)?.label, 'Sam phone');
+    here.peerVersions[friend] = 'garbage';
+    expect(updateSource(here)?.device, laptop);
+    expect(
+      updateMessage(
+        version: '0.3.1',
+        device: 'Sam phone',
+        person: 'Sam',
+        own: false,
+      ),
+      'OurNet 0.3.1 is out: we heard from Sam on Sam phone. '
+      'Check for an update.',
+    );
+  });
+
+  testWidgets('the update banner names the device and can be dismissed', (
+    tester,
+  ) async {
+    final here = PeerNetwork(node, version: '0.3.0');
+    here.peerVersions[friend] = '0.3.1';
+    Widget app() => MaterialApp(
+      home: Scaffold(
+        body: UpdateBanner(network: here, nameOf: (_) => 'Sam'),
+      ),
+    );
+    await tester.pumpWidget(app());
+    expect(find.textContaining('Sam on Sam phone'), findsOneWidget);
+    await tester.tap(find.text('Not now'));
+    await tester.pump();
+    expect(find.byKey(const Key('update-banner')), findsNothing);
+
+    // A later release shows again.
+    here.peerVersions[friend] = '0.3.2';
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(app());
+    expect(find.textContaining('OurNet 0.3.2'), findsOneWidget);
   });
 
   test('an incompatible device says which side to update', () {

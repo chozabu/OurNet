@@ -18,6 +18,15 @@ class MainActivity : FlutterActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private var folders: FolderAccess? = null
     private var channel: MethodChannel? = null
+    // "Pixel 8 Pro", "Blackview BV8800": the maker is left out where the
+    // model already names it, or is Google's own Pixel line.
+    private fun deviceModel(): String {
+        val maker = android.os.Build.MANUFACTURER.orEmpty().replaceFirstChar { it.uppercase() }
+        val model = android.os.Build.MODEL.orEmpty()
+        return if (maker.isEmpty() || maker == "Google" || model.startsWith(maker, ignoreCase = true)) model
+        else "$maker $model"
+    }
+
     // The primary clip's first image, copied to the cache so Dart reads a file
     // rather than receiving the bytes over the channel. Null when it has none.
     private fun clipboardImage(): String? {
@@ -95,6 +104,9 @@ class MainActivity : FlutterActivity() {
                         .onFailure { result.error("clipboard", it.message, null) }
                 }
             }
+        }
+        MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/device").setMethodCallHandler { call, result ->
+            if (call.method == "model") result.success(deviceModel()) else result.notImplemented()
         }
         channel = MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/share")
         channel!!.setMethodCallHandler { call, result ->

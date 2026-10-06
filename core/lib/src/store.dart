@@ -191,6 +191,22 @@ class Store {
       'CREATE INDEX IF NOT EXISTS object_routes_sync_cursor ON object_routes(created DESC,id DESC)',
     );
 
+    // When each contact device was added here, for showing people and
+    // devices. Contacts from before this was recorded are dated, once, by
+    // the earliest object their device signed, and marked as estimated.
+    if (db
+        .select("SELECT name FROM sqlite_master WHERE name='device_added'")
+        .isEmpty) {
+      db.execute('''BEGIN IMMEDIATE;
+        CREATE TABLE device_added(device TEXT PRIMARY KEY,
+          added INTEGER NOT NULL, estimated INTEGER NOT NULL);
+        INSERT OR IGNORE INTO device_added SELECT r.device, MIN(r.created), 1
+          FROM object_routes r JOIN device_contacts c ON c.device=r.device
+          GROUP BY r.device;
+        COMMIT;
+      ''');
+    }
+
     // Objects are bounded by the bytes they occupy, not by a count: one
     // object ranges up to 256 KiB, so a row total says nothing about disk.
     // Existing databases gain the accounting without rewriting content.
@@ -311,11 +327,32 @@ class Store {
       DeviceCertificate.fromJson(jsonDecode(row['wire'] as String)),
   ];
 
-  void putContact(DeviceCertificate c) => _execute(
-    'INSERT INTO device_contacts VALUES (?,?,?,?) ON CONFLICT(device) DO UPDATE '
-    'SET person=excluded.person,label=excluded.label,wire=excluded.wire',
-    [c.device, c.person, c.label, canonical(c.toJson())],
-  );
+  /// Stores [c], recording [added] as when it was added unless it already
+  /// was.
+  void putContact(DeviceCertificate c, int added) {
+    _execute(
+      'INSERT INTO device_contacts VALUES (?,?,?,?) ON CONFLICT(device) DO UPDATE '
+      'SET person=excluded.person,label=excluded.label,wire=excluded.wire',
+      [c.device, c.person, c.label, canonical(c.toJson())],
+    );
+    _execute('INSERT OR IGNORE INTO device_added VALUES (?,?,0)', [
+      c.device,
+      added,
+    ]);
+  }
+
+  /// When each contact device was added, in milliseconds since the epoch.
+  /// Estimated ones were added before this was recorded and are dated by
+  /// the earliest object their device signed.
+  Map<String, ({int added, bool estimated})> contactsAdded() => {
+    for (final row in _select(
+      'SELECT device,added,estimated FROM device_added',
+    ))
+      row['device'] as String: (
+        added: row['added'] as int,
+        estimated: row['estimated'] == 1,
+      ),
+  };
 
   Set<String> revokedDevices() => {
     for (final row in _select('SELECT device FROM device_revoked'))

@@ -221,6 +221,7 @@ class _LocationSharingPageState extends State<LocationSharingPage> {
     final share = widget.share, node = widget.node;
     final self = node.identity.device;
     final others = share.otherDevices;
+    final names = node.deviceNames();
     final primary = share.primary;
     String when(String device) {
       final fix = node.locations.ofDevice(device);
@@ -266,11 +267,12 @@ class _LocationSharingPageState extends State<LocationSharingPage> {
       ),
       tile(
         self,
-        node.identity.certificate.label,
+        names[self] ?? node.identity.certificate.label,
         when(self),
         me: true,
       ),
-      for (final c in others) tile(c.device, c.label, when(c.device), me: false),
+      for (final c in others)
+        tile(c.device, names[c.device] ?? c.label, when(c.device), me: false),
       SwitchListTile(
         title: const Text('Show this device to my other devices'),
         subtitle: const Text(

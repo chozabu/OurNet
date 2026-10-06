@@ -48,7 +48,9 @@ extension _GroupChat on _OurNetAppState {
   String callLabel(String device, String person) {
     if (device == node.identity.device) return 'You';
     final contact = node.contacts[device];
-    if (person == node.person) return contact?.label ?? 'Your device';
+    if (person == node.person) {
+      return contact == null ? 'Your device' : deviceLabel(contact);
+    }
     return name(person);
   }
 

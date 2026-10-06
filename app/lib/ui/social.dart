@@ -574,36 +574,48 @@ extension _SocialPages on _OurNetAppState {
                     )
                   else
                     const SizedBox(width: 8),
-                  conversationAvatar(peer),
-                  const SizedBox(width: 10),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          name(peer),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        if (typing.isTyping(peer))
-                          Text(
-                            'typing…',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  color: scheme.primary,
-                                  fontStyle: FontStyle.italic,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () => unawaited(showPersonDetails(context, peer)),
+                      child: Row(
+                        children: [
+                          conversationAvatar(peer),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  name(peer),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.titleMedium,
                                 ),
-                          )
-                        else
-                          ConversationDelivery(
-                            key: ValueKey('delivery/$peer'),
-                            network: network,
-                            person: peer,
-                            helpers: helpers,
+                                if (typing.isTyping(peer))
+                                  Text(
+                                    'typing…',
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: scheme.primary,
+                                          fontStyle: FontStyle.italic,
+                                        ),
+                                  )
+                                else
+                                  ConversationDelivery(
+                                    key: ValueKey('delivery/$peer'),
+                                    network: network,
+                                    person: peer,
+                                    helpers: helpers,
+                                  ),
+                              ],
+                            ),
                           ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                   IconButton(

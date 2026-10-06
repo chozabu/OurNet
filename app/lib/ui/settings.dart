@@ -64,8 +64,10 @@ extension _SettingsPages on _OurNetAppState {
         ),
       ListTile(
         leading: const Icon(Icons.devices),
-        title: Text(node.identity.certificate.label),
+        title: Text(deviceLabel(node.identity.certificate)),
         subtitle: const Text('This device'),
+        onTap: () =>
+            unawaited(showDeviceDetails(context, node.identity.certificate)),
       ),
       ...node.contacts.values
           .where(
@@ -74,8 +76,16 @@ extension _SettingsPages on _OurNetAppState {
           .map(
             (c) => ListTile(
               leading: const Icon(Icons.devices),
-              title: Text(c.label),
-              subtitle: DeviceHealthText(network: network, device: c.device),
+              title: Text(deviceLabel(c)),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  DeviceHealthText(network: network, device: c.device),
+                  if (addedText(c.device) case final added?)
+                    Text(added, style: Theme.of(context).textTheme.bodySmall),
+                ],
+              ),
+              onTap: () => unawaited(showDeviceDetails(context, c)),
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -110,32 +120,8 @@ extension _SettingsPages on _OurNetAppState {
                     IconButton(
                       tooltip: 'Remove device access',
                       icon: const Icon(Icons.phonelink_erase),
-                      onPressed: () => act(() async {
-                        final allow = await showDialog<bool>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: Text('Remove ${c.label}?'),
-                            content: const Text(
-                              'This stops future access. Copies already downloaded stay on that device.',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, false),
-                                child: const Text('Cancel'),
-                              ),
-                              FilledButton(
-                                onPressed: () => Navigator.pop(context, true),
-                                child: const Text('Remove access'),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (allow != true || !context.mounted) return;
-                        final root = await unlockRoot(context, node);
-                        if (root != null) {
-                          await node.revoke(c.device, unlocked: root);
-                        }
-                      }),
+                      onPressed: () =>
+                          act(() => removeDeviceAccess(context, c)),
                     ),
                 ],
               ),
@@ -155,8 +141,11 @@ extension _SettingsPages on _OurNetAppState {
             for (final c in removed)
               ListTile(
                 leading: const Icon(Icons.block),
-                title: Text(c.label),
-                subtitle: const Text('Access removed'),
+                title: Text(deviceLabel(c)),
+                subtitle: Text(
+                  [removedText(c.device), ?addedText(c.device)].join(' · '),
+                ),
+                onTap: () => unawaited(showDeviceDetails(context, c)),
               ),
           ],
         ),

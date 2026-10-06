@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:ournet_core/ournet_core.dart' show DeviceCertificate;
 import 'package:ournet_transport/ournet_transport.dart';
 
 import 'sync_status.dart' show syncAge;
@@ -153,6 +154,19 @@ String? newerRelease(PeerNetwork network) {
     if ((compareReleases(v, newest ?? network.version) ?? 0) > 0) newest = v;
   }
   return newest;
+}
+
+/// The contact device running the newest release, when that is newer than
+/// this one: proof, met face to face, that an update exists.
+DeviceCertificate? updateSource(PeerNetwork network) {
+  DeviceCertificate? source;
+  var newest = network.version;
+  for (final MapEntry(key: device, value: v) in network.peerVersions.entries) {
+    final contact = network.node.contacts[device];
+    if (contact == null || network.node.revoked.contains(device)) continue;
+    if ((compareReleases(v, newest) ?? 0) > 0) (source, newest) = (contact, v);
+  }
+  return source;
 }
 
 /// Devices whose health reaches the status bar: this person's other

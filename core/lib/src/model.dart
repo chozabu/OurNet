@@ -171,6 +171,13 @@ bool validContent(String kind, Json p) {
           p['deleted'] is bool &&
           ['file', 'folder'].contains(p['type']) &&
           (p['type'] == 'folder' || p['chunks'] is List),
+    // A newer name for one of the author's devices: see `Node.renameDevice`.
+    'device_name' =>
+      p['device'] is String &&
+          (p['device'] as String).length <= 64 &&
+          p['label'] is String &&
+          (p['label'] as String).trim().isNotEmpty &&
+          (p['label'] as String).length <= 100,
     'profile' =>
       p['name'] is String &&
           (p['name'] as String).isNotEmpty &&
@@ -198,7 +205,8 @@ bool validContent(String kind, Json p) {
           (p['event'] as String).length <= 160 &&
           ['yes', 'no', 'maybe', 'none'].contains(p['response']) &&
           (p['instance'] == null ||
-              p['instance'] is String && (p['instance'] as String).length <= 40),
+              p['instance'] is String &&
+                  (p['instance'] as String).length <= 40),
     'message' =>
       (p['text'] is String || p['chunks'] is List) &&
           (p['reply'] == null || p['reply'] is String) &&
@@ -259,7 +267,8 @@ bool _calEvent(Json p) {
       (p['series'] == null) != (p['instance'] == null) ||
       !within('series', 160) ||
       !within('instance', 40) ||
-      (p['repeat'] != null && !(p['repeat'] is Map && Repeat.valid(p['repeat']))) ||
+      (p['repeat'] != null &&
+          !(p['repeat'] is Map && Repeat.valid(p['repeat']))) ||
       (p['reminders'] != null &&
           !(p['reminders'] is List &&
               (p['reminders'] as List).length <= 5 &&

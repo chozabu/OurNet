@@ -24,7 +24,6 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import '../services/clipboard_image.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:app_badge_plus/app_badge_plus.dart';
@@ -54,6 +53,8 @@ import 'recovery_phrase.dart';
 import 'onboarding.dart';
 import 'sync_status.dart';
 import 'sync_health.dart';
+import 'update_banner.dart';
+import 'network_graph.dart';
 import 'conversation_delivery.dart';
 import 'note_editor.dart';
 import 'forum_thread.dart';
@@ -92,6 +93,7 @@ part 'social.dart';
 part 'conversation.dart';
 part 'objects.dart';
 part 'network.dart';
+part 'contact_details.dart';
 part 'voting.dart';
 part 'settings.dart';
 part 'drive.dart';
@@ -1435,6 +1437,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                             );
                           },
                         ),
+                        UpdateBanner(network: network, nameOf: name),
                         Expanded(
                           child: Padding(
                             padding: tab == Destination.maps
@@ -1543,7 +1546,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     final peer = calls.peer;
     if (peer == null) return 'Call';
     if (calls.isOwnDevice(peer)) {
-      return node.contacts[peer]?.label ?? 'Your device';
+      final contact = node.contacts[peer];
+      return contact == null ? 'Your device' : deviceLabel(contact);
     }
     return name(node.contacts[peer]?.person ?? peer);
   }
@@ -1571,40 +1575,4 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       redraw();
     }
   }
-}
-
-class NetworkPainter extends CustomPainter {
-  final String person;
-  final List<DeviceCertificate> contacts;
-  NetworkPainter(this.person, this.contacts);
-  @override
-  void paint(Canvas canvas, Size size) {
-    final centre = Offset(size.width / 2, size.height / 2);
-    final paint = Paint()
-      ..color = Colors.teal.withValues(alpha: .3)
-      ..strokeWidth = 2;
-    final total = contacts.length.clamp(1, 100);
-    for (var i = 0; i < contacts.length && i < 100; i++) {
-      final point = Offset(
-        24 + (size.width - 48) * (i + .5) / total,
-        i.isEven ? 35 : size.height - 35,
-      );
-      canvas.drawLine(centre, point, paint);
-      canvas.drawCircle(point, 9, Paint()..color = Colors.teal);
-    }
-    canvas.drawCircle(centre, 22, Paint()..color = Colors.teal);
-    final text = TextPainter(
-      text: const TextSpan(
-        text: 'You',
-        style: TextStyle(color: Colors.white, fontSize: 12),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    text.paint(canvas, centre - Offset(text.width / 2, text.height / 2));
-  }
-
-  @override
-  bool shouldRepaint(covariant NetworkPainter oldDelegate) =>
-      oldDelegate.person != person ||
-      !listEquals(oldDelegate.contacts, contacts);
 }
