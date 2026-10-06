@@ -75,7 +75,15 @@ class MainActivity : FlutterActivity() {
     override fun shouldDestroyEngineWithHost() =
         !isChangingConfigurations && !ConnectionService.enabled(this)
 
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        // Before the window shows, so a ringing call opened by its
+        // full-screen intent appears over the lock screen.
+        CallScreen.attach(this)
+        super.onCreate(savedInstanceState)
+    }
+
     override fun onDestroy() {
+        CallScreen.detach(this)
         folders?.close()
         val cache = FlutterEngineCache.getInstance()
         if (isChangingConfigurations) flutterEngine?.let { cache.put(RELAUNCH_ENGINE, it) }

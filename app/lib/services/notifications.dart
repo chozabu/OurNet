@@ -623,6 +623,8 @@ class Notifications {
           priority: Priority.max,
           category: AndroidNotificationCategory.call,
           largeIcon: avatar == null ? null : ByteArrayAndroidBitmap(avatar),
+          // Takes over the screen when it is off or locked (see CallScreen).
+          fullScreenIntent: true,
           playSound: false,
           enableVibration: true,
           vibrationPattern: Int64List.fromList([0, 900, 700, 900, 1500]),

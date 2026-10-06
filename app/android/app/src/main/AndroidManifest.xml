@@ -13,6 +13,11 @@
     <!-- Stay connected: a foreground service that keeps OurNet online. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Calls keep the microphone and camera with the screen off, and ring
+         over the lock screen. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- Maps and live location sharing with friends. Location is read only
          while OurNet is open or its "stay connected" service is running, and
          is asked for when the person first opens the map. -->
@@ -28,7 +33,7 @@
         <service
             android:name=".ConnectionService"
             android:exported="false"
-            android:foregroundServiceType="specialUse|location">
+            android:foregroundServiceType="specialUse|location|microphone|camera">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Peer-to-peer messaging without a server: keeps an encrypted connection to the user's friends' devices open so their messages and calls arrive immediately. Turned off in the app's settings." />

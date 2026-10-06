@@ -520,6 +520,26 @@ extension _SettingsPages on _OurNetAppState {
         ),
       if (Platform.isAndroid &&
           stayConnected &&
+          serviceStatus?.fullScreen == false)
+        ListTile(
+          leading: const Icon(Icons.phone_locked_outlined),
+          title: const Text('Calls cannot wake the screen'),
+          subtitle: const Text(
+            'While the phone is locked, an incoming call only shows as a notification. Allow OurNet to show full-screen notifications to answer calls from the lock screen.',
+          ),
+          trailing: OutlinedButton(
+            onPressed: () => act(() async {
+              if (!await openFullScreenSettings()) {
+                notice(
+                  'Open Android Settings › Apps › OurNet › Full screen notifications',
+                );
+              }
+            }),
+            child: const Text('Open'),
+          ),
+        ),
+      if (Platform.isAndroid &&
+          stayConnected &&
           serviceStatus != null &&
           !serviceStatus!.running)
         ListTile(

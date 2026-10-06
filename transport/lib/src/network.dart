@@ -50,6 +50,9 @@ class PeerNetwork {
   Timer? _networkChange;
   Timer? _watchdog;
   DateTime? _relaysDownSince;
+
+  /// A home relay has connected since the endpoint started.
+  bool _relayWasUp = false;
   DateTime? _restartedAt;
   int _watchdogRestarts = 0;
   final Map<String, int> _failures = {};
@@ -241,16 +244,30 @@ class PeerNetwork {
       lastAcceptError = null;
       relays = const [];
       _relaysDownSince = null;
+      _relayWasUp = false;
       if (!local) {
         _relayStatus = _endpoint!.homeRelayStatus().listen((status) {
           relays = [
             for (final r in status)
               (url: r.url, connected: r.connected, error: r.lastError),
           ];
+          // Logged so that a message or call that did not arrive can be
+          // matched to a gap in reachability (a sleeping phone, say).
           if (relays.any((r) => r.connected)) {
+            final since = _relaysDownSince;
+            if (since != null && _relayWasUp) {
+              log(
+                'Home relay back after '
+                '${DateTime.now().difference(since).inSeconds} s',
+              );
+            }
+            _relayWasUp = true;
             _relaysDownSince = null;
             _watchdogRestarts = 0;
           } else if (relays.isNotEmpty) {
+            if (_relaysDownSince == null && _relayWasUp) {
+              log('Home relay lost: ${relays.first.error ?? 'disconnected'}');
+            }
             _relaysDownSince ??= DateTime.now();
           }
           notifyListeners();

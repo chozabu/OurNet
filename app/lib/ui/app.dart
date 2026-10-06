@@ -223,6 +223,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   final performance = PerformanceMonitor();
   int _badgeCount = -1;
   bool _ringing = false;
+
+  /// The call state Android was last told (see [_sendCallState]).
+  String? _callState;
   Timer? _pausedStop;
   final messenger = GlobalKey<ScaffoldMessengerState>();
   final noteNavigator = GlobalKey<NavigatorState>();
@@ -852,6 +855,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         _ => null,
       });
       final ringing = phase == 'ringing';
+      // Before the incoming-call notification, whose full-screen intent
+      // needs OurNet allowed over the lock screen.
+      _sendCallState();
       if (ringing != _ringing) {
         _ringing = ringing;
         unawaited(
@@ -873,6 +879,28 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         }
       }
     }
+  }
+
+  /// Tells Android about a call ringing, starting or ending, so it shows
+  /// over the lock screen and keeps the microphone and camera while the
+  /// screen is off. [force] sends it again, as on returning to OurNet,
+  /// where Android grants the microphone it refused in the background.
+  void _sendCallState({bool force = false}) {
+    if (!Platform.isAndroid || !widget.enablePlatform) return;
+    final phase = calls.phase;
+    final ringing = phase == 'ringing';
+    final active = (phase != 'idle' && !ringing) || groupCalls.active;
+    final video = groupCalls.active || calls.video;
+    final state = '$ringing $active $video';
+    if (state == _callState && !force) return;
+    _callState = state;
+    unawaited(
+      callState(
+        ringing: ringing,
+        active: active,
+        video: video,
+      ).catchError((Object e) => network.log('Call state: $e')),
+    );
   }
 
   void notice(String text) {
@@ -1011,6 +1039,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         network.start().catchError((Object e) => notice('Sync will retry: $e')),
       );
       unawaited(checkConnectionService());
+      if (_callState != null) _sendCallState(force: true);
     }
     // A deliberate low-power default: no background relay work on a sleeping
     // phone. Incoming calls while suspended need a future wakeup integration.

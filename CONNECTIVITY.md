@@ -165,6 +165,18 @@ OurNet, with a button to OurNet's system page (Battery: Unrestricted). It
 does not ask with the direct battery-optimisation prompt, whose permission
 Play reserves for a few kinds of app.
 
+Calls with the screen off. While a call rings or lasts, the app tells the
+service (`call` on `ournet/connection`). Ringing lets OurNet show over the
+lock screen and turn the screen on, through the incoming-call notification's
+full-screen intent (`CallScreen`); outside calls the lock screen covers it as
+usual. A call in progress adds the microphone (and, for video, camera) types
+to the service, without which Android silences the microphone once the
+screen locks; with "Stay connected" off, the service runs just for the call.
+Android refuses these types to a service started out of sight, so the app
+asks again whenever it returns to the screen during a call. The network log
+records each time the home relay is lost and comes back, to match a missed
+message to a gap in reachability.
+
 ### Windows notification area (implemented)
 
 On Windows, closing the window hides it and OurNet keeps running from an icon

@@ -22,10 +22,15 @@ class ConnectionStatus {
   /// service, or hold back its network, when the screen is off.
   final bool batteryRestricted;
 
+  /// Incoming calls may take over the screen when it is off or locked
+  /// (Android 14 lets people turn this off per app).
+  final bool fullScreen;
+
   const ConnectionStatus({
     required this.running,
     required this.location,
     required this.batteryRestricted,
+    this.fullScreen = true,
   });
 }
 
@@ -36,6 +41,7 @@ Future<ConnectionStatus?> connectionStatus() async {
     running: status['running'] == true,
     location: status['location'] == true,
     batteryRestricted: status['batteryRestricted'] == true,
+    fullScreen: status['fullScreen'] != false,
   );
 }
 
@@ -43,6 +49,23 @@ Future<ConnectionStatus?> connectionStatus() async {
 /// unrestricted. False when the page could not be opened.
 Future<bool> openBatterySettings() async =>
     await _channel.invokeMethod<bool>('batterySettings') ?? false;
+
+/// Opens Android's page for letting OurNet's calls take over the screen.
+Future<bool> openFullScreenSettings() async =>
+    await _channel.invokeMethod<bool>('fullScreenSettings') ?? false;
+
+/// Tells Android a call is [ringing] (shown over the lock screen, turning the
+/// screen on) or [active] (shown over the lock screen, keeping the microphone,
+/// and the camera for [video], while the screen is off).
+Future<void> callState({
+  required bool ringing,
+  required bool active,
+  required bool video,
+}) => _channel.invokeMethod<void>('call', {
+  'ringing': ringing,
+  'active': active,
+  'video': video,
+});
 
 /// Calls [changed] when Android moves to another network (Wi-Fi to mobile
 /// data, or back after losing it).

@@ -37,7 +37,9 @@ class ConnectionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!enabled(this)) {
+        // A call keeps the service while it lasts, even with "Stay connected"
+        // off, so the microphone and camera keep working with the screen off.
+        if (!enabled(this) && !inCall) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -60,46 +62,71 @@ class ConnectionService : Service() {
             Notification.Builder(this, CHANNEL) else Notification.Builder(this)
         val notification = builder
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Connected to friends")
-            .setContentText("Messages and calls arrive straight away. Turn off in Settings.")
+            .setContentTitle(if (inCall) "In an OurNet call" else "Connected to friends")
+            .setContentText(
+                if (inCall) "Tap to return to the call."
+                else "Messages and calls arrive straight away. Turn off in Settings."
+            )
             .setContentIntent(open)
             .setOngoing(true)
             .setShowWhen(false)
             .build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            val special = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            var started = false
-            if (locationAllowed()) {
-                // Lets live location sharing keep reading the position while
-                // the app is in the background. Android refuses this when the
-                // service is started with the app out of sight (after a
-                // restart); then it runs as before and location resumes the
-                // next time the app is opened.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Location lets live location sharing keep reading the position,
+            // and the microphone (with the camera for video) keeps a call
+            // working, while the app is in the background. Android refuses
+            // these when the service starts with the app out of sight (after
+            // a restart, or a call while asleep): each refused set is dropped
+            // in turn. Location resumes the next time the app is opened; a
+            // call asks again once it is on screen.
+            val special = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
+            val location = if (locationAllowed()) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
+            val call = callTypes()
+            val candidates = listOf(special or location or call, special or call, special or location, special).distinct()
+            var started = special
+            for ((i, types) in candidates.withIndex()) {
                 try {
-                    startForeground(NOTIFICATION, notification, special or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
-                    started = true
+                    startForeground(NOTIFICATION, notification, types)
+                    started = types
+                    break
                 } catch (e: Exception) {
-                    Log.w("OurNet", "Location service type refused: $e")
+                    if (i == candidates.lastIndex) throw e
+                    Log.w(TAG, "Service types $types refused: $e")
                 }
             }
-            if (!started) startForeground(NOTIFICATION, notification, special)
-            locationType = started
+            locationType = started and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION != 0
+            callType = started and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE != 0
         } else {
             startForeground(NOTIFICATION, notification)
             locationType = locationAllowed()
+            callType = inCall
         }
         running = true
         engine(applicationContext)
         return START_STICKY
     }
 
+    private fun granted(permission: String) =
+        checkSelfPermission(permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
     private fun locationAllowed(): Boolean =
-        checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
-            checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        granted(android.Manifest.permission.ACCESS_FINE_LOCATION) ||
+            granted(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+
+    /** The microphone, and for video the camera, while a call lasts. */
+    private fun callTypes(): Int {
+        if (!inCall || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return 0
+        var types = 0
+        if (granted(android.Manifest.permission.RECORD_AUDIO)) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        if (callVideo && granted(android.Manifest.permission.CAMERA)) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+        return types
+    }
 
     override fun onDestroy() {
         running = false
         locationType = false
+        callType = false
         super.onDestroy()
     }
 
@@ -122,6 +149,13 @@ class ConnectionService : Service() {
 
         /** Whether the running service may read location in the background. */
         private var locationType = false
+
+        /** A call is in progress or being placed; [callVideo] when it may use the camera. */
+        private var inCall = false
+        private var callVideo = false
+
+        /** Whether the running service may use the microphone in the background. */
+        private var callType = false
 
         private var channel: MethodChannel? = null
         private var watching = false
@@ -165,6 +199,10 @@ class ConnectionService : Service() {
                 !context.getSystemService(PowerManager::class.java)
                     .isIgnoringBatteryOptimizations(context.packageName)
 
+        private fun fullScreenAllowed(context: Context): Boolean =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+                context.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
+
         fun enabled(context: Context) =
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("enabled", false)
 
@@ -173,7 +211,7 @@ class ConnectionService : Service() {
 
         /** [force] runs the service's start again while it is running, so it can take on a type it could not before (location, once permitted). */
         private fun start(context: Context, force: Boolean = false) {
-            if ((running && !force) || !enabled(context)) return
+            if ((running && !force) || (!enabled(context) && !inCall)) return
             try {
                 val intent = Intent(context, ConnectionService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
@@ -220,7 +258,8 @@ class ConnectionService : Service() {
                         }
                         "stop" -> {
                             setEnabled(context, false)
-                            context.stopService(Intent(context, ConnectionService::class.java))
+                            // A call in progress keeps it until the call ends.
+                            if (!inCall) context.stopService(Intent(context, ConnectionService::class.java))
                             result.success(null)
                         }
                         "status" -> result.success(
@@ -228,8 +267,43 @@ class ConnectionService : Service() {
                                 "running" to running,
                                 "location" to locationType,
                                 "batteryRestricted" to batteryRestricted(context),
+                                "fullScreen" to fullScreenAllowed(context),
                             )
                         )
+                        // A call ringing, starting or ending. Ringing shows
+                        // the call over the lock screen and turns the screen
+                        // on; a call keeps the microphone (and camera) working
+                        // with the screen off.
+                        "call" -> {
+                            val ringing = call.argument<Boolean>("ringing") == true
+                            val active = call.argument<Boolean>("active") == true
+                            val video = call.argument<Boolean>("video") == true
+                            CallScreen.set(show = ringing || active, wake = ringing)
+                            val changed = active != inCall || (active && video != callVideo)
+                            inCall = active
+                            callVideo = video
+                            if (!active && !enabled(context)) {
+                                context.stopService(Intent(context, ConnectionService::class.java))
+                            } else if (changed || active != callType) {
+                                // Also asks again for the microphone after
+                                // Android refused it, once the call is on
+                                // screen.
+                                start(context, force = true)
+                            }
+                            result.success(null)
+                        }
+                        // Android 14 lets people turn off full-screen calls.
+                        "fullScreenSettings" -> {
+                            try {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${context.packageName}"))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                                result.success(true)
+                            } catch (e: Exception) {
+                                result.success(false)
+                            }
+                        }
                         // The app's own settings page, where Battery is set to
                         // Unrestricted; asking directly needs a permission Play
                         // reserves for a few kinds of app.
