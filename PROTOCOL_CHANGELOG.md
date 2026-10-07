@@ -7,6 +7,22 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.21: group keys, members adding people to groups
+
+Additive. Device wraps are unchanged, so builds without it read everything
+they read before. They do not count people added by a member until the
+owner's device folds them into a room record, and until then neither write
+to them nor show what they write. What a member on such a build writes before
+then is not sealed with the group's key, so people added later do not see it.
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `groupKey` | room record | The group's key (`id`, `key`): new with every owner membership change. See PROTOCOL.md, Group keys. | Ignored. |
+| `invite` | room record | `members`: any member may add people. Absent: the owner alone. | Ignored. |
+| `group` | encrypted payload of private objects addressed to a whole group | The content key sealed under the group's key (`id`, `box`). | Ignored; they open their device wrap. |
+| `room_invite` | new private object kind (room space, audience the members and those added) | A member adds `people` with their `certificates`, handing them `groupKey`; `epoch` is the room's. | Store and relay it unread. |
+| `groupKeys` | sync inventory | The group keys the sender holds for groups shared with the receiver. Objects sealed with them are offered to the sender even when not addressed to it. | Not sent, so they are offered only what is addressed to them. |
+
 ## 0.2.19: friend lists, connecting through friends, asking to add to a group
 
 Additive. Builds without it drop `friends`, and store and relay `connect`

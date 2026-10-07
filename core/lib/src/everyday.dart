@@ -9,7 +9,18 @@ import 'room_forum.dart';
 class EverydayItem {
   final SignedObject object;
   final Json data;
-  EverydayItem(this.object, this.data);
+
+  /// For a room record: when its members last added each person they did
+  /// (see [Everyday.invite]), and who of them the owner's record does not
+  /// name yet. Both are already counted in `members`.
+  final Map<String, int> invited;
+  final Set<String> added;
+  EverydayItem(
+    this.object,
+    this.data, {
+    this.invited = const {},
+    this.added = const {},
+  });
 }
 
 /// Owner-signed membership epochs; independent list item operations
@@ -73,7 +84,7 @@ class Everyday {
       'room',
       current.data,
       space: current.object.space,
-      audience: current.object.audience.cast<String>(),
+      audience: _recordAudience(current),
     );
     for (final item in history) {
       // A deleted entry has nothing left to show, so the copy is the record
@@ -108,11 +119,7 @@ class Everyday {
         count++;
       }
       final readers = await members(current);
-      count += await Calendar.reshare(
-        node,
-        current,
-        audience: (_) => readers,
-      );
+      count += await Calendar.reshare(node, current, audience: (_) => readers);
     }
     return count;
   }
@@ -127,9 +134,16 @@ class Everyday {
     'sent': post.sent,
   };
 
+  /// Who a room record must be addressed to: everyone it names, and everyone
+  /// the record it replaces was addressed to.
+  List<String> _recordAudience(EverydayItem room) => {
+    ...room.object.audience,
+    ...(room.data['members'] as List).cast<String>(),
+  }.toList();
+
   /// The record kinds group history is made of. Membership lives in the first
-  /// two; the rest is what members wrote.
-  static const membershipKinds = ['room', 'room_leave'];
+  /// three; the rest is what members wrote.
+  static const membershipKinds = ['room', 'room_leave', 'room_invite'];
   static const itemKinds = ['inbox', 'room_item'];
   static const kinds = [...membershipKinds, ...itemKinds];
 
@@ -160,6 +174,10 @@ class Everyday {
     }
     return result;
   }
+
+  /// Changes whenever a membership record is taken in or the projection is
+  /// rebuilt: what [GroupAccess] checks before working out readers again.
+  Future<int> membershipVersion() async => (await _index()).version;
 
   /// The visible membership records of [space]: its rooms and leaves, without
   /// the items. What a caller deriving membership or epochs needs, and all it
@@ -258,6 +276,7 @@ class Everyday {
         latest[room.object.space] = room;
     }
     return latest.values
+        .map((room) => _withInvites(room, records))
         .where(
           (room) =>
               includeLeft ||
@@ -265,6 +284,86 @@ class Everyday {
                   effectiveMembers(room, records).contains(node.person)),
         )
         .toList();
+  }
+
+  /// [room] with the people its members added since its owner wrote it.
+  ///
+  /// Membership is the owner's record plus the invites written within its
+  /// epoch by people already members, in the order written; an invite from
+  /// someone who is not (yet) a member counts once they are. Every device
+  /// reading the same records works out the same members. Only the group's
+  /// owner may add people unless the record says members may (`invite`).
+  /// The owner folds invites into its next record (see [settleInvites]), so
+  /// builds without invites see them then.
+  EverydayItem _withInvites(EverydayItem room, List<EverydayItem> records) {
+    if (room.data['note'] == true || room.data['generation'] == null) {
+      return room;
+    }
+    final invites =
+        records
+            .where(
+              (r) =>
+                  r.object.kind == 'room_invite' &&
+                  r.object.space == room.object.space &&
+                  r.data['epoch'] == epoch(room),
+            )
+            .toList()
+          ..sort((a, b) {
+            final order = a.object.created.compareTo(b.object.created);
+            return order != 0 ? order : a.object.id.compareTo(b.object.id);
+          });
+    if (invites.isEmpty) return room;
+    final owner = room.data['owner'];
+    final open = room.data['invite'] == 'members';
+    final members = (room.data['members'] as List).cast<String>().toSet();
+    final certificates = [...room.data['certificates'] as List? ?? const []];
+    final invited = <String, int>{};
+    final pending = [...invites];
+    for (var changed = true; changed;) {
+      changed = false;
+      for (final invite in [...pending]) {
+        final author = invite.object.author;
+        if (!members.contains(author)) continue;
+        pending.remove(invite);
+        if (!open && author != owner) continue;
+        final people = (invite.data['people'] as List).cast<String>();
+        // Only people the invite reached, and the group's size limit holds.
+        for (final person in people) {
+          if (!invite.object.audience.contains(person)) continue;
+          if (!members.contains(person)) {
+            if (members.length >= 64) continue;
+            members.add(person);
+            changed = true;
+          }
+          invited[person] = math.max(
+            invited[person] ?? 0,
+            invite.object.created,
+          );
+        }
+        for (final wire in invite.data['certificates'] as List) {
+          if (wire is Map &&
+              wire['data'] is Map &&
+              people.contains(wire['data']['person'])) {
+            certificates.add(wire);
+          }
+        }
+      }
+    }
+    if (invited.isEmpty) return room;
+    final recorded = (room.data['members'] as List).toSet();
+    return EverydayItem(
+      room.object,
+      {
+        ...room.data,
+        'members': members.toList()..sort(),
+        'certificates': certificates,
+      },
+      invited: invited,
+      added: {
+        for (final p in members)
+          if (!recorded.contains(p)) p,
+      },
+    );
   }
 
   List<String> effectiveMembers(EverydayItem room, List<EverydayItem> records) {
@@ -275,6 +374,9 @@ class Everyday {
           r.object.space == room.object.space &&
           r.data['epoch'] == epoch(room),
     )) {
+      // Someone invited back after leaving is a member again.
+      final back = room.invited[leave.object.author];
+      if (back != null && back > leave.object.created) continue;
       members.remove(leave.object.author);
     }
     return members.toList()..sort();
@@ -324,10 +426,13 @@ class Everyday {
           .map((c) => c.toJson())
           .toList();
 
+  /// Creates a group of this person and [people]. With [membersInvite] any
+  /// member may add people (see [invite]); otherwise only its owner.
   Future<EverydayItem> createRoom(
     String name,
     List<String> people, {
     String? noteId,
+    bool membersInvite = false,
   }) async {
     final members = {node.person, ...people}.toList()..sort();
     final data = <String, dynamic>{
@@ -339,10 +444,122 @@ class Everyday {
       'generation': 0,
       'epoch': randomId(),
       'certificates': _certificates(members),
+      if (noteId == null) 'groupKey': newGroupKey(),
+      if (noteId == null && membersInvite) 'invite': 'members',
     };
     return EverydayItem(
       await node.publish('room', data, space: data['room'], audience: members),
       data,
+    );
+  }
+
+  /// Whether this person may add people to [room] themselves: its owner, or
+  /// any member once the owner lets members add people.
+  bool canInvite(EverydayItem room) =>
+      room.data['owner'] == node.person ||
+      (room.data['invite'] == 'members' && room.data['groupKey'] != null);
+
+  /// Adds [people], whom this member knows, to [room]: an invite every
+  /// member's device counts, carrying their devices and the group's key, so
+  /// they can open what the group has said so far. No one else needs to be
+  /// online: members pass the group's objects on to them.
+  Future<List<SignedObject>> invite(
+    EverydayItem room,
+    List<String> people,
+  ) async {
+    room = await current(room);
+    if (!canInvite(room)) {
+      throw StateError('Only the owner can add people to this group.');
+    }
+    final key = room.data['groupKey'];
+    if (key is! Json) {
+      throw StateError('This group is from an earlier version.');
+    }
+    final members = await this.members(room);
+    final adding = {
+      for (final p in people)
+        if (p != node.person && !members.contains(p)) p,
+    }.toList()..sort();
+    if (adding.isEmpty) throw StateError('They are already members.');
+    if (members.length + adding.length > 64) {
+      throw StateError('A group supports up to 64 members.');
+    }
+    await prepare(room);
+    for (final person in adding) {
+      if (!node.contacts.values.any(
+        (c) => c.person == person && !node.revoked.contains(c.device),
+      )) {
+        throw StateError('Add a current device for everyone you add first.');
+      }
+    }
+    final sent = <SignedObject>[];
+    for (var i = 0; i < adding.length; i += 16) {
+      final batch = adding.sublist(i, math.min(i + 16, adding.length));
+      sent.add(
+        await node.publish(
+          'room_invite',
+          {
+            'epoch': epoch(room),
+            'people': batch,
+            'certificates': _certificates(batch),
+            'groupKey': key,
+          },
+          space: room.object.space,
+          audience: {...members, ...batch}.toList(),
+        ),
+      );
+    }
+    return sent;
+  }
+
+  /// Folds the people members added into the records of the groups this
+  /// person owns, so builds without invites count them too. Returns how many
+  /// records were written. Safe to run on every change: a group with nothing
+  /// to fold costs a read of its membership.
+  Future<int> settleInvites() async {
+    var count = 0;
+    for (final room in await rooms()) {
+      if (room.data['owner'] != node.person || room.added.isEmpty) continue;
+      await prepare(room);
+      final data = {
+        ...room.data,
+        'generation': (room.data['generation'] as int) + 1,
+      };
+      try {
+        await node.publish(
+          'room',
+          data,
+          space: room.object.space,
+          audience: _recordAudience(room),
+        );
+        count++;
+      } catch (_) {
+        // A member whose devices this device has not met yet: their devices
+        // come with the next sync, and this runs again then.
+      }
+    }
+    return count;
+  }
+
+  /// Lets any member of [room] add people, as its owner. One way: a group
+  /// told it is shared is not taken back by one person.
+  ///
+  /// Everything the group holds is re-shared under a new key, so whoever is
+  /// added later can open what came before, as with any membership change.
+  Future<EverydayItem> letMembersInvite(EverydayItem room) async {
+    room = await current(room);
+    if (room.data['owner'] != node.person) {
+      throw StateError('Only the group owner can change who adds people.');
+    }
+    if (room.data['invite'] == 'members' && room.data['groupKey'] != null) {
+      return room;
+    }
+    final members = await this.members(room);
+    return changeMembers(
+      room,
+      members.where((p) => p != node.person).toList(),
+      shareHistory: true,
+      membersInvite: true,
     );
   }
 
@@ -434,15 +651,22 @@ class Everyday {
     node.notify();
   }
 
+  /// Publishes [room]'s membership as [people] and this owner, in a new
+  /// epoch. A group gets a new key: with [shareHistory] what it holds is
+  /// re-shared under it, to everyone, so it opens for whoever is added later.
+  /// [membersInvite] lets members add people from then on.
   Future<EverydayItem> changeMembers(
     EverydayItem room,
     List<String> people, {
     required bool shareHistory,
+    bool membersInvite = false,
     Future<void> Function(Json, List<String>)? beforePublish,
   }) async {
     room = await current(room);
     if (room.data['owner'] != node.person)
       throw StateError('Only the group owner can change membership.');
+    // People members added come with their devices in their invites.
+    await prepare(room);
     final nextMembers = {node.person, ...people}.toList()..sort();
     if (nextMembers.length > 64)
       throw StateError('A group supports up to 64 members.');
@@ -451,6 +675,7 @@ class Everyday {
     final id = room.data['generation'] == null
         ? 'room2:${node.person}:${randomId()}'
         : room.object.space;
+    final group = room.data['note'] != true;
     final data = <String, dynamic>{
       ...room.data,
       'room': id,
@@ -458,7 +683,14 @@ class Everyday {
       'members': nextMembers,
       'epoch': randomId(),
       'certificates': _certificates(nextMembers),
+      if (group) 'groupKey': newGroupKey(),
+      if (group && membersInvite) 'invite': 'members',
     };
+    // Copies are written before the record that holds the new key, so they
+    // name it themselves. A group whose history is shared re-shares all of
+    // it: the old key opens nothing for people added from now on.
+    final seal = group ? groupKeyFrom(data['groupKey'] as Json) : null;
+    final reseal = group && shareHistory;
     final audience =
         {...(room.data['members'] as List).cast<String>(), ...nextMembers}
             .where(
@@ -500,6 +732,7 @@ class Everyday {
         },
         space: id,
         audience: historyAudience,
+        seal: shareHistory ? seal : null,
       );
     }
     // The group forum has no epochs: members who had a post keep it. Where the
@@ -509,7 +742,9 @@ class Everyday {
     final joining = nextMembers.where((p) => !before.contains(p)).toList();
     for (final post in await RoomForum.read(node, room)) {
       final List<String> readers;
-      if (id == room.object.space) {
+      if (reseal) {
+        readers = nextMembers;
+      } else if (id == room.object.space) {
         if (!shareHistory || joining.isEmpty) continue;
         readers = [node.person, ...joining];
       } else {
@@ -522,6 +757,7 @@ class Everyday {
         _postCopy(post),
         space: id,
         audience: readers,
+        seal: reseal ? seal : null,
       );
     }
     // The calendar works the same way: events are not epoch-bound, so only
@@ -532,7 +768,9 @@ class Everyday {
       node,
       room,
       into: id,
+      seal: reseal ? seal : null,
       audience: (e) {
+        if (reseal) return nextMembers;
         if (id != room.object.space) {
           return shareHistory
               ? nextMembers
@@ -552,7 +790,9 @@ class Everyday {
     // Notes kept in the group's space are encrypted to the people who were
     // members when they were written. People joining are sent each note's
     // current state, and the owner's other members see no change.
-    if (shareHistory && joining.isNotEmpty && id == room.object.space) {
+    if (shareHistory &&
+        (reseal || joining.isNotEmpty) &&
+        id == room.object.space) {
       await Notes(node).shareGroup(next, audience: nextMembers);
     }
     if (id != room.object.space) {
@@ -568,6 +808,8 @@ class Everyday {
 
   Future<void> leave(EverydayItem room) async {
     room = await current(room);
+    // Someone added by a member may not have met every member's devices.
+    await prepare(room);
     if (room.data['owner'] == node.person) {
       await node.publish(
         'room',
@@ -578,7 +820,7 @@ class Everyday {
             'generation': (room.data['generation'] as int) + 1,
         },
         space: room.object.space,
-        audience: room.object.audience,
+        audience: _recordAudience(room),
       );
       return;
     }
@@ -586,7 +828,7 @@ class Everyday {
       'room_leave',
       {'epoch': epoch(room)},
       space: room.object.space,
-      audience: room.object.audience,
+      audience: _recordAudience(room),
     );
   }
 
@@ -685,6 +927,7 @@ class _EverydayIndex {
   final Node node;
   final spaces = <String, _EverydaySpace>{};
   int cursor = 0;
+  int version = 0;
   late int clock = node.store.setting(_clockKey) as int? ?? 0;
   late int _clockCursor = node.store.setting(_cursorKey) as int? ?? 0;
   late String _policy = node.store.setting(_policyKey) as String? ?? '';
@@ -745,6 +988,7 @@ class _EverydayIndex {
       cursor = 0;
       spaces.clear();
       _clockCursor = 0;
+      version++;
     }
     // Where the store had reached when this pass started. Looking for a kind
     // walks the rows in between whether or not any of them are of that kind,
@@ -753,6 +997,9 @@ class _EverydayIndex {
     // items at all, which is the worst case: every pass would scan all of it.
     final target = node.store.insertionCursor;
     final slice = TimeSlice();
+    // Records written to a group before this person joined open with its
+    // key, which an invite or another record brings.
+    await node.groups.learn();
     while (true) {
       final page = node.store.insertedAfter(cursor, Everyday.membershipKinds);
       if (page.isEmpty) break;
@@ -765,6 +1012,7 @@ class _EverydayIndex {
         (spaces[object.space] ??= _EverydaySpace()).records.add(
           EverydayItem(object, data),
         );
+        version++;
       }
     }
     if (cursor < target) cursor = target;

@@ -32,8 +32,11 @@ The default destination is **Notes**, with separate **Link my phone or PC** and
   “Available offline” refers to this device. A delivery label names a receiving
   device; it does not claim all devices received it.
 - New-device enrollment can republish inbox and drive history to the new device.
-- Group owners can add/remove members with explicit history sharing; members can
-  leave. Individual notes now have collaborator controls and Android widgets:
+- Group owners can add/remove members; people added always see the group's
+  history. An owner can let members add people too (on by default for new
+  groups, and not turned off again): the people added get the group's key, so
+  they open what came before and members pass it on to them without the owner
+  online. Members can leave. Individual notes now have collaborator controls and Android widgets:
   see [Notes and widgets](NOTES_WIDGETS.md). Existing private group/chat history is not migrated to
   devices enrolled after that history was encrypted. There is no invite-link
   service: friend invitations use the existing contact-card exchange.

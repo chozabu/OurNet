@@ -116,6 +116,42 @@ them). The owner's approval is an ordinary membership change; the devices are
 admitted as a group's members are, not as friends. Builds without these kinds
 store and relay `connect` and `room_add` unread and drop `friends`.
 
+### Group keys and members adding people
+
+A group's room record may carry `groupKey` (`id`, and `key`, 32 bytes in
+base64) and `invite` (`members`, or absent for the owner alone). An object
+addressed to every reader of a group (a room's whole membership; group notes
+in `<room>#<key>` belong to their room) also seals its content key under the
+group's current key: the encrypted payload gains `group`, `{id, box}`, the
+content key under ChaCha20-Poly1305 with associated data
+`ournet/group/2/<id>`. A room record seals itself with the key it carries.
+Device wraps are unchanged, so builds without group keys read as before.
+
+Where `invite` is `members`, any member adds people with a private
+`room_invite` in the room's space, audience the members and the people added:
+`epoch` (the room's), `people` (at most 16), `certificates` (their devices)
+and `groupKey` (the room's). The owner may write one too. A group's members
+are its owner's record plus the people its invites add, in the order the
+invites were written, counting an invite only once its author is a member and
+only for people in its audience, up to 64; a leave counts only if written
+after its author was last added. Every device reading the same records
+derives the same members. Invites keep the epoch and key; the owner folds the
+people they add into its next record (same epoch, next generation), so builds
+without invites count them then. Any owner membership change starts a new
+epoch with a new key and re-shares what the group holds under it; turning
+`invite` on is such a change, and is not turned off.
+
+Someone added holds the group's key, from the invite or any record, and so
+can open what was written to the group before they joined: the originals,
+not copies, with their authors and signatures. Members pass such objects on
+as any other: a device offers a private object sealed with a group's current
+key to a peer whose person is one of that group's readers, besides the
+object's own audience, and takes one it is not addressed to when it holds the
+key it is sealed with. An inventory names the group keys the receiver holds
+for groups the sender is in with them (`groupKeys`), and only objects sealed
+with one of those are offered this way: older builds name none, and are
+offered only what is addressed to them.
+
 ## Calendar
 
 Events are two private kinds, ignored by builds that do not know them (they

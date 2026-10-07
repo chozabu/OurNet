@@ -153,4 +153,70 @@ void main() {
       }
     },
   );
+
+  testWidgets(
+    'someone a member adds to a long group reads its history from them',
+    (tester) async {
+      final directory = await Directory.systemTemp.createTemp(
+        'ournet-group-invite-',
+      );
+      Future<Node> node(String name) async => Node(
+        await LocalIdentity.create(label: name),
+        Store(path: '${directory.path}/$name.db'),
+      );
+      final owner = await node('owner');
+      final member = await node('member');
+      final joining = await node('joining');
+      try {
+        for (final (a, b) in [(owner, member), (member, joining)]) {
+          await a.addContact(b.identity.certificate);
+          await b.addContact(a.identity.certificate);
+        }
+        await Everyday(
+          owner,
+        ).createRoom('History group', [member.person], membersInvite: true);
+        final room = (await Everyday(owner).rooms()).single;
+        final base = DateTime.now().millisecondsSinceEpoch - 10000000;
+        for (var i = 0; i < 1005; i++) {
+          await Everyday(owner).write({
+            'type': 'note',
+            'text': 'Group history $i',
+            'sent': base + i,
+          }, room: room);
+        }
+        await syncPair(owner, member, rounds: 1000);
+        await Everyday(
+          member,
+        ).invite((await Everyday(member).rooms()).single, [joining.person]);
+
+        // The owner is offline: everything comes from the member.
+        final handOver = Stopwatch()..start();
+        await syncPair(member, joining, rounds: 1000);
+        handOver.stop();
+        final reading = Stopwatch()..start();
+        final everyday = Everyday(joining);
+        final items = await everyday.items((await everyday.rooms()).single);
+        reading.stop();
+        expect(items, hasLength(1005));
+        expect(items.every((i) => i.object.author == owner.person), isTrue);
+        expect(items.any((i) => i.data['history'] == true), isFalse);
+
+        // Once settled, a sync that brings nothing new costs nothing extra.
+        final quiet = Stopwatch()..start();
+        await syncPair(member, joining);
+        quiet.stop();
+        (binding.reportData ??= {})['groupInvite'] = {
+          'historyMessages': 1005,
+          'handOverMs': handOver.elapsedMilliseconds,
+          'readAllMs': reading.elapsedMilliseconds,
+          'quietSyncMs': quiet.elapsedMilliseconds,
+        };
+      } finally {
+        await owner.close();
+        await member.close();
+        await joining.close();
+        await directory.delete(recursive: true);
+      }
+    },
+  );
 }

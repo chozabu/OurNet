@@ -220,6 +220,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// Publishes who this person is connected to when that changes.
   CoalescedTask? _friendList;
 
+  /// Folds the people members added into the records of groups this person
+  /// owns: see [Everyday.settleInvites].
+  CoalescedTask? _groupInvites;
+
   /// People asking to connect, read with the other data.
   List<ConnectRequest> connectRequests = const [];
   bool _offeringHistory = false;
@@ -559,6 +563,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       _dataRefresh.schedule();
       _keyGrants?.schedule();
       _friendList?.schedule();
+      _groupInvites?.schedule();
       if (widget.enablePlatform) unawaited(offerHistory());
     });
     _deliveryRefresh.schedule();
@@ -576,6 +581,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       _friendList = CoalescedTask(
         () => node.connections.publish(),
         (e) => network.log('Could not publish your friend list: $e'),
+        delay: const Duration(seconds: 5),
+      )..schedule();
+      _groupInvites = CoalescedTask(
+        () => Everyday(node).settleInvites(),
+        (e) => network.log('Could not update your groups\' members: $e'),
         delay: const Duration(seconds: 5),
       )..schedule();
       if (node.store.setting('autoConnect') != false) {
@@ -1113,6 +1123,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _dataRefresh.close();
     _keyGrants?.close();
     _friendList?.close();
+    _groupInvites?.close();
     _readTimer?.cancel();
     typing
       ..removeListener(redraw)

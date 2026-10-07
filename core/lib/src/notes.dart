@@ -301,6 +301,7 @@ class Notes {
       final page = node.store.insertedAfter(_cursor, [
         'room',
         'room_leave',
+        'room_invite',
         'note_op',
       ]);
       if (page.isEmpty) break;

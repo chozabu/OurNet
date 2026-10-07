@@ -14,9 +14,14 @@ extension _GroupMemberPages on _OurNetAppState {
     await everyday.prepare(room);
     final members = await everyday.members(room);
     final selected = members.toSet();
-    // Friends a member who is not the owner asks the owner to add.
+    // Friends a member adds, or asks the owner to add.
     final asking = <String>{};
     final owner = room.data['owner'] == node.person;
+    // Whether members add people themselves, and whether the owner is
+    // turning that on now. It is not turned off again.
+    final open = room.data['invite'] == 'members';
+    var opening = false;
+    final adds = !owner && everyday.canInvite(room);
     if (!context.mounted) return;
     List<String> addable() => people.where((p) => !members.contains(p)).toList()
       ..sort((a, b) => name(a).toLowerCase().compareTo(name(b).toLowerCase()));
@@ -35,6 +40,8 @@ extension _GroupMemberPages on _OurNetAppState {
                   Text(
                     owner
                         ? 'Untick someone to remove them; tick friends below to add them.'
+                        : adds
+                        ? 'Tick friends below to add them. They see everything the group already holds.'
                         : 'Tick friends below to ask ${name(room.data['owner'])}, the owner, to add them.',
                   ),
                   const SizedBox(height: 12),
@@ -103,6 +110,21 @@ extension _GroupMemberPages on _OurNetAppState {
                     label: const Text('Add a new friend'),
                   ),
                   if (owner) ...[
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Members can add people'),
+                      subtitle: Text(
+                        open
+                            ? 'Anyone in the group can add their friends. This stays on.'
+                            : opening
+                            ? 'Once saved, anyone in the group can add their friends. This cannot be turned off.'
+                            : 'Only you add people. Members can ask you to.',
+                      ),
+                      value: open || opening,
+                      onChanged: open
+                          ? null
+                          : (value) => change(() => opening = value),
+                    ),
                     const Text(
                       'Membership changes apply as devices reconnect. Removed members keep copies they already received.',
                     ),
@@ -124,6 +146,13 @@ extension _GroupMemberPages on _OurNetAppState {
               FilledButton(
                 onPressed: () => Navigator.pop(context, 'save'),
                 child: const Text('Save membership'),
+              )
+            else if (adds)
+              FilledButton(
+                onPressed: asking.isEmpty
+                    ? null
+                    : () => Navigator.pop(context, 'add'),
+                child: Text(asking.isEmpty ? 'Add' : 'Add ${asking.length}'),
               )
             else
               FilledButton(
@@ -169,6 +198,11 @@ extension _GroupMemberPages on _OurNetAppState {
         tab = Destination.groups;
       });
     }
+    if (action == 'add') {
+      await everyday.invite(room, asking.toList());
+      if (network.running) unawaited(network.syncAll());
+      notice('Added ${asking.map(name).join(', ')}');
+    }
     if (action == 'ask') {
       await everyday.askToAdd(room, asking.toList());
       if (network.running) unawaited(network.syncAll());
@@ -178,10 +212,10 @@ extension _GroupMemberPages on _OurNetAppState {
       );
     }
     if (action == 'save') {
-      if (selected.length == members.length && selected.containsAll(members)) {
-        return;
-      }
-      await saveMembership(room, selected.toList());
+      final unchanged =
+          selected.length == members.length && selected.containsAll(members);
+      if (unchanged && !opening) return;
+      await saveMembership(room, selected.toList(), membersInvite: opening);
     }
   }
 
@@ -247,9 +281,25 @@ extension _GroupMemberPages on _OurNetAppState {
   }
 
   /// Publishes [room]'s new membership, [selected], as its owner. People
-  /// joining always get the group's existing history.
-  Future<void> saveMembership(EverydayItem room, List<String> selected) async {
+  /// joining always get the group's existing history. With [membersInvite]
+  /// members may add people from then on.
+  Future<void> saveMembership(
+    EverydayItem room,
+    List<String> selected, {
+    bool membersInvite = false,
+  }) async {
     final everyday = Everyday(node);
+    final members = await everyday.members(room);
+    // Only adding to a group with a key: an invite hands them the key, and
+    // nothing has to be re-shared.
+    if (!membersInvite &&
+        room.data['groupKey'] != null &&
+        members.every(selected.contains)) {
+      await everyday.invite(room, selected);
+      if (network.running) unawaited(network.syncAll());
+      notice('Membership updated. Changes sync when devices reconnect.');
+      return;
+    }
     {
       // Keep a verified encrypted source for any files copied into the new epoch.
       for (final item in await everyday.items(room)) {
@@ -261,6 +311,7 @@ extension _GroupMemberPages on _OurNetAppState {
         room,
         selected,
         shareHistory: true,
+        membersInvite: membersInvite || room.data['invite'] == 'members',
       );
       update(() {
         activeRoom = next;

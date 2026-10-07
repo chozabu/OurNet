@@ -139,7 +139,22 @@ bool validContent(String kind, Json p) {
           (p['certificates'] == null ||
               p['certificates'] is List &&
                   (p['certificates'] as List).length <= 256 &&
-                  (p['certificates'] as List).every((c) => c is Map)),
+                  (p['certificates'] as List).every((c) => c is Map)) &&
+          // Optional: who may add people (`members`, or absent for the owner
+          // alone), and the key everything addressed to the group also opens
+          // with. Builds without them ignore both.
+          (p['invite'] == null || p['invite'] == 'members') &&
+          (p['groupKey'] == null || validGroupKey(p['groupKey'])),
+    // A member adding people to a group whose owner lets members do so: see
+    // `Everyday.invite`. Carries their devices and the group's key.
+    'room_invite' =>
+      p['epoch'] is String &&
+          _ids(p['people'], 16) &&
+          (p['people'] as List).isNotEmpty &&
+          p['certificates'] is List &&
+          (p['certificates'] as List).length <= 128 &&
+          (p['certificates'] as List).every((c) => c is Map) &&
+          validGroupKey(p['groupKey']),
     'inbox' || 'room_item' =>
       p['entry'] is String &&
           p['clock'] is int &&
@@ -901,12 +916,63 @@ class Evidence {
       await verify(data, signature, certificate.device);
 }
 
+/// A group's key as a room record or invite carries it: `id` names it in
+/// what it seals, `key` is 32 bytes.
+bool validGroupKey(Object? k) =>
+    k is Map &&
+    k['id'] is String &&
+    (k['id'] as String).length <= 64 &&
+    k['key'] is String &&
+    (k['key'] as String).length == 44;
+
+/// A group key: what [encryptFor] seals a content key with, beside the wraps
+/// for each device, so a member who joins later can open what the group was
+/// sent. See `GroupAccess`.
+typedef GroupKey = ({String id, List<int> key});
+
+GroupKey groupKeyFrom(Json k) => (id: k['id'] as String, key: unb64(k['key']));
+
+Json newGroupKey() => {
+  'id': randomId(),
+  'key': b64(List<int>.generate(32, (_) => _secure.nextInt(256))),
+};
+
+final _secure = Random.secure();
+
+/// The id of the group key [encrypted] is also sealed with, if any.
+String? groupSealOf(Json encrypted) {
+  final group = encrypted['group'];
+  return group is Map && group['id'] is String && group['box'] is String
+      ? group['id'] as String
+      : null;
+}
+
+List<int> _groupAad(String id) => utf8.encode('ournet/group/2/$id');
+
+/// The content key [encrypted] seals under [group]. Throws when it cannot.
+Future<List<int>> unsealGroup(Json encrypted, GroupKey group) async {
+  final seal = encrypted['group'] as Map;
+  if (seal['id'] != group.id) throw StateError('Another group key');
+  return Chacha20.poly1305Aead().decrypt(
+    SecretBox.fromConcatenation(
+      unb64(seal['box'] as String),
+      nonceLength: 12,
+      macLength: 16,
+    ),
+    secretKey: SecretKey(group.key),
+    aad: _groupAad(group.id),
+  );
+}
+
 /// [saltedWraps] chooses the wrap key derivation; callers on another isolate
-/// pass [WireFormat.saltedWraps] read on their own side.
+/// pass [WireFormat.saltedWraps] read on their own side. With [group], the
+/// content key is also sealed under that group key; builds without it ignore
+/// the extra field.
 Future<Json> encryptFor(
   Json plain,
   List<DeviceCertificate> recipients, {
   bool saltedWraps = false,
+  GroupKey? group,
 }) async {
   final cipher = Chacha20.poly1305Aead();
   final contentKey = await cipher.newSecretKey();
@@ -936,7 +1002,21 @@ Future<Json> encryptFor(
       'box': b64(wrapped.concatenation()),
     });
   }
-  return {'box': b64(box.concatenation()), 'wraps': wraps};
+  return {
+    'box': b64(box.concatenation()),
+    'wraps': wraps,
+    if (group != null)
+      'group': {
+        'id': group.id,
+        'box': b64(
+          (await cipher.encrypt(
+            await contentKey.extractBytes(),
+            secretKey: SecretKey(group.key),
+            aad: _groupAad(group.id),
+          )).concatenation(),
+        ),
+      },
+  };
 }
 
 Future<SecretKey> _wrapKey(

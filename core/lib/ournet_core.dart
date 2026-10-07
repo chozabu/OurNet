@@ -24,3 +24,4 @@ export 'src/backup.dart';
 export 'src/history.dart';
 export 'src/avatars.dart';
 export 'src/connections.dart';
+export 'src/group_access.dart';

@@ -162,8 +162,12 @@ void main() {
       await settled(tester);
       await tester.tap(find.byTooltip('Group members'));
       await tester.pump(const Duration(milliseconds: 300));
-      // History is always shared with people joining.
-      expect(find.byType(SwitchListTile), findsNothing);
+      // History is always shared with people joining; the one choice left
+      // is whether members add people too, off for this group.
+      expect(
+        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+        isFalse,
+      );
       await tester.tap(find.byType(CheckboxListTile).last);
       await tester.tap(find.text('Save membership'));
       await settled(tester);
@@ -240,6 +244,94 @@ void main() {
     final room = (await tester.runAsync(() => Everyday(bob).rooms()))!.single;
     expect(room.data['members'], contains(dave.person));
     expect(find.text('Carol asks you to add Dave'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() async {
+      for (final n in [bob, carol, dave]) {
+        await n.close();
+      }
+    });
+  });
+  testWidgets('a member adds a friend themselves once the owner lets them', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    // Bob owns the group; Carol is in it and knows Dave, whom Bob does not.
+    final (bob, carol, dave) = (await tester.runAsync(() async {
+      final nodes = <Node>[];
+      for (final name in ['Bob', 'Carol', 'Dave']) {
+        final n = Node(await LocalIdentity.create(), Store());
+        await n.publish('profile', {'name': name}, space: '_identity');
+        nodes.add(n);
+      }
+      final [bob, carol, dave] = nodes;
+      for (final (a, b) in [(bob, carol), (carol, dave)]) {
+        await a.addContact(b.identity.certificate);
+        await b.addContact(a.identity.certificate);
+      }
+      await Everyday(bob).createRoom('Climbing', [carol.person]);
+      await Everyday(bob).write({
+        'type': 'note',
+        'text': 'Wall night Thursday',
+      }, room: (await Everyday(bob).rooms()).single);
+      await syncPair(carol, dave);
+      await syncPair(bob, carol);
+      return (bob, carol, dave);
+    }))!;
+    Future<void> open(Node node) async {
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(
+        OurNetApp(
+          node: node,
+          enablePlatform: false,
+          initialTab: Destination.groups,
+        ),
+      );
+      await settled(tester);
+      await tester.tap(find.text('Climbing').first);
+      await settled(tester);
+    }
+
+    Future<void> members() async {
+      await tester.tap(find.byTooltip('Group members'));
+      for (var i = 0; i < 5; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 100)),
+        );
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    // The owner turns it on, once.
+    await open(bob);
+    await members();
+    await tester.tap(
+      find.widgetWithText(SwitchListTile, 'Members can add people'),
+    );
+    await tester.pump();
+    expect(find.textContaining('cannot be turned off'), findsOneWidget);
+    await tester.tap(find.text('Save membership'));
+    await settled(tester);
+    await tester.runAsync(() => syncPair(bob, carol));
+
+    await open(carol);
+    await members();
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'Dave'));
+    await tester.pump();
+    await tester.tap(find.text('Add 1'));
+    await settled(tester);
+    await settled(tester);
+    // Bob is offline; Dave hears from Carol and sees what came before.
+    await tester.runAsync(() => syncPair(carol, dave));
+    final texts = (await tester.runAsync(() async {
+      final everyday = Everyday(dave);
+      final room = (await everyday.rooms()).single;
+      return [for (final i in await everyday.items(room)) i.data['text']];
+    }))!;
+    expect(texts, ['Wall night Thursday']);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     await tester.runAsync(() async {

@@ -9,6 +9,7 @@ import 'blob_worker.dart';
 import 'locations.dart';
 import 'avatars.dart';
 import 'connections.dart';
+import 'group_access.dart';
 
 /// What a person chose about someone else, kept alike on all their devices.
 /// Blocking and disconnecting are independent: each choice settles one of
@@ -39,6 +40,9 @@ class Node {
 
   /// Who is friends with whom, and asking someone new to connect.
   late final connections = Connections(this);
+
+  /// Group keys this device holds and whom each group's objects may reach.
+  late final groups = GroupAccess(this);
 
   /// Last known positions; set up when first asked for.
   Locations get locations =>
@@ -228,6 +232,10 @@ class Node {
     List<String> via = const [],
     int expires = 0,
     List<DeviceCertificate> recipients = const [],
+
+    /// The group key to seal with, instead of the space's current one: for
+    /// copies written ahead of the record that holds a new key.
+    GroupKey? seal,
   }) {
     if (_closing || _pendingPublications >= 32) {
       return Future.error(
@@ -244,6 +252,7 @@ class Node {
       via: via,
       expires: expires,
       extra: recipients,
+      seal: seal,
     );
     if (store.path == null) return run();
     _pendingPublications++;
@@ -264,6 +273,7 @@ class Node {
     required List<String> via,
     required int expires,
     List<DeviceCertificate> extra = const [],
+    GroupKey? seal,
   }) async {
     if (!validContent(kind, content)) throw StateError('Invalid $kind content');
     if (revoked.contains(identity.device))
@@ -286,6 +296,21 @@ class Node {
       if (!certs.any((c) => c.person == p))
         throw StateError('No authorised device for recipient');
     }
+    // Written to a whole group: also sealed with its key, for whoever joins.
+    var group = audience.isEmpty ? null : seal;
+    // A room record is for the whole group, and may be the first to hold its
+    // key: it seals itself with the key it carries.
+    if (group == null &&
+        audience.isNotEmpty &&
+        kind == 'room' &&
+        content['groupKey'] is Json &&
+        validGroupKey(content['groupKey'])) {
+      group = groupKeyFrom(content['groupKey'] as Json);
+    }
+    if (group == null && audience.isNotEmpty && space.startsWith('room2:')) {
+      await groups.refresh();
+      group = groups.sealFor(space, recipients);
+    }
     final data = <String, dynamic>{
       'domain': 'ournet/object/2',
       // Absent on objects from before it; builds that do not know it ignore it.
@@ -307,6 +332,7 @@ class Node {
       background: store.path != null,
       // Read here: static state does not reach the publishing isolate.
       saltedWraps: WireFormat.saltedWraps,
+      group: group,
     );
     // Policy may change while cryptography runs on the worker.
     if (revoked.contains(identity.device)) {
@@ -344,10 +370,19 @@ class Node {
     if (encrypted is! Json) return null;
     List<int>? granted;
     if (!wrappedFor(encrypted, identity.device)) {
-      // Written before this device existed. Another of this person's devices
-      // may since have granted its key; until then nothing is cached, so the
-      // object becomes readable as soon as a grant arrives.
+      // Written before this device existed, or before this person joined the
+      // group it was written to. Another of this person's devices may since
+      // have granted its key, or the group's key opens it; until then nothing
+      // is cached, so the object becomes readable as soon as either arrives.
       granted = await _grantedKey(id);
+      if (granted == null) {
+        final group = groups.key(groupSealOf(encrypted) ?? '');
+        if (group != null) {
+          try {
+            granted = await unsealGroup(encrypted, group);
+          } catch (_) {}
+        }
+      }
       if (granted == null) return null;
     }
     try {
@@ -573,7 +608,7 @@ class Node {
   bool visible(SignedObject o) =>
       !blocked.contains(o.author) &&
       (!o.hasExpiry || o.expires > now()) &&
-      (o.isPublic || o.audience.contains(person));
+      (o.isPublic || o.audience.contains(person) || groups.opens(o));
 
   /// [unlocked] is the root from [LocalIdentity.unlockRoot], needed once
   /// this device's root is sealed.
@@ -784,6 +819,7 @@ class Node {
         'through': InventoryCursor(page.last.created, page.last.id).toJson(),
       'revoked': revoked.toList()..sort(),
       if (peer != null) 'devices': sharedCertificates(peer),
+      if (peer != null) 'groupKeys': groups.keysFor(peer.person),
     };
   }
 
@@ -835,6 +871,7 @@ class Node {
       'more': more,
       'revoked': revoked.toList()..sort(),
       if (peer != null) 'devices': sharedCertificates(peer),
+      if (peer != null) 'groupKeys': groups.keysFor(peer.person),
     };
   }
 
@@ -889,12 +926,29 @@ class Node {
     return added;
   }
 
+  /// [peerKeys], when known, are the group keys the peer said it holds: an
+  /// object reaching it only as a group's reader goes only to a device that
+  /// can open it. Without them, the group's current key must have sealed it.
   bool canOffer(
     SignedObject o,
     DeviceCertificate peer,
     Set<String> wanted, {
     bool relay = false,
-  }) => _offerable(ObjectRoute.of(o), peer, wanted, relay: relay);
+    Set<String>? peerKeys,
+  }) {
+    final route = ObjectRoute.of(o);
+    if (!_offerable(route, peer, wanted, relay: relay)) return false;
+    if (route.isPublic ||
+        route.audience.contains(peer.person) ||
+        route.via.contains(peer.person)) {
+      return true;
+    }
+    final sealed = groupSealOf(o.data['payload'] as Json);
+    if (sealed == null) return false;
+    return peerKeys == null
+        ? groups.current(o.space)?.id == sealed
+        : peerKeys.contains(sealed);
+  }
 
   /// [relay] is set when [peer] is one of this person's devices and said it
   /// takes [relayed] objects (`ownRelay` in its inventory).
@@ -909,7 +963,9 @@ class Node {
         (o.hasExpiry && o.expires <= now()))
       return false;
     if (!o.isPublic)
-      return o.audience.contains(peer.person) || o.via.contains(peer.person);
+      return o.audience.contains(peer.person) ||
+          o.via.contains(peer.person) ||
+          groups.reaches(o.space, peer.person);
     // As [receive] accepts them. An own device offered posts from a forum it
     // does not follow drops them, and every later page offered the same ones
     // again, so nothing older than them ever reached it.
@@ -959,7 +1015,15 @@ class Node {
       throw StateError('Peer is not an admitted device');
     if (inventory['version'] != 2) throw StateError('Unsupported protocol');
     await learnCertificates(peerDevice, inventory['devices']);
+    await groups.refresh();
     final peer = contacts[peerDevice]!;
+    // Builds without group keys send none, and are offered nothing as a
+    // group's reader alone: they would refuse it, and every sync would offer
+    // the same refused page again.
+    final peerKeys = {
+      for (final k in (inventory['groupKeys'] as List? ?? const []).take(1024))
+        if (k is String) k,
+    };
     // One of this person's own devices that asked for relayed objects.
     final relay = inventory['ownRelay'] == true && peer.person == person;
     final wanted = (inventory['subscriptions'] as List).cast<String>().toSet();
@@ -1004,7 +1068,8 @@ class Node {
         if (have[id] == store.evidenceDigest(id)) continue;
         await slice.pause();
         final object = store.get(id);
-        if (object == null || !canOffer(object, peer, wanted, relay: relay)) {
+        if (object == null ||
+            !canOffer(object, peer, wanted, relay: relay, peerKeys: peerKeys)) {
           continue;
         }
         final evidence = store.evidence(id);
@@ -1095,6 +1160,7 @@ class Node {
     if (!allowedPeer(peerDevice)) throw StateError('Peer is not admitted');
     if (items.length > 32 || bytes(items).length > maxPageBytes)
       throw StateError('Page quota exceeded');
+    await groups.refresh();
     // Signature checks depend only on the received records, so the page is
     // verified in a short-lived isolate instead of blocking this one.
     final slice = TimeSlice();
@@ -1160,8 +1226,13 @@ class Node {
     if (o.hasExpiry && o.expires <= now()) return 0;
     if (!o.isPublic &&
         !o.audience.contains(person) &&
-        !(o.data['via'] as List).contains(person))
-      return 0;
+        !(o.data['via'] as List).contains(person)) {
+      // Written to a group before this person joined it: taken when this
+      // device holds the key it is sealed with. The key may have arrived
+      // earlier in this same page.
+      if (!groups.opens(o)) await groups.learn();
+      if (!groups.opens(o)) return 0;
+    }
     if (o.isPublic &&
         ![
           'profile',
@@ -1399,6 +1470,7 @@ Future<SignedObject> _preparePublication(
   DeviceCertificate certificate, {
   required bool background,
   required bool saltedWraps,
+  GroupKey? group,
 }) {
   Future<SignedObject> prepare() async {
     if ((data['audience'] as List).isNotEmpty) {
@@ -1406,6 +1478,7 @@ Future<SignedObject> _preparePublication(
         data['payload'],
         recipients,
         saltedWraps: saltedWraps,
+        group: group,
       );
     }
     final object = SignedObject(data, await sign(data, key), certificate);

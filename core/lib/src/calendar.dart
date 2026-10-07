@@ -927,6 +927,7 @@ class Calendar {
     EverydayItem room, {
     String? into,
     required List<String> Function(CalEvent) audience,
+    GroupKey? seal,
   }) async {
     final index = _indexes[node] ??= _Index(node);
     await index.refresh();
@@ -941,6 +942,7 @@ class Calendar {
         {...e.data, 'history': true, 'originalAuthor': e.author},
         space: into ?? room.object.space,
         audience: readers,
+        seal: seal,
       );
       count++;
     }

@@ -200,6 +200,7 @@ extension _EverydayPages on _OurNetAppState {
     );
     if (title == null || title.isEmpty || !context.mounted) return;
     final selected = <String>{};
+    var membersInvite = true;
     final accepted = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -212,7 +213,18 @@ extension _EverydayPages on _OurNetAppState {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const Text(
-                    'Only the people you choose can read this group. The owner can invite or remove members later.',
+                    'Only the people in this group can read it. New members see everything it already holds.',
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Members can add people'),
+                    subtitle: Text(
+                      membersInvite
+                          ? 'Anyone in the group can add their friends.'
+                          : 'Only you add people. Members can ask you to.',
+                    ),
+                    value: membersInvite,
+                    onChanged: (v) => change(() => membersInvite = v),
                   ),
                   if (people.isEmpty)
                     const Padding(
@@ -255,7 +267,9 @@ extension _EverydayPages on _OurNetAppState {
       ),
     );
     if (accepted == true) {
-      final room = await Everyday(node).createRoom(title, selected.toList());
+      final room = await Everyday(
+        node,
+      ).createRoom(title, selected.toList(), membersInvite: membersInvite);
       update(() {
         activeRoom = room;
         everydaySection = 'Conversation';
