@@ -8,6 +8,124 @@ typedef AddRequest = ({
 });
 
 extension _GroupMemberPages on _OurNetAppState {
+  /// What the group page's slim header leaves out: who is in it, who can
+  /// add people, and how its sync is going. Reads only the room record.
+  Future<void> groupInfo(BuildContext context, EverydayItem room) {
+    final members = (room.data['members'] as List).cast<String>();
+    final owner = room.data['owner'] as String?;
+    final space = room.object.space;
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheet) => StatefulBuilder(
+        builder: (sheet, change) {
+          final theme = Theme.of(sheet);
+          final muted = chatMuted(node, space);
+          return SafeArea(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(sheet).height * .85,
+              ),
+              child: ListView(
+                shrinkWrap: true,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.people_outline, size: 32),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              room.data['name'],
+                              style: theme.textTheme.titleLarge,
+                            ),
+                            Text(
+                              [
+                                'Private group',
+                                '${members.length} members',
+                                if (owner != null)
+                                  owner == node.person
+                                      ? 'You own it'
+                                      : 'Owned by ${name(owner)}',
+                              ].join(' · '),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  SyncStatus(
+                    network: network,
+                    people: members,
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Files keep their originals intact. '
+                    '${room.data['invite'] == 'members' ? 'Any member can add their friends.' : 'Only the owner adds people; members can ask.'}',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      FilledButton.tonalIcon(
+                        onPressed: busy
+                            ? null
+                            : () {
+                                Navigator.pop(sheet);
+                                act(() => manageGroup(context, room));
+                              },
+                        icon: const Icon(Icons.manage_accounts_outlined),
+                        label: const Text('Members'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => change(() => toggleGroupMute(space)),
+                        icon: Icon(
+                          muted
+                              ? Icons.volume_off_outlined
+                              : Icons.volume_up_outlined,
+                        ),
+                        label: Text(muted ? 'Unmute' : 'Mute'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Members (${members.length})',
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  for (final person in members)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: conversationAvatar(person),
+                      title: Text(name(person)),
+                      subtitle: Text(
+                        [
+                          if (person == owner) 'Owner',
+                          if (person == node.person)
+                            'You'
+                          else if (!node.connections.isFriend(person))
+                            'Not your friend',
+                        ].join(' · '),
+                      ),
+                      onTap: () =>
+                          unawaited(showPersonDetails(context, person)),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> manageGroup(BuildContext context, EverydayItem room) async {
     final everyday = Everyday(node);
     room = await everyday.current(room);

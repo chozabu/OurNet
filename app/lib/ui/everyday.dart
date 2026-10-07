@@ -336,30 +336,52 @@ extension _EverydayPages on _OurNetAppState {
           // The notes screen brings its own search and capture bar, which
           // need the room once the keyboard is up.
           if (!(typing && notesTab))
-            Container(
-              width: double.infinity,
-              padding: EdgeInsets.all(typing ? 12 : 24),
-              decoration: BoxDecoration(
-                color: inboxDragging
-                    ? colors.tertiaryContainer
-                    : colors.primaryContainer,
-                borderRadius: BorderRadius.circular(24),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+            // One slim row; tapping it opens the group's details.
+            Material(
+              color: inboxDragging
+                  ? colors.tertiaryContainer
+                  : colors.primaryContainer,
+              borderRadius: BorderRadius.circular(16),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: () => unawaited(groupInfo(context, room)),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+                  child: Row(
                     children: [
-                      const Icon(Icons.people_outline, size: 28),
-                      const SizedBox(width: 12),
+                      const Icon(Icons.people_outline, size: 22),
+                      const SizedBox(width: 10),
                       Expanded(
-                        child: Text(
-                          room.data['name'],
-                          style: const TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -.8,
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              room.data['name'],
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            if (inboxDragging)
+                              const Text(
+                                'Drop to save here',
+                                style: TextStyle(fontSize: 12),
+                              )
+                            else
+                              SyncStatus(
+                                network: network,
+                                people: (room.data['members'] as List)
+                                    .cast<String>(),
+                                prefix:
+                                    '${(room.data['members'] as List).length} members · ',
+                                offline:
+                                    '${(room.data['members'] as List).length} members · offline',
+                                maxLines: 1,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                          ],
                         ),
                       ),
                       IconButton(
@@ -382,27 +404,14 @@ extension _EverydayPages on _OurNetAppState {
                       ),
                     ],
                   ),
-                  if (!typing) const SizedBox(height: 8),
-                  Text(
-                    inboxDragging
-                        ? 'Drop to save here'
-                        : '${(room.data['members'] as List).length} members · Private group',
-                  ),
-                  if (!typing) const SizedBox(height: 12),
-                  SyncStatus(
-                    network: network,
-                    people: (room.data['members'] as List).cast<String>(),
-                    suffix: ' · originals stay intact',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ],
+                ),
               ),
             ),
           if (!(typing && notesTab))
             groupCallBanner(context, room.object.space),
           if (!(typing && notesTab)) groupAddRequestsBanner(context, room),
           if (!(typing && notesTab)) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 6),
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(

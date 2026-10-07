@@ -11,6 +11,9 @@ class SyncStatus extends StatefulWidget {
   final Iterable<String>? people;
   final String offline, prefix, suffix;
   final TextStyle? style;
+
+  /// Set to keep the line to this many lines, ending in an ellipsis.
+  final int? maxLines;
   const SyncStatus({
     super.key,
     required this.network,
@@ -19,6 +22,7 @@ class SyncStatus extends StatefulWidget {
     this.prefix = '',
     this.suffix = '',
     this.style,
+    this.maxLines,
   });
   @override
   State<SyncStatus> createState() => _SyncStatusState();
@@ -89,5 +93,7 @@ class _SyncStatusState extends State<SyncStatus> {
         ? '${widget.prefix}${describe()}${widget.suffix}'
         : widget.offline,
     style: widget.style,
+    maxLines: widget.maxLines,
+    overflow: widget.maxLines == null ? null : TextOverflow.ellipsis,
   );
 }
