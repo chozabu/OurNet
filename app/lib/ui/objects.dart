@@ -158,7 +158,11 @@ extension _ObjectsPages on _OurNetAppState {
                     children: [
                       Row(
                         children: [
-                          conversationAvatar(author, radius: 15),
+                          GestureDetector(
+                            onTap: () =>
+                                unawaited(showPersonDetails(context, author)),
+                            child: conversationAvatar(author, radius: 15),
+                          ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text.rich(
@@ -357,9 +361,12 @@ extension _ObjectsPages on _OurNetAppState {
         });
       }
       if (action == 'provenance') provenance(context, o);
+      if (action == 'profile') unawaited(showPersonDetails(context, author));
       if (action == 'copy') Clipboard.setData(ClipboardData(text: copy!));
     },
     itemBuilder: (_) => [
+      if (author != node.person)
+        PopupMenuItem(value: 'profile', child: Text('About ${name(author)}')),
       const PopupMenuItem(value: 'hide', child: Text('Hide for me')),
       if (author != node.person)
         const PopupMenuItem(value: 'block', child: Text('Block author')),

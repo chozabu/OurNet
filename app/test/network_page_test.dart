@@ -96,4 +96,119 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await node.close();
   });
+
+  /// Me - Sam - Priya: Priya is not my friend, but Sam's.
+  Future<(Node, Node, Node)> friendOfFriend(WidgetTester tester) async =>
+      (await tester.runAsync(() async {
+        final names = ['Me', 'Sam', 'Priya'];
+        final nodes = [
+          for (final _ in names) Node(await LocalIdentity.create(), Store()),
+        ];
+        final [me, sam, priya] = nodes;
+        for (final (a, b) in [(me, sam), (sam, priya)]) {
+          await a.addContact(b.identity.certificate);
+          await b.addContact(a.identity.certificate);
+        }
+        for (final (i, n) in nodes.indexed) {
+          await n.publish('profile', {'name': names[i]}, space: '_identity');
+          await n.connections.publish();
+        }
+        for (var i = 0; i < 2; i++) {
+          await syncPair(priya, sam);
+          await syncPair(sam, me);
+        }
+        return (me, sam, priya);
+      }))!;
+
+  testWidgets('a friend of a friend can be found and invited', (tester) async {
+    tester.view.physicalSize = const Size(900, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final (node, sam, priya) = await friendOfFriend(tester);
+    await tester.pumpWidget(
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.network,
+      ),
+    );
+    await settle(tester);
+    await tester.tap(find.text('Sam'));
+    await settle(tester);
+    await tester.tap(find.text('About Sam'));
+    await settle(tester);
+    expect(find.text('You are friends directly.'), findsOneWidget);
+    await tester.tap(find.text('Their friends (1)'));
+    await settle(tester);
+    await tester.tap(find.text('Priya'));
+    await settle(tester);
+    expect(find.text('Not connected'), findsOneWidget);
+    // The chain: You > Sam > Priya.
+    expect(find.widgetWithText(ActionChip, 'Sam'), findsOneWidget);
+    await tester.tap(find.text('Invite to connect'));
+    await settle(tester);
+    await tester.enterText(find.byType(TextField).last, 'Sam says hi');
+    await tester.tap(find.text('Send request'));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 500)),
+    );
+    await settle(tester);
+    final sent = await tester.runAsync(
+      () => node.connections.sentTo(priya.person),
+    );
+    expect(sent?.data['via'], [sam.person]);
+    // The note's controller is disposed after the dialog has gone.
+    await tester.pump(const Duration(seconds: 2));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() async {
+      for (final n in [node, sam, priya]) {
+        await n.close();
+      }
+    });
+  });
+
+  testWidgets('a request to connect is shown and accepted', (tester) async {
+    tester.view.physicalSize = const Size(900, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final (node, sam, priya) = await friendOfFriend(tester);
+    await tester.runAsync(() async {
+      await priya.connections.request(node.person, text: 'Hello from Priya');
+      await syncPair(priya, sam);
+      await syncPair(sam, node);
+    });
+    await tester.pumpWidget(
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.network,
+      ),
+    );
+    await settle(tester);
+    expect(find.text('Priya asks to connect'), findsOneWidget);
+    expect(find.textContaining('Hello from Priya'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Accept'));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 500)),
+    );
+    await settle(tester);
+    expect(node.connections.isFriend(priya.person), isTrue);
+    expect(find.text('Priya asks to connect'), findsNothing);
+    // The answer reaches Priya through Sam, and connects her too.
+    await tester.runAsync(() async {
+      await syncPair(node, sam);
+      await syncPair(sam, priya);
+    });
+    expect(priya.connections.isFriend(node.person), isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() async {
+      for (final n in [node, sam, priya]) {
+        await n.close();
+      }
+    });
+  });
 }

@@ -38,16 +38,20 @@ extension _ConversationPages on _OurNetAppState {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
-      child: Text(
-        name(person),
-        style: Theme.of(context).textTheme.labelMedium?.copyWith(
-          fontWeight: FontWeight.w700,
-          color: HSLColor.fromAHSL(
-            1,
-            hue.toDouble(),
-            .55,
-            dark ? .72 : .34,
-          ).toColor(),
+      child: GestureDetector(
+        // Who they are, and how you are connected.
+        onTap: () => unawaited(showPersonDetails(context, person)),
+        child: Text(
+          name(person),
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: HSLColor.fromAHSL(
+              1,
+              hue.toDouble(),
+              .55,
+              dark ? .72 : .34,
+            ).toColor(),
+          ),
         ),
       ),
     );

@@ -386,6 +386,7 @@ extension _EverydayPages on _OurNetAppState {
             ),
           if (!(typing && notesTab))
             groupCallBanner(context, room.object.space),
+          if (!(typing && notesTab)) groupAddRequestsBanner(context, room),
           if (!(typing && notesTab)) ...[
             const SizedBox(height: 12),
             SingleChildScrollView(

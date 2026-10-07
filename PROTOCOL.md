@@ -88,6 +88,34 @@ write a 256 pixel square JPEG under 48 KiB) and `type` (`image/jpeg` or
 or PNG signature. Builds without it drop the kind on receipt, as any public
 object outside the spaces they follow, and do not pass it on.
 
+Friend lists are public `friends` objects in `_identity`, propagated like
+`profile`: payload `friends` (person IDs, at most 1000, the people the author's
+devices sync with) and `devices` (the author's root-signed device
+certificates, at most 32). The newest from its author counts. Two people are
+linked when either lists the other and neither, having published a list,
+leaves the other out; a chain is the shortest run of links between two people.
+Each device publishes when its contacts say more than the newest list, merged
+with that list so a person's devices converge rather than alternate.
+
+Asking someone outside one's contacts to connect is a private `connect`
+object in space `_connect`, audience the person asked, `via` the people on the
+chain between (and, for a friend of a friend, every common friend), expiring
+after 30 days. It is encrypted to the devices their list (or profile) names;
+the people in `via` store and pass it on unread, as any private object they
+relay. Payload: `type` `request`, `devices` (the sender's certificates), `via`
+and an optional `text`. Accepting admits those devices and answers with
+`type` `accept`, `request` (the request's ID) and the answerer's `devices`,
+relayed back the same way. A device admits the devices in an answer only when
+it holds the named request, written by its own person to the answerer, and
+only once per answer. Nothing is admitted from a request alone.
+
+A group member who is not its owner asks the owner to add people with a
+private `room_add` in the room's space, audience the owner: `epoch`, `people`
+(at most 16) and `certificates` (their devices, since the owner may not know
+them). The owner's approval is an ordinary membership change; the devices are
+admitted as a group's members are, not as friends. Builds without these kinds
+store and relay `connect` and `room_add` unread and drop `friends`.
+
 ## Calendar
 
 Events are two private kinds, ignored by builds that do not know them (they

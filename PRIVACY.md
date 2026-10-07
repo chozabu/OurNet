@@ -27,6 +27,12 @@ their friends, so people you have not admitted can see them. You can change or
 remove your picture at any time; devices that already received an earlier one
 keep it in their storage but stop showing it.
 
+**Who your friends are, just as widely.** Your list of friends (the people
+your devices sync with) and the IDs of your devices travel the same way as your
+name, so others can see how they are connected to you and ask to connect. A
+request to connect is encrypted for the person asked; the friends who pass it
+on cannot read it, though they can see who it is from and to.
+
 **Through relay servers, sometimes.** OurNet uses [iroh](https://iroh.computer)
 for transport. It tries to connect your device directly to your friend's
 device. When a direct connection cannot be established — typically because of

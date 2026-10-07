@@ -27,6 +27,8 @@ extension _NetworkPages on _OurNetAppState {
           ),
         ],
       ),
+      for (final request in connectRequests)
+        connectRequestCard(context, request),
       const SizedBox(height: 12),
       ConnectionHealthCard(
         network: network,
@@ -119,6 +121,73 @@ extension _NetworkPages on _OurNetAppState {
         ),
     ],
   );
+
+  /// Someone asking to connect, with who passed it on.
+  Widget connectRequestCard(BuildContext context, ConnectRequest request) {
+    final via = request.via;
+    return Card(
+      margin: const EdgeInsets.only(top: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: conversationAvatar(request.from),
+              title: Text('${name(request.from)} asks to connect'),
+              subtitle: Text(
+                [
+                  if (via.isNotEmpty) 'Through ${via.map(name).join(' › ')}',
+                  ?request.text,
+                ].join('\n'),
+              ),
+              onTap: () => unawaited(showPersonDetails(context, request.from)),
+            ),
+            Wrap(
+              spacing: 8,
+              children: [
+                FilledButton.icon(
+                  onPressed: () => act(() => acceptConnection(request)),
+                  icon: const Icon(Icons.how_to_reg_outlined),
+                  label: const Text('Accept'),
+                ),
+                OutlinedButton(
+                  onPressed: () => update(() {
+                    node.connections.ignore(request);
+                    connectRequests = [
+                      for (final r in connectRequests)
+                        if (r != request) r,
+                    ];
+                  }),
+                  child: const Text('Ignore'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Shown on other pages while someone is waiting for an answer.
+  Widget connectRequestsBanner(BuildContext context) {
+    final first = connectRequests.first;
+    return Material(
+      color: Theme.of(context).colorScheme.secondaryContainer,
+      child: ListTile(
+        dense: true,
+        leading: const Icon(Icons.person_add_alt),
+        title: Text(
+          connectRequests.length == 1
+              ? '${name(first.from)} asks to connect'
+              : '${connectRequests.length} people ask to connect',
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => update(() => tab = Destination.network),
+      ),
+    );
+  }
 
   /// This person's devices are managed under Profile and devices; here they
   /// are one line of connection status.

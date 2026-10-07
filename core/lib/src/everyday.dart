@@ -346,6 +346,94 @@ class Everyday {
     );
   }
 
+  /// Asks [room]'s owner to add [people], friends of this member. Only
+  /// the owner signs membership, so this is a private `room_add` for the
+  /// owner, which carries those people's devices: the owner may not know
+  /// them. Builds without it ignore it.
+  Future<SignedObject> askToAdd(EverydayItem room, List<String> people) async {
+    room = await current(room);
+    final owner = room.data['owner'] as String;
+    if (owner == node.person) {
+      throw StateError('You own this group: add them directly.');
+    }
+    final members = await this.members(room);
+    final adding = {
+      for (final p in people)
+        if (p != node.person && !members.contains(p)) p,
+    }.toList()..sort();
+    if (adding.isEmpty) throw StateError('They are already members.');
+    await prepare(room);
+    return node.publish(
+      'room_add',
+      {
+        'epoch': epoch(room),
+        'people': adding,
+        'certificates': _certificates(adding),
+      },
+      space: room.object.space,
+      audience: [owner],
+    );
+  }
+
+  /// Members' requests to add people, for the owner to approve: the people
+  /// not yet members, newest request first.
+  Future<List<({SignedObject object, List<String> people, List certificates})>>
+  addRequests(EverydayItem room) async {
+    if (room.data['owner'] != node.person) return const [];
+    final members = await this.members(room);
+    final result =
+        <({SignedObject object, List<String> people, List certificates})>[];
+    for (final o in node.store.objects(
+      kind: 'room_add',
+      space: room.object.space,
+      limit: 200,
+    )) {
+      if (o.author == node.person ||
+          o.isPublic ||
+          !node.visible(o) ||
+          !members.contains(o.author) ||
+          node.store.setting('roomAdd/${o.id}') == true) {
+        continue;
+      }
+      final p = await node.content(o);
+      if (p == null) continue;
+      final people = [
+        for (final person in (p['people'] as List).cast<String>())
+          if (!members.contains(person) && !node.blocked.contains(person))
+            person,
+      ];
+      if (people.isEmpty) continue;
+      result.add((
+        object: o,
+        people: people,
+        certificates: p['certificates'] as List,
+      ));
+    }
+    return result;
+  }
+
+  /// Admits the devices a member's request carries for [people], as a
+  /// group's members are admitted: not as friends.
+  Future<void> admitRequested(List certificates, List<String> people) async {
+    for (final wire in certificates) {
+      try {
+        final cert = DeviceCertificate.fromJson(wire as Json);
+        if (people.contains(cert.person) &&
+            cert.person != node.person &&
+            !node.contacts.containsKey(cert.device) &&
+            !node.revoked.contains(cert.device)) {
+          await node.addContact(cert, explicit: false);
+        }
+      } catch (_) {}
+    }
+  }
+
+  /// Settles a request to add people, approved or not, on this device.
+  void closeAddRequest(SignedObject request) {
+    node.store.set('roomAdd/${request.id}', true);
+    node.notify();
+  }
+
   Future<EverydayItem> changeMembers(
     EverydayItem room,
     List<String> people, {

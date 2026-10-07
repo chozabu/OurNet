@@ -177,8 +177,36 @@ extension _ContactDetails on _OurNetAppState {
         : 'Friend since ${_dateTime(first.added)}';
   }
 
-  Future<void> showPersonDetails(BuildContext context, String person) {
+  Future<void> showPersonDetails(BuildContext context, String person) async {
     final me = person == node.person;
+    final connections = node.connections;
+    final friend = connections.isFriend(person);
+    // Read before the sheet opens: both decrypt.
+    final asked = me || friend
+        ? null
+        : (await connections.incoming())
+              .where((r) => r.from == person)
+              .firstOrNull;
+    final sent = me || friend || asked != null
+        ? null
+        : await connections.sentTo(person);
+    if (!context.mounted) return;
+    final chain = me ? null : connections.chain(person);
+    final theirFriends = me
+        ? const <String>[]
+        : (connections
+              .neighbours(person)
+              .where((p) => p != node.person)
+              .toList()
+            ..sort((a, b) {
+              // Friends in common first, then by name.
+              final common = (connections.isFriend(b) ? 1 : 0).compareTo(
+                connections.isFriend(a) ? 1 : 0,
+              );
+              return common != 0
+                  ? common
+                  : name(a).toLowerCase().compareTo(name(b).toLowerCase());
+            }));
     final devices = [
       if (me) node.identity.certificate,
       for (final c in node.contacts.values)
@@ -230,6 +258,8 @@ extension _ContactDetails on _OurNetAppState {
                                 : [
                                     if (node.forgotten.contains(person))
                                       'Disconnected'
+                                    else if (!friend)
+                                      'Not connected'
                                     else
                                       since ?? 'Friend',
                                     if (blocked) 'Blocked',
@@ -254,6 +284,37 @@ extension _ContactDetails on _OurNetAppState {
                     spacing: 8,
                     runSpacing: 8,
                     children: [
+                      if (asked != null)
+                        FilledButton.icon(
+                          onPressed: () {
+                            Navigator.pop(sheet);
+                            act(() => acceptConnection(asked));
+                          },
+                          icon: const Icon(Icons.how_to_reg_outlined),
+                          label: const Text('Accept request'),
+                        )
+                      else if (!friend && sent == null)
+                        FilledButton.icon(
+                          onPressed: (chain?.length ?? 0) < 3
+                              ? null
+                              : () {
+                                  Navigator.pop(sheet);
+                                  unawaited(askToConnect(context, person));
+                                },
+                          icon: const Icon(Icons.person_add_alt),
+                          label: const Text('Invite to connect'),
+                        )
+                      else if (sent != null)
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            Navigator.pop(sheet);
+                            unawaited(askToConnect(context, person));
+                          },
+                          icon: const Icon(Icons.schedule_send_outlined),
+                          label: Text(
+                            'Invited ${_dateTime(sent.created)} · send again',
+                          ),
+                        ),
                       if (people.contains(person))
                         FilledButton.icon(
                           onPressed: () {
@@ -271,7 +332,7 @@ extension _ContactDetails on _OurNetAppState {
                         icon: Icon(blocked ? Icons.undo : Icons.block),
                         label: Text(blocked ? 'Unblock' : 'Block'),
                       ),
-                      if (!node.forgotten.contains(person))
+                      if (friend)
                         OutlinedButton.icon(
                           onPressed: () {
                             Navigator.pop(sheet);
@@ -282,45 +343,92 @@ extension _ContactDetails on _OurNetAppState {
                         ),
                     ],
                   ),
+                if (asked?.text case final text?)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.mail_outline),
+                    title: Text(text),
+                    subtitle: Text(
+                      'Their request, ${_dateTime(asked!.object.created)}',
+                    ),
+                  ),
+                if (!me) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'How you are connected',
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 4),
+                  connectionChain(sheet, chain, person),
+                ],
+                if (theirFriends.isNotEmpty)
+                  ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    childrenPadding: EdgeInsets.zero,
+                    title: Text('Their friends (${theirFriends.length})'),
+                    subtitle: Text(switch (theirFriends
+                        .where(connections.isFriend)
+                        .length) {
+                      0 => 'No friends in common',
+                      1 => '1 friend in common',
+                      final n => '$n friends in common',
+                    }),
+                    children: [
+                      for (final p in theirFriends.take(200))
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: conversationAvatar(p),
+                          title: Text(name(p)),
+                          subtitle: connections.isFriend(p)
+                              ? const Text('Your friend')
+                              : null,
+                          onTap: () {
+                            Navigator.pop(sheet);
+                            unawaited(showPersonDetails(context, p));
+                          },
+                        ),
+                    ],
+                  ),
                 const SizedBox(height: 8),
                 // Someone's devices are there to look at, not the point.
-                ExpansionTile(
-                  tilePadding: EdgeInsets.zero,
-                  childrenPadding: EdgeInsets.zero,
-                  title: Text(
-                    '${me ? 'Your devices' : 'Devices'} (${devices.length})',
+                if (devices.isNotEmpty)
+                  ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    childrenPadding: EdgeInsets.zero,
+                    title: Text(
+                      '${me ? 'Your devices' : 'Devices'} (${devices.length})',
+                    ),
+                    children: [
+                      for (final c in devices)
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(
+                            node.revoked.contains(c.device)
+                                ? Icons.block
+                                : Icons.devices,
+                          ),
+                          title: Text(deviceLabel(c)),
+                          subtitle: Text(
+                            [
+                              if (c.device == node.identity.device)
+                                'This device'
+                              else if (node.revoked.contains(c.device))
+                                removedText(c.device)
+                              else if (recentlyConnected(network, c.device))
+                                'Connected'
+                              else
+                                ?quietText(c.device),
+                              ?addedText(c.device),
+                            ].join(' · '),
+                          ),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () {
+                            Navigator.pop(sheet);
+                            unawaited(showDeviceDetails(context, c));
+                          },
+                        ),
+                    ],
                   ),
-                  children: [
-                    for (final c in devices)
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(
-                          node.revoked.contains(c.device)
-                              ? Icons.block
-                              : Icons.devices,
-                        ),
-                        title: Text(deviceLabel(c)),
-                        subtitle: Text(
-                          [
-                            if (c.device == node.identity.device)
-                              'This device'
-                            else if (node.revoked.contains(c.device))
-                              removedText(c.device)
-                            else if (recentlyConnected(network, c.device))
-                              'Connected'
-                            else
-                              ?quietText(c.device),
-                            ?addedText(c.device),
-                          ].join(' · '),
-                        ),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: () {
-                          Navigator.pop(sheet);
-                          unawaited(showDeviceDetails(context, c));
-                        },
-                      ),
-                  ],
-                ),
                 const SizedBox(height: 8),
                 _idRow(sheet, 'Person ID', person),
               ],
@@ -329,6 +437,117 @@ extension _ContactDetails on _OurNetAppState {
         );
       },
     );
+  }
+
+  /// [chain] from this person to [person]; each name between opens that
+  /// person's details.
+  Widget connectionChain(
+    BuildContext sheet,
+    List<String>? chain,
+    String person,
+  ) {
+    final theme = Theme.of(sheet);
+    if (chain == null) {
+      return Text(
+        'No chain of friends to ${name(person)} is known yet. Friend lists '
+        'arrive as your friends sync; people on older versions do not '
+        'share theirs.',
+        style: theme.textTheme.bodySmall,
+      );
+    }
+    if (chain.length == 2) {
+      return Text(
+        'You are friends directly.',
+        style: theme.textTheme.bodySmall,
+      );
+    }
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 2,
+      runSpacing: 4,
+      children: [
+        for (final (i, p) in chain.indexed) ...[
+          if (i > 0) const Icon(Icons.chevron_right, size: 18),
+          ActionChip(
+            visualDensity: VisualDensity.compact,
+            avatar: conversationAvatar(p, radius: 10),
+            label: Text(p == node.person ? 'You' : name(p)),
+            onPressed: p == node.person || p == person
+                ? null
+                : () {
+                    Navigator.pop(sheet);
+                    unawaited(showPersonDetails(context, p));
+                  },
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Asks [person], reached through friends, to connect, with an optional
+  /// note.
+  Future<void> askToConnect(BuildContext context, String person) async {
+    final route = node.connections.route(person);
+    final note = TextEditingController();
+    final send = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Invite ${name(person)} to connect?'),
+        content: SizedBox(
+          width: 480,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Your request travels through '
+                '${route.map(name).join(', ')}, who pass it on without '
+                'being able to read it. If ${name(person)} accepts, your '
+                'devices connect as friends.',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: note,
+                autofocus: true,
+                maxLength: 500,
+                maxLines: 3,
+                minLines: 1,
+                decoration: const InputDecoration(
+                  labelText: 'Note (optional)',
+                  hintText: 'Say who you are',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Send request'),
+          ),
+        ],
+      ),
+    );
+    final text = note.text;
+    Future<void>.delayed(const Duration(seconds: 1), note.dispose);
+    if (send != true) return;
+    act(() async {
+      await node.connections.request(person, text: text);
+      if (network.running) unawaited(network.syncAll());
+      notice('Request sent to ${name(person)}');
+    });
+  }
+
+  /// Connects with whoever sent [request].
+  Future<void> acceptConnection(ConnectRequest request) async {
+    await node.connections.accept(request);
+    if (network.running) unawaited(network.syncAll());
+    notice('Connected with ${name(request.from)}');
+    refresh();
   }
 
   Future<void> showDeviceDetails(

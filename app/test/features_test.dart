@@ -179,6 +179,77 @@ void main() {
       await tester.runAsync(node.close);
     },
   );
+  testWidgets('a member asks the owner to add a friend, who approves', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    // Bob owns the group; Carol is in it and knows Dave, whom Bob does not.
+    final (bob, carol, dave) = (await tester.runAsync(() async {
+      final nodes = <Node>[];
+      for (final name in ['Bob', 'Carol', 'Dave']) {
+        final n = Node(await LocalIdentity.create(), Store());
+        await n.publish('profile', {'name': name}, space: '_identity');
+        nodes.add(n);
+      }
+      final [bob, carol, dave] = nodes;
+      for (final (a, b) in [(bob, carol), (carol, dave)]) {
+        await a.addContact(b.identity.certificate);
+        await b.addContact(a.identity.certificate);
+      }
+      await Everyday(bob).createRoom('Climbing', [carol.person]);
+      await syncPair(carol, dave);
+      await syncPair(bob, carol);
+      return (bob, carol, dave);
+    }))!;
+    Future<void> open(Node node) async {
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(
+        OurNetApp(
+          node: node,
+          enablePlatform: false,
+          initialTab: Destination.groups,
+        ),
+      );
+      await settled(tester);
+      await tester.tap(find.text('Climbing').first);
+      await settled(tester);
+    }
+
+    await open(carol);
+    await tester.tap(find.byTooltip('Group members'));
+    // The dialog is open while the members action runs.
+    for (var i = 0; i < 5; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.text('Members (2)'), findsOneWidget);
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'Dave'));
+    await tester.pump();
+    await tester.tap(find.text('Ask owner to add 1'));
+    await settled(tester);
+
+    await tester.runAsync(() => syncPair(bob, carol));
+    await open(bob);
+    expect(find.text('Carol asks you to add Dave'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Add'));
+    await settled(tester);
+    await settled(tester);
+    final room = (await tester.runAsync(() => Everyday(bob).rooms()))!.single;
+    expect(room.data['members'], contains(dave.person));
+    expect(find.text('Carol asks you to add Dave'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() async {
+      for (final n in [bob, carol, dave]) {
+        await n.close();
+      }
+    });
+  });
   testWidgets('images embed in groups, messages, forums and private drive', (
     tester,
   ) async {

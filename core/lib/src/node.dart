@@ -8,6 +8,7 @@ import 'store.dart';
 import 'blob_worker.dart';
 import 'locations.dart';
 import 'avatars.dart';
+import 'connections.dart';
 
 /// What a person chose about someone else, kept alike on all their devices.
 /// Blocking and disconnecting are independent: each choice settles one of
@@ -35,6 +36,9 @@ class Node {
 
   /// Profile pictures, cached per person.
   late final avatars = Avatars(this);
+
+  /// Who is friends with whom, and asking someone new to connect.
+  late final connections = Connections(this);
 
   /// Last known positions; set up when first asked for.
   Locations get locations =>
@@ -223,6 +227,7 @@ class Node {
     List<String> audience = const [],
     List<String> via = const [],
     int expires = 0,
+    List<DeviceCertificate> recipients = const [],
   }) {
     if (_closing || _pendingPublications >= 32) {
       return Future.error(
@@ -238,6 +243,7 @@ class Node {
       audience: audience,
       via: via,
       expires: expires,
+      extra: recipients,
     );
     if (store.path == null) return run();
     _pendingPublications++;
@@ -257,6 +263,7 @@ class Node {
     required List<String> audience,
     required List<String> via,
     required int expires,
+    List<DeviceCertificate> extra = const [],
   }) async {
     if (!validContent(kind, content)) throw StateError('Invalid $kind content');
     if (revoked.contains(identity.device))
@@ -267,6 +274,13 @@ class Node {
       ...contacts.values.where(
         (c) => recipients.contains(c.person) && !revoked.contains(c.device),
       ),
+      // Devices of someone not admitted here, known from what they published:
+      // see [Connections.request].
+      for (final c in extra)
+        if (recipients.contains(c.person) &&
+            !revoked.contains(c.device) &&
+            !contacts.containsKey(c.device))
+          c,
     ];
     for (final p in audience) {
       if (!certs.any((c) => c.person == p))
@@ -300,6 +314,7 @@ class Node {
     }
     store.put(object);
     if (kind == 'avatar') avatars.changed(person);
+    if (kind == Connections.listKind) connections.changed();
     notify();
     return object;
   }
@@ -901,6 +916,7 @@ class Node {
     return o.kind == 'revoke' ||
         o.kind == 'profile' ||
         o.kind == 'avatar' ||
+        o.kind == Connections.listKind ||
         o.kind == 'device_name' ||
         wanted.contains(o.space) ||
         (peer.person == person && o.author == person);
@@ -1147,7 +1163,13 @@ class Node {
         !(o.data['via'] as List).contains(person))
       return 0;
     if (o.isPublic &&
-        !['profile', 'avatar', 'revoke', 'device_name'].contains(o.kind) &&
+        ![
+          'profile',
+          'avatar',
+          'revoke',
+          'device_name',
+          Connections.listKind,
+        ].contains(o.kind) &&
         !subscriptions.contains(o.space) &&
         o.author != person)
       return 0;
@@ -1221,6 +1243,8 @@ class Node {
       ].where((added) => added).length,
     );
     if (o.kind == 'avatar') avatars.changed(o.author);
+    if (o.kind == Connections.listKind) connections.changed();
+    if (o.kind == Connections.requestKind) await connections.received(o);
     if (o.kind == 'read') {
       final payload = await content(o);
       final ids = <Object?>{

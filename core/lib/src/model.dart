@@ -189,6 +189,28 @@ bool validContent(String kind, Json p) {
           (p['image'] is String &&
               (p['image'] as String).length <= 64 * 1024 &&
               ['image/jpeg', 'image/png'].contains(p['type'])),
+    // Who the author is connected to, and their devices: see `Connections`.
+    'friends' =>
+      _ids(p['friends'], 1000) &&
+          p['devices'] is List &&
+          (p['devices'] as List).length <= 32 &&
+          (p['devices'] as List).every((c) => c is Map),
+    // Asking someone to connect, or saying yes: see `Connections`.
+    'connect' =>
+      ['request', 'accept'].contains(p['type']) &&
+          p['devices'] is List &&
+          (p['devices'] as List).length <= 32 &&
+          (p['devices'] as List).every((c) => c is Map) &&
+          (p['type'] != 'accept' || p['request'] is String) &&
+          (p['via'] == null || _ids(p['via'], 8)),
+    // A member asking a group's owner to add people: see `Everyday.askToAdd`.
+    'room_add' =>
+      p['epoch'] is String &&
+          _ids(p['people'], 16) &&
+          (p['people'] as List).isNotEmpty &&
+          p['certificates'] is List &&
+          (p['certificates'] as List).length <= 128 &&
+          (p['certificates'] as List).every((c) => c is Map),
     'profile' =>
       p['name'] is String &&
           (p['name'] as String).isNotEmpty &&
@@ -250,6 +272,12 @@ bool validContent(String kind, Json p) {
     _ => true,
   };
 }
+
+/// A list of at most [limit] person IDs.
+bool _ids(Object? v, int limit) =>
+    v is List &&
+    v.length <= limit &&
+    v.every((p) => p is String && p.length <= 64);
 
 final _calDay = RegExp(r'^\d{4}-\d{2}-\d{2}$');
 

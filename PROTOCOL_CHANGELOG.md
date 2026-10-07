@@ -7,6 +7,19 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.19: friend lists, connecting through friends, asking to add to a group
+
+Additive. Builds without it drop `friends`, and store and relay `connect`
+and `room_add` unread, so a request still travels through friends on older
+builds.
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `friends` | new public object kind (space `_identity`) | Who the author is connected to (`friends`, person IDs) and their devices (`devices`, certificates). Newest wins. Offered to every peer, like `profile`. See PROTOCOL.md, Independent objects. | Refuse it on receipt and do not relay it. |
+| `connect` | new private object kind (space `_connect`, `via` the people between) | `type` `request` (sender's `devices`, `via`, optional `text`) or `accept` (`request`, answerer's `devices`). Expires after 30 days. | Store and relay it unread. |
+| `room_add` | new private object kind (room space, audience the owner) | A member asks the owner to add `people`, carrying their `certificates`; `epoch` is the room's. | Store and relay it unread; the owner sees nothing. |
+| `connectIgnored/<id>`, `connectApplied/<id>`, `roomAdd/<id>` | settings | Requests hidden, answers applied, add requests settled, on this device. | Ignored. |
+
 ## 0.2.17: profile pictures, blocking on every device
 
 Additive. Builds without it drop the new kinds, show initials as before and

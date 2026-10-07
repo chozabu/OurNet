@@ -216,6 +216,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// history from before a device was added, and messages from friends who
   /// have not yet heard of it. Each pass covers only what arrived since.
   CoalescedTask? _keyGrants;
+
+  /// Publishes who this person is connected to when that changes.
+  CoalescedTask? _friendList;
+
+  /// People asking to connect, read with the other data.
+  List<ConnectRequest> connectRequests = const [];
   bool _offeringHistory = false;
   late final CoalescedTask _deliveryRefresh;
   bool addingAttachment = false;
@@ -259,6 +265,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   EverydayItem? lastRoom;
   Future<List<EverydayItem>>? everydayView;
   Future<List<EverydayItem>>? roomsView;
+
+  /// Members' requests to add people, per group space; see [groupAddRequests].
+  final addRequestsView = <String, Future<List<AddRequest>>>{};
   Future<List<(EverydayItem, String)>>? attachmentsView;
   final inboxComposer = TextEditingController();
   final inboxFocus = FocusNode();
@@ -539,22 +548,35 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       everydayView = null;
       roomsView = null;
       attachmentsView = null;
+      addRequestsView.clear();
       await refreshGroupChat();
       await refreshGroupForum();
+      connectRequests = await node.connections.incoming();
       refresh();
       _deliveryRefresh.schedule();
     }, (e) => notice('$e'));
     _changes = node.changes.stream.listen((_) {
       _dataRefresh.schedule();
       _keyGrants?.schedule();
+      _friendList?.schedule();
       if (widget.enablePlatform) unawaited(offerHistory());
     });
     _deliveryRefresh.schedule();
+    unawaited(
+      node.connections.incoming().then((requests) {
+        if (mounted) update(() => connectRequests = requests);
+      }, onError: (Object _) {}),
+    );
     if (widget.enablePlatform) {
       _keyGrants = CoalescedTask(
         () => node.shareKeys(),
         (e) => network.log('Could not share keys with your devices: $e'),
         delay: const Duration(seconds: 2),
+      )..schedule();
+      _friendList = CoalescedTask(
+        () => node.connections.publish(),
+        (e) => network.log('Could not publish your friend list: $e'),
+        delay: const Duration(seconds: 5),
       )..schedule();
       if (node.store.setting('autoConnect') != false) {
         unawaited(
@@ -1090,6 +1112,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _changes?.cancel();
     _dataRefresh.close();
     _keyGrants?.close();
+    _friendList?.close();
     _readTimer?.cancel();
     typing
       ..removeListener(redraw)
@@ -1481,6 +1504,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                           },
                         ),
                         UpdateBanner(network: network, nameOf: name),
+                        if (connectRequests.isNotEmpty &&
+                            tab != Destination.network)
+                          connectRequestsBanner(context),
                         Expanded(
                           child: Padding(
                             padding: tab == Destination.maps
