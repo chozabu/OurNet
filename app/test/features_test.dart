@@ -139,7 +139,7 @@ void main() {
   );
 
   testWidgets(
-    'group owner can invite with history off and inspect membership',
+    'group owner invites without a history choice and inspects membership',
     (tester) async {
       tester.view.physicalSize = const Size(1200, 900);
       tester.view.devicePixelRatio = 1;
@@ -162,10 +162,8 @@ void main() {
       await settled(tester);
       await tester.tap(find.byTooltip('Group members'));
       await tester.pump(const Duration(milliseconds: 300));
-      expect(
-        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
-        false,
-      );
+      // History is always shared with people joining.
+      expect(find.byType(SwitchListTile), findsNothing);
       await tester.tap(find.byType(CheckboxListTile).last);
       await tester.tap(find.text('Save membership'));
       await settled(tester);

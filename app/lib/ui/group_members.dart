@@ -16,7 +16,6 @@ extension _GroupMemberPages on _OurNetAppState {
     final selected = members.toSet();
     // Friends a member who is not the owner asks the owner to add.
     final asking = <String>{};
-    var shareHistory = false;
     final owner = room.data['owner'] == node.person;
     if (!context.mounted) return;
     List<String> addable() => people.where((p) => !members.contains(p)).toList()
@@ -104,17 +103,6 @@ extension _GroupMemberPages on _OurNetAppState {
                     label: const Text('Add a new friend'),
                   ),
                   if (owner) ...[
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text(
-                        'Share existing history with new members',
-                      ),
-                      subtitle: const Text(
-                        'Off: new members see future activity only. Existing members keep their history.',
-                      ),
-                      value: shareHistory,
-                      onChanged: (value) => change(() => shareHistory = value),
-                    ),
                     const Text(
                       'Membership changes apply as devices reconnect. Removed members keep copies they already received.',
                     ),
@@ -193,7 +181,7 @@ extension _GroupMemberPages on _OurNetAppState {
       if (selected.length == members.length && selected.containsAll(members)) {
         return;
       }
-      await saveMembership(room, selected.toList(), shareHistory: shareHistory);
+      await saveMembership(room, selected.toList());
     }
   }
 
@@ -253,21 +241,14 @@ extension _GroupMemberPages on _OurNetAppState {
     room = await everyday.current(room);
     await everyday.admitRequested(request.certificates, request.people);
     final members = await everyday.members(room);
-    await saveMembership(
-      room,
-      {...members, ...request.people}.toList(),
-      shareHistory: false,
-    );
+    await saveMembership(room, {...members, ...request.people}.toList());
     everyday.closeAddRequest(request.object);
     addRequestsView.clear();
   }
 
-  /// Publishes [room]'s new membership, [selected], as its owner.
-  Future<void> saveMembership(
-    EverydayItem room,
-    List<String> selected, {
-    required bool shareHistory,
-  }) async {
+  /// Publishes [room]'s new membership, [selected], as its owner. People
+  /// joining always get the group's existing history.
+  Future<void> saveMembership(EverydayItem room, List<String> selected) async {
     final everyday = Everyday(node);
     {
       // Keep a verified encrypted source for any files copied into the new epoch.
@@ -279,7 +260,7 @@ extension _GroupMemberPages on _OurNetAppState {
       final next = await everyday.changeMembers(
         room,
         selected,
-        shareHistory: shareHistory,
+        shareHistory: true,
       );
       update(() {
         activeRoom = next;
