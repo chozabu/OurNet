@@ -6,6 +6,7 @@ import 'package:archive/archive_io.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:sqlite3/sqlite3.dart';
 
+import 'fast_crypto.dart';
 import 'model.dart';
 import 'node.dart';
 import 'store.dart';
@@ -218,6 +219,16 @@ class Backup {
     } finally {
       db.close();
     }
+    // A restored profile is this one as it was: peers' records of what it
+    // held since no longer apply, so it starts a new change log epoch.
+    final copy = sqlite3.open(snapshot);
+    try {
+      copy.execute(
+        "DELETE FROM settings WHERE key IN ('syncEpoch','syncMarks')",
+      );
+    } finally {
+      copy.close();
+    }
     final zip = ZipFileEncoder()..create(partial);
     try {
       zip.addArchiveFile(ArchiveFile.bytes('manifest.json', manifest));
@@ -292,7 +303,7 @@ class Backup {
   ) async {
     final salt = SecretKeyData.random(length: 16).bytes;
     final key = await _derive(passphrase, salt, memory, iterations);
-    final box = await Chacha20.poly1305Aead().encrypt(
+    final box = await aead.encrypt(
       utf8.encode(secrets),
       secretKey: key,
       aad: utf8.encode('$_domain/$person'),
@@ -341,7 +352,7 @@ class Backup {
     );
     try {
       return utf8.decode(
-        await Chacha20.poly1305Aead().decrypt(
+        await aead.decrypt(
           SecretBox.fromConcatenation(
             unb64(sealed['box']),
             nonceLength: 12,
@@ -364,12 +375,12 @@ class Backup {
   ) async {
     final password = passphrase.trim();
     final key = await Isolate.run(
-      () async => (await Argon2id(
-        parallelism: 1,
+      () => argon2id(
+        utf8.encode(password),
+        salt,
         memory: memory,
         iterations: iterations,
-        hashLength: 32,
-      ).deriveKeyFromPassword(password: password, nonce: salt)).extractBytes(),
+      ),
     );
     return SecretKey(key);
   }

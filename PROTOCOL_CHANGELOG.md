@@ -7,6 +7,50 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.27: syncing only what changed; native crypto
+
+Additive. Devices that list the capability `since_sync` keep a change log
+and, once they have agreed, exchange only what changed since.
+
+**Database.** A new table `sync_changes(seq AUTOINCREMENT, object_id)` gets
+a row from triggers for every object and evidence record stored; the newest
+50 000 are kept. Settings `syncEpoch` (random, per database) and `syncMarks`
+(per peer: `mine`, `theirs` change numbers and `myPolicy`, `theirPolicy`
+digests). Backups leave both settings out, so a restored profile starts a new
+epoch. Older builds ignore the table (its triggers keep filling it).
+
+**Marks.** A device records a mark for a peer when a full sync walks to the
+end of history with nothing changing on either side, or when a `delta`
+exchange ends with both agreeing. A side's *policy digest*
+(`Node.policyDigest`) covers its epoch, subscriptions, revoked devices, the
+certificates and group keys it shares with that peer, and whom it blocks.
+
+**Exchange.** With a mark, a device sends `delta` (`since`: the peer's change
+number in the mark, `policy`: the peer's digest in the mark, `changes`: an
+inventory of its own objects changed since its number). The peer answers
+`full: true` when its digest differs, its log no longer reaches `since`, more
+than 512 objects changed, or one of them is of kind `room`, `room_invite` or
+`revoke`; the asker also syncs in full when its own digest or log says so.
+Otherwise the reply carries `seq`, `policy`, `changes` (the peer's own changed
+objects) and `view` (what it holds of the asker's). When either side lacks
+something, `pull` with `only: [ids]` and `push` move those objects alone,
+until both agree. Unchanged devices exchange one request of about 2 KB, in
+place of up to 16 inventories of 2000 entries each way.
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `caps: [..., 'since_sync']` | as `caps` | Answers `delta` and limited `pull`. | Ignore it; they are never sent either. |
+| `{type: 'delta', since, policy, changes}` | request | See above. | Refuse it (never sent to them). |
+| `seq`, `policy` | `pull` reply | Where the replying device's log stood, and its digest for the asker. | Ignore them. |
+| `only: [ids]` | `pull` request | Offer just these objects; the reply's `inventory` covers them and `more` says the page was full. | Never sent to them. |
+
+`delta` joins the requests that share a pooled connection.
+
+**Native crypto.** Ed25519, X25519, ChaCha20-Poly1305, SHA-256 and Argon2id
+run in a Rust library (`native/`) where it is built, with byte-identical
+results; anything it does not confirm (a signature, a box that does not open)
+is decided by the Dart code as before. Nothing on the wire changes.
+
 ## 0.2.26: several requests per connection
 
 Additive, no database change. A device that lists the new capability

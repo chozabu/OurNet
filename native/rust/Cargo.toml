@@ -1,0 +1,23 @@
+[package]
+name = "ournet_native"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Native crypto for OurNet: same results as the Dart code it speeds up."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std", "zeroize"] }
+x25519-dalek = { version = "=2.0.1", default-features = false, features = ["zeroize"] }
+chacha20poly1305 = { version = "=0.10.1", default-features = false, features = ["alloc"] }
+sha2 = { version = "=0.10.9", default-features = false }
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+jpeg-encoder = { version = "0.6", default-features = false, features = ["std"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"

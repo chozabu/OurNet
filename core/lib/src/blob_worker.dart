@@ -6,8 +6,10 @@ import 'dart:convert';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:image/image.dart' as img;
+import 'package:ournet_native/ournet_native.dart';
 import 'package:sqlite3/sqlite3.dart';
 
+import 'fast_crypto.dart';
 import 'model.dart';
 import 'store.dart';
 
@@ -357,7 +359,7 @@ Future<void> _run(({SendPort port, String? path}) initial) async {
           final stored = key == null
               ? encoded
               : Uint8List.fromList(
-                  (await Chacha20.poly1305Aead().encrypt(
+                  (await aead.encrypt(
                     encoded,
                     secretKey: key,
                     aad: utf8.encode('ournet/preview/${command['preview']}'),
@@ -386,7 +388,7 @@ Future<Uint8List> _openPreview(
 ) async {
   if (key == null) return stored;
   return Uint8List.fromList(
-    await Chacha20.poly1305Aead().decrypt(
+    await aead.decrypt(
       SecretBox.fromConcatenation(stored, nonceLength: 12, macLength: 16),
       secretKey: key,
       aad: utf8.encode('ournet/preview/$id'),
@@ -413,6 +415,10 @@ Uint8List _encodePreview(Uint8List rgba, int width, int height) {
       break;
     }
   }
+  if (opaque) {
+    final jpeg = NativeImage.jpeg(rgba, width, height, quality: 82);
+    if (jpeg != null) return jpeg;
+  }
   final image = img.Image.fromBytes(
     width: width,
     height: height,
@@ -426,6 +432,13 @@ Uint8List _encodePreview(Uint8List rgba, int width, int height) {
 }
 
 Uint8List? _encodeAvatar(Uint8List rgba, int width, int height, int maxBytes) {
+  for (final quality in [86, 76, 64, 50, 36]) {
+    // Lays transparent parts over white, as below.
+    final jpeg = NativeImage.jpeg(rgba, width, height, quality: quality);
+    if (jpeg == null) break;
+    if (jpeg.length <= maxBytes) return jpeg;
+    if (quality == 36) return null;
+  }
   final image = img.Image.fromBytes(
     width: width,
     height: height,

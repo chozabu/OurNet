@@ -3,6 +3,14 @@
 The app is Flutter; protocol/storage code is in `core`, and networking/file
 transfer is in `transport`. Preserve the separation between these packages.
 
+Hot crypto (Ed25519, X25519, ChaCha20-Poly1305, SHA-256, Argon2id) and JPEG
+encoding run in `native`, a Rust library built by a Dart build hook for each
+target with an installed Rust standard library; elsewhere the pure-Dart code
+runs. Call it through `core/lib/src/fast_crypto.dart`, keep results
+byte-identical to the Dart implementations (`native/test`,
+`core/test/native_crypto_test.dart`), and let the Dart code decide anything
+the native code rejects.
+
 ## Responsiveness
 
 - Treat responsiveness separately from operation completion time. Keep typing,

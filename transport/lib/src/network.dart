@@ -42,6 +42,12 @@ class PeerNetwork {
         if (value['version'] case final String v) peerVersions[key] = v;
       }
     }
+    final marks = node.store.setting('syncMarks');
+    if (marks is Map) {
+      for (final MapEntry(:key, :value) in marks.entries) {
+        if (_Mark.parse(value) case final mark?) _marks[key as String] = mark;
+      }
+    }
   }
   iroh.Endpoint? _endpoint;
   StreamSubscription<void>? _changes;
@@ -184,7 +190,14 @@ class PeerNetwork {
   /// `blob_inline`: chunk bytes travel base64 in `blob` replies.
   /// `multi_request`: one connection serves several requests, one stream
   /// each, in turn; it waits [servedIdle] for the next.
-  static const caps = ['cursor_paging', 'blob_inline', 'multi_request'];
+  /// `since_sync`: answers `delta`, and `pull` limited to `only` some
+  /// objects, so two devices that agreed before exchange only what changed.
+  static const caps = [
+    'cursor_paging',
+    'blob_inline',
+    'multi_request',
+    'since_sync',
+  ];
 
   /// Capabilities each peer last announced; empty for builds that predate them.
   final Map<String, Set<String>> peerCaps = {};
@@ -436,7 +449,14 @@ class PeerNetwork {
 
   /// Requests that may share a connection. Each is safe to send again, which
   /// a pooled connection closed by its peer just as it was reused needs.
-  static const _poolable = {'pull', 'push', 'blob', 'position', 'typing'};
+  static const _poolable = {
+    'pull',
+    'push',
+    'delta',
+    'blob',
+    'position',
+    'typing',
+  };
   final Map<String, _Pooled> _pool = {};
   final Set<String> _dialing = {};
 
@@ -566,7 +586,14 @@ class PeerNetwork {
       var window = 0;
       InventoryCursor? localCursor, remoteCursor;
       var cursorPaging = true;
-      for (var page = 0; page < 16; page++) {
+      // Devices that agreed before exchange only what changed since.
+      final quick = await _syncChanges(device);
+      if (quick != null) exhausted = !quick;
+      // A walk from the newest window notes where both logs stood, which
+      // becomes their mark once it reaches the end with nothing changed.
+      final startSeq = node.changeSeq, startPolicy = node.policyDigest(device);
+      Json? lastReply;
+      for (var page = 0; quick == null && page < 16; page++) {
         final inventory = cursorPaging
             ? node.inventoryAfter(peerDevice: device, after: localCursor)
             : node.inventory(peerDevice: device, window: window);
@@ -579,6 +606,19 @@ class PeerNetwork {
           'addresses': _sharedAddresses(device),
           ..._stamp,
         });
+        lastReply = reply;
+        if (page == 0 && resume == null) {
+          _walkStart.remove(device);
+          if (_Mark.parse({
+                'mine': startSeq,
+                'theirs': reply['seq'],
+                'myPolicy': startPolicy,
+                'theirPolicy': reply['policy'],
+              })
+              case final start?) {
+            _walkStart[device] = start;
+          }
+        }
         final incoming = await node.receive(device, reply['items']);
         final remoteInventory = reply['inventory'] as Json;
         final outgoing = await node.offer(device, remoteInventory);
@@ -621,7 +661,17 @@ class PeerNetwork {
           }
         }
       }
-      if (exhausted) {
+      final start = _walkStart[device];
+      if (quick == null && !exhausted) {
+        _walkStart.remove(device);
+        // Nothing about sharing changed on either side during the walk.
+        if (start != null &&
+            node.policyDigest(device) == start.myPolicy &&
+            lastReply?['policy'] == start.theirPolicy) {
+          _setMark(device, start);
+        }
+      }
+      if (quick == null && exhausted) {
         _resume[device] = (
           window: window,
           local: localCursor,
@@ -657,6 +707,114 @@ class PeerNetwork {
       _progress.remove(device);
       _activity();
     }
+  }
+
+  /// Where this device's and each peer's change logs stood when the two last
+  /// agreed, and the [Node.policyDigest] of each side then.
+  final Map<String, _Mark> _marks = {};
+
+  /// Where both logs stood when the current walk through history began.
+  final Map<String, _Mark> _walkStart = {};
+  DateTime? _marksSaved;
+
+  void _setMark(String device, _Mark mark) {
+    _marks[device] = mark;
+    final saved = _marksSaved;
+    // A mark older than the newest is still right (it covers more), so it
+    // is written at most every few minutes, and when the network stops.
+    if (saved == null ||
+        DateTime.now().difference(saved) >= const Duration(minutes: 5)) {
+      _saveMarks();
+    }
+  }
+
+  void _saveMarks() {
+    _marksSaved = DateTime.now();
+    node.store.set('syncMarks', {
+      for (final MapEntry(:key, :value) in _marks.entries) key: value.toJson(),
+    });
+  }
+
+  /// Exchanges only what changed since this device and [device] last agreed:
+  /// true once they agree again, false when there is more than one session's
+  /// worth, and null when a full sync is needed (no mark, an older peer, a
+  /// change to what may be shared, or more changes than are listed).
+  Future<bool?> _syncChanges(String device) async {
+    final mark = _marks[device];
+    if (mark == null || peerCaps[device]?.contains('since_sync') != true) {
+      return null;
+    }
+    final policy = node.policyDigest(device);
+    if (policy != mark.myPolicy) return null;
+    final seq = node.changeSeq;
+    final mine = node.changedSince(mark.mine);
+    if (mine == null) return null;
+    final reply = await request(device, {
+      'type': 'delta',
+      'since': mark.theirs,
+      'policy': mark.theirPolicy,
+      'changes': node.changeInventory(device, mine),
+      ..._stamp,
+    });
+    final theirSeq = reply['seq'], theirPolicy = reply['policy'];
+    final changes = reply['changes'], view = reply['view'];
+    if (reply['full'] == true ||
+        theirSeq is! int ||
+        theirPolicy is! String ||
+        changes is! Json ||
+        view is! Json ||
+        changes['have'] is! Map) {
+      return null;
+    }
+    final theirs = (changes['have'] as Map).keys.whereType<String>().toList();
+    final held = node.store.routesOf(theirs);
+    // Each side already holds what the other changed: nothing to send.
+    var agreed =
+        held.length == theirs.length &&
+        node.agrees(device, view, mine) &&
+        node.agrees(device, changes, held, offeredOnly: false);
+    final ids = {for (final r in mine) r.id, ...theirs}.toList();
+    for (var round = 0; !agreed && round < 16; round++) {
+      var more = false;
+      final pulled = await request(device, {
+        'type': 'pull',
+        'only': ids,
+        'inventory': node.changeInventory(device, node.store.routesOf(ids)),
+        'addresses': _sharedAddresses(device),
+        ..._stamp,
+      });
+      final incoming = await node.receive(device, pulled['items']);
+      final outgoing = await node.offer(
+        device,
+        pulled['inventory'] as Json,
+        only: ids,
+        truncated: () => more = true,
+      );
+      await _learnAddresses(device, pulled['addresses']);
+      final pushed = await request(device, {
+        'type': 'push',
+        'items': outgoing,
+        'caps': caps,
+      });
+      _progress[device] = _progress[device]! + incoming + outgoing.length;
+      _activity();
+      agreed =
+          incoming == 0 &&
+          pushed['changed'] == 0 &&
+          !more &&
+          pulled['more'] != true;
+    }
+    if (!agreed) return false;
+    _setMark(
+      device,
+      _Mark(
+        mine: seq,
+        theirs: theirSeq,
+        myPolicy: policy,
+        theirPolicy: theirPolicy,
+      ),
+    );
+    return true;
   }
 
   /// Failed at least twice in a row and is waiting for its retry.
@@ -784,9 +942,38 @@ class PeerNetwork {
             _notePeer(peer, j);
             _heard(peer);
             _retryNow(peer);
+            // Taken first: this device holds at least this much of its log
+            // once the reply is sent, which a walk records as its start.
+            final seq = node.changeSeq, policy = node.policyDigest(peer);
+            if (j['only'] case final List only
+                when only.length <= 2 * Node.maxInventoryEntries &&
+                    only.every((id) => id is String)) {
+              var more = false;
+              final ids = only.cast<String>();
+              final items = await node.offer(
+                peer,
+                j['inventory'],
+                only: ids,
+                truncated: () => more = true,
+              );
+              await _learnAddresses(peer, j['addresses']);
+              reply = {
+                'items': items,
+                'more': more,
+                'inventory': node.changeInventory(
+                  peer,
+                  node.store.routesOf(ids),
+                ),
+                'addresses': _sharedAddresses(peer),
+                ..._stamp,
+              };
+              break;
+            }
             final items = await node.offer(peer, j['inventory']);
             await _learnAddresses(peer, j['addresses']);
             reply = {
+              'seq': seq,
+              'policy': policy,
               'items': items,
               // The window the caller is on, so both sides walk together.
               'inventory': j['cursorPaging'] == true
@@ -809,6 +996,11 @@ class PeerNetwork {
             _heard(peer);
             _retryNow(peer);
             reply = {'changed': await node.receive(peer, j['items'])};
+          case 'delta':
+            _notePeer(peer, j);
+            _heard(peer);
+            _retryNow(peer);
+            reply = {...await node.answerDelta(peer, j), ..._stamp};
           case 'blob':
             // Require a referenced object that this peer is allowed to receive.
             final o = node.store.get(j['object']);
@@ -984,6 +1176,7 @@ class PeerNetwork {
     await Future.wait(_jobs.toList());
     try {
       _rememberUnsaved();
+      if (_marks.isNotEmpty) _saveMarks();
     } catch (_) {
       // The profile closed first; these times are shown, not relied on.
     }
@@ -998,4 +1191,39 @@ class _Pooled {
   bool busy = false, closed = false;
   int uses = 0;
   Timer? idle;
+}
+
+/// Where two devices' change logs stood when they last agreed.
+class _Mark {
+  const _Mark({
+    required this.mine,
+    required this.theirs,
+    required this.myPolicy,
+    required this.theirPolicy,
+  });
+  final int mine, theirs;
+  final String myPolicy, theirPolicy;
+
+  static _Mark? parse(Object? value) => switch (value) {
+    {
+      'mine': final int mine,
+      'theirs': final int theirs,
+      'myPolicy': final String myPolicy,
+      'theirPolicy': final String theirPolicy,
+    } =>
+      _Mark(
+        mine: mine,
+        theirs: theirs,
+        myPolicy: myPolicy,
+        theirPolicy: theirPolicy,
+      ),
+    _ => null,
+  };
+
+  Json toJson() => {
+    'mine': mine,
+    'theirs': theirs,
+    'myPolicy': myPolicy,
+    'theirPolicy': theirPolicy,
+  };
 }

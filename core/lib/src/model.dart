@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
-import 'package:crypto/crypto.dart' as digest;
 import 'package:cryptography/cryptography.dart';
+import 'fast_crypto.dart';
 import 'recurrence.dart' show Repeat;
 
 typedef Json = Map<String, dynamic>;
@@ -473,9 +473,8 @@ String canonical(Object? value) {
 
 List<int> bytes(Object? value) => utf8.encode(canonical(value));
 String hash(Object? value) => canonicalHash(canonical(value));
-String canonicalHash(String canonical) =>
-    digest.sha256.convert(utf8.encode(canonical)).toString();
-String blobHash(List<int> value) => digest.sha256.convert(value).toString();
+String canonicalHash(String canonical) => sha256Hex(utf8.encode(canonical));
+String blobHash(List<int> value) => sha256Hex(value);
 String b64(List<int> value) => base64UrlEncode(value);
 List<int> unb64(String value) => base64Url.decode(value);
 String randomId() =>
@@ -502,19 +501,17 @@ void _checkAead(Map sealed) {
 
 final _signer = Ed25519();
 Future<String> sign(Json value, SimpleKeyPair key) async =>
-    b64((await _signer.sign(bytes(value), keyPair: key)).bytes);
+    b64((await ed25519Sign(bytes(value), key)).bytes);
 
 /// False for data naming a signature algorithm other than [signatureAlgorithm].
 Future<bool> verify(Json value, String signature, String publicKey) async {
   final sig = value['sig'];
   if (sig != null && sig != signatureAlgorithm) return false;
   try {
-    return await _signer.verify(
+    return await ed25519Verify(
       bytes(value),
-      signature: Signature(
-        unb64(signature),
-        publicKey: SimplePublicKey(unb64(publicKey), type: KeyPairType.ed25519),
-      ),
+      unb64(signature),
+      unb64(publicKey),
     );
   } catch (_) {
     return false;
@@ -626,7 +623,7 @@ class SealedRoot {
     final person = b64((await root.extractPublicKey()).bytes);
     final salt = List.generate(16, (_) => Random.secure().nextInt(256));
     final key = await _derive(phrase, salt, memory, iterations);
-    final box = await Chacha20.poly1305Aead().encrypt(
+    final box = await aead.encrypt(
       await root.extractPrivateKeyBytes(),
       secretKey: key,
       aad: utf8.encode('$_domain/$person'),
@@ -652,7 +649,7 @@ class SealedRoot {
     );
     final List<int> seed;
     try {
-      seed = await Chacha20.poly1305Aead().decrypt(
+      seed = await aead.decrypt(
         SecretBox.fromConcatenation(
           unb64(data['box']),
           nonceLength: 12,
@@ -681,12 +678,12 @@ class SealedRoot {
   ) async {
     final password = phrase.trim();
     final key = await Isolate.run(
-      () async => (await Argon2id(
-        parallelism: 1,
+      () => argon2id(
+        utf8.encode(password),
+        salt,
         memory: memory,
         iterations: iterations,
-        hashLength: 32,
-      ).deriveKeyFromPassword(password: password, nonce: salt)).extractBytes(),
+      ),
     );
     return SecretKey(key);
   }
@@ -722,7 +719,7 @@ class LocalIdentity {
   }) async {
     root ??= await _signer.newKeyPair();
     final device = await _signer.newKeyPair();
-    final agreement = await X25519().newKeyPair();
+    final agreement = await newAgreementKeyPair();
     final data = <String, dynamic>{
       'domain': 'ournet/device/2',
       'sig': signatureAlgorithm,
@@ -982,7 +979,7 @@ Future<List<int>> unsealGroup(Json encrypted, GroupKey group) async {
   final seal = encrypted['group'] as Map;
   if (seal['id'] != group.id) throw StateError('Another group key');
   _checkAead(encrypted);
-  return Chacha20.poly1305Aead().decrypt(
+  return aead.decrypt(
     SecretBox.fromConcatenation(
       unb64(seal['box'] as String),
       nonceLength: 12,
@@ -1003,19 +1000,13 @@ Future<Json> encryptFor(
   bool saltedWraps = false,
   GroupKey? group,
 }) async {
-  final cipher = Chacha20.poly1305Aead();
+  final cipher = aead;
   final contentKey = await cipher.newSecretKey();
   final box = await cipher.encrypt(bytes(plain), secretKey: contentKey);
   final wraps = <Json>[];
   for (final recipient in {for (final r in recipients) r.device: r}.values) {
-    final ephemeral = await X25519().newKeyPair();
-    final shared = await X25519().sharedSecretKey(
-      keyPair: ephemeral,
-      remotePublicKey: SimplePublicKey(
-        unb64(recipient.agreement),
-        type: KeyPairType.x25519,
-      ),
-    );
+    final ephemeral = await newAgreementKeyPair();
+    final shared = await x25519Agree(ephemeral, unb64(recipient.agreement));
     final key = await _wrapKey(shared, recipient.device, salted: saltedWraps);
     final wrapped = await cipher.encrypt(
       await contentKey.extractBytes(),
@@ -1085,13 +1076,7 @@ Future<List<int>> unwrapFor(
     throw StateError('Unsupported key agreement');
   }
   _checkAead(encrypted);
-  final shared = await X25519().sharedSecretKey(
-    keyPair: agreementKey,
-    remotePublicKey: SimplePublicKey(
-      unb64(wrap['ephemeral']),
-      type: KeyPairType.x25519,
-    ),
-  );
+  final shared = await x25519Agree(agreementKey, unb64(wrap['ephemeral']));
   final sealed = SecretBox.fromConcatenation(
     unb64(wrap['box']),
     nonceLength: 12,
@@ -1100,7 +1085,7 @@ Future<List<int>> unwrapFor(
   // Salted derivation first; wraps from builds before it used no salt.
   for (final salted in [true, false]) {
     try {
-      return await Chacha20.poly1305Aead().decrypt(
+      return await aead.decrypt(
         sealed,
         secretKey: await _wrapKey(shared, device, salted: salted),
         aad: utf8.encode(device),
@@ -1117,7 +1102,7 @@ Future<Json> decryptWith(Json encrypted, List<int> contentKey) async {
   _checkAead(encrypted);
   return jsonDecode(
         utf8.decode(
-          await Chacha20.poly1305Aead().decrypt(
+          await aead.decrypt(
             SecretBox.fromConcatenation(
               unb64(encrypted['box']),
               nonceLength: 12,
@@ -1137,7 +1122,7 @@ Future<Uint8List> sealBlob(
   SecretKey key, {
   required bool versioned,
 }) async {
-  final box = await Chacha20.poly1305Aead().encrypt(
+  final box = await aead.encrypt(
     plain,
     secretKey: key,
     aad: versioned ? const [blobVersion] : const [],
@@ -1155,7 +1140,7 @@ Future<Uint8List> sealBlob(
 /// only be legacy, so a future version byte cannot be told apart from it:
 /// unknown versions fail authentication rather than being named.
 Future<List<int>> openBlob(List<int> stored, SecretKey key) async {
-  final cipher = Chacha20.poly1305Aead();
+  final cipher = aead;
   if (stored.isNotEmpty && stored.first == blobVersion) {
     try {
       return await cipher.decrypt(

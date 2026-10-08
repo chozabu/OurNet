@@ -774,6 +774,125 @@ class Node {
     return withdrawn;
   }
 
+  /// Kinds that change which objects may be offered to whom (group state and
+  /// revocations). A change to one of them makes devices compare everything
+  /// again rather than only what changed.
+  static const policyKinds = {'room', 'room_invite', 'revoke'};
+
+  /// This profile's change log epoch. A backup leaves it out, so a restored
+  /// profile starts a new one and what peers recorded of it no longer applies.
+  late final String syncEpoch = () {
+    final saved = store.setting('syncEpoch');
+    if (saved is String) return saved;
+    final fresh = randomId();
+    store.set('syncEpoch', fresh);
+    return fresh;
+  }();
+
+  /// The newest entry of this device's change log.
+  int get changeSeq => store.changeSeq;
+
+  /// The inventory fields that describe this device's sharing with [peer]
+  /// rather than particular objects.
+  Json _inventoryHeader(DeviceCertificate? peer) => {
+    'version': 2,
+    'ownRelay': true,
+    'subscriptions': subscriptions.toList()..sort(),
+    'revoked': revoked.toList()..sort(),
+    if (peer != null) 'devices': sharedCertificates(peer),
+    if (peer != null) 'groupKeys': groups.keysFor(peer.person),
+  };
+
+  /// Everything besides stored objects that decides what this device offers
+  /// [peerDevice] and asks of it, as one digest. While it is unchanged on
+  /// both sides, the objects changed since the two last agreed are all that
+  /// can differ between them.
+  String policyDigest(String peerDevice) => hash({
+    'epoch': syncEpoch,
+    'peer': peerDevice,
+    'header': _inventoryHeader(contacts[peerDevice]),
+    'blocked': blocked.toList()..sort(),
+  });
+
+  /// The objects changed here after change [since], or null when a full
+  /// comparison is needed instead.
+  List<ObjectRoute>? changedSince(int since) {
+    final changed = store.changedSince(since);
+    if (changed == null || changed.any((r) => policyKinds.contains(r.kind))) {
+      return null;
+    }
+    return changed;
+  }
+
+  /// An inventory of just those of [routes] that [peerDevice] may receive,
+  /// with the fields [inventoryAfter] sends, for a sync of what changed.
+  Json changeInventory(String peerDevice, Iterable<ObjectRoute> routes) {
+    final peer = contacts[peerDevice]!;
+    final visible = [
+      for (final route in routes)
+        if (_offerable(route, peer, {route.space}, relay: true)) route,
+    ];
+    store.primeEvidence([for (final route in visible) route.id]);
+    return {
+      ..._inventoryHeader(peer),
+      'have': {
+        for (final route in visible) route.id: store.evidenceDigest(route.id),
+      },
+      'paths': _pathDigests(visible, peer),
+    };
+  }
+
+  /// Whether [inventory] from [peerDevice] already holds, path for path,
+  /// each of [routes] that this device would offer it.
+  /// With [offeredOnly] false, routes this device would not offer count too.
+  bool agrees(
+    String peerDevice,
+    Json inventory,
+    Iterable<ObjectRoute> routes, {
+    bool offeredOnly = true,
+  }) {
+    final peer = contacts[peerDevice]!;
+    final have = inventory['have'] as Map? ?? const {};
+    final paths = inventory['paths'] as Map? ?? const {};
+    for (final route in routes) {
+      if (offeredOnly && !_offerable(route, peer, {route.space}, relay: true)) {
+        continue;
+      }
+      if (!have.containsKey(route.id) ||
+          (paths[route.id] ?? '') != _pathDigest(route, peer)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// Answers a `delta` request. [peerDevice] last agreed with this device at
+  /// this device's change `since`, when its [policyDigest] was `policy`, and
+  /// lists in `changes` what it has changed since. The reply lists this
+  /// device's own changes since then (`changes`) and what it holds of the
+  /// peer's (`view`), or says `full` when everything must be compared.
+  Future<Json> answerDelta(String peerDevice, Json request) async {
+    await groups.refresh();
+    final since = request['since'];
+    final theirs = request['changes'];
+    final seq = changeSeq;
+    final changed = since is int ? changedSince(since) : null;
+    if (changed == null ||
+        theirs is! Map ||
+        theirs['have'] is! Map ||
+        (theirs['have'] as Map).length > maxInventoryEntries ||
+        request['policy'] != policyDigest(peerDevice)) {
+      return {'full': true};
+    }
+    final ids = (theirs['have'] as Map).keys.whereType<String>().toList();
+    return {
+      'seq': seq,
+      'policy': policyDigest(peerDevice),
+      'changes': changeInventory(peerDevice, changed),
+      'view': changeInventory(peerDevice, store.routesOf(ids)),
+    };
+  }
+
   /// Objects one inventory reconciles. History beyond it is covered by later
   /// windows, so an inventory stays a bounded message however much a device
   /// holds. Tests narrow it to walk several windows over a small profile.
@@ -797,10 +916,8 @@ class Node {
     );
     store.primeEvidence([for (final route in visible) route.id]);
     return {
-      'version': 2,
+      ..._inventoryHeader(peer),
       'cursorPaging': true,
-      'ownRelay': true,
-      'subscriptions': subscriptions.toList()..sort(),
       'have': {
         for (final route in visible) route.id: store.evidenceDigest(route.id),
       },
@@ -814,9 +931,6 @@ class Node {
         'next': InventoryCursor(page.last.created, page.last.id).toJson(),
       if (more)
         'through': InventoryCursor(page.last.created, page.last.id).toJson(),
-      'revoked': revoked.toList()..sort(),
-      if (peer != null) 'devices': sharedCertificates(peer),
-      if (peer != null) 'groupKeys': groups.keysFor(peer.person),
     };
   }
 
@@ -1106,7 +1220,17 @@ class Node {
 
   /// Pages reconcile evidence independently of object presence. They are
   /// bounded by count AND encoded size. Caller re-exchanges inventory to page.
-  Future<List<Json>> offer(String peerDevice, Json inventory) async {
+  ///
+  /// With [only], just those of this device's objects are considered, against
+  /// an inventory covering them (a sync of what changed since two devices
+  /// last agreed). [truncated] is called when the page is full before every
+  /// candidate was considered.
+  Future<List<Json>> offer(
+    String peerDevice,
+    Json inventory, {
+    List<String>? only,
+    void Function()? truncated,
+  }) async {
     if (!allowedPeer(peerDevice))
       throw StateError('Peer is not an admitted device');
     if (inventory['version'] != 2) throw StateError('Unsupported protocol');
@@ -1149,14 +1273,18 @@ class Node {
     if (paths != null && paths.length > maxInventoryEntries)
       throw StateError('Inventory too large');
     (int, String)? cursor = after == null ? null : (after.created, after.id);
+    var listed = false;
     walk:
     while (true) {
-      final entries = store.recentRoutes(
-        from: inventory['from'] as int? ?? 0,
-        until: inventory['until'] as int?,
-        after: cursor,
-        through: through == null ? null : (through.created, through.id),
-      );
+      final entries = only != null
+          ? (listed ? const <ObjectRoute>[] : store.routesOf(only))
+          : store.recentRoutes(
+              from: inventory['from'] as int? ?? 0,
+              until: inventory['until'] as int?,
+              after: cursor,
+              through: through == null ? null : (through.created, through.id),
+            );
+      listed = true;
       if (entries.isEmpty) break;
       // One query for the page's digests: skipping a reconciled object must
       // not cost a lookup, or walking a window the peer already holds would.
@@ -1165,7 +1293,10 @@ class Node {
       for (final route in entries) {
         final id = route.id;
         cursor = (route.created, id);
-        if (page.length >= 32) break walk;
+        if (page.length >= 32) {
+          truncated?.call();
+          break walk;
+        }
         // Already reconciled: skip before parsing the object or its evidence.
         if (paths == null
             ? have[id] == store.evidenceDigest(id)
@@ -1243,7 +1374,10 @@ class Node {
         'evidence': [for (final e in evidence) e.toJson()],
       };
       final itemSize = bytes(item).length + (out.isEmpty ? 0 : 1);
-      if (size + itemSize > maxPageBytes) break;
+      if (size + itemSize > maxPageBytes) {
+        truncated?.call();
+        break;
+      }
       size += itemSize;
       out.add(item);
     }

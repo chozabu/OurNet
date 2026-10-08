@@ -1,0 +1,14 @@
+name: ournet_native
+description: Native crypto for OurNet, built from Rust by a build hook. Falls back to pure Dart where it is not built.
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: ^3.12.0
+dependencies:
+  code_assets: ^1.2.1
+  hooks: ^2.0.2
+dev_dependencies:
+  cryptography: ^2.9.0
+  crypto: ^3.0.7
+  test: ^1.26.0
+  lints: ^6.0.0

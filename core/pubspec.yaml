@@ -6,6 +6,8 @@ environment:
   sdk: ^3.12.0
 dependencies:
   cryptography: ^2.9.0
+  ournet_native:
+    path: ../native
   crypto: ^3.0.7
   sqlite3: ^3.1.0
   image: 4.5.4

@@ -259,6 +259,25 @@ class Store {
       CREATE TRIGGER IF NOT EXISTS object_removed AFTER DELETE ON objects
       BEGIN UPDATE object_usage SET bytes=bytes-length(OLD.wire) WHERE id=1; END;
     ''');
+    // Every object and evidence record stored, in order, so a sync can send
+    // only what changed since two devices last agreed (see Node.changedSince).
+    // AUTOINCREMENT never reuses a number, even after the newest row goes.
+    // History from before this table is not listed; devices agree on it by a
+    // full sync before they rely on the log.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS sync_changes(
+        seq INTEGER PRIMARY KEY AUTOINCREMENT, object_id TEXT NOT NULL);
+      CREATE TRIGGER IF NOT EXISTS sync_change_object AFTER INSERT ON objects
+      BEGIN INSERT INTO sync_changes(object_id) VALUES (NEW.id); END;
+      CREATE TRIGGER IF NOT EXISTS sync_change_evidence AFTER INSERT ON evidence
+      BEGIN INSERT INTO sync_changes(object_id) VALUES (NEW.object_id); END;
+    ''');
+    // Bounded: a mark older than what is kept falls back to a full sync.
+    db.execute(
+      'DELETE FROM sync_changes WHERE seq <= '
+      '(SELECT MAX(seq) FROM sync_changes) - ?',
+      [changeLogLimit],
+    );
 
     db.execute('''CREATE TABLE IF NOT EXISTS previews(
       id TEXT PRIMARY KEY, bytes BLOB NOT NULL, size INTEGER NOT NULL, used INTEGER NOT NULL);
@@ -703,6 +722,49 @@ class Store {
         _route(row),
     ];
   }
+
+  /// Changes kept in [sync_changes]; older ones are pruned when opening.
+  static const changeLogLimit = 50000;
+
+  /// The newest change number, 0 before any.
+  int get changeSeq =>
+      (_select('SELECT seq FROM sqlite_sequence WHERE name=?', [
+            'sync_changes',
+          ]).firstOrNull?['seq']
+          as int?) ??
+      0;
+
+  /// The objects stored, or given evidence, after change [since]; null when
+  /// that is not known here (pruned, or from a log this one is not) or when
+  /// more than [limit] objects changed.
+  List<ObjectRoute>? changedSince(int since, {int limit = 512}) {
+    final low =
+        _select('SELECT MIN(seq) AS low FROM sync_changes').first['low']
+            as int?;
+    if (since > changeSeq || (low != null && low > since + 1)) return null;
+    final ids = [
+      for (final row in _select(
+        'SELECT DISTINCT object_id FROM sync_changes WHERE seq>? LIMIT ?',
+        [since, limit + 1],
+      ))
+        row['object_id'] as String,
+    ];
+    if (ids.length > limit) return null;
+    return routesOf(ids);
+  }
+
+  /// The routes of those of [ids] that are stored, newest first.
+  List<ObjectRoute> routesOf(List<String> ids) => ids.isEmpty
+      ? const []
+      : [
+          for (final row in _select(
+            'SELECT id,kind,space,author,created,device,expires,audience,via '
+            'FROM object_routes WHERE id IN (SELECT value FROM json_each(?)) '
+            'ORDER BY created DESC,id DESC',
+            [jsonEncode(ids)],
+          ))
+            _route(row),
+        ];
 
   static ObjectRoute _route(Row row) => ObjectRoute(
     id: row['id'] as String,

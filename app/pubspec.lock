@@ -917,6 +917,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  ournet_native:
+    dependency: transitive
+    description:
+      path: "../native"
+      relative: true
+    source: path
+    version: "0.1.0"
   ournet_speech:
     dependency: "direct main"
     description:
