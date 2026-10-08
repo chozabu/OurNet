@@ -7,7 +7,7 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
-## Unreleased: algorithm identifiers
+## 0.2.25: algorithm identifiers
 
 Additive. Everything new builds sign or seal names its algorithm, so a
 successor (a post-quantum signature, say) can be added later without
