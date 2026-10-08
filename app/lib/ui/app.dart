@@ -231,7 +231,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   late final CoalescedTask _deliveryRefresh;
   bool addingAttachment = false;
   final imports = ValueNotifier<Map<Object, ({int completed, int total})>>({});
-  final performance = PerformanceMonitor();
+  final performance = PerformanceMonitor(idleAfter: const Duration(seconds: 3));
   int _badgeCount = -1;
   bool _ringing = false;
 

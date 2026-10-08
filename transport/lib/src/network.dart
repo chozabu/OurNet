@@ -34,7 +34,9 @@ class PeerNetwork {
       for (final MapEntry(:key, :value) in saved.entries) {
         if (value is! Map) continue;
         if (value['synced'] case final int ms) {
-          lastSync[key] = DateTime.fromMillisecondsSinceEpoch(ms);
+          lastSync[key] = _savedSync[key] = DateTime.fromMillisecondsSinceEpoch(
+            ms,
+          );
         }
         if (value['build'] case final String b) peerBuilds[key] = b;
         if (value['version'] case final String v) peerVersions[key] = v;
@@ -113,18 +115,44 @@ class PeerNetwork {
     }
   }
 
-  void _remember(String device) {
-    final synced = lastSync[device];
-    final build = peerBuilds[device];
-    final version = peerVersions[device];
+  /// When each device's [lastSync] was last written to the profile.
+  final Map<String, DateTime> _savedSync = {};
+
+  /// Persists a completed sync at most every few minutes per device: every
+  /// sync would otherwise rewrite the setting (a disk sync each time). The
+  /// newest time is written when the network stops.
+  void _rememberSync(String device) {
+    final saved = _savedSync[device];
+    if (saved == null ||
+        DateTime.now().difference(saved) >= const Duration(minutes: 5)) {
+      _remember([device]);
+    }
+  }
+
+  /// Writes the sync times not yet persisted, in one setting update.
+  void _rememberUnsaved() {
+    final unsaved = [
+      for (final MapEntry(:key, :value) in lastSync.entries)
+        if (_savedSync[key] != value) key,
+    ];
+    if (unsaved.isNotEmpty) _remember(unsaved);
+  }
+
+  void _remember(Iterable<String> devices) {
     final saved = Map<String, dynamic>.from(
       node.store.setting('peerHealth') as Map? ?? const {},
     );
-    saved[device] = {
-      if (synced != null) 'synced': synced.millisecondsSinceEpoch,
-      if (build != null) 'build': build,
-      if (version != null) 'version': version,
-    };
+    for (final device in devices) {
+      final synced = lastSync[device];
+      if (synced != null) _savedSync[device] = synced;
+      final build = peerBuilds[device];
+      final version = peerVersions[device];
+      saved[device] = {
+        if (synced != null) 'synced': synced.millisecondsSinceEpoch,
+        if (build != null) 'build': build,
+        if (version != null) 'version': version,
+      };
+    }
     node.store.set('peerHealth', saved);
   }
 
@@ -145,7 +173,7 @@ class PeerNetwork {
         when c.length <= 32 && c.every((e) => e is String && e.length <= 32)) {
       peerCaps[device] = c.cast<String>().toSet();
     }
-    if (changed) _remember(device);
+    if (changed) _remember([device]);
   }
 
   /// What this build can do beyond the base sync protocol. Peers ignore names
@@ -154,7 +182,9 @@ class PeerNetwork {
   ///
   /// `cursor_paging`: inventories page by (created, id) cursor.
   /// `blob_inline`: chunk bytes travel base64 in `blob` replies.
-  static const caps = ['cursor_paging', 'blob_inline'];
+  /// `multi_request`: one connection serves several requests, one stream
+  /// each, in turn; it waits [servedIdle] for the next.
+  static const caps = ['cursor_paging', 'blob_inline', 'multi_request'];
 
   /// Capabilities each peer last announced; empty for builds that predate them.
   final Map<String, Set<String>> peerCaps = {};
@@ -260,6 +290,11 @@ class PeerNetwork {
                 'Home relay back after '
                 '${DateTime.now().difference(since).inSeconds} s',
               );
+              // Devices that failed while this one was unreachable may be
+              // fine; retry them now rather than when their backoff ends.
+              for (final device in _failures.keys.toList()) {
+                _retryNow(device);
+              }
             }
             _relayWasUp = true;
             _relaysDownSince = null;
@@ -281,6 +316,11 @@ class PeerNetwork {
           _debounce ??= Timer(const Duration(milliseconds: 400), () {
             _debounce = null;
             for (final device in node.contacts.keys.toList()) {
+              // A device that keeps failing is most likely switched off.
+              // Dialling it on every edit costs a connection attempt (and a
+              // radio wake) each time; its retry, its next request to this
+              // device, or the relay coming back reaches it instead.
+              if (_backingOff(device)) continue;
               unawaited(sync(device));
             }
           });
@@ -358,10 +398,14 @@ class PeerNetwork {
     }
   }
 
+  /// Outgoing connections opened since this network was created.
+  int dialed = 0;
+
   Future<iroh.Connection> _connect(String device) async {
     if (!node.allowedPeer(device)) throw StateError('Device not admitted');
     final ep = _endpoint;
     if (ep == null) throw StateError('Network is stopped');
+    dialed++;
     final encoded = node.store.setting('address/$device') as String?;
     final address = encoded == null
         ? iroh.EndpointAddr(iroh.PublicKey.fromBytes(unb64(device)))
@@ -382,25 +426,111 @@ class PeerNetwork {
     }
   }
 
+  /// How long a pooled connection is kept after its last request, and how
+  /// long a served connection waits for the next one. iroh keeps an open
+  /// connection alive with a packet every 5 s, so both stay short: long
+  /// enough for a sync session's pages or a file's chunks to follow each
+  /// other, and within the time a phone's radio stays up after sending.
+  static const pooledIdle = Duration(seconds: 3);
+  static const servedIdle = Duration(seconds: 5);
+
+  /// Requests that may share a connection. Each is safe to send again, which
+  /// a pooled connection closed by its peer just as it was reused needs.
+  static const _poolable = {'pull', 'push', 'blob', 'position', 'typing'};
+  final Map<String, _Pooled> _pool = {};
+  final Set<String> _dialing = {};
+
   Future<Json> request(String device, Json request) async {
-    final connection = await _connect(device);
-    _connections.add(connection);
-    try {
-      final (send, recv) = await connection.openBi();
-      await send.writeAll(bytes(request));
-      await send.finish();
-      final data = await recv
-          .readToEnd(3 * 1024 * 1024)
-          .timeout(const Duration(seconds: 20));
-      final reply = jsonDecode(utf8.decode(data)) as Json;
-      // Refusals carry the stamp too, so an incompatible peer is identifiable.
-      if (node.contacts.containsKey(device)) _notePeer(device, reply);
-      if (reply['error'] != null) throw StateError(reply['error']);
-      return reply;
-    } finally {
-      connection.close();
-      _connections.remove(connection);
+    Json? reply;
+    if (_poolable.contains(request['type']) &&
+        peerCaps[device]?.contains('multi_request') == true) {
+      final pooled = await _pooledFor(device);
+      if (pooled != null) {
+        final reused = pooled.uses++ > 0;
+        try {
+          reply = await _exchange(pooled.connection, request);
+        } on TimeoutException {
+          _drop(device, pooled);
+          rethrow;
+        } catch (_) {
+          _drop(device, pooled);
+          // A reused connection may have been closed by the peer while idle;
+          // the request never reached it, so send it on a new connection.
+          if (!reused) rethrow;
+        } finally {
+          _release(device, pooled);
+        }
+      }
     }
+    if (reply == null) {
+      final connection = await _connect(device);
+      _connections.add(connection);
+      try {
+        reply = await _exchange(connection, request);
+      } finally {
+        connection.close();
+        _connections.remove(connection);
+      }
+    }
+    // Refusals carry the stamp too, so an incompatible peer is identifiable.
+    if (node.contacts.containsKey(device)) _notePeer(device, reply);
+    if (reply['error'] != null) throw StateError(reply['error']);
+    return reply;
+  }
+
+  Future<Json> _exchange(iroh.Connection connection, Json request) async {
+    final (send, recv) = await connection.openBi();
+    await send.writeAll(bytes(request));
+    await send.finish();
+    final data = await recv
+        .readToEnd(3 * 1024 * 1024)
+        .timeout(const Duration(seconds: 20));
+    return jsonDecode(utf8.decode(data)) as Json;
+  }
+
+  /// [device]'s pooled connection, taken for one request, or null when it is
+  /// in use or being dialled: that request then uses a connection of its own,
+  /// so nothing waits behind another request. Connection failures propagate.
+  Future<_Pooled?> _pooledFor(String device) async {
+    final existing = _pool[device];
+    if (existing != null && !existing.closed) {
+      if (existing.busy) return null;
+      existing.idle?.cancel();
+      existing.busy = true;
+      return existing;
+    }
+    if (!_dialing.add(device)) return null;
+    try {
+      final connection = await _connect(device);
+      final pooled = _Pooled(connection)..busy = true;
+      _pool[device] = pooled;
+      _connections.add(connection);
+      unawaited(
+        connection.closed().then(
+          (_) => _drop(device, pooled),
+          onError: (Object _) => _drop(device, pooled),
+        ),
+      );
+      return pooled;
+    } finally {
+      _dialing.remove(device);
+    }
+  }
+
+  void _release(String device, _Pooled pooled) {
+    pooled.busy = false;
+    if (pooled.closed) return;
+    pooled.idle?.cancel();
+    pooled.idle = Timer(pooledIdle, () => _drop(device, pooled));
+  }
+
+  void _drop(String device, _Pooled pooled) {
+    if (pooled.closed) return;
+    pooled.closed = true;
+    pooled.idle?.cancel();
+    if (identical(_pool[device], pooled)) _pool.remove(device);
+    _connections.remove(pooled.connection);
+    pooled.connection.close();
   }
 
   Future<void> sync(String device) {
@@ -501,7 +631,7 @@ class PeerNetwork {
       syncErrors.remove(device);
       lastSync[device] = DateTime.now();
       _heard(device);
-      _remember(device);
+      _rememberSync(device);
       _failures.remove(device);
       _retry.remove(device)?.cancel();
       if (exhausted && running) {
@@ -529,6 +659,17 @@ class PeerNetwork {
     }
   }
 
+  /// Failed at least twice in a row and is waiting for its retry.
+  bool _backingOff(String device) =>
+      (_failures[device] ?? 0) >= 2 && _retry.containsKey(device);
+
+  /// Cuts short [device]'s backoff: it is (or may be) reachable again.
+  void _retryNow(String device) {
+    if (!running || !_backingOff(device)) return;
+    _retry.remove(device)?.cancel();
+    unawaited(sync(device));
+  }
+
   Future<void> syncAll() async {
     if (!running) return;
     await Future.wait(node.contacts.keys.toList().map(sync));
@@ -544,9 +685,16 @@ class PeerNetwork {
         if ((!node.allowedPeer(peer) &&
                 pairing?.available != true &&
                 friendInvitation?.available != true) ||
-            _activeInbound >= 4) {
+            _activeInbound >= 4 && _idleInbound.isEmpty) {
           connection.close();
           continue;
+        }
+        if (_activeInbound >= 4) {
+          // Make room by closing a connection that is only waiting for a
+          // next request; its caller sends that on a new connection.
+          final idle = _idleInbound.first;
+          _idleInbound.remove(idle);
+          idle.close();
         }
         _activeInbound++;
         _connections.add(connection);
@@ -570,13 +718,52 @@ class PeerNetwork {
     }
   }
 
+  /// Served connections between requests, which may be closed for others.
+  final Set<iroh.Connection> _idleInbound = {};
+
+  /// Answers [connection]'s requests in turn. A caller that sends one closes
+  /// the connection once it has the reply (older builds always do); one that
+  /// pools connections sends the next within [servedIdle].
   Future<void> _serve(iroh.Connection connection, String peer) async {
-    iroh.SendStream? replyStream;
     try {
-      final (send, recv) = await connection.acceptBi().timeout(
-        const Duration(seconds: 10),
-      );
-      replyStream = send;
+      var first = true;
+      while (true) {
+        final iroh.SendStream send;
+        final iroh.RecvStream recv;
+        if (!first) _idleInbound.add(connection);
+        try {
+          (send, recv) = await connection.acceptBi().timeout(
+            first ? const Duration(seconds: 10) : servedIdle,
+          );
+        } catch (_) {
+          // Closed by the caller, or nothing more within the wait.
+          return;
+        } finally {
+          _idleInbound.remove(connection);
+        }
+        first = false;
+        if (!await _answer(peer, send, recv)) {
+          // Give QUIC the opportunity to deliver the refusal before closing.
+          await connection.closed().timeout(
+            const Duration(seconds: 3),
+            onTimeout: () => 'done',
+          );
+          return;
+        }
+      }
+    } finally {
+      _idleInbound.remove(connection);
+      connection.close();
+    }
+  }
+
+  /// Answers one request. False when the connection should not serve more.
+  Future<bool> _answer(
+    String peer,
+    iroh.SendStream send,
+    iroh.RecvStream recv,
+  ) async {
+    try {
       final raw = await recv
           .readToEnd(2 * 1024 * 1024)
           .timeout(const Duration(seconds: 20));
@@ -596,6 +783,7 @@ class PeerNetwork {
           case 'pull':
             _notePeer(peer, j);
             _heard(peer);
+            _retryNow(peer);
             final items = await node.offer(peer, j['inventory']);
             await _learnAddresses(peer, j['addresses']);
             reply = {
@@ -619,6 +807,7 @@ class PeerNetwork {
           case 'push':
             _notePeer(peer, j);
             _heard(peer);
+            _retryNow(peer);
             reply = {'changed': await node.receive(peer, j['items'])};
           case 'blob':
             // Require a referenced object that this peer is allowed to receive.
@@ -655,30 +844,24 @@ class PeerNetwork {
       }
       await send.writeAll(bytes(reply));
       await send.finish();
-      // Give QUIC the opportunity to deliver the reply before closing.
-      await connection.closed().timeout(
-        const Duration(seconds: 3),
-        onTimeout: () => 'done',
-      );
+      return true;
     } catch (e) {
       log('Rejected request: $e');
       // Tell the caller why, so it can show the reason rather than a
       // transport failure. Only policy refusals carry their message.
       try {
-        await replyStream?.writeAll(
+        await send.writeAll(
           bytes({
             'error': e is StateError ? e.message : 'Request failed',
             if (node.allowedPeer(peer)) ..._stamp,
           }),
         );
-        await replyStream?.finish();
-        await connection.closed().timeout(
-          const Duration(seconds: 3),
-          onTimeout: () => 'done',
-        );
-      } catch (_) {}
-    } finally {
-      connection.close();
+        await send.finish();
+      } catch (_) {
+        return false;
+      }
+      // Only an admitted device may go on to ask for more.
+      return node.allowedPeer(peer);
     }
   }
 
@@ -791,11 +974,28 @@ class PeerNetwork {
       timer.cancel();
     }
     _retry.clear();
+    for (final MapEntry(:key, :value) in _pool.entries.toList()) {
+      _drop(key, value);
+    }
     for (final connection in _connections.toList()) {
       connection.close();
     }
     await endpoint?.close();
     await Future.wait(_jobs.toList());
+    try {
+      _rememberUnsaved();
+    } catch (_) {
+      // The profile closed first; these times are shown, not relied on.
+    }
     notifyListeners();
   }
+}
+
+/// A connection to one device kept for the requests that follow.
+class _Pooled {
+  _Pooled(this.connection);
+  final iroh.Connection connection;
+  bool busy = false, closed = false;
+  int uses = 0;
+  Timer? idle;
 }

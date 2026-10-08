@@ -14,10 +14,20 @@ class DriveSync {
   String? error;
   bool get enabled => network.node.store.setting('drive/offline') == true;
   bool get busy => _active != null;
+  bool _wasRunning = false;
   DriveSync(this.network, {this.onUpdate}) {
     _content = network.node.changes.stream.listen((_) => schedule());
-    _network = network.updates.stream.listen((_) => schedule());
+    // Network updates fire on every log line and relay report. Only the
+    // network starting, or a device being heard from (a source that may
+    // hold missing files), is worth another pass over the drive.
+    _network = network.updates.stream.listen((_) {
+      final running = network.running;
+      if (running && !_wasRunning) schedule();
+      _wasRunning = running;
+    });
+    network.peerSeenListeners.add(_peerSeen);
   }
+  void _peerSeen(String _) => schedule();
   void setEnabled(bool value) {
     network.node.store.set('drive/offline', value);
     schedule();
@@ -63,6 +73,7 @@ class DriveSync {
   Future<void> close() async {
     _closed = true;
     _timer?.cancel();
+    network.peerSeenListeners.remove(_peerSeen);
     await _content?.cancel();
     await _network?.cancel();
     await _active;

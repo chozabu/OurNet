@@ -23,9 +23,37 @@ class EverydaySync {
   /// Group and inbox items waiting to be acknowledged, found the same way.
   final _items = <String>{};
   int _itemCursor = 0;
+
+  /// Items whose files could not be fetched, with the failures so far and
+  /// when to try again. A source that is switched off would otherwise be
+  /// dialled every pass; hearing from any device retries everything at once.
+  final _waiting = <String, ({int failures, DateTime until})>{};
+  static const _firstWait = Duration(seconds: 15);
+  static const _maxWait = Duration(minutes: 15);
+
   EverydaySync(this.network, this.onUpdate, {this.onCached}) {
     timer = Timer.periodic(const Duration(seconds: 15), (_) => sync());
+    network.peerSeenListeners.add(_peerSeen);
   }
+
+  void _peerSeen(String device) {
+    if (_waiting.isEmpty) return;
+    _waiting.clear();
+    unawaited(sync());
+  }
+
+  bool _deferred(String id) {
+    final wait = _waiting[id];
+    return wait != null && DateTime.now().isBefore(wait.until);
+  }
+
+  void _failed(String id) {
+    final failures = (_waiting[id]?.failures ?? 0) + 1;
+    var wait = _firstWait * (1 << (failures - 1).clamp(0, 6));
+    if (wait > _maxWait) wait = _maxWait;
+    _waiting[id] = (failures: failures, until: DateTime.now().add(wait));
+  }
+
   Future<void> sync() async {
     if (busy || closed || !network.running) return;
     busy = true;
@@ -67,6 +95,7 @@ class EverydaySync {
     var changed = false;
     for (final id in _items.toList()) {
       if (closed || !network.running) break;
+      if (_deferred(id)) continue;
       final object = node.store.get(id);
       // Unreadable here means blocked, expired or not ours to decrypt. None
       // of those should be acknowledged as delivered.
@@ -91,9 +120,11 @@ class EverydaySync {
         node.store.set('everyday/received/$id', true);
         _received.add(id);
         _items.remove(id);
+        _waiting.remove(id);
         changed = true;
         errors.remove(id);
       } catch (error) {
+        _failed(id);
         final message = error.toString();
         if (errors[id] != message) changed = true;
         errors[id] = message;
@@ -124,6 +155,7 @@ class EverydaySync {
     var changed = false;
     for (final id in _noteFiles.toList()) {
       if (closed || !network.running) break;
+      if (_deferred(id)) continue;
       final object = node.store.get(id);
       final payload = object == null ? null : await node.content(object);
       if (object == null || payload == null) {
@@ -133,10 +165,12 @@ class EverydaySync {
       try {
         await files.cache(object);
         _noteFiles.remove(id);
+        _waiting.remove(id);
         errors.remove(id);
         onCached?.call(object, payload);
         changed = true;
       } catch (error) {
+        _failed(id);
         errors[id] = '$error';
         /* A source device may come online later. */
       }
@@ -147,5 +181,6 @@ class EverydaySync {
   void close() {
     closed = true;
     timer?.cancel();
+    network.peerSeenListeners.remove(_peerSeen);
   }
 }

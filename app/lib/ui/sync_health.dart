@@ -489,6 +489,7 @@ Map<String, Object?> syncDiagnostics(PeerNetwork network) => {
   ],
   'acceptFailures': network.acceptFailures,
   'lastAcceptError': network.lastAcceptError,
+  'dialed': network.dialed,
   // Newest first: relay losses, restarts and failed handshakes, with times,
   // so a report shows what happened around the problem.
   'events': network.events,

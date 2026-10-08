@@ -3,10 +3,17 @@ import 'dart:collection';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/scheduler.dart';
 
 /// Bounded, local-only measurements. No content, file paths or keys are kept.
 class PerformanceMonitor {
+  /// With [idleAfter], event-loop sampling (20 wakeups a second) pauses once
+  /// nothing has been drawn or touched for that long, and resumes with the
+  /// next frame or pointer event. Without it, sampling runs from [start] to
+  /// [stop], as measurement runs need.
+  PerformanceMonitor({this.idleAfter});
+  final Duration? idleAfter;
   final frames = TimingSamples();
   final builds = TimingSamples();
   final rasters = TimingSamples();
@@ -14,16 +21,43 @@ class PerformanceMonitor {
   final _clock = Stopwatch();
   Timer? _timer;
   int _lastTick = 0;
+  int _lastActive = 0;
+  bool _started = false, _frameHook = false;
 
   void start() {
-    if (_timer != null) return;
+    if (_started) return;
+    _started = true;
     SchedulerBinding.instance.addTimingsCallback(_onFrames);
     _clock.start();
-    _lastTick = _clock.elapsedMicroseconds;
+    if (idleAfter != null) {
+      // Persistent frame callbacks cannot be removed; this one checks
+      // [_started] instead.
+      if (!_frameHook) {
+        _frameHook = true;
+        SchedulerBinding.instance.addPersistentFrameCallback((_) => _active());
+      }
+      GestureBinding.instance.pointerRouter.addGlobalRoute(_pointer);
+    }
+    _active();
+  }
+
+  void _pointer(PointerEvent _) => _active();
+
+  void _active() {
+    if (!_started) return;
+    final now = _clock.elapsedMicroseconds;
+    _lastActive = now;
+    if (_timer != null) return;
+    _lastTick = now;
     _timer = Timer.periodic(const Duration(milliseconds: 50), (_) {
       final now = _clock.elapsedMicroseconds;
       eventLoop.add(math.max(0, now - _lastTick - 50000) / 1000);
       _lastTick = now;
+      final idle = idleAfter;
+      if (idle != null && now - _lastActive > idle.inMicroseconds) {
+        _timer?.cancel();
+        _timer = null;
+      }
     });
   }
 
@@ -58,11 +92,15 @@ class PerformanceMonitor {
   };
 
   void stop() {
-    if (_timer == null) return;
+    if (!_started) return;
+    _started = false;
     _timer?.cancel();
     _timer = null;
     _clock.stop();
     SchedulerBinding.instance.removeTimingsCallback(_onFrames);
+    if (idleAfter != null) {
+      GestureBinding.instance.pointerRouter.removeGlobalRoute(_pointer);
+    }
   }
 }
 
