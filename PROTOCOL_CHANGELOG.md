@@ -7,6 +7,30 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: per-path handoff evidence
+
+Additive. Evidence was one set per object, merged between every holder and
+capped at 128 records, so an object stopped being offered after about 63
+device deliveries in total: forum posts past that many subscribers, messages
+in groups of about 32 people with two devices each, and profiles, friend lists
+and revocations in any network of more than about 60 devices. Every holder
+also saw every delivery, with device names and times.
+
+Now a device keeps the chain that brought an object to it and its own
+deliveries, and reconciles with each peer only what the two should share
+(see [Handoff evidence](PROTOCOL.md#handoff-evidence)). The per-object cap is
+gone; 128 records now bounds one received item, which is a path.
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `paths` | inventory | Object ID to the first 16 hex digits of the digest of the evidence this device should share with the peer; objects with none are left out | Ignored. They compare `have` and are sent all evidence, as before, except an object with more than 126 records, which they would refuse: sent only when they lack it, with its path |
+
+Builds without it keep merging what they are sent, so while one of them
+holds an object, evidence passed through it still spreads, and still stops at
+their 128 records. Local storage: a derived table, `evidence_routes`, records
+each evidence record's signer and what it names. It is filled from the stored
+evidence when a profile is first opened by this build, and kept by trigger.
+
 ## 0.2.23: re-shared group entries shown at their original time
 
 No protocol change. Local storage only: each device remembers, in settings

@@ -134,6 +134,7 @@ not yet a packaged background service or a multi-user hosting server.
 
 Read [CORE_IDEA.md](CORE_IDEA.md), [PROTOCOL.md](PROTOCOL.md),
 [CONNECTIVITY.md](CONNECTIVITY.md) (NAT, offline delivery and friend carriers),
+[RETROSHARE_COMPARISON.md](RETROSHARE_COMPARISON.md) (what we learn from RetroShare),
 and the historical [PROTOTYPE_REVIEW.md](PROTOTYPE_REVIEW.md). Provenance proves signed statements
 about recorded actions, not truth, real-world identity, or off-protocol copying.
 The current encryption is a prototype device-envelope scheme; forward secrecy,

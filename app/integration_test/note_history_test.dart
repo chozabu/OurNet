@@ -106,6 +106,13 @@ void main() {
       report['initialSync'] = await initial.stop();
       log('initial sync ${report['initialSync']}');
 
+      // Reconciled devices compare per-path evidence digests: a pass with
+      // nothing new offers nothing, rather than re-sending settled evidence.
+      final quiet = Stopwatch()..start();
+      expect(await syncPair(phone, other, rounds: 1000), 0);
+      report['quietSyncMs'] = quiet.elapsedMilliseconds;
+      log('quiet sync ${quiet.elapsed}');
+
       // Exercise several bounded cursor pages even in the small fixture. A
       // refresh must not reread the prefix of history for each older page.
       InventoryCursor? cursor;

@@ -89,7 +89,17 @@ class Node {
 
   int get _receivedBudget =>
       store.setting('receivedBudget') as int? ?? maxReceivedBytes;
+
+  /// Evidence records one received item may carry. Peers keeping evidence
+  /// per path send the chain to them, so this bounds path depth (about 60
+  /// hops), not how many devices an object reaches. Builds before per-path
+  /// evidence also hold an object's whole record to it: [_offerWhole].
   static const maxEvidence = 128;
+
+  /// Receipts from an object's readers that two devices on its way back to
+  /// the author pass each other, beyond their own: the first by ID, so both
+  /// sides choose the same ones and their digests settle.
+  static const maxSharedReceipts = 32;
   static const maxPageBytes = 1024 * 1024;
   Node(this._identity, this.store, {int Function()? clock})
     : now = clock ?? (() => DateTime.now().millisecondsSinceEpoch) {
@@ -809,6 +819,8 @@ class Node {
       'have': {
         for (final route in visible) route.id: store.evidenceDigest(route.id),
       },
+      // Per-path evidence: what this device and the peer should both hold.
+      if (peer != null) 'paths': _pathDigests(visible, peer),
       'from': more ? page.last.created : 0,
       if (after != null) 'until': after.created,
       if (after != null) 'after': after.toJson(),
@@ -864,6 +876,7 @@ class Node {
       'ownRelay': true,
       'subscriptions': subscriptions.toList()..sort(),
       'have': {for (final r in page) r.id: store.evidenceDigest(r.id)},
+      if (peer != null) 'paths': _pathDigests(page, peer),
       // Bounds overlap by an object at each edge, so entries sharing a
       // creation time across a boundary are still covered.
       'from': more ? page.last.created : 0,
@@ -987,6 +1000,89 @@ class Node {
   bool _relayable(ObjectRoute o, DeviceCertificate peer, bool relay) =>
       relay && peer.person == person && o.author == person;
 
+  /// The evidence for [o] that this device and [peer] both keep once
+  /// reconciled, without the records proving it ([_withProof]): handoffs
+  /// between the two and the receipts answering them, and for a private
+  /// object its readers' receipts on their way back to its author. A device
+  /// thereby holds the chain that brought an object to it and its own
+  /// deliveries, not how other copies travelled.
+  Set<String> _shared(ObjectRoute o, DeviceCertificate peer) {
+    final records = store.evidenceRoutes(o.id);
+    final ends = {identity.device, peer.device};
+    final signers = {for (final r in records) r.id: r.signer};
+    // The author and the carriers it named are upstream of every reader.
+    bool upstream(String p) => p == o.author || o.via.contains(p);
+    final shared = <String>{};
+    final readers = <String>[];
+    for (final r in records) {
+      final other = r.receipt ? signers[r.target] : r.target;
+      if (other != null &&
+          other != r.signer &&
+          ends.contains(r.signer) &&
+          ends.contains(other)) {
+        shared.add(r.id);
+      } else if (r.receipt &&
+          !o.isPublic &&
+          r.person != o.author &&
+          o.audience.contains(r.person) &&
+          ((upstream(person) &&
+                  (upstream(peer.person) || peer.person == r.person)) ||
+              (upstream(peer.person) && person == r.person))) {
+        readers.add(r.id);
+      }
+    }
+    readers.sort();
+    return shared..addAll(readers.take(maxSharedReceipts));
+  }
+
+  /// Digest of [_shared], which a peer keeping evidence per path compares
+  /// with its own: '' when the two share nothing, and otherwise 64 bits, as
+  /// a mismatch costs only a re-offer and inventories carry one per object.
+  String _pathDigest(ObjectRoute o, DeviceCertificate peer) =>
+      store.evidenceMemo(o.id, 'path ${peer.device}', () {
+        final shared = _shared(o, peer);
+        return shared.isEmpty
+            ? ''
+            : hash(shared.toList()..sort()).substring(0, 16);
+      });
+
+  /// Per-path digests for an inventory, leaving out objects the two share
+  /// nothing for.
+  Map<String, String> _pathDigests(
+    Iterable<ObjectRoute> routes,
+    DeviceCertificate peer,
+  ) => {
+    for (final route in routes)
+      if (_pathDigest(route, peer) case final d when d.isNotEmpty) route.id: d,
+  };
+
+  /// The records among [all] named by [ids], and every record they depend
+  /// on, which a receiver needs to verify them.
+  static List<Evidence> _withProof(List<Evidence> all, Set<String> ids) {
+    final byId = {for (final e in all) e.id: e};
+    final needed = <String>{};
+    final pending = [...ids];
+    while (pending.isNotEmpty) {
+      final e = byId[pending.removeLast()];
+      if (e == null || !needed.add(e.id)) continue;
+      if (e.data['domain'] == 'ournet/receipt/2') {
+        pending.add(e.data['handoff'] as String);
+      } else {
+        pending.addAll((e.data['parents'] as List).cast<String>());
+      }
+    }
+    return [
+      for (final e in all)
+        if (needed.contains(e.id)) e,
+    ];
+  }
+
+  /// Whether a build before per-path evidence can take [o] whole: it holds
+  /// at most [maxEvidence] records for one object, and offering it more
+  /// would be refused on every sync.
+  bool _offerWhole(SignedObject o) =>
+      store.evidenceRoutes(o.id).length <= maxEvidence - 2;
+
   Future<Evidence> makeEvidence(Json data) async => Evidence(
     data,
     await sign(data, identity.deviceKey),
@@ -1047,10 +1143,15 @@ class Node {
     final through = inventory['cursorPaging'] == true
         ? InventoryCursor.parse(inventory['through'])
         : null;
+    // A peer keeping evidence per path says what the two should share for
+    // each object it holds; one without compares whole evidence digests.
+    final paths = inventory['paths'] is Map ? inventory['paths'] as Map : null;
+    if (paths != null && paths.length > maxInventoryEntries)
+      throw StateError('Inventory too large');
     (int, String)? cursor = after == null ? null : (after.created, after.id);
     walk:
     while (true) {
-      final entries = store.recentEntries(
+      final entries = store.recentRoutes(
         from: inventory['from'] as int? ?? 0,
         until: inventory['until'] as int?,
         after: cursor,
@@ -1059,19 +1160,28 @@ class Node {
       if (entries.isEmpty) break;
       // One query for the page's digests: skipping a reconciled object must
       // not cost a lookup, or walking a window the peer already holds would.
-      store.primeEvidence([for (final (_, id) in entries) id]);
+      store.primeEvidence([for (final route in entries) route.id]);
       await slice.pause();
-      for (final (created, id) in entries) {
-        cursor = (created, id);
+      for (final route in entries) {
+        final id = route.id;
+        cursor = (route.created, id);
         if (page.length >= 32) break walk;
         // Already reconciled: skip before parsing the object or its evidence.
-        if (have[id] == store.evidenceDigest(id)) continue;
+        if (paths == null
+            ? have[id] == store.evidenceDigest(id)
+            : have.containsKey(id) &&
+                  (paths[id] ?? '') == _pathDigest(route, peer))
+          continue;
         await slice.pause();
         final object = store.get(id);
         if (object == null ||
             !canOffer(object, peer, wanted, relay: relay, peerKeys: peerKeys)) {
           continue;
         }
+        // An older build already holding more than it can take keeps what
+        // it has; one without the object still gets it, with its path.
+        if (paths == null && have.containsKey(id) && !_offerWhole(object))
+          continue;
         final evidence = store.evidence(id);
         // Mint once per target, never on each repeated sync.
         final minted = evidence.any(
@@ -1095,7 +1205,6 @@ class Node {
           // devices still pass it on without one, signature intact.
           final routed = object.author == person || parents.isNotEmpty;
           if (!routed && !relay) continue;
-          if (evidence.length >= maxEvidence - 2) continue;
           if (routed) {
             handoffs.add({
               'domain': 'ournet/handoff/2',
@@ -1116,9 +1225,14 @@ class Node {
     var size = 2;
     for (final object in page) {
       await slice.pause();
+      final all = store.evidence(object.id);
+      final route = ObjectRoute.of(object);
+      final evidence = paths == null && _offerWhole(object)
+          ? all
+          : _withProof(all, _shared(route, peer));
       final item = <String, dynamic>{
         'object': object.toJson(),
-        'evidence': store.evidence(object.id).map((e) => e.toJson()).toList(),
+        'evidence': [for (final e in evidence) e.toJson()],
       };
       final itemSize = bytes(item).length + (out.isEmpty ? 0 : 1);
       if (size + itemSize > maxPageBytes) break;
@@ -1261,7 +1375,10 @@ class Node {
         if (!withdrawn.contains(e.id)) e.id: e,
       for (final e in incoming) e.id: e,
     };
-    if (all.length > maxEvidence) throw StateError('Evidence quota exceeded');
+    // A path, not everything every holder knows: stored records may number
+    // more, one per delivery this device made, but one item is bounded.
+    if (received.length > maxEvidence)
+      throw StateError('Evidence quota exceeded');
     final verified = <String>{};
     bool path(Evidence e, Set<String> visiting) {
       if (verified.contains(e.id)) return true;
@@ -1290,7 +1407,8 @@ class Node {
       return ok;
     }
 
-    if (all.values.any((e) => !path(e, {})))
+    // Stored records were proven when they arrived.
+    if (incoming.any((e) => !path(e, {})))
       throw StateError('Unproven handoff chain');
     final held = store.get(o.id) != null;
     final handoffs = all.values
@@ -1354,7 +1472,6 @@ class Node {
             e.certificate.device == identity.device,
       ))
         continue;
-      if (store.evidence(o.id).length >= maxEvidence) break;
       receipts[h.id] = {
         'domain': 'ournet/receipt/2',
         'object': o.id,

@@ -241,9 +241,35 @@ Another person cannot forge an author's handoff by merely claiming receipt.
 Signers can still collude, copy outside this protocol or withhold evidence.
 Signatures do not establish endorsement, factual accuracy or legal responsibility.
 
-Inventory exchanges both object IDs and digests of held evidence IDs. Peers can
-therefore reconcile new provenance even when both already have the content.
-Evidence is unioned after validation; exceeding resource bounds is rejected.
+Evidence is kept per path. A device holds the chain of handoffs and receipts
+that brought an object to it, back to an author device, and the handoffs it
+made itself with the receipts answering them. It is not sent how other copies
+travelled, so how far an object can go is bounded by path depth, not by how
+many devices it reaches, and no holder learns the whole delivery tree. Tracing
+misuse goes hop by hop: each device can prove who handed it an object and whom
+it handed it to.
+
+Two devices reconcile the records they should both hold for an object:
+handoffs between them and the receipts answering those, and, for a private
+object, receipts signed by its readers on their way back to its author. The
+latter pass between two devices that are both upstream (the author's devices
+and the people in `via`), and between an upstream device and the reader who
+signed them, so a sender learns delivery through a carrier or through another
+of its own devices; one group member does not learn when another received
+something. Of those reader receipts, two devices pass each other the first 32
+by ID. An item sends these records with every record they depend on, so the
+receiver can verify each to an author device.
+
+Inventory lists each object a device holds with a digest of all its evidence
+IDs (`have`), and, from builds with per-path evidence, a digest of the
+records it should share with that peer (`paths`: object ID to the first 16
+hex digits of the digest, leaving out objects the two share nothing for).
+Peers sending `paths` are offered an object they hold only when the two
+digests differ, with the shared records. Peers without it compare `have` and
+are sent all evidence for an object, as before; an object with more than 126
+records, which they would refuse, is sent to them only when they lack it, and
+then with the shared records alone. Received evidence is stored after
+validation, and one item may carry at most 128 records.
 
 One inventory covers a window of history rather than everything a device holds.
 Cursor-capable pulls set `cursorPaging: true` and pass the receiver's previous
@@ -286,7 +312,7 @@ Local limits: 512 MiB of stored objects once they are received from peers (a
 store bound, not a sync-message bound, and not applied to this device's own
 writes; the number of objects is not capped),
 256 KiB per signed object, 128 evidence records per
-object, 64 MiB per file, 512 MiB total stored blob bytes, and four simultaneous
+received item (a path, so about 60 hops), 64 MiB per file, 512 MiB total stored blob bytes, and four simultaneous
 inbound requests. These bounds are not a complete DoS resistance strategy.
 
 Files use 128 KiB content-addressed chunks, encrypted separately for private

@@ -191,6 +191,40 @@ class Store {
       'CREATE INDEX IF NOT EXISTS object_routes_sync_cursor ON object_routes(created DESC,id DESC)',
     );
 
+    // Derived evidence index: who signed each handoff or receipt and what it
+    // names (the device a handoff is to, the handoff a receipt answers), so
+    // sync can tell which records two devices share without parsing them.
+    if (db
+        .select("SELECT name FROM sqlite_master WHERE name='evidence_routes'")
+        .isEmpty) {
+      db.execute('''BEGIN IMMEDIATE;
+        CREATE TABLE evidence_routes(id TEXT PRIMARY KEY,
+          object_id TEXT NOT NULL, signer TEXT NOT NULL, person TEXT NOT NULL,
+          receipt INTEGER NOT NULL, target TEXT NOT NULL);
+        CREATE INDEX evidence_routes_object ON evidence_routes(object_id);
+        INSERT OR IGNORE INTO evidence_routes SELECT id, object_id,
+          COALESCE(json_extract(wire,'\$.certificate.data.device'),''),
+          COALESCE(json_extract(wire,'\$.certificate.data.person'),''),
+          json_extract(wire,'\$.data.domain')='ournet/receipt/2',
+          COALESCE(json_extract(wire,'\$.data.to'),
+            json_extract(wire,'\$.data.handoff'),'') FROM evidence;
+        COMMIT;
+      ''');
+    }
+    db.execute('''
+      CREATE TRIGGER IF NOT EXISTS evidence_route_added AFTER INSERT ON evidence
+      BEGIN
+        INSERT OR IGNORE INTO evidence_routes VALUES(NEW.id, NEW.object_id,
+          COALESCE(json_extract(NEW.wire,'\$.certificate.data.device'),''),
+          COALESCE(json_extract(NEW.wire,'\$.certificate.data.person'),''),
+          json_extract(NEW.wire,'\$.data.domain')='ournet/receipt/2',
+          COALESCE(json_extract(NEW.wire,'\$.data.to'),
+            json_extract(NEW.wire,'\$.data.handoff'),''));
+      END;
+      CREATE TRIGGER IF NOT EXISTS evidence_route_removed AFTER DELETE ON evidence
+      BEGIN DELETE FROM evidence_routes WHERE id=OLD.id; END;
+    ''');
+
     // For when a device was last active, without walking every object.
     db.execute(
       'CREATE INDEX IF NOT EXISTS object_routes_device ON object_routes(device,created)',
@@ -631,6 +665,43 @@ class Store {
   /// just past an entry already examined, so a caller reads the pages it
   /// needs instead of holding every object's route in memory for the life of
   /// the process.
+  /// [recentEntries] as routes, for walks that decide what to offer from the
+  /// sharing fields before reading an object.
+  List<ObjectRoute> recentRoutes({
+    int limit = 512,
+    int from = 0,
+    int? until,
+    (int, String)? after,
+    (int, String)? through,
+  }) {
+    final lower = through != null && through.$1 >= from ? through : (from, '');
+    final ceiling = until ?? 253402300799999;
+    final resume = after != null && after.$1 <= ceiling;
+    final upper = resume ? after : (ceiling, '￿');
+    return [
+      for (final row in _select(
+        'SELECT id,kind,space,author,created,device,expires,audience,via '
+        'FROM object_routes WHERE (created,id)>=(?,?) '
+        'AND (created,id)${resume ? '<' : '<='}(?,?) '
+        'ORDER BY created DESC,id DESC LIMIT ?',
+        [lower.$1, lower.$2, upper.$1, upper.$2, limit],
+      ))
+        _route(row),
+    ];
+  }
+
+  static ObjectRoute _route(Row row) => ObjectRoute(
+    id: row['id'] as String,
+    kind: row['kind'] as String,
+    space: row['space'] as String,
+    author: row['author'] as String,
+    created: row['created'] as int,
+    device: row['device'] as String,
+    expires: row['expires'] as int,
+    audience: (jsonDecode(row['audience'] as String) as List).cast<String>(),
+    via: (jsonDecode(row['via'] as String) as List).cast<String>(),
+  );
+
   List<ObjectRoute> routesAfter({(int, String)? after, int limit = 512}) => [
     for (final row in _select(
       'SELECT id,kind,space,author,created,device,expires,audience,via '
@@ -642,18 +713,7 @@ class Store {
         limit,
       ],
     ))
-      ObjectRoute(
-        id: row['id'] as String,
-        kind: row['kind'] as String,
-        space: row['space'] as String,
-        author: row['author'] as String,
-        created: row['created'] as int,
-        device: row['device'] as String,
-        expires: row['expires'] as int,
-        audience: (jsonDecode(row['audience'] as String) as List)
-            .cast<String>(),
-        via: (jsonDecode(row['via'] as String) as List).cast<String>(),
-      ),
+      _route(row),
   ];
 
   /// Every stored object matching the filter, newest first, read in pages.
@@ -769,10 +829,11 @@ class Store {
     final set = cached ?? _EvidenceSet();
     if (cached == null) {
       for (final row in _select(
-        'SELECT id FROM evidence WHERE object_id=? ORDER BY id',
+        'SELECT id,signer,person,receipt,target FROM evidence_routes '
+        'WHERE object_id=?',
         [objectId],
       )) {
-        set.add(row['id'] as String);
+        set.add(EvidenceRoute._of(row));
       }
     }
     _evidenceSets[objectId] = set;
@@ -801,12 +862,12 @@ class Store {
     if (missing.isEmpty) return;
     final found = <String, _EvidenceSet>{};
     for (final row in _select(
-      'SELECT object_id, id FROM evidence WHERE object_id IN '
-      '(SELECT value FROM json_each(?)) ORDER BY object_id, id',
+      'SELECT object_id,id,signer,person,receipt,target FROM evidence_routes '
+      'WHERE object_id IN (SELECT value FROM json_each(?))',
       [jsonEncode(missing)],
     )) {
       (found[row['object_id'] as String] ??= _EvidenceSet()).add(
-        row['id'] as String,
+        EvidenceRoute._of(row),
       );
     }
     for (final id in missing) {
@@ -823,7 +884,15 @@ class Store {
 
   /// Whether evidence [id] for [objectId] is stored (and so was verified).
   bool hasEvidence(String objectId, String id) =>
-      _evidenceSet(objectId).ids.contains(id);
+      _evidenceSet(objectId).routes.containsKey(id);
+
+  /// Who signed each of an object's evidence records and what it names.
+  Iterable<EvidenceRoute> evidenceRoutes(String objectId) =>
+      _evidenceSet(objectId).routes.values;
+
+  /// A value derived from an object's evidence, kept until it changes.
+  String evidenceMemo(String objectId, String key, String Function() derive) =>
+      _evidenceSet(objectId).memo[key] ??= derive();
 
   /// Parsed evidence for an object, sorted by ID. Sync reads it for every
   /// offered or received item, so recent results are kept until it changes.
@@ -1004,11 +1073,33 @@ class ObjectRoute {
 }
 
 class _EvidenceSet {
-  final ids = SplayTreeSet<String>();
-  String? _digest;
-  void add(String id) {
-    if (ids.add(id)) _digest = null;
+  final routes = SplayTreeMap<String, EvidenceRoute>();
+  final memo = <String, String>{};
+  void add(EvidenceRoute route) {
+    if (routes.putIfAbsent(route.id, () => route) == route) memo.clear();
   }
 
-  String digestOf() => _digest ??= hash(ids.toList());
+  String digestOf() => memo[''] ??= hash(routes.keys.toList());
+}
+
+/// One evidence record's signer and what it names: the device a handoff is
+/// to, or the handoff a receipt answers.
+class EvidenceRoute {
+  final String id, signer, person, target;
+  final bool receipt;
+  const EvidenceRoute({
+    required this.id,
+    required this.signer,
+    required this.person,
+    required this.receipt,
+    required this.target,
+  });
+  EvidenceRoute._of(Row row)
+    : this(
+        id: row['id'] as String,
+        signer: row['signer'] as String,
+        person: row['person'] as String,
+        receipt: row['receipt'] == 1,
+        target: row['target'] as String,
+      );
 }
