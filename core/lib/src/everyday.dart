@@ -77,7 +77,7 @@ class Everyday {
     if (current.data['owner'] != node.person)
       throw StateError('Only the group owner can re-issue this group.');
     var count = 1;
-    final history = entries ? await items(current) : const <EverydayItem>[];
+    final history = entries ? await _history(current) : const <EverydayItem>[];
     // The record first: a device that stops here has the group, and its
     // entries arrive with the next write or the next pass.
     await node.publish(
@@ -670,7 +670,7 @@ class Everyday {
     final nextMembers = {node.person, ...people}.toList()..sort();
     if (nextMembers.length > 64)
       throw StateError('A group supports up to 64 members.');
-    final history = await items(room);
+    final history = await _history(room);
     // Legacy rooms migrate to a self-certifying namespace on their first edit.
     final id = room.data['generation'] == null
         ? 'room2:${node.person}:${randomId()}'
@@ -865,7 +865,12 @@ class Everyday {
     // is everything the selection below can match.
     final records = await this.records(space: room?.object.space ?? '_inbox');
     if (room != null) room = await current(room, records);
-    final selected = room;
+    return _live(records, room);
+  }
+
+  /// The latest version of each entry in [records] that belongs to
+  /// [selected], or to the inbox when it is null. Highest clock first.
+  List<EverydayItem> _live(List<EverydayItem> records, EverydayItem? selected) {
     final result = records
         .where(
           (r) => selected == null
@@ -884,11 +889,53 @@ class Everyday {
     return result.where((r) => seen.add(r.data['entry'])).toList();
   }
 
+  /// [room]'s live entries as copies should carry them: each with `sent`,
+  /// oldest first, so that copies written in this order are also stored in
+  /// it and [RoomFeed] pages them newest first.
+  ///
+  /// Entries from before `sent` existed take the earliest time any version
+  /// of them held here says, so a copy keeps the original's place rather
+  /// than taking the time it was made. Only versions by the entry's author,
+  /// or copies by the owner, count: anyone else could claim an early time.
+  Future<List<EverydayItem>> _history(EverydayItem room) async {
+    final records = await this.records(space: room.object.space);
+    room = await current(room, records);
+    final owner = room.data['owner'];
+    final first = <String, int>{};
+    for (final r in records) {
+      final entry = r.data['entry'];
+      if (r.object.kind != 'room_item' || entry is! String) continue;
+      final author = r.data['originalAuthor'] ?? r.object.author;
+      if (r.object.author != author && r.object.author != owner) continue;
+      final key = '$author/$entry';
+      final sent = sentOf(r);
+      if (sent < (first[key] ?? sent + 1)) first[key] = sent;
+    }
+    return [
+      for (final item in _live(records, room))
+        if (item.data['sent'] is int)
+          item
+        else
+          EverydayItem(item.object, {
+            ...item.data,
+            'sent':
+                first['${item.data['originalAuthor'] ?? item.object.author}/'
+                    '${item.data['entry']}'] ??
+                sentOf(item),
+          }),
+    ]..sort((a, b) => sentOf(a).compareTo(sentOf(b)));
+  }
+
   /// The counter is maintained as records are indexed, so a write no longer
   /// walks history to find out what to number itself.
+  ///
+  /// A new entry (one without an `entry` yet) is stamped with when it was
+  /// written. A new version keeps its entry's `sent`, which its caller passes
+  /// on (see [sentOf]), so editing never moves it.
   Future<Json> data(Json content) async => {
     ...content,
     'entry': content['entry'] ?? randomId(),
+    if (content['entry'] == null) 'sent': content['sent'] ?? node.now(),
     'clock': (await _index()).clock + 1,
   };
 

@@ -242,6 +242,69 @@ void main() {
     await friend.close();
   });
 
+  testWidgets('message info shows when a group message was sent', (
+    tester,
+  ) async {
+    wide(tester);
+    final (node, [friend]) = await friends(1);
+    await friend.publish('profile', {'name': 'Chatty'}, space: '_identity');
+    final room = (await tester.runAsync(
+      () => Everyday(node).createRoom('Weekend trip', [friend.person]),
+    ))!;
+    final sent = DateTime(2026, 10, 1, 19, 24, 1).millisecondsSinceEpoch;
+    await tester.runAsync(() async {
+      await Everyday(
+        node,
+      ).write({'type': 'note', 'text': 'Timed', 'sent': sent}, room: room);
+      // As written by builds before group entries carried `sent`.
+      await node.publish(
+        'room_item',
+        {
+          'type': 'note',
+          'text': 'Untimed',
+          'entry': 'untimed',
+          'clock': 100,
+          'epoch': Everyday(node).epoch(room),
+          'history': false,
+        },
+        space: room.object.space,
+        audience: await Everyday(node).members(room),
+      );
+    });
+    await tester.pumpWidget(
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.groups,
+      ),
+    );
+    await settled(tester);
+    await tester.tap(find.text('Weekend trip'));
+    await settled(tester);
+
+    await tester.longPress(inChat('Timed'));
+    await settled(tester);
+    await tester.tap(find.text('Message info'));
+    await settled(tester);
+    expect(find.text('Thu 1 Oct 2026, 19:24:01'), findsOneWidget);
+    expect(find.text('Not recorded'), findsNothing);
+    await tester.tap(find.text('Close'));
+    await settled(tester);
+
+    await tester.longPress(inChat('Untimed'));
+    await settled(tester);
+    await tester.tap(find.text('Message info'));
+    await settled(tester);
+    expect(find.text('Not recorded'), findsOneWidget);
+    expect(find.text('Written'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await settled(tester);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await node.close();
+    await friend.close();
+  });
+
   testWidgets('a long group chat opens on the newest and pages back', (
     tester,
   ) async {

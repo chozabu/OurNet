@@ -11,6 +11,22 @@ String messageClock(int millisecondsSinceEpoch) {
       '${time.minute.toString().padLeft(2, '0')}';
 }
 
+/// Full local date and time to the second, as `Tue 7 Oct 2026, 23:02:39`,
+/// for message details.
+String messageDateTime(int millisecondsSinceEpoch) {
+  final t = DateTime.fromMillisecondsSinceEpoch(
+    millisecondsSinceEpoch,
+  ).toLocal();
+  String two(int n) => n.toString().padLeft(2, '0');
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  return '${days[t.weekday - 1]} ${t.day} ${months[t.month - 1]} ${t.year}, '
+      '${two(t.hour)}:${two(t.minute)}:${two(t.second)}';
+}
+
 /// A bubble's colour, tinted while [highlighted], with the tail corner on the
 /// first message of a run.
 BoxDecoration bubbleDecoration(

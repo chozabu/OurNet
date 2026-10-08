@@ -740,12 +740,16 @@ extension _EverydayPages on _OurNetAppState {
     final p = item.data, room = activeRoom;
     update(() => roomChecks[p['entry']] = done);
     unawaited(
-      Everyday(node).write({...p, 'done': done}, room: room).catchError((
-        Object e,
-      ) {
-        update(() => roomChecks.remove(p['entry']));
-        notice('$e');
-      }),
+      Everyday(node)
+          .write({
+            ...p,
+            'done': done,
+            'sent': Everyday.sentOf(item),
+          }, room: room)
+          .catchError((Object e) {
+            update(() => roomChecks.remove(p['entry']));
+            notice('$e');
+          }),
     );
   }
 
@@ -781,6 +785,7 @@ extension _EverydayPages on _OurNetAppState {
           ...p,
           'text': ?text,
           if (value == 'delete') 'deleted': true,
+          'sent': Everyday.sentOf(item),
         }, room: room);
         if (value == 'delete' && mounted) {
           messenger.currentState?.showSnackBar(
@@ -790,9 +795,11 @@ extension _EverydayPages on _OurNetAppState {
               action: SnackBarAction(
                 label: 'Undo',
                 onPressed: () => act(() async {
-                  await Everyday(
-                    node,
-                  ).write({...p, 'deleted': false}, room: room);
+                  await Everyday(node).write({
+                    ...p,
+                    'deleted': false,
+                    'sent': Everyday.sentOf(item),
+                  }, room: room);
                 }),
               ),
             ),

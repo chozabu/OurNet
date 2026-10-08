@@ -493,6 +493,7 @@ extension _GroupChat on _OurNetAppState {
           value: 'pin',
           child: Text(pins.contains(p['entry']) ? 'Unpin' : 'Pin'),
         ),
+        const PopupMenuItem(value: 'info', child: Text('Message info')),
         if (mine) const PopupMenuItem(value: 'delete', child: Text('Remove')),
       ],
     );
@@ -512,9 +513,139 @@ extension _GroupChat on _OurNetAppState {
         startGroupReply(item);
       case 'edit':
         startGroupEdit(item);
+      case 'info':
+        await groupMessageInfo(context, item);
       default:
         everydayItemAction(context, item, action, pins);
     }
+  }
+
+  /// When a group message was written and by whom, and when the copy shown
+  /// here was made, for when a message seems out of place. Shared history is
+  /// a copy written later by the group owner; it shows its original time
+  /// only if the original carried one.
+  Future<void> groupMessageInfo(BuildContext context, EverydayItem item) {
+    final p = item.data, o = item.object;
+    final author = (p['originalAuthor'] ?? o.author) as String;
+    final sent = p['sent'] as int?;
+    final copy = p['history'] == true;
+    final contact = node.contacts[o.certificate.device];
+    final device = contact == null ? o.certificate.label : deviceLabel(contact);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    const skew = 5 * 60 * 1000;
+    final ahead = (sent ?? o.created) > now + skew;
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    Widget row(String label, String value, {String? note}) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 96,
+            child: Text(
+              label,
+              style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(value, style: text.bodyMedium),
+                if (note != null)
+                  Text(
+                    note,
+                    style: text.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+    final evidence = node.store.evidence(o.id).toList();
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Message info'),
+        content: SizedBox(
+          width: 480,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                row('From', name(author)),
+                row(
+                  'Sent',
+                  sent == null ? 'Not recorded' : messageDateTime(sent),
+                  note: sent == null
+                      ? 'Placed by when the version below was written.'
+                      : null,
+                ),
+                if (copy)
+                  row(
+                    'Re-shared',
+                    messageDateTime(o.created),
+                    note:
+                        'By ${name(o.author)}, passing group history on to '
+                        'members.',
+                  )
+                else if (p['edited'] == true)
+                  row('Edited', messageDateTime(o.created))
+                else if (sent == null || (o.created - sent).abs() > 60000)
+                  row('Written', messageDateTime(o.created)),
+                row('Device', device),
+                if (ahead)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'This is later than the time now on this device: the '
+                      "sender's clock may be wrong.",
+                      style: text.bodySmall?.copyWith(color: scheme.error),
+                    ),
+                  ),
+                for (final e in evidence)
+                  row(
+                    e.data['domain'] == 'ournet/receipt/2'
+                        ? 'Received'
+                        : 'Handed on',
+                    e.data['created'] is int
+                        ? messageDateTime(e.data['created'] as int)
+                        : 'Time not recorded',
+                    note: 'By ${name(e.certificate.person)}, by their clock.',
+                  ),
+                const SizedBox(height: 8),
+                ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  title: Text('Technical details', style: text.bodyMedium),
+                  children: [
+                    SelectableText(
+                      'Entry: ${p['entry']}\n'
+                      'Object: ${o.id}\n'
+                      'Signed by: ${o.author}\n'
+                      'Signed: ${o.created}${sent == null ? '' : '\nSent: $sent'}\n'
+                      'Clock: ${p['clock']}\n'
+                      'Epoch: ${p['epoch'] ?? '—'}',
+                      style: text.bodySmall,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Sets this person's reaction to [emoji], or withdraws it if it is theirs.
@@ -720,9 +851,12 @@ extension _GroupChat on _OurNetAppState {
       final item = feed?.entry(editing);
       update(() => cancelGroupEdit(room));
       if (item == null || (item.data['text'] ?? '') == text) return;
-      await Everyday(
-        node,
-      ).write({...item.data, 'text': text, 'edited': true}, room: room);
+      await Everyday(node).write({
+        ...item.data,
+        'text': text,
+        'edited': true,
+        'sent': Everyday.sentOf(item),
+      }, room: room);
     } else {
       await Everyday(node).write({
         'type': 'note',

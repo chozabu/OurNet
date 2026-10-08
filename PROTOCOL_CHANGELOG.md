@@ -7,6 +7,18 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.22: group entries always carry when they were sent
+
+Additive: no new fields. `sent` on `room_item` (optional since 0.2.12) is now
+written on every new group entry, kept by edits, and kept by copies made when
+history is re-shared. A copy of an entry from before `sent` takes the earliest
+time the owner's device holds for it, from the entry's author or from an
+earlier owner copy. Earlier builds left it out of copies, so such entries
+moved to the newest place after a membership change; the next change by an
+owner on this build puts them back. Copies are written oldest first so the
+stored order follows `sent`. Older builds already read `sent`; builds before
+0.2.12 ignore it.
+
 ## 0.2.21: group keys, members adding people to groups
 
 Additive. Device wraps are unchanged, so builds without it read everything
