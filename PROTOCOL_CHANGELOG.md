@@ -7,6 +7,23 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.26: several requests per connection
+
+Additive, no database change. A device that lists the new capability
+`multi_request` answers several requests on one connection, one stream each,
+in turn, and waits up to 5 s for the next before closing. A device sends
+`pull`, `push`, `blob`, `position` and `typing` requests to such a peer on one
+pooled connection, closed 3 s after its last request; other requests, and
+every request to a peer without the capability, still take a connection each.
+A sync session or a file's chunks therefore need one handshake instead of one
+per request. When all four inbound slots are taken, a connection waiting
+between requests is closed to admit a new one; its caller resends on a new
+connection.
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `caps: [..., 'multi_request']` | as `caps` | Serves several requests per connection. | Ignore it; they close after one request, and are only ever sent one. |
+
 ## 0.2.25: algorithm identifiers
 
 Additive. Everything new builds sign or seal names its algorithm, so a
