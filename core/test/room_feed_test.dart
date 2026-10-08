@@ -173,66 +173,66 @@ void main() {
     expect(texts(feed), ['after', 'before']);
   });
 
-  test('shared history keeps entries from before sent in their place', () async {
-    var t = 1000;
-    int clock() => t++;
-    final a = Node(await LocalIdentity.create(), Store(), clock: clock);
-    final b = Node(await LocalIdentity.create(), Store(), clock: clock);
-    final c = Node(await LocalIdentity.create(), Store(), clock: clock);
-    addTearDown(() async {
-      await a.close();
-      await b.close();
-      await c.close();
-    });
-    for (final (x, y) in [(a, b), (a, c), (b, c)]) {
-      await x.addContact(y.identity.certificate);
-      await y.addContact(x.identity.certificate);
-    }
-    var room = await Everyday(a).createRoom('Trip', [b.person]);
-    await syncPair(a, b);
-    final theirs = (await Everyday(b).rooms()).single;
-    // Written by a build from before group entries carried `sent`.
-    Future<void> legacy(
-      Node node,
-      EverydayItem room,
-      Json fields,
-    ) async => node.publish(
-      'room_item',
-      {
-        'type': 'note',
-        'epoch': Everyday(node).epoch(room),
-        'history': false,
-        ...fields,
-      },
-      space: room.object.space,
-      audience: await Everyday(node).members(room),
-    );
-    await legacy(b, theirs, {'text': 'oldest', 'entry': 'old', 'clock': 1});
-    t = 2000;
-    await say(a, room, 'newer');
-    await syncPair(a, b);
-    // A copy re-shared by an earlier build, which dropped the original time.
-    t = 5000;
-    await legacy(a, room, {
-      'text': 'oldest',
-      'entry': 'old',
-      'clock': 5,
-      'history': true,
-      'originalAuthor': b.person,
-    });
-    t = 9000;
-    room = await Everyday(
-      a,
-    ).changeMembers(room, [b.person, c.person], shareHistory: true);
-    for (final node in [a, c]) {
-      if (node == c) await syncPair(a, c);
-      final rooms = await Everyday(node).rooms();
-      final feed = RoomFeed(node, rooms.single);
-      await feed.loadOlder();
-      expect(texts(feed), ['newer', 'oldest']);
-      expect(Everyday.sentOf(feed.items.last), lessThan(2000));
-    }
-  });
+  test(
+    'shared history keeps entries from before sent in their place',
+    () async {
+      var t = 1000;
+      int clock() => t++;
+      final a = Node(await LocalIdentity.create(), Store(), clock: clock);
+      final b = Node(await LocalIdentity.create(), Store(), clock: clock);
+      final c = Node(await LocalIdentity.create(), Store(), clock: clock);
+      addTearDown(() async {
+        await a.close();
+        await b.close();
+        await c.close();
+      });
+      for (final (x, y) in [(a, b), (a, c), (b, c)]) {
+        await x.addContact(y.identity.certificate);
+        await y.addContact(x.identity.certificate);
+      }
+      var room = await Everyday(a).createRoom('Trip', [b.person]);
+      await syncPair(a, b);
+      final theirs = (await Everyday(b).rooms()).single;
+      // Written by a build from before group entries carried `sent`.
+      Future<void> legacy(Node node, EverydayItem room, Json fields) async =>
+          node.publish(
+            'room_item',
+            {
+              'type': 'note',
+              'epoch': Everyday(node).epoch(room),
+              'history': false,
+              ...fields,
+            },
+            space: room.object.space,
+            audience: await Everyday(node).members(room),
+          );
+      await legacy(b, theirs, {'text': 'oldest', 'entry': 'old', 'clock': 1});
+      t = 2000;
+      await say(a, room, 'newer');
+      await syncPair(a, b);
+      // A copy re-shared by an earlier build, which dropped the original time.
+      t = 5000;
+      await legacy(a, room, {
+        'text': 'oldest',
+        'entry': 'old',
+        'clock': 5,
+        'history': true,
+        'originalAuthor': b.person,
+      });
+      t = 9000;
+      room = await Everyday(
+        a,
+      ).changeMembers(room, [b.person, c.person], shareHistory: true);
+      for (final node in [a, c]) {
+        if (node == c) await syncPair(a, c);
+        final rooms = await Everyday(node).rooms();
+        final feed = RoomFeed(node, rooms.single);
+        await feed.loadOlder();
+        expect(texts(feed), ['newer', 'oldest']);
+        expect(Everyday.sentOf(feed.items.last), lessThan(2000));
+      }
+    },
+  );
 
   test('after adding a member a long chat still opens on the newest', () async {
     final (a, b) = await pair();
@@ -251,5 +251,54 @@ void main() {
     await feed.loadOlder(want: 40);
     expect(feed.hasOlder, isTrue);
     expect(texts(feed).take(3), ['m149', 'm148', 'm147']);
+  });
+
+  test('a copy that lost its time shows where its original was', () async {
+    var t = 1000;
+    int clock() => t++;
+    final a = Node(await LocalIdentity.create(), Store(), clock: clock);
+    final b = Node(await LocalIdentity.create(), Store(), clock: clock);
+    addTearDown(() async {
+      await a.close();
+      await b.close();
+    });
+    await a.addContact(b.identity.certificate);
+    await b.addContact(a.identity.certificate);
+    final room = await Everyday(a).createRoom('Trip', [b.person]);
+    await syncPair(a, b);
+    final theirs = (await Everyday(b).rooms()).single;
+    Future<void> legacy(Node node, EverydayItem room, Json fields) async =>
+        node.publish(
+          'room_item',
+          {
+            'type': 'note',
+            'epoch': Everyday(node).epoch(room),
+            'history': false,
+            ...fields,
+          },
+          space: room.object.space,
+          audience: await Everyday(node).members(room),
+        );
+    await legacy(b, theirs, {'text': 'oldest', 'entry': 'old', 'clock': 1});
+    t = 2000;
+    await say(a, room, 'newer');
+    await syncPair(a, b);
+    // What 0.2.21 re-shared: the owner's copy, without the original time.
+    t = 5000;
+    await legacy(a, room, {
+      'text': 'oldest',
+      'entry': 'old',
+      'clock': 5,
+      'history': true,
+      'originalAuthor': b.person,
+    });
+    await syncPair(a, b);
+    for (final node in [a, b]) {
+      final feed = RoomFeed(node, (await Everyday(node).rooms()).single);
+      await feed.loadOlder();
+      expect(texts(feed), ['newer', 'oldest']);
+      expect(feed.items.last.data['history'], isTrue);
+      expect(Everyday.sentOf(feed.items.last), lessThan(2000));
+    }
   });
 }

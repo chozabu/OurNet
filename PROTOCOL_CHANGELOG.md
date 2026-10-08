@@ -7,6 +7,15 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.23: re-shared group entries shown at their original time
+
+No protocol change. Local storage only: each device remembers, in settings
+(`everyday/first/<author>/<entry>`, cursor `everyday/firstCursor`), when a
+group entry written without `sent` was first written, from versions its author
+signed. A re-shared copy without `sent` (as 0.2.21 and earlier made them) is
+shown at that time when this device holds the original. Profiles from earlier
+builds read their group items once more to fill it in.
+
 ## 0.2.22: group entries always carry when they were sent
 
 Additive: no new fields. `sent` on `room_item` (optional since 0.2.12) is now

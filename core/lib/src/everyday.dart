@@ -856,6 +856,26 @@ class Everyday {
   static int sentOf(EverydayItem i) =>
       i.data['sent'] as int? ?? i.object.created;
 
+  /// When this device saw [entry] by [author] first written, for entries from
+  /// before `sent`: copies made when history was re-shared did not keep that
+  /// time, and this lets a device that holds the original show it in place.
+  /// Read after the index is current (any read through [Everyday] is).
+  int? firstWritten(String author, String entry) =>
+      node.store.setting(_EverydayIndex.firstKey(author, entry)) as int?;
+
+  /// [item] with `sent` from [firstWritten] when it lacks one and that is
+  /// earlier, so it sorts, shows and is edited as the original.
+  EverydayItem dated(EverydayItem item) {
+    if (item.data['sent'] is int) return item;
+    final entry = item.data['entry'];
+    if (entry is! String) return item;
+    final author =
+        (item.data['originalAuthor'] ?? item.object.author) as String;
+    final first = firstWritten(author, entry);
+    if (first == null || first >= item.object.created) return item;
+    return EverydayItem(item.object, {...item.data, 'sent': first});
+  }
+
   /// What reactions to a group entry are filed under.
   static String reactionTarget(EverydayItem i) => 'entry:${i.data['entry']}';
 
@@ -969,7 +989,10 @@ class Everyday {
 /// * The Lamport counter, whose maximum is only found inside item payloads.
 ///   Items are the bulk of history, so decrypting all of them to learn one
 ///   number is done once per device and the result is stored, not repeated
-///   on every start. Nothing is retained from the items themselves.
+///   on every start. Nothing else is retained from the items themselves,
+///   except when entries written without `sent` were first written (see
+///   [Everyday.firstWritten]): a bounded set, since every entry has carried
+///   `sent` since 0.2.22.
 class _EverydayIndex {
   final Node node;
   final spaces = <String, _EverydaySpace>{};
@@ -977,6 +1000,7 @@ class _EverydayIndex {
   int version = 0;
   late int clock = node.store.setting(_clockKey) as int? ?? 0;
   late int _clockCursor = node.store.setting(_cursorKey) as int? ?? 0;
+  late int _firstCursor = node.store.setting(_firstCursorKey) as int? ?? 0;
   late String _policy = node.store.setting(_policyKey) as String? ?? '';
   Future<void>? _running;
   int _settled = -1;
@@ -985,6 +1009,9 @@ class _EverydayIndex {
   static const _clockKey = 'everyday/clock';
   static const _cursorKey = 'everyday/clockCursor';
   static const _policyKey = 'everyday/clockPolicy';
+  static const _firstCursorKey = 'everyday/firstCursor';
+  static String firstKey(String author, String entry) =>
+      'everyday/first/$author/$entry';
 
   /// Brings the projection up to the end of the store.
   ///
@@ -1071,24 +1098,55 @@ class _EverydayIndex {
   /// on the next start; a profile written before this existed pays for one
   /// pass, where every call used to pay for one.
   Future<void> _advanceClock(TimeSlice slice, int target) async {
+    // The first-written times started later than the counter, so a profile
+    // from before them reads its items once more, from its own cursor.
+    var from = math.min(_clockCursor, _firstCursor);
     while (true) {
-      final page = node.store.insertedAfter(_clockCursor, Everyday.itemKinds);
+      final page = node.store.insertedAfter(from, Everyday.itemKinds);
       if (page.isEmpty) break;
       for (final (sequence, object) in page) {
-        _clockCursor = sequence;
+        from = sequence;
         await slice.pause();
         if (object.isPublic) continue;
-        final counter = (await node.content(object))?['clock'];
-        if (counter is int && counter > clock) clock = counter;
+        final data = await node.content(object);
+        if (data == null) continue;
+        if (sequence > _clockCursor) {
+          final counter = data['clock'];
+          if (counter is int && counter > clock) clock = counter;
+        }
+        if (sequence > _firstCursor) _noteFirst(object, data);
       }
+      if (from > _clockCursor) _clockCursor = from;
+      if (from > _firstCursor) _firstCursor = from;
     }
     if (_clockCursor < target) _clockCursor = target;
+    if (_firstCursor < target) _firstCursor = target;
     // Unchanged settings do not write rows, so this costs nothing when a
     // refresh found nothing new.
     node.store
       ..set(_clockKey, clock)
       ..set(_cursorKey, _clockCursor)
+      ..set(_firstCursorKey, _firstCursor)
       ..set(_policyKey, _policy);
+  }
+
+  /// Remembers when an entry without `sent` was first written, from versions
+  /// its author signed. Copies are left out: they are what lost the time.
+  void _noteFirst(SignedObject object, Json data) {
+    final entry = data['entry'];
+    if (object.kind != 'room_item' ||
+        entry is! String ||
+        data['sent'] is int ||
+        data['history'] == true) {
+      return;
+    }
+    final author = data['originalAuthor'] ?? object.author;
+    if (author != object.author) return;
+    final key = firstKey(object.author, entry);
+    final known = node.store.setting(key) as int?;
+    if (known == null || object.created < known) {
+      node.store.set(key, object.created);
+    }
   }
 }
 
@@ -1244,6 +1302,7 @@ class RoomFeed {
     if (p == null) return _Merge.none;
     var item = EverydayItem(o, p);
     if (!everyday._belongs(_room, item)) return _Merge.none;
+    item = everyday.dated(item);
     final id = p['entry'];
     if (id is! String) return _Merge.none;
     final old = _entries[id];
