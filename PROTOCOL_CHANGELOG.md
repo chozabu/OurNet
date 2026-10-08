@@ -7,6 +7,21 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: algorithm identifiers
+
+Additive. Everything new builds sign or seal names its algorithm, so a
+successor (a post-quantum signature, say) can be added later without
+guessing at old data. Nothing already stored is re-signed or re-hashed.
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `sig: 'ed25519'` | signed object `data`, evidence `data`, device certificate `data`, revocation `proof` | The signature algorithm, covered by the signature itself so it cannot be swapped. Absent means Ed25519. Data naming another algorithm fails verification. | Ignore it; the signature covers it. |
+| `aead: 'chacha20-poly1305'` | encrypted payloads (beside `box` and `wraps`) | The cipher of the box, every wrap and the group seal. Absent means ChaCha20-Poly1305. A payload naming another cipher is refused. | Ignore it. |
+| `aead: 'chacha20-poly1305'` | sealed roots, sealed backups (beside `kdf`) | As above. A sealed root naming another cipher is invalid; such a backup asks for a newer version. | Ignore it. |
+
+Blobs already carry a version byte, and wraps `kem`; local preview caches are
+never exchanged and are unchanged.
+
 ## 0.2.24: per-path handoff evidence, one storage limit
 
 Additive. Evidence was one set per object, merged between every holder and

@@ -481,10 +481,33 @@ List<int> unb64(String value) => base64Url.decode(value);
 String randomId() =>
     b64(List.generate(24, (_) => Random.secure().nextInt(256)));
 
+/// The signature algorithm, named as `sig` inside what new builds sign, so a
+/// successor can be introduced beside it. Signed data without `sig` is from
+/// before the field and is Ed25519; builds that predate it verify over the
+/// field like any other.
+const signatureAlgorithm = 'ed25519';
+
+/// The AEAD cipher, named as `aead` beside what new builds seal. Sealed data
+/// without `aead` is from before the field and is ChaCha20-Poly1305.
+const aeadAlgorithm = 'chacha20-poly1305';
+
+/// Refuses a payload sealed with a cipher this build does not know, rather
+/// than failing to authenticate it.
+void _checkAead(Map sealed) {
+  final aead = sealed['aead'];
+  if (aead != null && aead != aeadAlgorithm) {
+    throw StateError('Unsupported cipher');
+  }
+}
+
 final _signer = Ed25519();
 Future<String> sign(Json value, SimpleKeyPair key) async =>
     b64((await _signer.sign(bytes(value), keyPair: key)).bytes);
+
+/// False for data naming a signature algorithm other than [signatureAlgorithm].
 Future<bool> verify(Json value, String signature, String publicKey) async {
+  final sig = value['sig'];
+  if (sig != null && sig != signatureAlgorithm) return false;
   try {
     return await _signer.verify(
       bytes(value),
@@ -557,6 +580,7 @@ class SealedRoot {
     if (j is! Map ||
         j['domain'] != _domain ||
         j['kdf'] != 'argon2id' ||
+        (j['aead'] != null && j['aead'] != aeadAlgorithm) ||
         j['person'] is! String ||
         j['salt'] is! String ||
         j['box'] is! String) {
@@ -611,6 +635,7 @@ class SealedRoot {
       'domain': _domain,
       'person': person,
       'kdf': 'argon2id',
+      'aead': aeadAlgorithm,
       'memory': memory,
       'iterations': iterations,
       'salt': b64(salt),
@@ -700,6 +725,7 @@ class LocalIdentity {
     final agreement = await X25519().newKeyPair();
     final data = <String, dynamic>{
       'domain': 'ournet/device/2',
+      'sig': signatureAlgorithm,
       'person': b64((await root.extractPublicKey()).bytes),
       'device': b64((await device.extractPublicKey()).bytes),
       'agreement': b64((await agreement.extractPublicKey()).bytes),
@@ -790,6 +816,8 @@ class LocalIdentity {
     if (!await request.valid()) throw StateError('Invalid enrolment request');
     final data = <String, dynamic>{
       ...request.data,
+      // A request from a build before `sig` carries none.
+      'sig': signatureAlgorithm,
       'person': person,
       // Optional, for showing who added a device and when; earlier builds
       // verify the signature over them like any other field.
@@ -953,6 +981,7 @@ List<int> _groupAad(String id) => utf8.encode('ournet/group/2/$id');
 Future<List<int>> unsealGroup(Json encrypted, GroupKey group) async {
   final seal = encrypted['group'] as Map;
   if (seal['id'] != group.id) throw StateError('Another group key');
+  _checkAead(encrypted);
   return Chacha20.poly1305Aead().decrypt(
     SecretBox.fromConcatenation(
       unb64(seal['box'] as String),
@@ -1003,6 +1032,8 @@ Future<Json> encryptFor(
     });
   }
   return {
+    // The cipher of the box, the wraps and the group seal alike.
+    'aead': aeadAlgorithm,
     'box': b64(box.concatenation()),
     'wraps': wraps,
     if (group != null)
@@ -1053,6 +1084,7 @@ Future<List<int>> unwrapFor(
   if (wrap['kem'] != null && wrap['kem'] != 'x25519') {
     throw StateError('Unsupported key agreement');
   }
+  _checkAead(encrypted);
   final shared = await X25519().sharedSecretKey(
     keyPair: agreementKey,
     remotePublicKey: SimplePublicKey(
@@ -1081,20 +1113,22 @@ Future<List<int>> unwrapFor(
 }
 
 /// Opens [encrypted] with its content key, however that key was obtained.
-Future<Json> decryptWith(Json encrypted, List<int> contentKey) async =>
-    jsonDecode(
-          utf8.decode(
-            await Chacha20.poly1305Aead().decrypt(
-              SecretBox.fromConcatenation(
-                unb64(encrypted['box']),
-                nonceLength: 12,
-                macLength: 16,
-              ),
-              secretKey: SecretKey(contentKey),
+Future<Json> decryptWith(Json encrypted, List<int> contentKey) async {
+  _checkAead(encrypted);
+  return jsonDecode(
+        utf8.decode(
+          await Chacha20.poly1305Aead().decrypt(
+            SecretBox.fromConcatenation(
+              unb64(encrypted['box']),
+              nonceLength: 12,
+              macLength: 16,
             ),
+            secretKey: SecretKey(contentKey),
           ),
-        )
-        as Json;
+        ),
+      )
+      as Json;
+}
 
 /// Encrypts one file chunk. A versioned blob is [blobVersion] followed by the
 /// nonce, ciphertext and tag, with the version byte authenticated as AAD.

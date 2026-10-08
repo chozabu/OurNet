@@ -300,6 +300,7 @@ class Backup {
     return {
       'domain': _domain,
       'kdf': 'argon2id',
+      'aead': aeadAlgorithm,
       'memory': memory,
       'iterations': iterations,
       'salt': b64(salt),
@@ -318,6 +319,9 @@ class Backup {
         sealed['salt'] is! String ||
         sealed['box'] is! String) {
       throw const FormatException('This backup is damaged');
+    }
+    if (sealed['aead'] != null && sealed['aead'] != aeadAlgorithm) {
+      throw StateError('This backup needs a newer OurNet version');
     }
     final memory = sealed['memory'], iterations = sealed['iterations'];
     // The backup chooses the cost of opening it: bound it.

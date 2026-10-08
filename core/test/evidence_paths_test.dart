@@ -323,7 +323,8 @@ void main() {
       isEmpty,
     );
     expect(await syncPair(last, next), 0);
-  });
+    // 66 nodes and about 64 syncs: near 30 s alone, longer beside other suites.
+  }, timeout: const Timeout(Duration(seconds: 90)));
 
   test('peers on older builds still reconcile all evidence', () async {
     final a = await node(), b = await node(), c = await node();

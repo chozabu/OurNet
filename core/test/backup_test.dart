@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:test/test.dart';
 
@@ -81,6 +83,39 @@ void main() {
       ),
     );
     expect(File('${temp.path}/out.db').existsSync(), isFalse);
+  });
+
+  test('a backup sealed with an unknown cipher asks for a newer version', () async {
+    final node = await profile();
+    final zip = '${temp.path}/backup.zip';
+    await Backup.create(
+      node,
+      zip,
+      passphrase,
+      memory: memory,
+      iterations: iterations,
+    );
+    final archive = ZipDecoder().decodeBytes(File(zip).readAsBytesSync());
+    final rewritten = Archive();
+    for (final file in archive.files) {
+      if (file.name != 'identity.json') {
+        rewritten.addFile(file);
+        continue;
+      }
+      final sealed = jsonDecode(utf8.decode(file.content as List<int>)) as Map;
+      expect(sealed['aead'], aeadAlgorithm);
+      sealed['aead'] = 'aes-256-gcm';
+      rewritten.addFile(
+        ArchiveFile.bytes('identity.json', utf8.encode(jsonEncode(sealed))),
+      );
+    }
+    File(zip).writeAsBytesSync(ZipEncoder().encode(rewritten));
+    await expectLater(
+      Backup.stage(zip, passphrase, '${temp.path}/out.db'),
+      throwsA(
+        isA<StateError>().having((e) => e.message, 'message', contains('newer')),
+      ),
+    );
   });
 
   test('a short passphrase is refused before anything is written', () async {

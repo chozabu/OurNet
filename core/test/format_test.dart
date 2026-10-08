@@ -277,6 +277,111 @@ void main() {
     );
   });
 
+  group('algorithm identifiers', () {
+    test(
+      'new signed data names ed25519 and older data still verifies',
+      () async {
+        final a = Node(await LocalIdentity.create(), Store());
+        final b = Node(await LocalIdentity.create(), Store());
+        await a.addContact(b.identity.certificate);
+        await b.addContact(a.identity.certificate);
+        final o = await a.publish(
+          'message',
+          {'text': 'hi'},
+          audience: [b.person],
+        );
+        expect(o.data['sig'], signatureAlgorithm);
+        expect(a.identity.certificate.data['sig'], signatureAlgorithm);
+        await syncPair(a, b);
+        final evidence = b.store.evidence(o.id);
+        expect(
+          evidence.map((e) => e.data['domain']),
+          contains('ournet/receipt/2'),
+        );
+        expect(
+          evidence.every((e) => e.data['sig'] == signatureAlgorithm),
+          isTrue,
+        );
+
+        final key = await a.identity.deviceKey.extract();
+        Future<SignedObject> resigned(void Function(Json) edit) async {
+          final data = {...o.data};
+          edit(data);
+          return SignedObject(
+            data,
+            await sign(data, key),
+            a.identity.certificate,
+          );
+        }
+
+        expect(await (await resigned((d) => d.remove('sig'))).valid(), isTrue);
+        expect(
+          await (await resigned((d) => d['sig'] = 'ml-dsa-65')).valid(),
+          isFalse,
+        );
+      },
+    );
+
+    test('a certificate naming another signature is invalid', () async {
+      final root = await Ed25519().newKeyPair();
+      final me = await LocalIdentity.create(root: root);
+      final legacy = {...me.certificate.data}..remove('sig');
+      expect(
+        await DeviceCertificate(legacy, await sign(legacy, root)).valid(),
+        isTrue,
+      );
+      final other = {...me.certificate.data, 'sig': 'ml-dsa-65'};
+      expect(
+        await DeviceCertificate(other, await sign(other, root)).valid(),
+        isFalse,
+      );
+      // A request from a build before `sig` is approved with it.
+      final approved = await me.authorise(
+        DeviceCertificate(legacy, await sign(legacy, root)),
+      );
+      expect(approved.data['sig'], signatureAlgorithm);
+      expect(await approved.valid(), isTrue);
+    });
+
+    test('encrypted payloads name their cipher; others are refused', () async {
+      final me = await LocalIdentity.create();
+      final group = groupKeyFrom(newGroupKey());
+      final box = await encryptFor({'a': 1}, [me.certificate], group: group);
+      expect(box['aead'], aeadAlgorithm);
+      expect(await decryptFor(box, me), {'a': 1});
+      expect(await unsealGroup(box, group), isNotEmpty);
+      final legacy = {...box}..remove('aead');
+      expect(await decryptFor(legacy, me), {'a': 1});
+      expect(await unsealGroup(legacy, group), isNotEmpty);
+      final other = {...box, 'aead': 'aes-256-gcm'};
+      await expectLater(decryptFor(other, me), throwsStateError);
+      await expectLater(unsealGroup(other, group), throwsStateError);
+      final key = await unwrapFor(box, me.agreementKey, me.device);
+      await expectLater(decryptWith(other, key), throwsStateError);
+    });
+
+    test('sealed roots name their cipher; others are refused', () async {
+      final me = await LocalIdentity.create();
+      const phrase = 'correct horse battery staple';
+      final sealed = await SealedRoot.seal(
+        me.root!,
+        phrase,
+        memory: 8 * 1024,
+        iterations: 1,
+      );
+      expect(sealed.toJson()['aead'], aeadAlgorithm);
+      final legacy = SealedRoot.fromJson({...sealed.toJson()}..remove('aead'));
+      expect(
+        (await (await legacy.open(phrase)).extractPublicKey()).bytes,
+        (await me.root!.extractPublicKey()).bytes,
+      );
+      expect(
+        () => SealedRoot.fromJson({...sealed.toJson(), 'aead': 'aes-256-gcm'}),
+        throwsFormatException,
+      );
+    });
+  });
+
   group('tags', () {
     test('chunk sizes must be powers of two', () {
       for (final ok in [1024, 65536, 131072, 1 << 20]) {

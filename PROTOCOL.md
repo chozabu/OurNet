@@ -43,6 +43,14 @@ device certificate, kind, space, creation time, optional expiry, audience, optio
 relay audience, payload and signature. Their IDs hash the signed representation.
 There is no dependency on an author's unrelated earlier private objects.
 
+Algorithms are named where they are used, so a successor can be added beside
+them. Signed data (objects, evidence, device certificates, revocation proofs)
+carries `sig: "ed25519"` among the signed fields; encrypted payloads, sealed
+roots and sealed backups carry `aead: "chacha20-poly1305"`, which covers a
+payload's box, wraps and group seal alike; each wrap names its key agreement
+as `kem: "x25519"`. Absent means those same algorithms, as written before the
+fields existed. Anything naming another algorithm is refused on its own.
+
 Public objects travel to admitted friends subscribed to their space, and to a
 person's own devices when subscribed or when that person wrote them. Which
 spaces a person follows is itself personal state replicated between their own

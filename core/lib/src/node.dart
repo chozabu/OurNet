@@ -308,6 +308,7 @@ class Node {
       'domain': 'ournet/object/2',
       // Absent on objects from before it; builds that do not know it ignore it.
       'v': 2,
+      'sig': signatureAlgorithm,
       'nonce': randomId(),
       'kind': kind,
       'space': space,
@@ -618,6 +619,7 @@ class Node {
       throw StateError('Can only revoke your own enrolled device');
     final proof = <String, dynamic>{
       'domain': 'ournet/revoke/2',
+      'sig': signatureAlgorithm,
       'person': person,
       'device': device,
     };
@@ -1211,6 +1213,7 @@ class Node {
           if (routed) {
             handoffs.add({
               'domain': 'ournet/handoff/2',
+              'sig': signatureAlgorithm,
               'object': id,
               'to': peerDevice,
               'parents': parents.take(1).toList(),
@@ -1482,6 +1485,7 @@ class Node {
         continue;
       receipts[h.id] = {
         'domain': 'ournet/receipt/2',
+        'sig': signatureAlgorithm,
         'object': o.id,
         'handoff': h.id,
         'created': now(),
