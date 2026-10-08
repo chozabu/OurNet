@@ -67,6 +67,14 @@ void main() {
     expect(overall.headline, 'Synced 2 min ago');
   });
 
+  test('diagnostics carry the network activity log', () {
+    network.log('Home relay lost: disconnected');
+    network.log('Accept failed: handshake timed out');
+    final events = syncDiagnostics(network)['events'] as List<String>;
+    expect(events.first, endsWith('Accept failed: handshake timed out'));
+    expect(events, contains(endsWith('Home relay lost: disconnected')));
+  });
+
   test('builds that differ are pointed out', () {
     // Development builds have no stamp to compare against.
     network.peerBuilds[laptop] = '20260916-004729';

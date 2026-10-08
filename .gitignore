@@ -21,3 +21,6 @@ play-service-account.json
 PrivateData/
 # Saved profiles from earlier releases, opened by core/test/upgrade_test.dart.
 !core/test/fixtures/upgrade/*/profile.db
+
+# Screen recordings for Play Console declarations - large, kept locally
+store/play-demo/
