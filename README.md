@@ -17,6 +17,13 @@ The focus is on **identity, accountability and trust**:
 - **Accountability.** Content is signed and carries a record of who wrote it and
   which people passed it along, so you can judge what you receive and trace
   misuse.
+- **Accountable, not anonymous.** Everything reaches you through friends who
+  chose to connect, and every hop is signed. That is how OurNet aims to keep
+  out scams, spam and bots without a central moderator: an account nobody
+  vouched for has no way in, and whoever passes junk along can be seen and
+  dropped. The flip side is that OurNet is not an anonymity tool. Friend lists
+  are public, and people who need to hide who they talk to should use
+  something else.
 - **Trust in context.** Being someone's friend doesn't grant access to
   everything. Folders, groups and lists are encrypted and shared only with the
   people you pick.

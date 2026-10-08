@@ -10,6 +10,8 @@ The ambition includes alternatives to services such as Reddit, Google Drive and 
 
 The distinguishing idea is an accountable friend-to-friend network: people interact through persistent identities recognised by their friends, and data carries a verifiable record of its attributed origin and its passage through the network.
 
+A core goal follows from this: decentralised resistance to scams, spam and bots. Platforms fight these centrally, with moderators, phone-number checks and scoring, and still lose. Here an identity only reaches people through friends who admitted it, and every handoff is attributable, so abuse can be traced to the people who let it in and cut off locally, by the people affected, with no central authority. This favours accountability over anonymity on purpose: OurNet is not an anonymity tool, and should say so to people who may assume it is (for example, those coming from RetroShare). It does not prove that each account is a distinct human (see section 3).
+
 The application should be useful enough for everyday adoption while preserving individual control. Safety, accountability, maintainability, battery life and performance are core design concerns.
 
 ## 2. Agreed foundations
