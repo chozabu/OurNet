@@ -138,7 +138,7 @@ carrier-grade NATs.
 RetroShare: shared directories with hashing, browsing friends' files,
 anonymous search across the network, swarming multi-source downloads,
 per-friend sharing flags, banned-file lists, deep indexing, large files.
-OurNet: encrypted 128 KiB chunks, 64 MiB per file, 512 MiB of blobs, downloads
+OurNet: encrypted 128 KiB chunks, 64 MiB per file, downloads
 from the author and then other holders, private drive sync with revisions; no
 search, swarming or resumable large transfers. **RetroShare far ahead** on
 file sharing; OurNet's drive sync between own devices has no RetroShare
@@ -248,6 +248,18 @@ delivery status still works). Implemented on 8 October 2026; see
 - The second forum limit is untouched: a friend who does not follow a forum
   still does not relay it (see 2).
 
+Decided afterwards (8 October 2026): no hop limit and no limit on forum size.
+Identity objects (profiles, pictures, friend lists, revocations) are relayed
+to every friend, followed or not, so without the old cap they now reach the
+whole connected network and every device keeps every reachable person's
+newest ones, with earlier versions never deleted. Left unlimited for now;
+revisit scoping them (pictures to a few hops, friend lists to the chain
+length connecting looks for) and deleting superseded versions when networks
+grow large. To keep unlimited reach safe, the 512 MiB bounds became one
+configurable storage limit (20 GiB, with a warning at 5 GiB), and a device
+hands an object on along its shortest chain and does not offer paths a
+receiver would refuse.
+
 ### 4. Per-friend permissions and bandwidth
 RetroShare has a grid of friends against services (chat, forums, channels,
 file transfer, tunnels, VOIP, distant chat) with per-friend overrides
@@ -255,8 +267,8 @@ enforced centrally, global and per-friend bandwidth limits with flow control,
 priority queues, and per-friend file-sharing groups. In OurNet every admitted
 friend gets location (if sharing is on), can ring, can fetch chunks they are
 allowed, relays forums they follow, passes connect requests, and will be able
-to use carrier storage, while the only budgets are global (512 MiB objects,
-512 MiB files, 4 inbound requests). Proposed: per-friend switches (location,
+to use carrier storage, while the only budgets are global (one storage limit,
+20 GiB by default since 8 October 2026, and 4 inbound requests). Proposed: per-friend switches (location,
 calls ring, silent or blocked, carry for them, relay their connect requests,
 add me to groups) in synced personal state; per-friend quotas for carried
 storage and chunk requests, so one friend cannot fill the shared budget;

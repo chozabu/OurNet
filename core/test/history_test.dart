@@ -278,12 +278,12 @@ void main() {
     await syncPair(a, b);
     expect(b.store.count, 1);
     // Own writes are never refused by the budget; a peer's are.
-    b.store.set('receivedBudget', 1);
+    b.store.set('storageLimit', 1);
     await b.publish('post', {'text': 'mine'});
     await a.publish('message', {'text': 'second'}, audience: [b.person]);
     await expectLater(syncPair(a, b), throwsStateError);
     expect(b.store.count, 2, reason: 'the peer object was refused');
-    b.store.set('receivedBudget', Node.maxReceivedBytes);
+    b.store.set('storageLimit', null);
     await syncPair(a, b);
     expect(b.store.count, 3);
   });

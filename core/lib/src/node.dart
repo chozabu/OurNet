@@ -63,20 +63,6 @@ class Node {
   bool _closing = false;
   Future<void>? _closeFuture;
 
-  /// Objects a peer may drive this device into storing, in bytes. There is no
-  /// limit on how many objects a person's own devices hold: a count cap
-  /// bounded nothing real (an object runs up to [maxObjectBytes], so a row
-  /// total says little about disk) while it did bound the product. What is
-  /// left is the one place an outside party controls growth, measured in the
-  /// resource that matters. Reading a view never costs more than the window
-  /// it shows, so history beyond this is only ever disk.
-  ///
-  /// Own writes are never refused by it: a quota on your own data protects
-  /// nobody. A device that fills this with its own objects would stop
-  /// accepting new ones from peers; objects are metadata and text, with
-  /// attachments in blobs, so that is on the order of a million notes, and
-  /// `receivedBudget` in settings raises or disables it.
-  static const maxReceivedBytes = 512 * 1024 * 1024;
   static const maxObjectBytes = 256 * 1024;
 
   /// Entries one peer may list in a single inventory page. Bounds a peer's
@@ -86,9 +72,6 @@ class Node {
   /// How much history an unindexed scanning view reads. Distinct from any
   /// storage budget: these are the remaining views that have no cursor.
   static const maxScan = 10000;
-
-  int get _receivedBudget =>
-      store.setting('receivedBudget') as int? ?? maxReceivedBytes;
 
   /// Evidence records one received item may carry. Peers keeping evidence
   /// per path send the chain to them, so this bounds path depth (about 60
@@ -1077,6 +1060,21 @@ class Node {
     ];
   }
 
+  /// [receipts] ordered by the length of the chain proving each, shortest
+  /// first, ties by ID.
+  static List<String> _shortestFirst(
+    List<Evidence> all,
+    List<String> receipts,
+  ) {
+    final length = {
+      for (final id in receipts) id: _withProof(all, {id}).length,
+    };
+    return receipts..sort((a, b) {
+      final byLength = length[a]!.compareTo(length[b]!);
+      return byLength != 0 ? byLength : a.compareTo(b);
+    });
+  }
+
   /// Whether a build before per-path evidence can take [o] whole: it holds
   /// at most [maxEvidence] records for one object, and offering it more
   /// would be refused on every sync.
@@ -1191,20 +1189,25 @@ class Node {
               e.data['to'] == peerDevice,
         );
         if (!minted && !have.containsKey(id)) {
-          final parents = evidence
-              .where(
-                (e) =>
-                    e.data['domain'] == 'ournet/receipt/2' &&
-                    e.certificate.device == identity.device,
-              )
-              .map((e) => e.id)
-              .toList();
+          // Hand on along the shortest chain this device received it by,
+          // so paths stay near the distance between people.
+          final parents = _shortestFirst(evidence, [
+            for (final e in evidence)
+              if (e.data['domain'] == 'ournet/receipt/2' &&
+                  e.certificate.device == identity.device)
+                e.id,
+          ]);
           // Another person's object can be handed on only along a route this
           // device holds a receipt for. When that route went through a
           // device since removed, the receipt is gone; this person's own
           // devices still pass it on without one, signature intact.
           final routed = object.author == person || parents.isNotEmpty;
           if (!routed && !relay) continue;
+          // A receiver takes at most [maxEvidence] records with an item;
+          // offering a longer path would be refused on every sync.
+          if (parents.isNotEmpty &&
+              _withProof(evidence, {parents.first}).length + 1 > maxEvidence)
+            continue;
           if (routed) {
             handoffs.add({
               'domain': 'ournet/handoff/2',
@@ -1230,6 +1233,8 @@ class Node {
       final evidence = paths == null && _offerWhole(object)
           ? all
           : _withProof(all, _shared(route, peer));
+      // Refused by the receiver however often it is sent.
+      if (evidence.length > maxEvidence) continue;
       final item = <String, dynamic>{
         'object': object.toJson(),
         'evidence': [for (final e in evidence) e.toJson()],
@@ -1422,8 +1427,11 @@ class Node {
     if (!held && handoffs.isEmpty && !own) {
       throw StateError('No handoff from authenticated peer');
     }
-    if (!held && store.objectBytes >= _receivedBudget)
-      throw StateError('Storage budget for received objects reached');
+    // What a peer may drive this device into storing is bounded by the
+    // storage limit, objects and files together. Own writes never are: a
+    // quota on your own data protects nobody.
+    if (!held && store.storedBytes >= store.storageLimit)
+      throw StateError('Storage limit reached');
     await applyRevocation(o);
     final changed = store.batch(
       () => [

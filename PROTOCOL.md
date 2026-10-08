@@ -308,12 +308,14 @@ characters) naming the sender's app build; peers ignore it, or show it when it
 differs from their own. A failed inbound handshake is logged and counted, and
 the endpoint keeps accepting further connections.
 
-Local limits: 512 MiB of stored objects once they are received from peers (a
-store bound, not a sync-message bound, and not applied to this device's own
-writes; the number of objects is not capped),
-256 KiB per signed object, 128 evidence records per
-received item (a path, so about 60 hops), 64 MiB per file, 512 MiB total stored blob bytes, and four simultaneous
-inbound requests. These bounds are not a complete DoS resistance strategy.
+Local limits: a storage limit on stored objects and files together (setting
+`storageLimit`, 20 GiB by default; past it, objects from peers and files are
+refused, this device's own objects are not, and the number of objects is not
+capped), with a warning shown past `storageWarning` (5 GiB by default),
+256 KiB per signed object, 128 evidence records per received item (a path, so
+about 60 hops; a device does not offer an item with more), 64 MiB per file,
+and four simultaneous inbound requests. A device hands an object on along the
+shortest chain it received it by. These bounds are not a complete DoS resistance strategy.
 
 Files use 128 KiB content-addressed chunks, encrypted separately for private
 attachments. The encrypted manifest holds the chunk key and hashes. Sources

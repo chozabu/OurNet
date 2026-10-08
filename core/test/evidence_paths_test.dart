@@ -260,6 +260,71 @@ void main() {
     expect(handoff.target, identity.device);
   });
 
+  test('an object is handed on along the shortest chain it came by', () async {
+    final a = await node(), b = await node(), c = await node();
+    final d = await node(), e = await node();
+    addTearDown(() async {
+      for (final n in [a, b, c, d, e]) {
+        await n.close();
+      }
+    });
+    await friend(a, b);
+    await friend(b, c);
+    await friend(c, d);
+    await friend(a, d);
+    await friend(d, e);
+    final post = await a.publish('post', {'text': 'two ways in'});
+    await syncPair(a, b);
+    await syncPair(b, c);
+    // d lacks the post when c and a each offer it, so it takes both.
+    final fromC = await c.offer(
+      d.identity.device,
+      d.inventoryAfter(peerDevice: c.identity.device),
+    );
+    final fromA = await a.offer(
+      d.identity.device,
+      d.inventoryAfter(peerDevice: a.identity.device),
+    );
+    await d.receive(c.identity.device, fromC);
+    await d.receive(a.identity.device, fromA);
+    await syncPair(d, e);
+    // a -> d -> e: two handoffs and two receipts, not the six of a -> b -> c.
+    expect(e.store.evidence(post.id), hasLength(4));
+    expect(signers(e, post), {
+      a.identity.device,
+      d.identity.device,
+      e.identity.device,
+    });
+  });
+
+  test('a path too long for the receiver is not offered', () async {
+    // Each hop adds a handoff and a receipt: 64 devices after the author make
+    // a path of 128 records, the most one item may carry.
+    final chain = [for (var i = 0; i < 66; i++) await node()];
+    addTearDown(() async {
+      for (final n in chain) {
+        await n.close();
+      }
+    });
+    for (var i = 0; i + 1 < chain.length; i++) {
+      await friend(chain[i], chain[i + 1]);
+    }
+    final post = await chain.first.publish('post', {'text': 'a long way'});
+    for (var i = 0; i + 2 < chain.length; i++) {
+      await syncPair(chain[i], chain[i + 1]);
+    }
+    final last = chain[chain.length - 2], next = chain.last;
+    expect(last.store.evidence(post.id), hasLength(Node.maxEvidence));
+    expect(
+      await last.offer(
+        next.identity.device,
+        next.inventoryAfter(peerDevice: last.identity.device),
+      ),
+      isEmpty,
+    );
+    expect(await syncPair(last, next), 0);
+  });
+
   test('peers on older builds still reconcile all evidence', () async {
     final a = await node(), b = await node(), c = await node();
     addTearDown(() async {

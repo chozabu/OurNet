@@ -54,6 +54,7 @@ import 'onboarding.dart';
 import 'sync_status.dart';
 import 'sync_health.dart';
 import 'update_banner.dart';
+import 'storage_banner.dart';
 import 'network_graph.dart';
 import 'conversation_delivery.dart';
 import 'note_editor.dart';
@@ -1515,6 +1516,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                           },
                         ),
                         UpdateBanner(network: network, nameOf: name),
+                        StorageBanner(
+                          network: network,
+                          openSettings: () =>
+                              update(() => tab = Destination.settings),
+                        ),
                         if (connectRequests.isNotEmpty &&
                             tab != Destination.network)
                           connectRequestsBanner(context),

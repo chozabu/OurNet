@@ -269,16 +269,30 @@ class Store {
     db.execute('''
       CREATE TABLE IF NOT EXISTS blob_usage(id INTEGER PRIMARY KEY CHECK(id=1), bytes INTEGER NOT NULL);
       INSERT OR IGNORE INTO blob_usage SELECT 1, COALESCE(SUM(length(bytes)),0) FROM blobs;
-      CREATE TRIGGER IF NOT EXISTS blob_quota BEFORE INSERT ON blobs
-      WHEN NOT EXISTS(SELECT 1 FROM blobs WHERE id=NEW.id)
-        AND (SELECT bytes FROM blob_usage WHERE id=1)+length(NEW.bytes)>536870912
-      BEGIN SELECT RAISE(ABORT, 'Blob storage limit is 512 MiB'); END;
       CREATE TRIGGER IF NOT EXISTS blob_added AFTER INSERT ON blobs
       BEGIN UPDATE blob_usage SET bytes=bytes+length(NEW.bytes) WHERE id=1; END;
       CREATE TRIGGER IF NOT EXISTS blob_removed AFTER DELETE ON blobs
       BEGIN UPDATE blob_usage SET bytes=bytes-length(OLD.bytes) WHERE id=1; END;
       CREATE TRIGGER IF NOT EXISTS blob_updated AFTER UPDATE OF bytes ON blobs
       BEGIN UPDATE blob_usage SET bytes=bytes+length(NEW.bytes)-length(OLD.bytes) WHERE id=1; END;
+    ''');
+    // Files count towards the storage limit with objects, enforced here too
+    // so a write from another connection cannot pass it. Earlier builds
+    // created this trigger with a fixed 512 MiB for files alone; it is
+    // replaced once, not on every open, as other connections share it.
+    final quota = db.select(
+      "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='blob_quota'",
+    );
+    if (quota.isEmpty ||
+        !(quota.first['sql'] as String).contains('storageLimit'))
+      db.execute('''
+      DROP TRIGGER IF EXISTS blob_quota;
+      CREATE TRIGGER blob_quota BEFORE INSERT ON blobs
+      WHEN NOT EXISTS(SELECT 1 FROM blobs WHERE id=NEW.id)
+        AND (SELECT bytes FROM blob_usage WHERE id=1)
+          +(SELECT bytes FROM object_usage WHERE id=1)+length(NEW.bytes)
+          >$_storageLimitSql
+      BEGIN SELECT RAISE(ABORT, 'Storage limit reached'); END;
     ''');
   }
 
@@ -806,6 +820,42 @@ class Store {
   int get objectBytes =>
       _select('SELECT bytes FROM object_usage WHERE id=1').first['bytes']
           as int;
+
+  /// Bytes of stored objects and files together: what [storageLimit] and
+  /// [storageWarning] measure. Both totals are kept by trigger.
+  int get storedBytes =>
+      _select(
+            'SELECT (SELECT bytes FROM object_usage WHERE id=1)'
+            '+(SELECT bytes FROM blob_usage WHERE id=1) AS n',
+          ).first['n']
+          as int;
+
+  /// Default for [storageLimit]: generous, since a device chooses what it
+  /// follows, and only there to stop a disk filling unnoticed.
+  static const defaultStorageLimit = 20 * 1024 * 1024 * 1024;
+
+  /// Default for [storageWarning].
+  static const defaultStorageWarning = 5 * 1024 * 1024 * 1024;
+
+  /// Past this many [storedBytes], objects from peers and files are refused
+  /// (`storageLimit` in settings). This device's own objects never are.
+  int get storageLimit => _bytesSetting('storageLimit', defaultStorageLimit);
+
+  /// Past this many [storedBytes] the app warns that storage is filling
+  /// (`storageWarning` in settings).
+  int get storageWarning =>
+      _bytesSetting('storageWarning', defaultStorageWarning);
+
+  int _bytesSetting(String key, int fallback) => switch (setting(key)) {
+    final int bytes when bytes > 0 => bytes,
+    _ => fallback,
+  };
+
+  static const _storageLimitSql =
+      "COALESCE((SELECT CAST(value AS INTEGER) FROM settings "
+      "WHERE key='storageLimit' AND value GLOB '[1-9]*'), "
+      '$defaultStorageLimit)';
+
   bool putEvidence(Evidence evidence) {
     _execute('INSERT OR IGNORE INTO evidence VALUES (?,?,?)', [
       evidence.id,
@@ -974,11 +1024,8 @@ class Store {
     if (bytes.length > 128 * 1024 + 64 || blobHash(bytes) != id)
       throw StateError('Invalid blob');
     if (hasBlob(id)) return;
-    final total =
-        _select('SELECT bytes FROM blob_usage WHERE id=1').first['bytes']
-            as int;
-    if (total + bytes.length > 512 * 1024 * 1024)
-      throw StateError('Blob storage limit is 512 MiB');
+    if (storedBytes + bytes.length > storageLimit)
+      throw StateError('Storage limit reached');
     _execute('INSERT INTO blobs VALUES (?,?)', [id, Uint8List.fromList(bytes)]);
   }
 

@@ -7,7 +7,7 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
-## Unreleased: per-path handoff evidence
+## 0.2.24: per-path handoff evidence, one storage limit
 
 Additive. Evidence was one set per object, merged between every holder and
 capped at 128 records, so an object stopped being offered after about 63
@@ -27,7 +27,17 @@ gone; 128 records now bounds one received item, which is a path.
 
 Builds without it keep merging what they are sent, so while one of them
 holds an object, evidence passed through it still spreads, and still stops at
-their 128 records. Local storage: a derived table, `evidence_routes`, records
+their 128 records. A device hands an object on along the shortest chain it received it by, and
+does not offer an item carrying more than 128 records, which a receiver would
+refuse on every sync.
+
+Storage: the 512 MiB bound on objects received from peers and the 512 MiB
+bound on files are replaced by one limit on both together, `storageLimit` in
+settings (20 GiB by default), with a warning past `storageWarning` (5 GiB by
+default). `receivedBudget` is no longer read. Older builds keep their own
+512 MiB checks.
+
+Local storage: a derived table, `evidence_routes`, records
 each evidence record's signer and what it names. It is filled from the stored
 evidence when a profile is first opened by this build, and kept by trigger.
 

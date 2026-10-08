@@ -302,6 +302,40 @@ extension _SettingsPages on _OurNetAppState {
         onTap: () => update(() => tab = Destination.network),
       ),
       ListTile(
+        leading: const Icon(Icons.storage),
+        title: const Text('Storage'),
+        subtitle: Text(
+          '${storageSummary(node.store)}. At the limit, messages, posts and '
+          'files from friends are refused; what you write is still saved.',
+        ),
+        isThreeLine: true,
+        trailing: TextButton(
+          onPressed: () => act(() async {
+            final limit = await ask(
+              context,
+              'Storage limit (GB)',
+              initial: gigabytesText(node.store.storageLimit),
+            );
+            if (limit == null || !context.mounted) return;
+            final warning = await ask(
+              context,
+              'Warn when storage passes (GB)',
+              initial: gigabytesText(node.store.storageWarning),
+            );
+            if (warning == null) return;
+            final limitBytes = gigabytes(limit);
+            final warningBytes = gigabytes(warning);
+            if (limitBytes == null || warningBytes == null) {
+              throw StateError('Enter sizes in GB, greater than 0');
+            }
+            node.store.set('storageLimit', limitBytes);
+            node.store.set('storageWarning', warningBytes);
+            update(() {});
+          }),
+          child: const Text('Change'),
+        ),
+      ),
+      ListTile(
         leading: const Icon(Icons.archive_outlined),
         title: const Text('Save a backup'),
         subtitle: const Text(
@@ -606,7 +640,7 @@ extension _SettingsPages on _OurNetAppState {
       const ListTile(
         title: Text('Prototype limits'),
         subtitle: Text(
-          '10,000 local objects · 128 evidence records per object · 64 MiB per file. No guaranteed incoming calls while the mobile app is suspended.',
+          '64 MiB per file · 128 evidence records per received item, about 60 hops. No guaranteed incoming calls while the mobile app is suspended.',
         ),
       ),
       const Padding(

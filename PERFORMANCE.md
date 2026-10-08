@@ -211,8 +211,9 @@ supposed to cost what it shows rather than what is stored.
   rows rather than bytes, so it bounded nothing real (an object runs to 256 KiB)
   while it did bound the product. A person's own writes are no longer limited;
   what a peer can drive this device into storing is, in bytes, with object
-  usage maintained by trigger exactly as blob usage is. `receivedBudget` in
-  settings raises or disables that, and own writes are never refused by it.
+  usage maintained by trigger exactly as blob usage is. Since October 2026
+  that is the storage limit on objects and files together (`storageLimit`,
+  20 GiB by default), and own writes are never refused by it.
 - Group and note views are per-space. `Everyday` keeps one projection per node,
   fed by an insertion cursor: rooms and leaves are held (membership is derived
   from them and there are few), while items are read from the space being
