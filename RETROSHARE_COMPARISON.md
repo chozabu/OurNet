@@ -289,12 +289,17 @@ Secrecy matters less to OurNet than to RetroShare. Links are already forward
 secret. The exposure is ciphertext on others' devices plus a later stolen
 device key, which carriers deleting on delivery reduces more than any cipher
 would. Cheapest worthwhile steps: rotate device agreement keys periodically
-(keeping payload keys in a local table under the vault, as key grants do),
-and add algorithm identifiers to signatures and envelopes now, additively,
-which RetroShare never did.
+(keeping payload keys in a local table under the vault, as key grants do;
+not yet built), and add algorithm identifiers to signatures and envelopes,
+additively, which RetroShare never did. The identifiers are done (0.2.25):
+signed data carries `sig: 'ed25519'` among its signed fields, and encrypted
+payloads, sealed roots and sealed backups carry `aead: 'chacha20-poly1305'`.
+Absent means those algorithms; anything naming another is refused
+individually. See [PROTOCOL.md](PROTOCOL.md) and PROTOCOL_CHANGELOG.md.
 
 ## Lessons to avoid
-- Cryptography with no way to upgrade it.
+- Cryptography with no way to upgrade it (algorithm identifiers added in
+  0.2.25; root keys still cannot be rotated).
 - Per-device silos (already avoided).
 - Services nobody maintains: RetroShare's wiki, Wire and photo services sit
   half-finished behind compile flags. Keep the "built and verified" bar of
