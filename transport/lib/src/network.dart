@@ -105,13 +105,19 @@ class PeerNetwork {
 
   final Map<String, DateTime> _heardAt = {};
 
+  /// Devices a request failed to reach since they were last heard from.
+  final Set<String> _outOfReach = {};
+
   /// Tells [peerSeen] about a device that is syncing with this one, at most
-  /// once a minute each. Only syncs count: a position or typing request does
-  /// not, or two devices would answer each other for ever.
+  /// once a minute each, unless it was out of reach in between: then it is
+  /// back, and what waits for it (a last position) goes at once. Only syncs
+  /// count: a position or typing request does not, or two devices would
+  /// answer each other for ever.
   void _heard(String device) {
     final now = DateTime.now(), last = _heardAt[device];
+    final back = _outOfReach.remove(device);
     if (peerSeen == null && peerSeenListeners.isEmpty ||
-        last != null && now.difference(last).inSeconds < 60) {
+        !back && last != null && now.difference(last).inSeconds < 60) {
       return;
     }
     _heardAt[device] = now;
@@ -461,6 +467,18 @@ class PeerNetwork {
   final Set<String> _dialing = {};
 
   Future<Json> request(String device, Json request) async {
+    try {
+      return await _request(device, request);
+    } on StateError {
+      // A refusal, or a request never sent: not a sign of being out of reach.
+      rethrow;
+    } catch (_) {
+      _outOfReach.add(device);
+      rethrow;
+    }
+  }
+
+  Future<Json> _request(String device, Json request) async {
     Json? reply;
     if (_poolable.contains(request['type']) &&
         peerCaps[device]?.contains('multi_request') == true) {
