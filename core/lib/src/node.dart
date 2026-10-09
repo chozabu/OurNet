@@ -924,26 +924,78 @@ class Node {
   /// lists in `changes` what it has changed since. The reply lists this
   /// device's own changes since then (`changes`) and what it holds of the
   /// peer's (`view`), or says `full` when everything must be compared.
+  ///
+  /// A peer listing `delta_items` sends its new objects in `items`, which are
+  /// stored first; the reply then carries in `items` (and `more`) those
+  /// objects with this device's receipts, and this device's own new objects,
+  /// so a message and its receipt cross in one exchange.
   Future<Json> answerDelta(String peerDevice, Json request) async {
     await groups.refresh();
+    final sent = request['items'];
+    final accepted = <String>[];
+    if (sent is List && sent.isNotEmpty) {
+      try {
+        await receive(peerDevice, sent);
+      } on StateError {
+        // Refused items are compared and offered again as usual.
+      }
+      for (final item in sent) {
+        if (_parse(item)?.object.id case final id?
+            when store.get(id) != null) {
+          accepted.add(id);
+        }
+      }
+    }
     final since = request['since'];
     final theirs = request['changes'];
     final seq = changeSeq;
     final changed = since is int ? changedSince(since) : null;
     if (changed == null ||
-        theirs is! Map ||
+        theirs is! Json ||
         theirs['have'] is! Map ||
         (theirs['have'] as Map).length > maxInventoryEntries ||
         request['policy'] != policyDigest(peerDevice)) {
       return {'full': true};
     }
     final ids = (theirs['have'] as Map).keys.whereType<String>().toList();
-    return {
+    final reply = {
       'seq': seq,
       'policy': policyDigest(peerDevice),
       'changes': changeInventory(peerDevice, changed),
       'view': changeInventory(peerDevice, store.routesOf(ids)),
     };
+    if (request['caps'] case final List caps when caps.contains('delta_items')) {
+      var more = false;
+      reply['items'] = await offer(
+        peerDevice,
+        theirs,
+        only: {...accepted, ...unsent(peerDevice, changed)}.toList(),
+        truncated: () => more = true,
+      );
+      reply['more'] = more;
+    }
+    return reply;
+  }
+
+  /// Those of [routes] this device wrote and has not yet handed to
+  /// [peerDevice]: what it certainly lacks, worth sending unasked.
+  List<String> unsent(String peerDevice, Iterable<ObjectRoute> routes) {
+    final peer = contacts[peerDevice];
+    if (peer == null) return const [];
+    return [
+      for (final route in routes)
+        if (route.device == identity.device &&
+            _offerable(route, peer, {route.space}, relay: true) &&
+            !store
+                .evidenceRoutes(route.id)
+                .any(
+                  (e) =>
+                      !e.receipt &&
+                      e.signer == identity.device &&
+                      e.target == peerDevice,
+                ))
+          route.id,
+    ];
   }
 
   /// Objects one inventory reconciles. History beyond it is covered by later

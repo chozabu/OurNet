@@ -210,11 +210,14 @@ class PeerNetwork {
   /// each, in turn; it waits [servedIdle] for the next.
   /// `since_sync`: answers `delta`, and `pull` limited to `only` some
   /// objects, so two devices that agreed before exchange only what changed.
+  /// `delta_items`: takes new objects in a `delta` request, and answers with
+  /// those it can tell the asker lacks ([Node.answerDelta]).
   static const caps = [
     'cursor_paging',
     'blob_inline',
     'multi_request',
     'since_sync',
+    'delta_items',
   ];
 
   /// Capabilities a peer must list to sync with this build: 0.2.27 and later.
@@ -671,6 +674,12 @@ class PeerNetwork {
           ..._stamp,
         });
         lastReply = reply;
+        if (reply['policy'] case final String policy) {
+          _peerHeaders[device] = (
+            policy: policy,
+            inventory: _header(reply['inventory'] as Json),
+          );
+        }
         if (page == 0 && resume == null) {
           _walkStart.remove(device);
           if (_Mark.parse({
@@ -783,6 +792,22 @@ class PeerNetwork {
     });
   }
 
+  /// The sharing fields of each peer's latest inventory, and the policy
+  /// digest they had, to offer it new objects without asking first.
+  final Map<String, ({String policy, Json inventory})> _peerHeaders = {};
+
+  static Json _header(Json inventory) => {
+    for (final key in const [
+      'version',
+      'ownRelay',
+      'subscriptions',
+      'revoked',
+      'devices',
+      'groupKeys',
+    ])
+      if (inventory.containsKey(key)) key: inventory[key],
+  };
+
   /// Exchanges only what changed since this device and [device] last agreed:
   /// true once they agree again, false when there is more than one session's
   /// worth, and null when a full sync is needed (no mark, an older peer, a
@@ -795,11 +820,27 @@ class PeerNetwork {
     final seq = node.changeSeq;
     final mine = node.changedSince(mark.mine);
     if (mine == null) return null;
+    // What this device wrote and never handed over goes along unasked, when
+    // the peer takes it and its sharing is as when the two last agreed.
+    final header = _peerHeaders[device];
+    final fresh =
+        peerCaps[device]?.contains('delta_items') == true &&
+            header?.policy == mark.theirPolicy
+        ? node.unsent(device, mine)
+        : const <String>[];
+    final items = fresh.isEmpty
+        ? const <Json>[]
+        : await node.offer(device, {
+            ...header!.inventory,
+            'have': const <String, String>{},
+          }, only: fresh);
     final reply = await request(device, {
       'type': 'delta',
       'since': mark.theirs,
       'policy': mark.theirPolicy,
+      // Listed after offering, so it includes the handoffs just minted.
       'changes': node.changeInventory(device, mine),
+      if (items.isNotEmpty) 'items': items,
       ..._stamp,
     });
     final theirSeq = reply['seq'], theirPolicy = reply['policy'];
@@ -812,14 +853,66 @@ class PeerNetwork {
         changes['have'] is! Map) {
       return null;
     }
+    _peerHeaders[device] = (policy: theirPolicy, inventory: _header(changes));
+    // A peer listing `delta_items` answers with what it knows this device
+    // lacks: the items just sent, with its receipts, and its own new ones.
+    var received = 0;
+    if (reply['items'] case final List incoming when incoming.isNotEmpty) {
+      received = await node.receive(device, incoming);
+    }
+    if (received + items.length > 0) {
+      _progress[device] = _progress[device]! + received + items.length;
+      _activity();
+    }
     final theirs = (changes['have'] as Map).keys.whereType<String>().toList();
     final held = node.store.routesOf(theirs);
     // Each side already holds what the other changed: nothing to send.
     var agreed =
+        reply['more'] != true &&
         held.length == theirs.length &&
         node.agrees(device, view, mine) &&
         node.agrees(device, changes, held, offeredOnly: false);
     final ids = {for (final r in mine) r.id, ...theirs}.toList();
+    // Holding all the peer changed, only this device's side may be missing
+    // there (its receipts, say): push it at once, and the reply's view of
+    // these objects says whether the two now agree.
+    if (!agreed &&
+        reply['more'] != true &&
+        held.length == theirs.length &&
+        peerCaps[device]?.contains('delta_items') == true) {
+      var more = false;
+      final outgoing = await node.offer(
+        device,
+        {
+          ...changes,
+          'have': <String, dynamic>{
+            ...view['have'] as Map,
+            ...changes['have'] as Map,
+          },
+          'paths': <String, dynamic>{
+            ...?view['paths'] as Map?,
+            ...?changes['paths'] as Map?,
+          },
+        },
+        only: ids,
+        truncated: () => more = true,
+      );
+      if (outgoing.isNotEmpty && !more) {
+        final pushed = await request(device, {
+          'type': 'push',
+          'items': outgoing,
+          'view': ids,
+          'caps': caps,
+        });
+        _progress[device] = _progress[device]! + outgoing.length;
+        _activity();
+        if (pushed['view'] case final Json after) {
+          agreed =
+              node.agrees(device, after, mine) &&
+              node.agrees(device, after, held, offeredOnly: false);
+        }
+      }
+    }
     for (var round = 0; !agreed && round < 16; round++) {
       var more = false;
       final pulled = await request(device, {
@@ -1041,6 +1134,16 @@ class PeerNetwork {
             _heard(peer);
             _retryNow(peer);
             reply = {'changed': await node.receive(peer, j['items'])};
+            // What this device now holds of those objects, so the caller
+            // can tell without asking again whether the two agree.
+            if (j['view'] case final List ids
+                when ids.length <= 2 * Node.maxInventoryEntries &&
+                    ids.every((id) => id is String)) {
+              reply['view'] = node.changeInventory(
+                peer,
+                node.store.routesOf(ids.cast<String>()),
+              );
+            }
           case 'delta':
             _notePeer(peer, j);
             _heard(peer);

@@ -93,6 +93,46 @@ void main() {
     );
   });
 
+  test('a new message and its receipt cross in one request', () async {
+    await a.publish('message', {'text': 'Before'}, audience: [b.person]);
+    await agree();
+    final mine = await a.publish(
+      'message',
+      {'text': 'New'},
+      audience: [b.person],
+    );
+    await na.sync(b.identity.device);
+    expect(na.types, ['delta']);
+    expect(b.store.get(mine.id), isNotNull);
+    expect(
+      a.store.evidence(mine.id).map((e) => e.data['domain']),
+      contains('ournet/receipt/2'),
+    );
+    expect(na.syncErrors, isEmpty);
+  });
+
+  test("a peer's new message arrives in the reply to one request", () async {
+    await a.publish('message', {'text': 'Before'}, audience: [b.person]);
+    await agree();
+    final theirs = await b.publish(
+      'message',
+      {'text': 'Theirs'},
+      audience: [a.person],
+    );
+    await na.sync(b.identity.device);
+    expect(a.store.get(theirs.id), isNotNull);
+    expect(na.syncErrors, isEmpty);
+    // The receipt goes straight back, and the two agree.
+    expect(na.types, ['delta', 'push']);
+    expect(
+      b.store.evidence(theirs.id).map((e) => e.data['domain']),
+      contains('ournet/receipt/2'),
+    );
+    na.sent.clear();
+    await na.sync(b.identity.device);
+    expect(na.types, ['delta']);
+  });
+
   test('the peer subscribing to a forum brings its older posts', () async {
     final post = await a.publish('post', {
       'text': 'Posted before they followed',
