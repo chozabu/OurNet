@@ -7,6 +7,13 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.28: faster local writes
+
+No wire change. The profile database and the map tile cache use
+`PRAGMA synchronous=NORMAL` (WAL mode): commits no longer wait for storage, and
+only a power cut or an OS crash can undo the last moments of them; the
+database is never corrupted. Nothing new is stored.
+
 ## 0.2.27: syncing only what changed; native crypto
 
 Additive. Devices that list the capability `since_sync` keep a change log
