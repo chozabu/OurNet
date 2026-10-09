@@ -52,7 +52,7 @@ Future<void> main(List<String> args) async {
     );
     results['rssMiB'] = ProcessInfo.currentRss / (1024 * 1024);
     results['inventoryBytes'] = bytes(
-      a.inventory(peerDevice: b.identity.device),
+      a.inventoryAfter(peerDevice: b.identity.device),
     ).length;
     results['transferMiBPerSecond'] =
         1000 / (results['quicDownloadDecrypt1MiBMs'] as num);

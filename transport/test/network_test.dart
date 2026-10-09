@@ -6,50 +6,46 @@ import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
 
 void main() {
-  for (final legacy in [false, true]) {
-    test(
-      'history continues across sync sessions (legacy: $legacy)',
-      () async {
-        var clock = 1000000;
-        final a = Node(
-          await LocalIdentity.create(),
-          Store(),
-          clock: () => clock += 1000,
-        );
-        final b = legacy
-            ? _LegacyInventoryNode(await LocalIdentity.create(), Store())
-            : Node(await LocalIdentity.create(), Store());
-        final na = PeerNetwork(a), nb = PeerNetwork(b);
-        addTearDown(() async {
-          await na.stop();
-          await nb.stop();
-          await a.close();
-          await b.close();
-          Node.inventoryWindow = 2000;
-        });
-        Node.inventoryWindow = 2;
-        await na.start(local: true, automatic: false);
-        await nb.start(local: true, automatic: false);
-        await na.addCard(nb.contactCard());
-        await nb.addCard(na.contactCard());
-        for (var i = 0; i < 18; i++) {
-          await a.publish('post', {'text': 'old $i'});
-        }
-        for (var i = 0; i < 6; i++) {
-          await na.sync(b.identity.device);
-        }
-        expect(na.syncErrors, isEmpty, reason: na.events.join('\n'));
-        expect(b.store.ids(), a.store.ids());
-        expect(b.store.count, 18);
-        final latest = await a.publish('post', {
-          'text': 'new during continuation',
-        });
+  test(
+    'history continues across sync sessions',
+    () async {
+      var clock = 1000000;
+      final a = Node(
+        await LocalIdentity.create(),
+        Store(),
+        clock: () => clock += 1000,
+      );
+      final b = Node(await LocalIdentity.create(), Store());
+      final na = PeerNetwork(a), nb = PeerNetwork(b);
+      addTearDown(() async {
+        await na.stop();
+        await nb.stop();
+        await a.close();
+        await b.close();
+        Node.inventoryWindow = 2000;
+      });
+      Node.inventoryWindow = 2;
+      await na.start(local: true, automatic: false);
+      await nb.start(local: true, automatic: false);
+      await na.addCard(nb.contactCard());
+      await nb.addCard(na.contactCard());
+      for (var i = 0; i < 18; i++) {
+        await a.publish('post', {'text': 'old $i'});
+      }
+      for (var i = 0; i < 6; i++) {
         await na.sync(b.identity.device);
-        expect(b.store.get(latest.id), isNotNull);
-      },
-      timeout: const Timeout(Duration(seconds: 90)),
-    );
-  }
+      }
+      expect(na.syncErrors, isEmpty, reason: na.events.join('\n'));
+      expect(b.store.ids(), a.store.ids());
+      expect(b.store.count, 18);
+      final latest = await a.publish('post', {
+        'text': 'new during continuation',
+      });
+      await na.sync(b.identity.device);
+      expect(b.store.get(latest.id), isNotNull);
+    },
+    timeout: const Timeout(Duration(seconds: 90)),
+  );
 
   test(
     'a restart rebuilds the endpoint, and peers keep syncing with it',
@@ -171,7 +167,7 @@ void main() {
         await expectLater(
           nb.request(a.identity.device, {
             'type': 'pull',
-            'inventory': b.inventory(),
+            'inventory': b.inventoryAfter(),
           }),
           throwsA(anything),
         );
@@ -182,6 +178,44 @@ void main() {
         await a.close();
         await b.close();
       }
+    },
+    timeout: const Timeout(Duration(seconds: 60)),
+  );
+
+  test(
+    'a peer without the required capabilities is refused with a reason',
+    () async {
+      final a = Node(await LocalIdentity.create(), Store());
+      final b = Node(await LocalIdentity.create(), Store());
+      final na = PeerNetwork(a), nb = PeerNetwork(b);
+      addTearDown(() async {
+        await na.stop();
+        await nb.stop();
+        await a.close();
+        await b.close();
+      });
+      await na.start(local: true, automatic: false);
+      await nb.start(local: true, automatic: false);
+      await na.addCard(nb.contactCard());
+      await nb.addCard(na.contactCard());
+      await a.publish('post', {'text': 'not for old builds'});
+      // As a build before 0.2.27 asks: no `since_sync` among its caps.
+      await expectLater(
+        nb.request(a.identity.device, {
+          'type': 'pull',
+          'inventory': b.inventoryAfter(peerDevice: a.identity.device),
+          'cursorPaging': true,
+          'caps': ['cursor_paging', 'blob_inline'],
+        }),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            PeerNetwork.outdatedPeer,
+          ),
+        ),
+      );
+      expect(b.store.count, 0);
     },
     timeout: const Timeout(Duration(seconds: 60)),
   );
@@ -332,12 +366,4 @@ void main() {
     },
     timeout: const Timeout(Duration(seconds: 60)),
   );
-}
-
-/// Old peers ignore cursor requests and return numbered-window inventories.
-class _LegacyInventoryNode extends Node {
-  _LegacyInventoryNode(super.identity, super.store);
-  @override
-  Json inventoryAfter({String? peerDevice, InventoryCursor? after}) =>
-      inventory(peerDevice: peerDevice);
 }

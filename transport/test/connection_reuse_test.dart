@@ -24,22 +24,21 @@ void main() {
               audience: [b.person],
             ),
         ];
-        // The first request learns that the peer serves several requests on
-      // one connection; the rest of the session (seven pages, fourteen
-      // requests) and a session straight after it share one connection.
-      await na.sync(b.identity.device);
-      expect(na.dialed, 2);
-      await na.sync(b.identity.device);
-      for (final o in sent) {
-        expect(b.store.get(o.id), isNotNull);
-      }
-      expect(na.dialed, 2);
+        // A session's requests, and a session straight after it, share one
+        // connection.
+        await na.sync(b.identity.device);
+        expect(na.dialed, 1);
+        await na.sync(b.identity.device);
+        for (final o in sent) {
+          expect(b.store.get(o.id), isNotNull);
+        }
+        expect(na.dialed, 1);
       // Closed shortly after the last request; the next session redials.
         await Future<void>.delayed(
           PeerNetwork.pooledIdle + const Duration(seconds: 1),
         );
         await na.sync(b.identity.device);
-        expect(na.dialed, 3);
+        expect(na.dialed, 2);
       } finally {
         Node.inventoryWindow = window;
         await na.stop();

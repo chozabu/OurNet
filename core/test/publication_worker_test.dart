@@ -101,8 +101,20 @@ void main() {
         expect(domains, containsAll(['ournet/handoff/2', 'ournet/receipt/2']));
         expect(a.store.evidenceDigest(id), b.store.evidenceDigest(id));
       }
-      expect(await a.offer(b.identity.device, b.inventory()), isEmpty);
-      expect(await b.offer(a.identity.device, a.inventory()), isEmpty);
+      expect(
+        await a.offer(
+          b.identity.device,
+          b.inventoryAfter(peerDevice: a.identity.device),
+        ),
+        isEmpty,
+      );
+      expect(
+        await b.offer(
+          a.identity.device,
+          a.inventoryAfter(peerDevice: b.identity.device),
+        ),
+        isEmpty,
+      );
     },
   );
 }

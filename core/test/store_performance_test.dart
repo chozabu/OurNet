@@ -129,7 +129,7 @@ void main() {
           id,
     };
     Set<String> offered(Node peer) =>
-        (a.inventory(peerDevice: peer.identity.device)['have'] as Json).keys
+        (a.inventoryAfter(peerDevice: peer.identity.device)['have'] as Json).keys
             .toSet();
     await a.publish('post', {'text': 'public'});
     await a.publish('post', {'text': 'elsewhere'}, space: 'other');
@@ -162,6 +162,6 @@ void main() {
     );
     expect(offered(b), expected(b));
     expect(offered(b), isNot(contains(extra.id)));
-    expect(a.inventory()['have'], hasLength(a.store.count));
+    expect(a.inventoryAfter()['have'], hasLength(a.store.count));
   });
 }

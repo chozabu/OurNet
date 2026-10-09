@@ -51,7 +51,7 @@ void main() {
       expect(c.store.count, 1);
       // Stored records skip re-verification; a new record is still checked.
       final page = await a.offer(c.identity.device, {
-        ...c.inventory(),
+        ...c.inventoryAfter(),
         'have': <String, dynamic>{},
       });
       final item = page.single;
@@ -185,9 +185,8 @@ void main() {
         audience: [b.person],
       );
       expect(
-        (a.inventory(peerDevice: c.identity.device)['have'] as Map).containsKey(
-          private.id,
-        ),
+        (a.inventoryAfter(peerDevice: c.identity.device)['have'] as Map)
+            .containsKey(private.id),
         isFalse,
       );
     },

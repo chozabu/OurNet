@@ -51,7 +51,7 @@ void main() {
       await expectLater(
         b.request(owner.identity.device, {
           'type': 'pull',
-          'inventory': phone.inventory(),
+          'inventory': phone.inventoryAfter(),
         }),
         throwsA(anything),
       );

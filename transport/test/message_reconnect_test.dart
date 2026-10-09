@@ -13,7 +13,8 @@ class LateMessageNetwork extends PeerNetwork {
   @override
   Future<Json> request(String device, Json request) async {
     final reply = await super.request(device, request);
-    if (request['type'] == 'push' && reply['changed'] == 0) {
+    // An idle exchange pushes nothing: its pull bringing nothing is the last.
+    if (request['type'] == 'pull' && (reply['items'] as List).isEmpty) {
       final action = onIdlePush;
       onIdlePush = null;
       await action?.call();

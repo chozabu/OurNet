@@ -153,7 +153,7 @@ void main() {
       });
       await friend(a, b);
       await a.publish('post', {'text': 'original'});
-      final page = await a.offer(b.identity.device, b.inventory());
+      final page = await a.offer(b.identity.device, b.inventoryAfter());
       final tampered = jsonDecode(jsonEncode(page)) as List;
       tampered.first['object']['data']['payload']['text'] = 'forged';
       await expectLater(
@@ -256,14 +256,14 @@ void main() {
     expect(
       await laptop.offer(
         friendNode.identity.device,
-        friendNode.inventory(peerDevice: laptop.identity.device),
+        friendNode.inventoryAfter(peerDevice: laptop.identity.device),
       ),
       isEmpty,
     );
     expect(
       await friendNode.offer(
         laptop.identity.device,
-        laptop.inventory(peerDevice: friendNode.identity.device),
+        laptop.inventoryAfter(peerDevice: friendNode.identity.device),
       ),
       isEmpty,
     );
@@ -299,7 +299,7 @@ void main() {
     await friend(a, b);
     await a.publish('post', {'text': 'first'});
     await a.publish('post', {'text': 'second'});
-    final page = await a.offer(b.identity.device, b.inventory());
+    final page = await a.offer(b.identity.device, b.inventoryAfter());
     expect(page, hasLength(2));
     final broken = Json.from(page.first)
       ..['object'] = {
@@ -330,7 +330,7 @@ void main() {
     // limit, where the list's brackets and commas would exceed it.
     await a.publish('post', {'text': 'x' * 1000});
     final overhead =
-        itemsSize(await a.offer(b.identity.device, b.inventory())) - 1000;
+        itemsSize(await a.offer(b.identity.device, b.inventoryAfter())) - 1000;
     var total = overhead + 1000;
     while (Node.maxPageBytes - total > 2 * (60000 + overhead)) {
       await a.publish('post', {'text': 'x' * 60000});
@@ -340,16 +340,24 @@ void main() {
       'text': 'x' * (Node.maxPageBytes - total - overhead),
     });
     final all = await a.offer(b.identity.device, {
-      ...b.inventory(),
+      ...b.inventoryAfter(),
       'subscriptions': ['general'],
     });
     expect(bytes(all).length, lessThanOrEqualTo(Node.maxPageBytes));
     await b.receive(a.identity.device, all);
     expect(b.store.count, all.length);
     // The remaining item proves the items alone summed to exactly the limit.
+    // b's receipts go back, so the two agree on what they already share.
+    await a.receive(
+      b.identity.device,
+      await b.offer(
+        a.identity.device,
+        a.inventoryAfter(peerDevice: b.identity.device),
+      ),
+    );
     final rest = await a.offer(b.identity.device, {
-      ...b.inventory(),
-      'have': {for (final id in b.store.ids()) id: a.store.evidenceDigest(id)},
+      ...b.inventoryAfter(peerDevice: a.identity.device),
+      'subscriptions': ['general'],
     });
     expect(rest, hasLength(1));
     expect(itemsSize(all) + itemsSize(rest), Node.maxPageBytes);
@@ -453,7 +461,7 @@ void main() {
     for (var i = 0; i < 7; i++) {
       await a.publish('post', {'text': 'entry $i'});
     }
-    final first = a.inventory(peerDevice: b.identity.device);
+    final first = a.inventoryAfter(peerDevice: b.identity.device);
     expect((first['have'] as Json).length, 2);
     expect(first['more'], isTrue);
     expect(
@@ -461,8 +469,13 @@ void main() {
       isNull,
       reason: 'window 0 is open at the newest end',
     );
-    final last = a.inventory(peerDevice: b.identity.device, window: 3);
-    expect(last['more'], isFalse);
+    var last = first;
+    while (last['more'] == true) {
+      last = a.inventoryAfter(
+        peerDevice: b.identity.device,
+        after: InventoryCursor.parse(last['next']),
+      );
+    }
     expect(
       last['from'],
       0,
@@ -473,32 +486,11 @@ void main() {
     expect(b.store.count, a.store.count);
     // An inventory stays bounded however much history a device holds.
     expect(
-      (b.inventory(peerDevice: a.identity.device)['have'] as Json).length,
+      (b.inventoryAfter(peerDevice: a.identity.device)['have'] as Json).length,
       2,
     );
     // Nothing is offered twice once both sides agree.
     expect(await syncPair(a, b, rounds: 40), 0);
-  });
-
-  test('a windowed inventory still reconciles with an older build', () async {
-    final a = await node(), b = await node();
-    addTearDown(() async {
-      await a.close();
-      await b.close();
-      Node.inventoryWindow = 2000;
-    });
-    await friend(a, b);
-    for (var i = 0; i < 5; i++) {
-      await a.publish('post', {'text': 'entry $i'});
-    }
-    Node.inventoryWindow = 2;
-    // An older build sends every entry it holds and no window at all.
-    final legacy = b.inventory(peerDevice: a.identity.device)
-      ..remove('from')
-      ..remove('until')
-      ..remove('more');
-    final page = await a.offer(b.identity.device, legacy);
-    expect(await b.receive(a.identity.device, page), greaterThan(0));
   });
 }
 

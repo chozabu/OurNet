@@ -866,17 +866,23 @@ class Node {
   /// with the fields [inventoryAfter] sends, for a sync of what changed.
   Json changeInventory(String peerDevice, Iterable<ObjectRoute> routes) {
     final peer = contacts[peerDevice]!;
+    return _listing(peer, routes);
+  }
+
+  /// The header, `have` and `paths` of an inventory listing those of
+  /// [routes] that [peer] may receive. `have` values are empty: builds since
+  /// per-path evidence (0.2.24) compare only its keys, and `paths`.
+  Json _listing(DeviceCertificate? peer, Iterable<ObjectRoute> routes) {
     final visible = [
       for (final route in routes)
-        if (_offerable(route, peer, {route.space}, relay: true)) route,
+        if (peer == null || _offerable(route, peer, {route.space}, relay: true))
+          route,
     ];
     store.primeEvidence([for (final route in visible) route.id]);
     return {
       ..._inventoryHeader(peer),
-      'have': {
-        for (final route in visible) route.id: store.evidenceDigest(route.id),
-      },
-      'paths': _pathDigests(visible, peer),
+      'have': {for (final route in visible) route.id: ''},
+      if (peer != null) 'paths': _pathDigests(visible, peer),
     };
   }
 
@@ -938,29 +944,21 @@ class Node {
 
   /// Cursor pages inspect a fixed number of routes, including routes this peer
   /// cannot receive. A sparse sharing policy must not scan the whole profile.
-  /// The timestamp bounds still let older peers answer this inventory.
+  /// `cursorPaging` and the timestamp bounds are what 0.2.27 and 0.2.28 read.
   Json inventoryAfter({String? peerDevice, InventoryCursor? after}) {
     final peer = peerDevice == null ? null : contacts[peerDevice];
+    if (peerDevice != null && peer == null) {
+      throw StateError('Peer is not an admitted device');
+    }
     final routes = store.routesAfter(
       after: after == null ? null : (after.created, after.id),
       limit: inventoryWindow + 1,
     );
     final more = routes.length > inventoryWindow;
     final page = routes.take(inventoryWindow).toList();
-    final visible = page.where(
-      (route) =>
-          peerDevice == null ||
-          (peer != null && _offerable(route, peer, {route.space}, relay: true)),
-    );
-    store.primeEvidence([for (final route in visible) route.id]);
     return {
-      ..._inventoryHeader(peer),
+      ..._listing(peer, page),
       'cursorPaging': true,
-      'have': {
-        for (final route in visible) route.id: store.evidenceDigest(route.id),
-      },
-      // Per-path evidence: what this device and the peer should both hold.
-      if (peer != null) 'paths': _pathDigests(visible, peer),
       'from': more ? page.last.created : 0,
       if (after != null) 'until': after.created,
       if (after != null) 'after': after.toJson(),
@@ -969,59 +967,6 @@ class Node {
         'next': InventoryCursor(page.last.created, page.last.id).toJson(),
       if (more)
         'through': InventoryCursor(page.last.created, page.last.id).toJson(),
-    };
-  }
-
-  /// What this device holds, for the [window]th page of history, newest
-  /// first. `from` and `until` are the creation times the entries cover:
-  /// window 0 reaches above the newest object this device holds, and the last
-  /// window reaches below the oldest, so successive windows tile all of
-  /// history with no gap. `more` says whether an older window follows.
-  Json inventory({String? peerDevice, int window = 0}) {
-    final peer = peerDevice == null ? null : contacts[peerDevice];
-    // Routes stream out of the store already in this order, so only the
-    // window being described is ever held, however much history there is.
-    final skip = window * inventoryWindow;
-    final page = <ObjectRoute>[];
-    ObjectRoute? preceding;
-    var offerable = 0;
-    var more = false;
-    (int, String)? cursor;
-    walk:
-    while (true) {
-      final batch = store.routesAfter(after: cursor);
-      if (batch.isEmpty) break;
-      for (final route in batch) {
-        cursor = (route.created, route.id);
-        if (peerDevice != null &&
-            !(peer != null &&
-                _offerable(route, peer, {route.space}, relay: true)))
-          continue;
-        if (offerable < skip) {
-          preceding = route;
-        } else if (page.length < inventoryWindow) {
-          page.add(route);
-        } else {
-          more = true;
-          break walk;
-        }
-        offerable++;
-      }
-    }
-    return {
-      'version': 2,
-      'ownRelay': true,
-      'subscriptions': subscriptions.toList()..sort(),
-      'have': {for (final r in page) r.id: store.evidenceDigest(r.id)},
-      if (peer != null) 'paths': _pathDigests(page, peer),
-      // Bounds overlap by an object at each edge, so entries sharing a
-      // creation time across a boundary are still covered.
-      'from': more ? page.last.created : 0,
-      if (preceding != null) 'until': preceding.created,
-      'more': more,
-      'revoked': revoked.toList()..sort(),
-      if (peer != null) 'devices': sharedCertificates(peer),
-      if (peer != null) 'groupKeys': groups.keysFor(peer.person),
     };
   }
 
@@ -1229,12 +1174,6 @@ class Node {
     });
   }
 
-  /// Whether a build before per-path evidence can take [o] whole: it holds
-  /// at most [maxEvidence] records for one object, and offering it more
-  /// would be refused on every sync.
-  bool _offerWhole(SignedObject o) =>
-      store.evidenceRoutes(o.id).length <= maxEvidence - 2;
-
   Future<Evidence> makeEvidence(Json data) async => Evidence(
     data,
     await sign(data, identity.deviceKey),
@@ -1294,21 +1233,15 @@ class Node {
     final handoffs = <Json>[];
     final slice = TimeSlice();
     // Only the window the inventory covers: outside it, an absent entry says
-    // nothing about what the peer holds. Inventories without a window (older
-    // builds) cover everything, as before. The window is walked in bounded
+    // nothing about what the peer holds. The window is walked in bounded
     // pages, so a page is chosen without materialising the whole of it, and
     // all the way to the end of the window: stopping short of it would strand
     // whatever lay beyond, since the next window starts below this one.
-    final after = inventory['cursorPaging'] == true
-        ? InventoryCursor.parse(inventory['after'])
-        : null;
-    final through = inventory['cursorPaging'] == true
-        ? InventoryCursor.parse(inventory['through'])
-        : null;
-    // A peer keeping evidence per path says what the two should share for
-    // each object it holds; one without compares whole evidence digests.
-    final paths = inventory['paths'] is Map ? inventory['paths'] as Map : null;
-    if (paths != null && paths.length > maxInventoryEntries)
+    final after = InventoryCursor.parse(inventory['after']);
+    final through = InventoryCursor.parse(inventory['through']);
+    // What the two should share of each object the peer holds, per path.
+    final paths = inventory['paths'] as Map? ?? const {};
+    if (paths.length > maxInventoryEntries)
       throw StateError('Inventory too large');
     (int, String)? cursor = after == null ? null : (after.created, after.id);
     var listed = false;
@@ -1336,10 +1269,8 @@ class Node {
           break walk;
         }
         // Already reconciled: skip before parsing the object or its evidence.
-        if (paths == null
-            ? have[id] == store.evidenceDigest(id)
-            : have.containsKey(id) &&
-                  (paths[id] ?? '') == _pathDigest(route, peer))
+        if (have.containsKey(id) &&
+            (paths[id] ?? '') == _pathDigest(route, peer))
           continue;
         await slice.pause();
         final object = store.get(id);
@@ -1347,10 +1278,6 @@ class Node {
             !canOffer(object, peer, wanted, relay: relay, peerKeys: peerKeys)) {
           continue;
         }
-        // An older build already holding more than it can take keeps what
-        // it has; one without the object still gets it, with its path.
-        if (paths == null && have.containsKey(id) && !_offerWhole(object))
-          continue;
         final evidence = store.evidence(id);
         // Mint once per target, never on each repeated sync.
         final minted = evidence.any(
@@ -1400,11 +1327,10 @@ class Node {
     var size = 2;
     for (final object in page) {
       await slice.pause();
-      final all = store.evidence(object.id);
-      final route = ObjectRoute.of(object);
-      final evidence = paths == null && _offerWhole(object)
-          ? all
-          : _withProof(all, _shared(route, peer));
+      final evidence = _withProof(
+        store.evidence(object.id),
+        _shared(ObjectRoute.of(object), peer),
+      );
       // Refused by the receiver however often it is sent.
       if (evidence.length > maxEvidence) continue;
       final item = <String, dynamic>{

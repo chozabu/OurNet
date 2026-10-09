@@ -85,7 +85,7 @@ Future<Map<String, Object>> measure(int objects) async {
       () => cold.write({'type': 'note', 'text': 'Measured again'}, room: busy),
     );
     result['membersMs'] = await time(() => cold.members(busy));
-    result['inventoryMs'] = await time(() async => node.inventory());
+    result['inventoryMs'] = await time(() async => node.inventoryAfter());
     result['rssMiB'] = ProcessInfo.currentRss / (1024 * 1024);
   } finally {
     await node.close();

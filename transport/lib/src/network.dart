@@ -64,10 +64,7 @@ class PeerNetwork {
   DateTime? _restartedAt;
   int _watchdogRestarts = 0;
   final Map<String, int> _failures = {};
-  final Map<
-    String,
-    ({int window, InventoryCursor? local, InventoryCursor? remote})
-  >
+  final Map<String, ({InventoryCursor? local, InventoryCursor? remote})>
   _resume = {};
   final Set<String> _busy = {};
   final Set<iroh.Connection> _connections = {};
@@ -204,6 +201,15 @@ class PeerNetwork {
     'multi_request',
     'since_sync',
   ];
+
+  /// Capabilities a peer must list to sync with this build: 0.2.27 and later.
+  /// Older builds are refused, so the sync paths they needed are gone.
+  static const requiredCaps = {'cursor_paging', 'multi_request', 'since_sync'};
+  static const outdatedPeer =
+      'The other device runs an older OurNet: both need 0.2.27 or later';
+  static bool _current(Json message) =>
+      message['caps'] is List &&
+      requiredCaps.every((message['caps'] as List).contains);
 
   /// Capabilities each peer last announced; empty for builds that predate them.
   final Map<String, Set<String>> peerCaps = {};
@@ -480,8 +486,7 @@ class PeerNetwork {
 
   Future<Json> _request(String device, Json request) async {
     Json? reply;
-    if (_poolable.contains(request['type']) &&
-        peerCaps[device]?.contains('multi_request') == true) {
+    if (_poolable.contains(request['type'])) {
       final pooled = await _pooledFor(device);
       if (pooled != null) {
         final reused = pooled.uses++ > 0;
@@ -513,6 +518,9 @@ class PeerNetwork {
     // Refusals carry the stamp too, so an incompatible peer is identifiable.
     if (node.contacts.containsKey(device)) _notePeer(device, reply);
     if (reply['error'] != null) throw StateError(reply['error']);
+    if (const {'pull', 'delta'}.contains(request['type']) && !_current(reply)) {
+      throw StateError(outdatedPeer);
+    }
     return reply;
   }
 
@@ -597,30 +605,29 @@ class PeerNetwork {
     try {
       // Bounded work per session; exhausted pages schedule a continuation.
       var exhausted = true;
-      // Both sides reconcile their current slices, then walk back through
-      // older ones once the current exchange agrees. A
-      // continuation checks the newest window, then resumes where the last
-      // session stopped, so history beyond one session's pages is reached.
-      var window = 0;
+      // Both sides reconcile their newest pages, then walk back through
+      // older ones once the current exchange agrees. A continuation checks
+      // the newest page, then resumes where the last session stopped, so
+      // history beyond one session's pages is reached.
       InventoryCursor? localCursor, remoteCursor;
-      var cursorPaging = true;
+      var resumed = resume == null;
       // Devices that agreed before exchange only what changed since.
       final quick = await _syncChanges(device);
       if (quick != null) exhausted = !quick;
-      // A walk from the newest window notes where both logs stood, which
+      // A walk from the newest page notes where both logs stood, which
       // becomes their mark once it reaches the end with nothing changed.
       final startSeq = node.changeSeq, startPolicy = node.policyDigest(device);
       Json? lastReply;
       for (var page = 0; quick == null && page < 16; page++) {
-        final inventory = cursorPaging
-            ? node.inventoryAfter(peerDevice: device, after: localCursor)
-            : node.inventory(peerDevice: device, window: window);
+        final inventory = node.inventoryAfter(
+          peerDevice: device,
+          after: localCursor,
+        );
         final reply = await request(device, {
           'type': 'pull',
           'inventory': inventory,
-          'window': window,
-          if (cursorPaging) 'cursorPaging': true,
-          if (cursorPaging) 'after': remoteCursor?.toJson(),
+          'cursorPaging': true,
+          'after': remoteCursor?.toJson(),
           'addresses': _sharedAddresses(device),
           ..._stamp,
         });
@@ -641,41 +648,29 @@ class PeerNetwork {
         final remoteInventory = reply['inventory'] as Json;
         final outgoing = await node.offer(device, remoteInventory);
         await _learnAddresses(device, reply['addresses']);
-        final pushed = await request(device, {
-          'type': 'push',
-          'items': outgoing,
-          'caps': caps,
-        });
+        final pushed = await _push(device, outgoing);
         _progress[device] = _progress[device]! + incoming + outgoing.length;
         _activity();
-        if (cursorPaging && remoteInventory['cursorPaging'] != true) {
-          // Old builds ignore the cursor fields. Restart numbered pagination
-          // from the top; mixing the two kinds of boundaries could skip data.
-          cursorPaging = false;
-          window = 0;
-          continue;
-        }
         // Without changes on either side the next page would be identical,
         // e.g. items the peer ignores; move on rather than resend them.
-        if (incoming == 0 && pushed['changed'] == 0) {
+        if (incoming == 0 && pushed == 0) {
           if (inventory['more'] != true && remoteInventory['more'] != true) {
             exhausted = false;
             break;
           }
-          if (window == 0 && resume != null && resume.window > 0) {
-            window = resume.window;
-            localCursor = resume.local;
-            remoteCursor = resume.remote;
-          } else {
-            window++;
-            if (cursorPaging) {
-              if (inventory['more'] == true) {
-                localCursor = InventoryCursor.parse(inventory['next']);
-              }
-              if (remoteInventory['more'] == true) {
-                remoteCursor = InventoryCursor.parse(remoteInventory['next']);
-              }
+          if (!resumed && resume != null) {
+            resumed = true;
+            if (resume.local != null || resume.remote != null) {
+              localCursor = resume.local;
+              remoteCursor = resume.remote;
+              continue;
             }
+          }
+          if (inventory['more'] == true) {
+            localCursor = InventoryCursor.parse(inventory['next']);
+          }
+          if (remoteInventory['more'] == true) {
+            remoteCursor = InventoryCursor.parse(remoteInventory['next']);
           }
         }
       }
@@ -690,11 +685,7 @@ class PeerNetwork {
         }
       }
       if (quick == null && exhausted) {
-        _resume[device] = (
-          window: window,
-          local: localCursor,
-          remote: remoteCursor,
-        );
+        _resume[device] = (local: localCursor, remote: remoteCursor);
       }
       syncErrors.remove(device);
       lastSync[device] = DateTime.now();
@@ -759,9 +750,7 @@ class PeerNetwork {
   /// change to what may be shared, or more changes than are listed).
   Future<bool?> _syncChanges(String device) async {
     final mark = _marks[device];
-    if (mark == null || peerCaps[device]?.contains('since_sync') != true) {
-      return null;
-    }
+    if (mark == null) return null;
     final policy = node.policyDigest(device);
     if (policy != mark.myPolicy) return null;
     final seq = node.changeSeq;
@@ -809,18 +798,10 @@ class PeerNetwork {
         truncated: () => more = true,
       );
       await _learnAddresses(device, pulled['addresses']);
-      final pushed = await request(device, {
-        'type': 'push',
-        'items': outgoing,
-        'caps': caps,
-      });
+      final pushed = await _push(device, outgoing);
       _progress[device] = _progress[device]! + incoming + outgoing.length;
       _activity();
-      agreed =
-          incoming == 0 &&
-          pushed['changed'] == 0 &&
-          !more &&
-          pulled['more'] != true;
+      agreed = incoming == 0 && pushed == 0 && !more && pulled['more'] != true;
     }
     if (!agreed) return false;
     _setMark(
@@ -833,6 +814,18 @@ class PeerNetwork {
       ),
     );
     return true;
+  }
+
+  /// Sends [items] to [device], returning how many changed anything there.
+  /// Nothing to send costs no request.
+  Future<int> _push(String device, List<Json> items) async {
+    if (items.isEmpty) return 0;
+    final reply = await request(device, {
+      'type': 'push',
+      'items': items,
+      'caps': caps,
+    });
+    return reply['changed'] as int? ?? 0;
   }
 
   /// Failed at least twice in a row and is waiting for its retry.
@@ -956,6 +949,9 @@ class PeerNetwork {
         if (!node.allowedPeer(peer)) throw StateError('Device not admitted');
         lastInbound[peer] = DateTime.now();
         switch (j['type']) {
+          case 'pull' || 'push' || 'delta' when !_current(j):
+            _notePeer(peer, j);
+            throw StateError(outdatedPeer);
           case 'pull':
             _notePeer(peer, j);
             _heard(peer);
@@ -993,19 +989,11 @@ class PeerNetwork {
               'seq': seq,
               'policy': policy,
               'items': items,
-              // The window the caller is on, so both sides walk together.
-              'inventory': j['cursorPaging'] == true
-                  ? node.inventoryAfter(
-                      peerDevice: peer,
-                      after: InventoryCursor.parse(j['after']),
-                    )
-                  : node.inventory(
-                      peerDevice: peer,
-                      window: switch (j['window']) {
-                        final int w when w >= 0 => w,
-                        _ => 0,
-                      },
-                    ),
+              // The page the caller is on, so both sides walk together.
+              'inventory': node.inventoryAfter(
+                peerDevice: peer,
+                after: InventoryCursor.parse(j['after']),
+              ),
               'addresses': _sharedAddresses(peer),
               ..._stamp,
             };
