@@ -16,7 +16,7 @@ class DriveSync {
   bool get busy => _active != null;
   bool _wasRunning = false;
   DriveSync(this.network, {this.onUpdate}) {
-    _content = network.node.changes.stream.listen((_) => schedule());
+    _content = network.node.onChangesTo(const {'drive'}, schedule);
     // Network updates fire on every log line and relay report. Only the
     // network starting, or a device being heard from (a source that may
     // hold missing files), is worth another pass over the drive.

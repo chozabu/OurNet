@@ -70,7 +70,8 @@ class NoteReminders {
     } catch (_) {
       /* Platforms that cannot list pending notifications. */
     }
-    _changes = node.changes.stream.listen((_) => _task.schedule());
+    // Reminders live in notes; other arrivals (receipts, chat) leave them.
+    _changes = node.onChangesTo(const {'note_op'}, _task.schedule);
     _timer = Timer.periodic(const Duration(minutes: 1), (_) => _due());
     _task.schedule();
   }

@@ -90,6 +90,8 @@ class TileStore {
     : db = path == null ? sqlite3.openInMemory() : sqlite3.open(path) {
     db.execute('PRAGMA busy_timeout=5000');
     db.execute('PRAGMA journal_mode=WAL');
+    // A cache: losing the last moments of it to a power cut costs nothing.
+    db.execute('PRAGMA synchronous=NORMAL');
     db.execute('''
       CREATE TABLE IF NOT EXISTS tiles(
         z INTEGER NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL,

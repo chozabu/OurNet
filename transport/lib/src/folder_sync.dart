@@ -240,7 +240,7 @@ class FolderSync {
   FolderSync(this.files, this.backend, {this.onUpdate, bool automatic = true})
     : _automatic = automatic {
     if (automatic) {
-      _changes = node.changes.stream.listen((_) => schedule());
+      _changes = node.onChangesTo(const {'drive'}, schedule);
       _timer = Timer.periodic(const Duration(seconds: 15), (_) => schedule());
       schedule();
     }

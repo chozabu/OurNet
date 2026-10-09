@@ -51,7 +51,8 @@ class NoteWidgets {
           schedule();
         }
       });
-      _changes = notes.node.changes.stream.listen((_) => schedule());
+      // Widgets show notes; other arrivals (receipts, chat) leave them.
+      _changes = notes.node.onChangesTo(const {'note_op'}, schedule);
       schedule();
     } on MissingPluginException {
       // No activity yet; see above.

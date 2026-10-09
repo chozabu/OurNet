@@ -56,12 +56,15 @@ debug = false
 strip = "debuginfo"
 
 [profile.release]
-# Size-opt profile. NOTE: panic="abort" means a Rust panic aborts the process
+# Speed-optimised: opt-level 3 makes the arm64 library 1.3 MB (17%) larger than
+# "z" but moved a 32 MiB file between two devices in 2.5 s instead of 3.9 s
+# (2026-10-09), less CPU on phones for every sync and call.
+# NOTE: panic="abort" means a Rust panic aborts the process
 # instead of being caught by FRB's catch_unwind -> surfaced as a Dart exception. We accept this
 # for shipped release builds (size); `cargo test`/dev builds use the default `unwind` so the
 # conformance tests still observe panics as catchable failures. Revisit if a panic-y
 # code path (malformed peer input) needs graceful surfacing in production.
-opt-level = "z"
+opt-level = 3
 lto = "fat"
 codegen-units = 1
 panic = "abort"

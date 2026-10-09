@@ -50,6 +50,38 @@ class Node {
   Locations? _locations;
   final int Function() now;
   final changes = StreamController<void>.broadcast();
+
+  /// Fires with [changes], naming the kinds of the objects stored or given
+  /// evidence since the previous event. Empty when what changed is not a
+  /// stored object (settings, contacts, subscriptions). See [onChangesTo].
+  late final changedKinds = StreamController<Set<String>>.broadcast(
+    onListen: () => _kindsCursor = store.changeSeq,
+  );
+  int _kindsCursor = 0;
+
+  /// Kinds that decide what this device can read or see (keys, membership,
+  /// revocations, blocks): a change to one concerns every listener.
+  static const accessKinds = {
+    'keys',
+    'room',
+    'room_invite',
+    'room_leave',
+    'revoke',
+    'contact_state',
+  };
+
+  /// Calls [changed] after changes that may concern objects of [kinds]: those
+  /// kinds, [accessKinds], and anything that is not a stored object. Other
+  /// stored objects (a delivery receipt, a forum post) do not wake it.
+  StreamSubscription<Set<String>> onChangesTo(
+    Set<String> kinds,
+    void Function() changed,
+  ) => changedKinds.stream.listen((now) {
+    if (now.isEmpty ||
+        now.any((k) => kinds.contains(k) || accessKinds.contains(k))) {
+      changed();
+    }
+  });
   final Map<String, DeviceCertificate> contacts = {};
   final Set<String> subscriptions = {};
   final Set<String> blocked = {};
@@ -116,6 +148,12 @@ class Node {
 
   void notify() {
     if (!changes.isClosed) changes.add(null);
+    if (!changedKinds.isClosed && changedKinds.hasListener) {
+      final seq = store.changeSeq;
+      final kinds = store.kindsChanged(_kindsCursor, seq);
+      _kindsCursor = seq;
+      changedKinds.add(kinds);
+    }
   }
 
   /// Admits [certificate]. [explicit] is false where a device is admitted
@@ -1716,6 +1754,7 @@ class Node {
       await blobs.close();
     } finally {
       await changes.close();
+      await changedKinds.close();
       await _locations?.close();
       store.close();
     }

@@ -20,6 +20,12 @@ class Store {
     }
     db.execute('PRAGMA busy_timeout=5000');
     db.execute('PRAGMA journal_mode=WAL');
+    // In WAL mode NORMAL is crash-safe for the app (a killed process loses
+    // nothing) and never corrupts the database; only a power cut or an OS
+    // crash can undo the last moments of commits, which SQLite recommends
+    // accepting for WAL. FULL would flush to storage on every commit, about
+    // 15 times slower for each single write, and writes run on the UI isolate.
+    db.execute('PRAGMA synchronous=NORMAL');
     db.execute('''CREATE TABLE IF NOT EXISTS objects (
       id TEXT PRIMARY KEY, kind TEXT NOT NULL, space TEXT NOT NULL,
       author TEXT NOT NULL, created INTEGER NOT NULL, wire TEXT NOT NULL);
@@ -752,6 +758,17 @@ class Store {
     if (ids.length > limit) return null;
     return routesOf(ids);
   }
+
+  /// The kinds of the objects stored, or given evidence, in changes after
+  /// [after] up to [upTo].
+  Set<String> kindsChanged(int after, int upTo) => {
+    for (final row in _select(
+      'SELECT DISTINCT o.kind FROM sync_changes c JOIN objects o '
+      'ON o.id=c.object_id WHERE c.seq>? AND c.seq<=?',
+      [after, upTo],
+    ))
+      row['kind'] as String,
+  };
 
   /// The routes of those of [ids] that are stored, newest first.
   List<ObjectRoute> routesOf(List<String> ids) => ids.isEmpty
