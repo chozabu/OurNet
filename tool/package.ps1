@@ -36,7 +36,7 @@ $taskVersion=(Select-String -Path (Join-Path $taskRoot 'app/pubspec.yaml') -Patt
 $taskOutput=Join-Path $taskRoot "dist/OurNet-$taskVersion-$taskBuild"
 $taskStage=Join-Path $taskRoot 'build/package-source'
 # Build a source snapshot so running app binaries are never overwritten.
-foreach($taskComponent in @('app','core','transport','vendor/iroh_mobile')) {
+foreach($taskComponent in @('app','core','transport','native','vendor/iroh_mobile')) {
   $taskSource=Join-Path $taskRoot $taskComponent
   $taskDestination=Join-Path $taskStage $taskComponent
   New-Item -ItemType Directory -Force -Path $taskDestination | Out-Null
