@@ -375,6 +375,8 @@ class PeerNetwork {
     }
   }
 
+  static final _random = Random();
+
   /// Where the change log stood when [_concerned] last looked.
   int _changesSeen = 0;
 
@@ -750,10 +752,21 @@ class PeerNetwork {
       // state to discard: a link that drops mid-session would otherwise
       // restart at the newest window every time and never reach the rest.
       if (resume != null) _resume.putIfAbsent(device, () => resume);
+      _retry.remove(device)?.cancel();
+      if (e is StateError && e.message == busyPeer) {
+        // Reachable, just occupied: soon, and not counted as a failure.
+        if (running) {
+          _retry[device] = Timer(
+            Duration(milliseconds: 2000 + _random.nextInt(3000)),
+            () => sync(device),
+          );
+        }
+        log('Sync deferred: ${node.contacts[device]?.label ?? device} is busy');
+        return;
+      }
       syncErrors[device] = e.toString();
       final failures = (_failures[device] ?? 0) + 1;
       _failures[device] = failures;
-      _retry.remove(device)?.cancel();
       final seconds = (15 * (1 << failures.clamp(0, 6))).clamp(30, 900);
       if (running) {
         _retry[device] = Timer(Duration(seconds: seconds), () => sync(device));
@@ -983,14 +996,31 @@ class PeerNetwork {
         final connection = await endpoint.accept();
         if (connection == null) break;
         final peer = b64(connection.remoteId.asBytes());
-        if ((!node.allowedPeer(peer) &&
-                pairing?.available != true &&
-                friendInvitation?.available != true) ||
-            _activeInbound >= 4 && _idleInbound.isEmpty) {
+        final admitted = node.allowedPeer(peer);
+        if (!admitted &&
+            pairing?.available != true &&
+            friendInvitation?.available != true) {
           connection.close();
           continue;
         }
-        if (_activeInbound >= 4) {
+        if (_activeInbound >= maxInbound && _idleInbound.isEmpty) {
+          // An admitted device is told to come back shortly, rather than
+          // seeing a failure it would back off from for a minute or more.
+          if (admitted && _refusing < maxInbound) {
+            _refusing++;
+            _connections.add(connection);
+            unawaited(
+              _refuseBusy(connection).whenComplete(() {
+                _refusing--;
+                _connections.remove(connection);
+              }),
+            );
+          } else {
+            connection.close();
+          }
+          continue;
+        }
+        if (_activeInbound >= maxInbound) {
           // Make room by closing a connection that is only waiting for a
           // next request; its caller sends that on a new connection.
           final idle = _idleInbound.first;
@@ -1016,6 +1046,31 @@ class PeerNetwork {
         lastAcceptError = '$e';
         log('Accept failed: $e');
       }
+    }
+  }
+
+  /// Connections served at once; more are answered with [busyPeer].
+  static const maxInbound = 8;
+  static const busyPeer = 'Busy: try again shortly';
+  int _refusing = 0;
+
+  /// Answers [connection]'s first request with [busyPeer], and closes it.
+  Future<void> _refuseBusy(iroh.Connection connection) async {
+    try {
+      final (send, recv) = await connection.acceptBi().timeout(
+        const Duration(seconds: 5),
+      );
+      await recv.readToEnd(2 * 1024 * 1024).timeout(const Duration(seconds: 5));
+      await send.writeAll(bytes({'error': busyPeer, ..._stamp}));
+      await send.finish();
+      await connection.closed().timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => 'done',
+      );
+    } catch (_) {
+      // The caller gave up first.
+    } finally {
+      connection.close();
     }
   }
 
