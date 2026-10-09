@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
@@ -15,6 +16,13 @@ class FlakyNetwork extends PeerNetwork {
       if (fail) return Future.error(StateError('Test source unreachable'));
     }
     return super.request(device, request);
+  }
+
+  @override
+  Future<(Json, Uint8List)> requestBytes(String device, Json request) {
+    blobRequests++;
+    if (fail) return Future.error(StateError('Test source unreachable'));
+    return super.requestBytes(device, request);
   }
 }
 

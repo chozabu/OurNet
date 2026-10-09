@@ -18,6 +18,32 @@ class InterruptingNetwork extends PeerNetwork {
     }
     return super.request(device, request);
   }
+
+  /// Chunks beyond [allowChunks] are lost with the connection: a batch
+  /// brings those before it, then fails.
+  @override
+  Future<(Json, Uint8List)> requestBytes(String device, Json request) async {
+    final hashes = (request['hashes'] as List).cast<String>();
+    final allowed = allowChunks == null
+        ? hashes.length
+        : (allowChunks! - requested.length).clamp(0, hashes.length);
+    requested.addAll(hashes);
+    if (allowed == 0) throw StateError('Connection lost');
+    final (header, body) = await super.requestBytes(device, {
+      ...request,
+      'hashes': hashes.take(allowed).toList(),
+    });
+    return (
+      {
+        ...header,
+        'sizes': [
+          ...header['sizes'] as List,
+          for (final _ in hashes.skip(allowed)) null,
+        ],
+      },
+      body,
+    );
+  }
 }
 
 void main() {

@@ -1116,6 +1116,15 @@ class Store {
   bool hasBlob(String id) =>
       _select('SELECT 1 FROM blobs WHERE id=?', [id]).isNotEmpty;
 
+  /// Those of [ids] stored here, in one query.
+  Set<String> heldBlobs(List<String> ids) => {
+    for (final row in _select(
+      'SELECT id FROM blobs WHERE id IN (SELECT DISTINCT value FROM json_each(?))',
+      [jsonEncode(ids)],
+    ))
+      row['id'] as String,
+  };
+
   /// One query for a file's chunk list instead of one query per chunk.
   bool hasBlobs(List<String> ids) =>
       ids.isEmpty ||

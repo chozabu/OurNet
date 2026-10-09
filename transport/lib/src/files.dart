@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 import 'dart:async';
 import 'dart:collection';
 import 'dart:developer';
@@ -183,6 +184,11 @@ class Files {
     );
   }
 
+  /// Missing chunks asked of one source in one request, and how many such
+  /// requests run at once, spread over the devices that may hold the file.
+  static const batchChunks = PeerNetwork.maxBatchChunks;
+  static const batchesInFlight = 4;
+
   Stream<List<int>> _plain(
     SignedObject object, {
     void Function(int, int)? onProgress,
@@ -193,46 +199,10 @@ class Files {
     var size = 0;
     onProgress?.call(0, payload['size'] as int);
     final key = payload['key'] == null ? null : unb64(payload['key']);
-    // A peer that failed once is not retried for every later chunk: each
-    // attempt can wait out a connection timeout.
-    final failed = <String>{};
-    for (final id in (payload['chunks'] as List).cast<String>()) {
-      var plain = await node.blobs.decode(id, key);
-      if (plain == null) {
-        final sources =
-            node.contacts.values
-                .where(
-                  (p) =>
-                      node.allowedPeer(p.device) && !failed.contains(p.device),
-                )
-                .toList()
-              ..sort(
-                (a, b) => (a.person == object.author ? 0 : 1).compareTo(
-                  b.person == object.author ? 0 : 1,
-                ),
-              );
-        for (final peer in sources) {
-          try {
-            final response = await network.request(peer.device, {
-              'type': 'blob',
-              'object': object.id,
-              'hash': id,
-            });
-            if (response['bytes'] != null) {
-              final candidate = unb64(response['bytes']);
-              if (candidate.length <= chunkSize + 64) {
-                plain = await node.blobs.decode(id, key, bytes: candidate);
-                break;
-              }
-            }
-          } catch (_) {
-            failed.add(peer.device);
-            /* Another admitted source may be available. */
-          }
-        }
-      }
-      if (plain == null)
-        throw StateError('No online source holds this file chunk');
+    final chunks = (payload['chunks'] as List).cast<String>();
+    final fetch = _Fetch(this, object, key, chunks);
+    for (var i = 0; i < chunks.length; i++) {
+      final plain = await fetch.chunk(i);
       size += plain.length;
       if (size > maxSize || size > payload['size'])
         throw StateError('File size exceeded');
@@ -390,5 +360,162 @@ class _TransferQueue {
       _waiting.add(start);
     }
     return result.future;
+  }
+}
+
+/// Fetches the chunks of one file that are not stored here, in batches of
+/// [Files.batchChunks] from the devices that may hold it, a few batches ahead
+/// of the reader. A batch goes to one source; chunks it lacks are asked of
+/// the next. Each chunk is verified and stored as it arrives.
+class _Fetch {
+  _Fetch(this.files, this.object, this.key, this.chunks) {
+    final held = files.node.store.heldBlobs(chunks);
+    final missing = [
+      for (var i = 0; i < chunks.length; i++)
+        if (!held.contains(chunks[i])) i,
+    ];
+    for (var i = 0; i < missing.length; i += Files.batchChunks) {
+      final batch = missing.sublist(
+        i,
+        min(i + Files.batchChunks, missing.length),
+      );
+      for (final index in batch) {
+        _batchOf[index] = _batches.length;
+      }
+      _batches.add(batch);
+    }
+  }
+
+  final Files files;
+  final SignedObject object;
+  final List<int>? key;
+  final List<String> chunks;
+  final _batches = <List<int>>[];
+  final _batchOf = <int, int>{};
+  final _results = <int, Future<Map<int, Uint8List>>>{};
+
+  /// Devices that failed once are not asked again for this file: each
+  /// attempt can wait out a connection timeout.
+  final _failed = <String>{};
+  late final List<String> _sources = _rank();
+
+  Node get node => files.node;
+
+  /// Admitted devices that may hold the file, its author's first, then those
+  /// heard from most recently.
+  List<String> _rank() {
+    final network = files.network;
+    final candidates = [
+      for (final peer in node.contacts.values)
+        if (node.allowedPeer(peer.device) &&
+            node.canOffer(object, peer, {object.space}, relay: true))
+          peer,
+    ];
+    int heard(DeviceCertificate p) => max(
+      network.lastInbound[p.device]?.millisecondsSinceEpoch ?? 0,
+      network.lastSync[p.device]?.millisecondsSinceEpoch ?? 0,
+    );
+    candidates.sort((a, b) {
+      final author =
+          (a.person == object.author ? 0 : 1) -
+          (b.person == object.author ? 0 : 1);
+      return author != 0 ? author : heard(b).compareTo(heard(a));
+    });
+    return [for (final p in candidates) p.device];
+  }
+
+  Future<Uint8List> chunk(int index) async {
+    final batch = _batchOf[index];
+    if (batch == null) {
+      final plain = await node.blobs.decode(chunks[index], key);
+      if (plain != null) return plain;
+      // Unreadable, or removed since it was found: fetched on its own.
+      final fetched = (await _fetch([index], 0))[index];
+      if (fetched != null) return fetched;
+      throw StateError('No online source holds this file chunk');
+    }
+    // Keep the next few batches coming while this one is read.
+    final ahead = min(batch + Files.batchesInFlight, _batches.length);
+    for (var b = batch; b < ahead; b++) {
+      _results[b] ??= _fetch(_batches[b], b);
+    }
+    final result = await _results[batch]!;
+    _batchOf.remove(index);
+    // Plaintext is held only until the reader takes it.
+    final plain = result.remove(index);
+    if (!_batches[batch].any(_batchOf.containsKey)) _results.remove(batch);
+    if (plain == null) {
+      throw StateError('No online source holds this file chunk');
+    }
+    return plain;
+  }
+
+  /// Fetches [indices], asking sources in turn from the [n]th, so batches in
+  /// flight spread over the devices that hold the file.
+  Future<Map<int, Uint8List>> _fetch(List<int> indices, int n) async {
+    final got = <int, Uint8List>{};
+    final sources = _sources;
+    for (var s = 0; s < sources.length && got.length < indices.length; s++) {
+      final device = sources[(n + s) % sources.length];
+      if (_failed.contains(device)) continue;
+      final wanted = [
+        for (final i in indices)
+          if (!got.containsKey(i)) i,
+      ];
+      try {
+        final fetched = await _ask(device, [for (final i in wanted) chunks[i]]);
+        for (final (k, bytes) in fetched.indexed) {
+          if (bytes == null || bytes.length > Files.chunkSize + 64) continue;
+          final i = wanted[k];
+          final plain = await node.blobs.decode(chunks[i], key, bytes: bytes);
+          if (plain != null) got[i] = plain;
+        }
+      } catch (_) {
+        _failed.add(device);
+        /* Another admitted source may be available. */
+      }
+    }
+    return got;
+  }
+
+  /// [hashes] from [device], null where it does not hold one.
+  Future<List<List<int>?>> _ask(String device, List<String> hashes) async {
+    final network = files.network;
+    if (network.peerCaps[device]?.contains('blob_batch') != true) {
+      return [
+        for (final hash in hashes)
+          switch ((await network.request(device, {
+            'type': 'blob',
+            'object': object.id,
+            'hash': hash,
+          }))['bytes']) {
+            final String b => unb64(b),
+            _ => null,
+          },
+      ];
+    }
+    final (header, body) = await network.requestBytes(device, {
+      'type': 'blobs',
+      'object': object.id,
+      'hashes': hashes,
+    });
+    final sizes = header['sizes'];
+    if (sizes is! List || sizes.length != hashes.length) {
+      throw StateError('Invalid chunk reply');
+    }
+    var offset = 0;
+    final out = <List<int>?>[];
+    for (final size in sizes) {
+      if (size is! int) {
+        out.add(null);
+        continue;
+      }
+      if (size < 0 || offset + size > body.length) {
+        throw StateError('Invalid chunk reply');
+      }
+      out.add(Uint8List.sublistView(body, offset, offset + size));
+      offset += size;
+    }
+    return out;
   }
 }

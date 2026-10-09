@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:iroh_quic/iroh_quic.dart' as iroh;
 import 'package:ournet_core/ournet_core.dart';
@@ -212,12 +213,17 @@ class PeerNetwork {
   /// objects, so two devices that agreed before exchange only what changed.
   /// `delta_items`: takes new objects in a `delta` request, and answers with
   /// those it can tell the asker lacks ([Node.answerDelta]).
+  /// `concurrent_streams`: answers up to [streamsPerConnection] requests on
+  /// one connection at once.
+  /// `blob_batch`: answers `blobs`, several file chunks as raw bytes.
   static const caps = [
     'cursor_paging',
     'blob_inline',
     'multi_request',
     'since_sync',
     'delta_items',
+    'concurrent_streams',
+    'blob_batch',
   ];
 
   /// Capabilities a peer must list to sync with this build: 0.2.27 and later.
@@ -510,6 +516,7 @@ class PeerNetwork {
     'push',
     'delta',
     'blob',
+    'blobs',
     'position',
     'typing',
   };
@@ -517,8 +524,36 @@ class PeerNetwork {
   final Set<String> _dialing = {};
 
   Future<Json> request(String device, Json request) async {
+    final (reply, _) = await _call(device, request);
+    if (const {'pull', 'delta'}.contains(request['type']) && !_current(reply)) {
+      throw StateError(outdatedPeer);
+    }
+    return reply;
+  }
+
+  /// A request answered by a JSON header line followed by raw bytes, such as
+  /// `blobs`. A refusal is a JSON reply alone, thrown as with [request].
+  Future<(Json, Uint8List)> requestBytes(String device, Json request) =>
+      _call(device, request);
+
+  Future<(Json, Uint8List)> _call(String device, Json request) async {
     try {
-      return await _request(device, request);
+      final data = await _send(device, request);
+      final newline = data.indexOf(0x0a);
+      final reply =
+          jsonDecode(
+                utf8.decode(
+                  newline < 0 ? data : Uint8List.sublistView(data, 0, newline),
+                ),
+              )
+              as Json;
+      // Refusals carry the stamp too, so an incompatible peer is identifiable.
+      if (node.contacts.containsKey(device)) _notePeer(device, reply);
+      if (reply['error'] != null) throw StateError(reply['error']);
+      return (
+        reply,
+        newline < 0 ? Uint8List(0) : Uint8List.sublistView(data, newline + 1),
+      );
     } on StateError {
       // A refusal, or a request never sent: not a sign of being out of reach.
       rethrow;
@@ -528,14 +563,14 @@ class PeerNetwork {
     }
   }
 
-  Future<Json> _request(String device, Json request) async {
-    Json? reply;
+  /// Sends [request] and returns the reply's bytes.
+  Future<Uint8List> _send(String device, Json request) async {
     if (_poolable.contains(request['type'])) {
       final pooled = await _pooledFor(device);
       if (pooled != null) {
         final reused = pooled.uses++ > 0;
         try {
-          reply = await _exchange(pooled.connection, request);
+          return await _exchange(pooled.connection, request);
         } on TimeoutException {
           _drop(device, pooled);
           rethrow;
@@ -549,50 +584,47 @@ class PeerNetwork {
         }
       }
     }
-    if (reply == null) {
-      final connection = await _connect(device);
-      _connections.add(connection);
-      try {
-        reply = await _exchange(connection, request);
-      } finally {
-        connection.close();
-        _connections.remove(connection);
-      }
+    final connection = await _connect(device);
+    _connections.add(connection);
+    try {
+      return await _exchange(connection, request);
+    } finally {
+      connection.close();
+      _connections.remove(connection);
     }
-    // Refusals carry the stamp too, so an incompatible peer is identifiable.
-    if (node.contacts.containsKey(device)) _notePeer(device, reply);
-    if (reply['error'] != null) throw StateError(reply['error']);
-    if (const {'pull', 'delta'}.contains(request['type']) && !_current(reply)) {
-      throw StateError(outdatedPeer);
-    }
-    return reply;
   }
 
-  Future<Json> _exchange(iroh.Connection connection, Json request) async {
+  Future<Uint8List> _exchange(iroh.Connection connection, Json request) async {
     final (send, recv) = await connection.openBi();
     await send.writeAll(bytes(request));
     await send.finish();
-    final data = await recv
+    return await recv
         .readToEnd(3 * 1024 * 1024)
         .timeout(const Duration(seconds: 20));
-    return jsonDecode(utf8.decode(data)) as Json;
   }
 
+  /// Requests one connection carries at once, each on its own stream, for a
+  /// peer listing `concurrent_streams`; others answer one at a time.
+  static const streamsPerConnection = 4;
+
   /// [device]'s pooled connection, taken for one request, or null when it is
-  /// in use or being dialled: that request then uses a connection of its own,
+  /// full or being dialled: that request then uses a connection of its own,
   /// so nothing waits behind another request. Connection failures propagate.
   Future<_Pooled?> _pooledFor(String device) async {
     final existing = _pool[device];
     if (existing != null && !existing.closed) {
-      if (existing.busy) return null;
+      final limit = peerCaps[device]?.contains('concurrent_streams') == true
+          ? streamsPerConnection
+          : 1;
+      if (existing.inFlight >= limit) return null;
       existing.idle?.cancel();
-      existing.busy = true;
+      existing.inFlight++;
       return existing;
     }
     if (!_dialing.add(device)) return null;
     try {
       final connection = await _connect(device);
-      final pooled = _Pooled(connection)..busy = true;
+      final pooled = _Pooled(connection)..inFlight = 1;
       _pool[device] = pooled;
       _connections.add(connection);
       unawaited(
@@ -608,8 +640,8 @@ class PeerNetwork {
   }
 
   void _release(String device, _Pooled pooled) {
-    pooled.busy = false;
-    if (pooled.closed) return;
+    pooled.inFlight--;
+    if (pooled.closed || pooled.inFlight > 0) return;
     pooled.idle?.cancel();
     pooled.idle = Timer(pooledIdle, () => _drop(device, pooled));
   }
@@ -1077,37 +1109,60 @@ class PeerNetwork {
   /// Served connections between requests, which may be closed for others.
   final Set<iroh.Connection> _idleInbound = {};
 
-  /// Answers [connection]'s requests in turn. A caller that sends one closes
-  /// the connection once it has the reply (older builds always do); one that
-  /// pools connections sends the next within [servedIdle].
+  /// Answers [connection]'s requests, up to [streamsPerConnection] at once.
+  /// A caller that sends one closes the connection once it has the reply;
+  /// one that pools connections sends the next within [servedIdle].
   Future<void> _serve(iroh.Connection connection, String peer) async {
+    final answering = <Future<void>>{};
+    var refused = false;
     try {
       var first = true;
-      while (true) {
-        final iroh.SendStream send;
-        final iroh.RecvStream recv;
-        if (!first) _idleInbound.add(connection);
+      // One wait for the next stream at a time: a stream accepted by a wait
+      // that was abandoned would be lost.
+      Future<(iroh.SendStream, iroh.RecvStream)>? next;
+      while (!refused) {
+        if (answering.length >= streamsPerConnection) {
+          await Future.any(answering);
+          continue;
+        }
+        next ??= connection.acceptBi();
+        final idle = answering.isEmpty;
+        final Object? event;
+        if (!first && idle) _idleInbound.add(connection);
         try {
-          (send, recv) = await connection.acceptBi().timeout(
-            first ? const Duration(seconds: 10) : servedIdle,
-          );
+          event = idle
+              ? await next.timeout(
+                  first ? const Duration(seconds: 10) : servedIdle,
+                )
+              // A request finishing may leave the connection idle.
+              : await Future.any<Object?>([next, Future.any(answering)]);
         } catch (_) {
           // Closed by the caller, or nothing more within the wait.
           return;
         } finally {
           _idleInbound.remove(connection);
         }
-        first = false;
-        if (!await _answer(peer, send, recv)) {
-          // Give QUIC the opportunity to deliver the refusal before closing.
-          await connection.closed().timeout(
-            const Duration(seconds: 3),
-            onTimeout: () => 'done',
-          );
-          return;
+        if (event case (
+          final iroh.SendStream send,
+          final iroh.RecvStream recv,
+        )) {
+          next = null;
+          first = false;
+          late final Future<void> job;
+          job = _answer(peer, send, recv)
+              .then((served) => refused |= !served)
+              .whenComplete(() => answering.remove(job));
+          answering.add(job);
         }
       }
+      await Future.wait(answering.toList());
+      // Give QUIC the opportunity to deliver the refusal before closing.
+      await connection.closed().timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => 'done',
+      );
     } finally {
+      await Future.wait(answering.toList());
       _idleInbound.remove(connection);
       connection.close();
     }
@@ -1125,6 +1180,8 @@ class PeerNetwork {
           .timeout(const Duration(seconds: 20));
       final j = jsonDecode(utf8.decode(raw)) as Json;
       Json reply;
+      // Raw bytes to follow the reply's line, for `blobs`.
+      List<Uint8List>? body;
       if (j['type'] == 'friend') {
         if (friendInvitation == null)
           throw StateError('Invitation unavailable');
@@ -1205,21 +1262,27 @@ class PeerNetwork {
             _retryNow(peer);
             reply = {...await node.answerDelta(peer, j), ..._stamp};
           case 'blob':
-            // Require a referenced object that this peer is allowed to receive.
-            final o = node.store.get(j['object']);
-            if (o == null ||
-                !node.canOffer(o, node.contacts[peer]!, {
-                  o.space,
-                }, relay: true)) {
-              throw StateError('File not shared with peer');
-            }
-            final payload = await node.content(o);
-            if (payload == null ||
-                !(payload['chunks'] as List? ?? []).contains(j['hash'])) {
-              throw StateError('Unknown file chunk');
-            }
-            final blob = node.store.blob(j['hash']);
+            final [blob] = await _chunks(peer, j['object'], [j['hash']]);
             reply = {'bytes': blob == null ? null : b64(blob)};
+          case 'blobs':
+            final hashes = j['hashes'];
+            if (hashes is! List ||
+                hashes.length > maxBatchChunks ||
+                hashes.any((h) => h is! String)) {
+              throw StateError('Invalid chunk list');
+            }
+            final blobs = await _chunks(
+              peer,
+              j['object'],
+              hashes.cast<String>(),
+            );
+            reply = {
+              'sizes': [for (final b in blobs) b?.length],
+            };
+            body = [
+              for (final b in blobs)
+                if (b != null) Uint8List.fromList(b),
+            ];
           case 'typing':
             typing?.call(peer);
             reply = {};
@@ -1237,7 +1300,14 @@ class PeerNetwork {
             throw StateError('Unknown request');
         }
       }
-      await send.writeAll(bytes(reply));
+      if (body == null) {
+        await send.writeAll(bytes(reply));
+      } else {
+        await send.writeAll([...bytes(reply), 0x0a]);
+        for (final chunk in body) {
+          await send.writeAll(chunk);
+        }
+      }
       await send.finish();
       return true;
     } catch (e) {
@@ -1258,6 +1328,30 @@ class PeerNetwork {
       // Only an admitted device may go on to ask for more.
       return node.allowedPeer(peer);
     }
+  }
+
+  /// Chunks one `blobs` request may ask for: their encrypted bytes fit the
+  /// reply limit with room to spare.
+  static const maxBatchChunks = 16;
+
+  /// The stored bytes of chunks [hashes] of the file [objectId] carries, null
+  /// where not held, for [peer]: refused unless it may receive the object.
+  Future<List<List<int>?>> _chunks(
+    String peer,
+    Object? objectId,
+    List<Object?> hashes,
+  ) async {
+    final o = objectId is String ? node.store.get(objectId) : null;
+    if (o == null ||
+        !node.canOffer(o, node.contacts[peer]!, {o.space}, relay: true)) {
+      throw StateError('File not shared with peer');
+    }
+    final payload = await node.content(o);
+    final chunks = {...?(payload?['chunks'] as List?)};
+    if (!hashes.every(chunks.contains)) {
+      throw StateError('Unknown file chunk');
+    }
+    return [for (final hash in hashes) node.store.blob(hash as String)];
   }
 
   Future<void> stop() {
@@ -1391,7 +1485,8 @@ class PeerNetwork {
 class _Pooled {
   _Pooled(this.connection);
   final iroh.Connection connection;
-  bool busy = false, closed = false;
+  int inFlight = 0;
+  bool closed = false;
   int uses = 0;
   Timer? idle;
 }
