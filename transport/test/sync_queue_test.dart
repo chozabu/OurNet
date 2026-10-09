@@ -68,4 +68,27 @@ void main() {
     await queue.schedule('a');
     await queue.schedule('b');
   });
+
+  test('waiting peers start in the given order', () async {
+    final gates = <String, Completer<void>>{};
+    final calls = <String>[];
+    final rank = {'slow': 2, 'fast': 0, 'mid': 1, 'first': 0};
+    final queue = SyncQueue(
+      (device) async {
+        calls.add(device);
+        await (gates[device] = Completer<void>()).future;
+      },
+      concurrency: 1,
+      order: (a, b) => rank[a]!.compareTo(rank[b]!),
+    );
+    final jobs = [
+      for (final d in ['first', 'slow', 'mid', 'fast']) queue.schedule(d),
+    ];
+    for (final d in ['first', 'fast', 'mid', 'slow']) {
+      await tick();
+      expect(calls.last, d);
+      gates[d]!.complete();
+    }
+    await Future.wait(jobs);
+  });
 }

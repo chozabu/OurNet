@@ -886,6 +886,15 @@ class Node {
     };
   }
 
+  /// Whether [peerDevice] may be offered any of [routes], so that a change to
+  /// them is worth a sync with it. Errs towards yes, as [changeInventory]
+  /// lists the same routes.
+  bool offersAny(String peerDevice, Iterable<ObjectRoute> routes) {
+    final peer = contacts[peerDevice];
+    return peer != null &&
+        routes.any((r) => _offerable(r, peer, {r.space}, relay: true));
+  }
+
   /// Whether [inventory] from [peerDevice] already holds, path for path,
   /// each of [routes] that this device would offer it.
   /// With [offeredOnly] false, routes this device would not offer count too.

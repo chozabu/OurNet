@@ -69,7 +69,22 @@ class PeerNetwork {
   final Set<String> _busy = {};
   final Set<iroh.Connection> _connections = {};
   final Set<Future<void>> _jobs = {};
-  late final _syncQueue = SyncQueue(_sync);
+  /// Sessions mostly wait on the network, and a device that is switched off
+  /// holds its slot for the whole connection timeout: the devices most
+  /// recently heard from go first, and the ones failing last.
+  late final _syncQueue = SyncQueue(_sync, concurrency: 4, order: _likelier);
+
+  int _likelier(String a, String b) {
+    final failing = (_failures[a] ?? 0).compareTo(_failures[b] ?? 0);
+    if (failing != 0) return failing;
+    return _lastHeard(b).compareTo(_lastHeard(a));
+  }
+
+  /// When [device] last answered or asked; 0 when never.
+  int _lastHeard(String device) => max(
+    lastInbound[device]?.millisecondsSinceEpoch ?? 0,
+    lastSync[device]?.millisecondsSinceEpoch ?? 0,
+  );
 
   /// When each device last completed a sync; kept across restarts.
   final Map<String, DateTime> lastSync = {};
@@ -334,22 +349,19 @@ class PeerNetwork {
         }, onError: (Object _) {});
         _watchdog = Timer.periodic(watchdogInterval, (_) => _checkRelays());
       }
-      if (automatic)
+      if (automatic) {
+        _changesSeen = node.changeSeq;
         _changes = node.changes.stream.listen((_) {
           // A busy editor must not postpone delivery indefinitely. Batch from
           // the first change, rather than restarting the timer on every edit.
           _debounce ??= Timer(const Duration(milliseconds: 400), () {
             _debounce = null;
-            for (final device in node.contacts.keys.toList()) {
-              // A device that keeps failing is most likely switched off.
-              // Dialling it on every edit costs a connection attempt (and a
-              // radio wake) each time; its retry, its next request to this
-              // device, or the relay coming back reaches it instead.
-              if (_backingOff(device)) continue;
+            for (final device in _concerned()) {
               unawaited(sync(device));
             }
           });
         });
+      }
       unawaited(_accept());
       log(local ? 'Local network started' : 'Network started');
       if (automatic) unawaited(syncAll());
@@ -358,6 +370,33 @@ class PeerNetwork {
       log('Network unavailable: $e');
       rethrow;
     }
+  }
+
+  /// Where the change log stood when [_concerned] last looked.
+  int _changesSeen = 0;
+
+  /// The devices that local changes since the last call may concern: those
+  /// that may be offered a changed object, and those whose sharing policy
+  /// changed since the two last agreed (or that never have). Everyone else
+  /// would answer a sync with "nothing new", at the cost of a connection
+  /// and a radio wake on both sides.
+  ///
+  /// A device that keeps failing is most likely switched off, and is left
+  /// out too: its retry, its next request to this device, or the relay
+  /// coming back reaches it instead.
+  List<String> _concerned() {
+    final seq = node.changeSeq;
+    final changed = node.changedSince(_changesSeen);
+    _changesSeen = seq;
+    return [
+      for (final device in node.contacts.keys.toList())
+        if (!_backingOff(device) &&
+            node.allowedPeer(device) &&
+            (changed == null ||
+                _marks[device]?.myPolicy != node.policyDigest(device) ||
+                node.offersAny(device, changed)))
+          device,
+    ];
   }
 
   String contactCard() => canonical({
