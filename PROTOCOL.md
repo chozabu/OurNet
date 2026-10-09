@@ -272,11 +272,10 @@ Inventory lists each object a device holds with a digest of all its evidence
 IDs (`have`), and, from builds with per-path evidence, a digest of the
 records it should share with that peer (`paths`: object ID to the first 16
 hex digits of the digest, leaving out objects the two share nothing for).
-Peers sending `paths` are offered an object they hold only when the two
-digests differ, with the shared records. Peers without it compare `have` and
-are sent all evidence for an object, as before; an object with more than 126
-records, which they would refuse, is sent to them only when they lack it, and
-then with the shared records alone. Received evidence is stored after
+A peer is offered an object it holds only when the two `paths` digests
+differ, with the shared records. `have` lists the objects an inventory
+covers; its values are empty (builds before 0.2.29 sent a whole-evidence
+digest, which no supported build reads). Received evidence is stored after
 validation, and one item may carry at most 128 records.
 
 One inventory covers a window of history rather than everything a device holds.
@@ -287,7 +286,8 @@ plus one lookahead, including routes it cannot share; only offerable objects
 appear in `have`. Sparse sharing therefore cannot make an inventory scan the
 whole profile. Cursors are `[created, id]` positions, not access capabilities.
 
-Inventories retain `from`/`until` timestamp bounds and add an exclusive `after`
+Inventories carry `cursorPaging: true` and `from`/`until` timestamp bounds,
+which 0.2.27 and 0.2.28 read, and an exclusive `after`
 and inclusive `through` position for exact boundaries across timestamp ties.
 The first page is open at the newest end and the last at the oldest end.
 `more` and `next` describe the next page. An offer considers only its supplied
@@ -295,9 +295,22 @@ bounds. A quiet exchange advances each side that has more history; completion
 requires both sides' last pages to be quiet. Continuations first reconcile the
 newest page, then resume the retained cursors.
 
-Peers without cursor support use the existing numbered `window` requests and
-overlapping timestamp bounds. Inventories carrying no bounds (earlier builds)
-cover all history, as before.
+Peers must list the capabilities `cursor_paging`, `multi_request` and
+`since_sync` (0.2.27 and later) in sync requests and replies; a device refuses
+to sync with one that does not, and says why.
+
+Devices that agreed before exchange only what changed since (`delta`, see
+PROTOCOL_CHANGELOG.md 0.2.27). With `delta_items`, a `delta` request carries
+the objects the asker wrote and never handed to the peer, and the reply
+carries them back with the peer's receipts and the peer's own new objects: a
+message and its receipt cross in one request. A `push` may list `view`, the
+objects whose holdings the reply should describe, so agreement needs no
+further pull.
+
+A local change starts a sync only with the devices it concerns: those that may
+be offered a changed object, and those whose sharing policy changed since the
+two last agreed (or that never have). Up to four syncs run at once, devices
+heard from most recently first.
 
 ## Transfers and limits
 
@@ -322,14 +335,20 @@ refused, this device's own objects are not, and the number of objects is not
 capped), with a warning shown past `storageWarning` (5 GiB by default),
 256 KiB per signed object, 128 evidence records per received item (a path, so
 about 60 hops; a device does not offer an item with more), 64 MiB per file,
-and four simultaneous inbound requests. A device hands an object on along the
+and eight simultaneous inbound connections (an admitted device beyond them
+is answered "busy" and tries again within seconds, without counting it as a
+failure). A device hands an object on along the
 shortest chain it received it by. These bounds are not a complete DoS resistance strategy.
 
 Files use 128 KiB content-addressed chunks, encrypted separately for private
 attachments. The encrypted manifest holds the chunk key and hashes. Sources
 check that the requesting friend may receive the referenced object and that the
 chunk belongs to it. Downloads verify hashes, authentication tags and final size.
-Current downloads try author devices then other admitted holders; blind encrypted relay file serving,
+Downloads ask for missing chunks 16 at a time (`blobs`: a JSON line with each
+chunk's size, then the raw bytes), with four such requests in flight spread
+over the devices that may hold the file, its author's first; chunks one
+holder lacks are asked of the next. Peers listing `concurrent_streams`
+answer up to four requests on one connection at once. Blind encrypted relay file serving,
 garbage collection, retention controls and resumable large-file UX remain work.
 
 ## Infrastructure and media

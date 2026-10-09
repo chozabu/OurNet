@@ -58,7 +58,10 @@ Store rollouts are staged, so friends run mixed versions for days. Change the
 protocol and database additively: new optional fields, kinds and request types
 that older builds ignore or refuse individually. Never change the meaning of an
 existing field or kind. A breaking change needs a new ALPN that the next release
-accepts alongside `ournet/2`. Peers exchange `version` (keep `appVersion` in
+accepts alongside `ournet/2`. The oldest peer a build syncs with is set by
+`PeerNetwork.requiredCaps` (currently 0.2.27); raising it cuts off older
+builds, so release to both stores together and record it in
+`PROTOCOL_CHANGELOG.md`. Peers exchange `version` (keep `appVersion` in
 `app/lib/build_info.dart` equal to `pubspec.yaml`, which a test checks).
 When releasing a new version, run `dart run tool/upgrade_fixture.dart <version>`
 in `core` and commit the saved profile; `test/upgrade_test.dart` opens every

@@ -7,6 +7,36 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: 0.2.27 is the oldest peer; fewer requests
+
+**Breaking for old peers.** Sync requests and replies must list the
+capabilities `cursor_paging`, `multi_request` and `since_sync`; a device
+refuses `pull`, `push` and `delta` from a peer that does not (0.2.26 and
+older, including the Store's 0.2.9) with the error "The other device runs an
+older OurNet: both need 0.2.27 or later", and stops a sync whose `pull` or
+`delta` reply lacks them. Release this to the Store and Play together.
+Numbered `window` inventories and whole-evidence offers are gone.
+
+| Field | Where | Meaning | 0.2.27 and 0.2.28 |
+| --- | --- | --- | --- |
+| `have` values | inventory | Empty strings; only the keys are read. | Read only the keys, since every inventory carries `paths`. |
+| `caps: [..., 'delta_items']` | as `caps` | Takes `items` in `delta`, and answers with `items` and `more`. | Ignore it. |
+| `items` | `delta` request | Objects the asker wrote and never handed over (a page as in `push`), stored before answering. | Never sent to them. |
+| `items`, `more` | `delta` reply | The request's items with this device's receipts, and its own new objects. | Never asked of them. |
+| `view: [ids]` | `push` request | The reply's `view` is an inventory of these objects as held after the push. | Ignore it. |
+| `caps: [..., 'concurrent_streams']` | as `caps` | Answers up to four requests on one connection at once. | Ignore it; sent one at a time. |
+| `caps: [..., 'blob_batch']` | as `caps` | Answers `blobs`. | Ignore it; asked with `blob`. |
+| `{type: 'blobs', object, hashes}` | request | Up to 16 chunks of the file `object` carries. The reply is a JSON line `{sizes: [n or null, ...]}`, a newline, then the chunks' bytes in order. | Never sent to them. |
+
+Other changes, without a wire field: a local change syncs only with the
+devices it concerns; four syncs run at once, devices heard from most recently
+first; an admitted device that finds all eight inbound connections in use is
+answered with the error "Busy: try again shortly" and retries within seconds;
+empty pushes are not sent.
+
+**Rollout switches.** `WireFormat.saltedWraps` and `WireFormat.versionedBlobs`
+are on: every supported peer reads both (since 0.2.4).
+
 ## 0.2.28: faster local writes
 
 No wire change. The profile database and the map tile cache use
