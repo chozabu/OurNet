@@ -1192,14 +1192,14 @@ class PeerNetwork {
       } else {
         if (!node.allowedPeer(peer)) throw StateError('Device not admitted');
         lastInbound[peer] = DateTime.now();
+        if (const {'pull', 'push', 'delta'}.contains(j['type'])) {
+          _notePeer(peer, j);
+          if (!_current(j)) throw StateError(outdatedPeer);
+          _heard(peer);
+          _retryNow(peer);
+        }
         switch (j['type']) {
-          case 'pull' || 'push' || 'delta' when !_current(j):
-            _notePeer(peer, j);
-            throw StateError(outdatedPeer);
           case 'pull':
-            _notePeer(peer, j);
-            _heard(peer);
-            _retryNow(peer);
             // Taken first: this device holds at least this much of its log
             // once the reply is sent, which a walk records as its start.
             final seq = node.changeSeq, policy = node.policyDigest(peer);
@@ -1242,9 +1242,6 @@ class PeerNetwork {
               ..._stamp,
             };
           case 'push':
-            _notePeer(peer, j);
-            _heard(peer);
-            _retryNow(peer);
             reply = {'changed': await node.receive(peer, j['items'])};
             // What this device now holds of those objects, so the caller
             // can tell without asking again whether the two agree.
@@ -1257,9 +1254,6 @@ class PeerNetwork {
               );
             }
           case 'delta':
-            _notePeer(peer, j);
-            _heard(peer);
-            _retryNow(peer);
             reply = {...await node.answerDelta(peer, j), ..._stamp};
           case 'blob':
             final [blob] = await _chunks(peer, j['object'], [j['hash']]);

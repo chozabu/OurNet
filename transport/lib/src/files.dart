@@ -9,11 +9,15 @@ import 'package:ournet_core/ournet_core.dart';
 import 'network.dart';
 
 class Files {
-  static final _previews = Expando<_PreviewQueue>();
-  static final _transfers = Expando<_TransferQueue>();
+  static final _previews = Expando<_BoundedQueue<Uint8List>>();
+  static final _transfers = Expando<_BoundedQueue<void>>();
   final Node node;
   final PeerNetwork network;
   Files(this.node, this.network);
+  _BoundedQueue<Uint8List> get _previewQueue => _previews[node] ??=
+      _BoundedQueue(32, 'Preview queue is full; tap to retry');
+  _BoundedQueue<void> get _transferQueue => _transfers[node] ??=
+      _BoundedQueue(16, 'Transfer queue is full; retry shortly');
   static const chunkSize = 128 * 1024;
   static const maxSize = 64 * 1024 * 1024;
   Future<SignedObject> publish(
@@ -216,7 +220,7 @@ class Files {
   Future<Uint8List> readBytes(
     SignedObject object, {
     int limit = 8 * 1024 * 1024,
-  }) => (_previews[node] ??= _PreviewQueue()).run(
+  }) => _previewQueue.run(
     '${object.id}/$limit',
     () => _readBytes(object, limit),
   );
@@ -255,7 +259,7 @@ class Files {
   Future<void> cache(
     SignedObject object, {
     void Function(int, int)? onProgress,
-  }) => (_transfers[node] ??= _TransferQueue()).run(
+  }) => _transferQueue.run(
     'cache/${object.id}',
     () async {
       await for (final _ in _plain(object, onProgress: onProgress)) {}
@@ -269,7 +273,7 @@ class Files {
     SignedObject object,
     String path, {
     void Function(int, int)? onProgress,
-  }) => (_transfers[node] ??= _TransferQueue()).run(
+  }) => _transferQueue.run(
     'save/${object.id}/$path',
     () async {
       final target = File('$path.${randomId()}.ournet-part');
@@ -290,61 +294,28 @@ class Files {
   );
 }
 
-/// Bound preview memory/CPU pressure and share duplicate in-flight requests.
-/// Completed plaintext is owned by the caller, never retained in this queue.
-class _PreviewQueue {
-  final _pending = <String, Future<Uint8List>>{};
+/// Runs at most two jobs at once and shares duplicate in-flight requests by
+/// key. Previews (bounding memory and CPU; completed plaintext is owned by
+/// the caller, never retained here) and original transfers each have one.
+/// A full queue refuses with [full]; callers retry explicitly.
+class _BoundedQueue<T> {
+  _BoundedQueue(this.limit, this.full);
+  final int limit;
+  final String full;
+  final _pending = <String, Future<T>>{};
   final _waiting = Queue<void Function()>();
   int _active = 0;
 
-  Future<Uint8List> run(String key, Future<Uint8List> Function() load) {
+  Future<T> run(String key, Future<T> Function() load) {
     final existing = _pending[key];
     if (existing != null) return existing;
-    if (_pending.length >= 32)
-      return Future.error(StateError('Preview queue is full; tap to retry'));
-    final result = Completer<Uint8List>();
+    if (_pending.length >= limit) return Future.error(StateError(full));
+    final result = Completer<T>();
     _pending[key] = result.future;
     void start() async {
       _active++;
       try {
         result.complete(await load());
-      } catch (error, stack) {
-        result.completeError(error, stack);
-      } finally {
-        _pending.remove(key);
-        _active--;
-        if (_waiting.isNotEmpty) _waiting.removeFirst()();
-      }
-    }
-
-    if (_active < 2) {
-      start();
-    } else {
-      _waiting.add(start);
-    }
-    return result.future;
-  }
-}
-
-/// Bound original transfers independently of preview memory. Callers retry a
-/// full queue explicitly; duplicate cache/export requests share existing work.
-class _TransferQueue {
-  final _pending = <String, Future<void>>{};
-  final _waiting = Queue<void Function()>();
-  int _active = 0;
-
-  Future<void> run(String key, Future<void> Function() load) {
-    final existing = _pending[key];
-    if (existing != null) return existing;
-    if (_pending.length >= 16)
-      return Future.error(StateError('Transfer queue is full; retry shortly'));
-    final result = Completer<void>();
-    _pending[key] = result.future;
-    void start() async {
-      _active++;
-      try {
-        await load();
-        result.complete();
       } catch (error, stack) {
         result.completeError(error, stack);
       } finally {

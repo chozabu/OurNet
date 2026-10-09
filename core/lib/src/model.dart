@@ -44,10 +44,11 @@ const maxGrantKeys = 400;
 /// state does not cross an isolate boundary.
 abstract final class WireFormat {
   /// Wraps use the salted HKDF derivation ([wrapSalt]) instead of an empty salt.
-  static bool saltedWraps = false;
+  /// On since peers older than 0.2.27 are refused: every peer reads it.
+  static bool saltedWraps = true;
 
-  /// New encrypted blobs carry a leading [blobVersion] byte.
-  static bool versionedBlobs = false;
+  /// New encrypted blobs carry a leading [blobVersion] byte. On, as above.
+  static bool versionedBlobs = true;
 }
 
 /// HKDF salt of the second wrap derivation. Wraps made before it used none.

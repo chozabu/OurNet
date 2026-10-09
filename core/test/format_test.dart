@@ -173,10 +173,11 @@ void main() {
       addTearDown(node.close);
       final k = List.filled(32, 3);
       final plain = Uint8List.fromList(utf8.encode('payload'));
+      WireFormat.versionedBlobs = false;
+      addTearDown(() => WireFormat.versionedBlobs = true);
       final before = await node.blobs.encode(plain, k);
       expect(node.store.blob(before)!.length, 12 + 7 + 16);
       WireFormat.versionedBlobs = true;
-      addTearDown(() => WireFormat.versionedBlobs = false);
       final after = await node.blobs.encode(plain, k);
       expect(node.store.blob(after)!.first, blobVersion);
       // Both open, whichever wrote them.
@@ -259,6 +260,8 @@ void main() {
         final b = Node(await LocalIdentity.create(), Store());
         await a.addContact(b.identity.certificate);
         await b.addContact(a.identity.certificate);
+        WireFormat.saltedWraps = false;
+        addTearDown(() => WireFormat.saltedWraps = true);
         final o = await a.publish(
           'message',
           {'text': 'hi'},
@@ -266,7 +269,6 @@ void main() {
         );
         expect((await b.content(o))!['text'], 'hi');
         WireFormat.saltedWraps = true;
-        addTearDown(() => WireFormat.saltedWraps = false);
         final s = await a.publish(
           'message',
           {'text': 'salted'},
