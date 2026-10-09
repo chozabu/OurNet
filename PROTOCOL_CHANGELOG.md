@@ -7,7 +7,7 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
-## Unreleased: 0.2.27 is the oldest peer; fewer requests
+## 0.2.29: 0.2.27 is the oldest peer; fewer requests
 
 **Breaking for old peers.** Sync requests and replies must list the
 capabilities `cursor_paging`, `multi_request` and `since_sync`; a device

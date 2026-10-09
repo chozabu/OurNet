@@ -5,7 +5,12 @@ Updates after the first submission go through `tool/publish-store.ps1`.
 
 ## Pricing and availability
 
-Free, all markets, public. No trial, no sale.
+Free, all markets. No trial, no sale.
+
+**Discoverability:** available by direct link only, not shown in Store search
+(set in Submission 2, September 2026). Packages uploaded by
+`tool/publish-store.ps1` keep this setting; changing it takes a new submission.
+The overview page's availability toggle blocks installs entirely instead.
 
 ## Properties
 
