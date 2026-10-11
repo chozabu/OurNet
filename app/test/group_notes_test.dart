@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'scope_helpers.dart';
 import 'package:ournet/ui/app.dart';
 import 'package:ournet/ui/note_card.dart';
 import 'package:ournet_core/ournet_core.dart';
@@ -37,10 +38,10 @@ void main() {
       ),
     );
     await settled(tester);
-    await tester.tap(find.text('Weekend trip'));
+    await tester.tap(find.text('Weekend trip').last);
     await settled(tester);
     expect(find.text('Lists'), findsNothing);
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Notes'));
+    await openSection(tester, 'Notes');
     await settled(tester);
 
     // The group's notes, and only those, as cards on the usual screen.
@@ -84,9 +85,9 @@ void main() {
       ),
     );
     await settled(tester);
-    await tester.tap(find.text('Weekend trip'));
+    await tester.tap(find.text('Weekend trip').last);
     await settled(tester);
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Notes'));
+    await openSection(tester, 'Notes');
     await settled(tester);
     expect(
       find.text('This group has a list from before notes'),

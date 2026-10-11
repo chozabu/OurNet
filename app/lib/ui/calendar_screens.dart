@@ -44,10 +44,20 @@ extension _CalendarScreens on _OurNetAppState {
       );
   }
 
-  Widget calendarScreen(BuildContext context) => CalendarPage(
-    controller: calendarController,
-    flows: calendarFlows,
-  );
+  Widget calendarScreen(BuildContext context) =>
+      CalendarPage(controller: calendarController, flows: calendarFlows);
+
+  /// The personal calendar alone, for the Personal scope.
+  Widget personalCalendarView(BuildContext context) {
+    final c = groupCalendars[Calendar.personal] ??= _newCalendar(
+      Calendar.personal,
+    );
+    return CalendarPage(
+      key: const ValueKey('personalcalendar'),
+      controller: c,
+      flows: _flows(c),
+    );
+  }
 
   /// A private group's own calendar, shown in its Calendar tab.
   Widget groupCalendarView(BuildContext context, EverydayItem room) {
@@ -67,7 +77,7 @@ extension _CalendarScreens on _OurNetAppState {
     if (context == null) return;
     update(() {
       tab = Destination.calendar;
-      activeRoom = null;
+      setScope(null);
     });
     final opened = await calendarFlows.openLink(context, link);
     if (!opened) notice('That event is not available on this device yet.');
@@ -159,7 +169,8 @@ extension _CalendarScreens on _OurNetAppState {
         ? field.selection.start.clamp(0, text.length)
         : text.length;
     final before = text.substring(0, at);
-    final needsSpace = before.isNotEmpty && !before.endsWith(' ') && !before.endsWith('\n');
+    final needsSpace =
+        before.isNotEmpty && !before.endsWith(' ') && !before.endsWith('\n');
     final insert = '${needsSpace ? ' ' : ''}$link ';
     field.value = TextEditingValue(
       text: before + insert + text.substring(at),

@@ -183,7 +183,7 @@ extension _ConversationPages on _OurNetAppState {
           ],
         ),
         subtitle: subtitle,
-        selected: contact == person,
+        selected: contact == person && publicChat == null && listRoom == null,
         trailing: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.end,

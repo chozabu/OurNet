@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'scope_helpers.dart';
 import 'package:ournet/ui/app.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'chat_features_test.dart' show friends, wide;
@@ -44,12 +45,12 @@ void main() {
       ),
     );
     await settled(tester);
-    await tester.tap(find.text('Weekend trip'));
+    await tester.tap(find.text('Weekend trip').last);
     await settled(tester);
 
     // The tab shows how much is unread, and the discussion with its author.
     expect(find.byType(Badge), findsWidgets);
-    await tester.tap(find.text('Forum'));
+    await openSection(tester, 'Forums');
     await settled(tester);
     expect(find.text('Which campsite?'), findsOneWidget);
     expect(find.text('Lake or forest?'), findsOneWidget);

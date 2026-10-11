@@ -36,6 +36,10 @@ class NoteCard extends StatefulWidget {
   final Files? files;
   final SignedObject? Function(String id)? objectOf;
   final bool online;
+
+  /// The group a note belongs to, named where notes from several are listed
+  /// together (the All scope).
+  final String? group;
   const NoteCard({
     super.key,
     required this.item,
@@ -54,6 +58,7 @@ class NoteCard extends StatefulWidget {
     this.files,
     this.objectOf,
     this.online = false,
+    this.group,
   });
   @override
   State<NoteCard> createState() => _NoteCardState();
@@ -268,6 +273,7 @@ class _NoteCardState extends State<NoteCard> {
                             ),
                           if (p['conflicts'] == true ||
                               people.length > 1 ||
+                              widget.group != null ||
                               p['removed'] == true)
                             Padding(
                               padding: const EdgeInsets.only(top: 10),
@@ -276,7 +282,25 @@ class _NoteCardState extends State<NoteCard> {
                                 runSpacing: 4,
                                 crossAxisAlignment: WrapCrossAlignment.center,
                                 children: [
-                                  if (people.length > 1)
+                                  if (widget.group case final group?)
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.lock_outline,
+                                          size: 14,
+                                          color: theme
+                                              .colorScheme
+                                              .onSurfaceVariant,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          group,
+                                          style: theme.textTheme.labelSmall,
+                                        ),
+                                      ],
+                                    )
+                                  else if (people.length > 1)
                                     for (final person in people.take(5))
                                       PersonAvatar(
                                         name: widget.personName(person),

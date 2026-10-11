@@ -454,7 +454,7 @@ class _CalendarPageState extends State<CalendarPage> {
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
             child: Text(
-              'Private groups have calendars too. Open a group’s Calendar tab to plan with them; they show here when you join.',
+              'Private groups have calendars too. Pick a group at the top to plan with them; they show here when you join.',
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
             ),
           ),

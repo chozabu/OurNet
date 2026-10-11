@@ -1,8 +1,9 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:ournet_core/ournet_core.dart' show Calendar;
+import 'package:ournet_core/ournet_core.dart' show Calendar, PublicChats;
 import 'package:url_launcher/url_launcher.dart';
 
+import 'chat_links.dart';
 import 'event_links.dart';
 
 /// Message text with tappable links and light formatting, as other
@@ -51,15 +52,18 @@ class MessageText extends StatefulWidget {
   static String plain(String text) => text
       .replaceAll(Calendar.linkPattern, '📅 Calendar event')
       .replaceAllMapped(
+        PublicChats.linkPattern,
+        (m) =>
+            '💬 ${PublicChats.parseLink(m.group(0)!)?.name ?? 'Public chat'}',
+      )
+      .replaceAllMapped(
         _format,
         (m) => m.group(1) ?? m.group(2) ?? m.group(3) ?? m.group(4) ?? '',
       );
 
   /// The distinct web links in [text], in order.
-  static List<Uri> links(String text) => {
-    for (final m in _link.allMatches(text))
-      ?linkUri(m.group(0)!),
-  }.toList();
+  static List<Uri> links(String text) =>
+      {for (final m in _link.allMatches(text)) ?linkUri(m.group(0)!)}.toList();
 
   static Uri? linkUri(String link) {
     final uri = Uri.tryParse(link.startsWith('www.') ? 'https://$link' : link);
@@ -120,7 +124,12 @@ class _MessageTextState extends State<MessageText> {
   );
 
   /// Web links and light formatting in [text].
-  List<InlineSpan> _text(String text, TextStyle base, Color code, {required TextStyle link}) {
+  List<InlineSpan> _text(
+    String text,
+    TextStyle base,
+    Color code, {
+    required TextStyle link,
+  }) {
     final children = <InlineSpan>[];
     var at = 0;
     for (final m in MessageText._link.allMatches(text)) {
@@ -165,26 +174,44 @@ class _MessageTextState extends State<MessageText> {
     final code = theme.colorScheme.onSurface.withValues(alpha: 0.08);
     final text = widget.text;
     final children = <InlineSpan>[];
-    // Event links become cards; everything between them is ordinary text.
+    // Event and chat links become cards; everything between them is
+    // ordinary text.
     var from = 0;
-    // Most messages hold no event link: look for the scheme before the
-    // pattern, as this runs for every message each time it is drawn.
-    final Iterable<Match> links = text.contains('ournet://event/')
-        ? Calendar.linkPattern.allMatches(text)
-        : const <Match>[];
+    // Most messages hold no such link: look for the scheme before the
+    // patterns, as this runs for every message each time it is drawn.
+    final links = <Match>[
+      if (text.contains('ournet://event/'))
+        ...Calendar.linkPattern.allMatches(text),
+      if (text.contains('ournet://chat/'))
+        ...PublicChats.linkPattern.allMatches(text),
+    ]..sort((a, b) => a.start.compareTo(b.start));
     for (final m in links) {
+      if (m.start < from) continue;
       final link = m.group(0)!;
-      if (Calendar.parseLink(link) == null) continue;
-      children.addAll(_text(text.substring(from, m.start), base, code, link: _linkStyle(theme, base)));
-      children.add(
-        WidgetSpan(
-          alignment: PlaceholderAlignment.middle,
-          child: EventLinkChip(link, style: base),
+      final Widget chip;
+      if (Calendar.parseLink(link) != null) {
+        chip = EventLinkChip(link, style: base);
+      } else if (PublicChats.parseLink(link) != null) {
+        chip = ChatLinkChip(link, style: base);
+      } else {
+        continue;
+      }
+      children.addAll(
+        _text(
+          text.substring(from, m.start),
+          base,
+          code,
+          link: _linkStyle(theme, base),
         ),
+      );
+      children.add(
+        WidgetSpan(alignment: PlaceholderAlignment.middle, child: chip),
       );
       from = m.end;
     }
-    children.addAll(_text(text.substring(from), base, code, link: _linkStyle(theme, base)));
+    children.addAll(
+      _text(text.substring(from), base, code, link: _linkStyle(theme, base)),
+    );
     return Text.rich(TextSpan(style: base, children: children));
   }
 }

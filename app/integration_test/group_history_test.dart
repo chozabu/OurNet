@@ -63,7 +63,7 @@ void main() {
         ) {
           await tester.pump(const Duration(milliseconds: 100));
         }
-        await tester.tap(find.text('History group'));
+        await tester.tap(find.text('History group').last);
         final opening = Stopwatch()..start();
         while (inChat('Group history 1004').evaluate().isEmpty &&
             opening.elapsed < const Duration(seconds: 10)) {

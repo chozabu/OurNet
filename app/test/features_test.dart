@@ -175,7 +175,8 @@ void main() {
         () => Everyday(node).rooms(),
       ))!.single;
       expect(room.data['members'], contains(friend.person));
-      expect(find.text('Conversation'), findsOneWidget);
+      // Still in the group, with its new members.
+      expect(find.byTooltip('Group info'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(node.close);

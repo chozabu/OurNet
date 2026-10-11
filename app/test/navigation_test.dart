@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'scope_helpers.dart';
 import 'package:ournet/ui/app.dart';
 import 'package:ournet_core/ournet_core.dart';
 
@@ -49,9 +50,7 @@ void main() {
       await tester.tap(find.text('Publish discussion'));
       await settle(tester);
       expect(node.store.objects(kind: 'post').single.space, forum.space);
-      await tester.tap(find.text('Private groups').first);
-      await settle(tester);
-      await tester.tap(find.text('Create group'));
+      await tester.tap(find.widgetWithText(ListTile, 'Create group').first);
       await tester.pump(const Duration(milliseconds: 300));
       await tester.enterText(find.byType(TextField).last, 'Weekend plans');
       await tester.tap(find.text('Save'));
@@ -64,18 +63,20 @@ void main() {
         ))!.single.data['name'],
         'Weekend plans',
       );
-      expect(find.text('Conversation'), findsOneWidget);
+      // A new group opens as the scope, at its chat.
+      expect(find.byTooltip('Group info'), findsOneWidget);
+      expect(find.text('Weekend plans'), findsWidgets);
       await tester.enterText(find.byType(TextField).last, 'Group draft');
-      await tester.tap(find.text('Notes').first);
+      await pickScope(tester, 'All');
+      await openSection(tester, 'Notes');
       await settle(tester);
       expect(
         tester.widget<TextField>(find.byType(TextField).last).controller!.text,
         isEmpty,
       );
       await tester.enterText(find.byType(TextField).last, 'Personal draft');
-      await tester.tap(find.text('Private groups').first);
-      await settle(tester);
-      await tester.tap(find.text('Weekend plans').first);
+      await pickScope(tester, 'Weekend plans');
+      await openSection(tester, 'Chat');
       await settle(tester);
       expect(
         tester.widget<TextField>(find.byType(TextField).last).controller!.text,
@@ -100,7 +101,15 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       await tester.pumpWidget(OurNetApp(node: node, enablePlatform: false));
       await settle(tester);
+      // Both the destination and the scope (the group) come back.
+      expect(find.byTooltip('Group info'), findsOneWidget);
+      expect(find.text('Weekend plans'), findsWidgets);
+      await pickScope(tester, 'All');
       expect(find.text('Private drive'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(OurNetApp(node: node, enablePlatform: false));
+      await settle(tester);
+      expect(find.text('Everything you can see'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await node.close();

@@ -38,7 +38,7 @@ void main() {
       ),
     );
     await settled(tester);
-    await tester.tap(find.text('Weekend trip'));
+    await tester.tap(find.text('Weekend trip').last);
     await settled(tester);
     expect(inChat('Who has the tent?'), findsOneWidget);
     expect(inChat('I do'), findsOneWidget);
@@ -98,7 +98,7 @@ void main() {
       ),
     );
     await settled(tester);
-    await tester.tap(find.text('Weekend trip'));
+    await tester.tap(find.text('Weekend trip').last);
     await settled(tester);
     final composer = find.byType(TextField).last;
     final controller = tester.widget<TextField>(composer).controller!;
@@ -161,7 +161,7 @@ void main() {
       ),
     );
     await settled(tester);
-    await tester.tap(find.text('Weekend trip'));
+    await tester.tap(find.text('Weekend trip').last);
     await settled(tester);
 
     // Reply: the quote shows in the new bubble and travels with it.
@@ -279,7 +279,7 @@ void main() {
       ),
     );
     await settled(tester);
-    await tester.tap(find.text('Weekend trip'));
+    await tester.tap(find.text('Weekend trip').last);
     await settled(tester);
 
     await tester.longPress(inChat('Timed'));
@@ -331,7 +331,7 @@ void main() {
       ),
     );
     await settled(tester);
-    await tester.tap(find.text('Busy'));
+    await tester.tap(find.text('Busy').last);
     await settled(tester);
     expect(inChat('message 299'), findsOneWidget);
     // Only a window was read, not the whole group.

@@ -62,9 +62,11 @@ extension _DiscoveryPages on _OurNetAppState {
         _SearchHit(
           EverydayItem(e.object, {
             ...e.data,
-            'text': [e.description, e.location, e.transcript]
-                .where((t) => t.isNotEmpty)
-                .join(' · '),
+            'text': [
+              e.description,
+              e.location,
+              e.transcript,
+            ].where((t) => t.isNotEmpty).join(' · '),
             'title': eventTitle(e),
           }),
           'Calendar',
@@ -115,7 +117,7 @@ extension _DiscoveryPages on _OurNetAppState {
     }
     update(() {
       if (o.kind == 'inbox') {
-        activeRoom = null;
+        reveal(ScopeKind.personal);
         notesController.notesFilter = item.data['type'] == 'file'
             ? 'Files'
             : item.data['type'] == 'check'
@@ -123,26 +125,30 @@ extension _DiscoveryPages on _OurNetAppState {
             : 'All';
         tab = Destination.notes;
       } else if (o.kind == 'room_item' && room != null) {
-        activeRoom = room;
-        tab = Destination.groups;
-        everydaySection = item.data['type'] == 'file'
-            ? 'Files'
-            : item.data['type'] == 'check'
-            ? 'Notes'
-            : 'Conversation';
+        showGroup(
+          room,
+          section: item.data['type'] == 'file'
+              ? Destination.files
+              : item.data['type'] == 'check'
+              ? Destination.notes
+              : Destination.messages,
+        );
       } else if (o.kind == 'message') {
         tab = Destination.messages;
+        reveal(ScopeKind.personal);
         showConversation = true;
         contact = o.author == node.person
             ? o.audience.where((p) => p != node.person).firstOrNull
             : o.author;
       } else if (o.kind == 'post') {
         tab = Destination.forums;
+        reveal(ScopeKind.public);
         space = o.space;
         selectedThread = item.data['parent'] ?? o.id;
         showForum = true;
       } else {
         tab = Destination.files;
+        reveal(o.isPublic ? ScopeKind.public : ScopeKind.personal);
         attachmentFiles = false;
         publicFiles = o.isPublic;
         driveFolder = item.data['folder'];

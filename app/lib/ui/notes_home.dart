@@ -17,7 +17,7 @@ extension _NotesHome on _OurNetAppState {
     key: ValueKey('editor/${id ?? 'new'}'),
     notes: notes,
     id: id,
-    group: notesScope,
+    group: newNoteGroup,
     checklist: checklist,
     drafts: draftStore,
     network: network,
@@ -68,7 +68,7 @@ extension _NotesHome on _OurNetAppState {
       save: (recording) async {
         final file = File(recording.path);
         try {
-          final note = await notes.create(group: notesScope);
+          final note = await notes.create(group: newNoteGroup);
           final attached = await notes.attachAudio(
             note,
             file.openRead(),
@@ -107,7 +107,7 @@ extension _NotesHome on _OurNetAppState {
     final result = await editDrawing(context);
     if (result == null || !mounted) return;
     try {
-      final note = await notes.create(group: notesScope);
+      final note = await notes.create(group: newNoteGroup);
       await notes.attachDrawing(
         note,
         png: result.png,
@@ -132,7 +132,7 @@ extension _NotesHome on _OurNetAppState {
     }
     if (picked == null || !mounted) return;
     try {
-      final note = await notes.create(group: notesScope);
+      final note = await notes.create(group: newNoteGroup);
       await notes.attachImage(note, picked.openRead(), picked.name);
       await openNote(note.id);
     } catch (e) {
@@ -615,6 +615,13 @@ extension _NotesHome on _OurNetAppState {
       files: files,
       objectOf: cachedObject,
       online: network.running,
+      // Notes from several places are listed together only in All.
+      group: notesScope == null
+          ? switch (Notes.groupOf(id)) {
+              final group? => groupName(group),
+              null => null,
+            }
+          : null,
     );
     final container = OpenContainer<void>(
       tappable: false,
@@ -699,14 +706,64 @@ extension _NotesHome on _OurNetAppState {
     }
   }
 
+  /// Where a new note goes: the group on screen, or in All the destination
+  /// picked on the capture bar (Personal unless a group is chosen).
+  String? get newNoteGroup {
+    if (notesScope case final group?) return group;
+    final chosen = allNotesTarget;
+    if (scope != null || chosen == null) return null;
+    // A group left since is no longer offered.
+    return knownRooms.any((r) => r.object.space == chosen) ? chosen : null;
+  }
+
+  /// In All, the capture bar's choice of where new notes go.
+  Widget noteTargetPicker(BuildContext context) {
+    final target = newNoteGroup;
+    return PopupMenuButton<String>(
+      tooltip: target == null
+          ? 'New notes are personal'
+          : 'New notes go to ${groupName(target)}',
+      onSelected: (value) =>
+          update(() => allNotesTarget = value.isEmpty ? null : value),
+      itemBuilder: (_) => [
+        CheckedPopupMenuItem(
+          value: '',
+          checked: target == null,
+          child: const Text('Personal'),
+        ),
+        for (final room in knownRooms)
+          CheckedPopupMenuItem(
+            value: room.object.space,
+            checked: target == room.object.space,
+            child: Text('${room.data['name']}'),
+          ),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.only(left: 14),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              target == null ? Icons.person_outline : Icons.lock_outline,
+              size: 20,
+            ),
+            const Icon(Icons.arrow_drop_down, size: 18),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget captureBar(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final target = newNoteGroup;
     return Material(
       color: colors.surfaceContainerHigh,
       borderRadius: BorderRadius.circular(28),
       clipBehavior: Clip.antiAlias,
       child: Row(
         children: [
+          if (scope == null) noteTargetPicker(context),
           Expanded(
             child: OpenContainer<void>(
               tappable: false,
@@ -725,7 +782,9 @@ extension _NotesHome on _OurNetAppState {
                     vertical: 16,
                   ),
                   child: Text(
-                    'Take a note…',
+                    scope == null && target != null
+                        ? 'Take a note for ${groupName(target)}…'
+                        : 'Take a note…',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: colors.onSurfaceVariant),

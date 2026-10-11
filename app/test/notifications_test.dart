@@ -231,4 +231,28 @@ void main() {
     await notifications.dismiss('forum:general');
     expect(a.store.setting('postAlerts/general'), isNull);
   });
+
+  test('public chats notify only when asked to', () async {
+    final theirs = PublicChats(b, NoteState(b));
+    final space = await theirs.create('Night owls');
+    final mine = PublicChats(a, NoteState(a));
+    await mine.join(space);
+    await syncPair(a, b);
+    await theirs.send(space, 'Anyone up?', name: 'Bea');
+    await syncPair(a, b);
+    await settle();
+    expect(shown(), isEmpty);
+
+    mine.setNotifies(space, true);
+    await theirs.send(space, 'Hello?');
+    await syncPair(a, b);
+    await settle();
+    final alert = shown().single;
+    expect(alert['payload'], 'pubchat:$space');
+    expect(alert['title'], 'Night owls');
+    expect(alert['body'], 'Bea: Hello?');
+
+    await notifications.dismiss('pubchat:$space');
+    expect(a.store.setting('chatAlerts/$space'), isNull);
+  });
 }

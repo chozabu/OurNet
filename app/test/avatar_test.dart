@@ -142,7 +142,7 @@ void main() {
 
     await tester.pumpWidget(OurNetApp(node: node, enablePlatform: false));
     await settle(tester);
-    await tester.tap(find.text('Direct messages').first);
+    await tester.tap(find.text('Chat').first);
     await settle(tester);
     expect(find.text('Friendly'), findsWidgets);
     expect(find.byWidgetPredicate(showsPicture), findsWidgets);

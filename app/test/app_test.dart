@@ -83,10 +83,9 @@ void main() {
     await tester.pumpAndSettle();
     for (final title in [
       'Forums',
-      'Direct messages',
+      'Chat',
       'Files',
       'Notes',
-      'Private groups',
       'Settings',
     ]) {
       await tester.tap(find.byTooltip('Open navigation menu'));
@@ -98,13 +97,13 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull, reason: title);
-      if (title == 'Direct messages' ||
+      if (title == 'Chat' ||
           title == 'Locations' ||
           title == 'Files' ||
           title == 'Forums') {
         await snapshot(tester, 'phone-${title.toLowerCase()}');
       }
-      if (title == 'Direct messages' || title == 'Forums') {
+      if (title == 'Chat' || title == 'Forums') {
         await tester.tap(
           title == 'Forums'
               ? find.text('general').first
@@ -258,7 +257,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Open navigation menu'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Direct messages'));
+      await tester.tap(find.text('Chat'));
       await tester.pumpAndSettle();
       expect(find.text('Start a conversation'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
@@ -276,7 +275,7 @@ void main() {
     await node.addContact((await LocalIdentity.create()).certificate);
     await tester.pumpWidget(OurNetApp(node: node, enablePlatform: false));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Direct messages').first);
+    await tester.tap(find.text('Chat').first);
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).last, 'Private draft');
     await tester.tap(find.text('Forums').first);
@@ -290,7 +289,7 @@ void main() {
       isEmpty,
     );
     await tester.enterText(find.byType(TextField).last, 'Public draft');
-    await tester.tap(find.text('Direct messages').first);
+    await tester.tap(find.text('Chat').first);
     await tester.pumpAndSettle();
     expect(
       tester.widget<TextField>(find.byType(TextField).last).controller!.text,

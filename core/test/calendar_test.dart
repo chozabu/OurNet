@@ -558,6 +558,27 @@ void main() {
       await ca.refresh();
       expect(ca.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13)), isEmpty);
     });
+
+    test('a public event in a group calendar is ignored', () async {
+      final [a, b] = await friends(2);
+      final room = await Everyday(a).createRoom('Club', [b.person]);
+      expect(ScopedSection.calendar.allows(ScopeKind.public), isFalse);
+      // Written by a member, but to no audience: anyone could read it.
+      await a.publish(
+        Calendar.eventKind,
+        {
+          'event': 'open',
+          'clock': 5,
+          'title': 'Open day',
+          'start': DateTime(2026, 10, 12, 9).millisecondsSinceEpoch,
+          'end': DateTime(2026, 10, 12, 10).millisecondsSinceEpoch,
+        },
+        space: room.object.space,
+      );
+      final ca = calendarOf(a);
+      await ca.refresh();
+      expect(ca.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13)), isEmpty);
+    });
   });
 
   group('voice notes', () {

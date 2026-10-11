@@ -101,7 +101,7 @@ extension _GroupChat on _OurNetAppState {
   Future<void> refreshGroupChat() async {
     final feed = roomFeed;
     if (feed == null) return;
-    if (activeRoom == null) {
+    if (openRoom == null) {
       roomFeed = null;
       return;
     }
@@ -120,11 +120,7 @@ extension _GroupChat on _OurNetAppState {
       node,
     ).rooms()).where((r) => r.object.space == space && r.data['note'] != true);
     if (!mounted || room.isEmpty) return;
-    update(() {
-      tab = Destination.groups;
-      activeRoom = room.first;
-      everydaySection = 'Conversation';
-    });
+    update(() => showGroup(room.first, section: Destination.messages));
     markRoomSeen(space);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (groupChatScroll.hasClients) groupChatScroll.jumpTo(0);
@@ -134,6 +130,7 @@ extension _GroupChat on _OurNetAppState {
   /// Marks everything in a group read and clears its notification. What
   /// opening the group, or reading its newest messages, does.
   void markRoomSeen(String space) {
+    unreadCounts.clear();
     unawaited(
       node.markRoomRead(space).catchError((Object e) {
         notice('Could not mark read: $e');
@@ -248,7 +245,7 @@ extension _GroupChat on _OurNetAppState {
     if (_readingNewestGroupMessages(feed)) {
       final space = feed.space;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && activeRoom?.object.space == space) markRoomSeen(space);
+        if (mounted && openRoom?.object.space == space) markRoomSeen(space);
       });
     }
     final byId = {for (final i in messages) i.object.id: i};
@@ -671,7 +668,7 @@ extension _GroupChat on _OurNetAppState {
   }
 
   void startGroupReply(EverydayItem item) {
-    final room = activeRoom;
+    final room = openRoom;
     if (room == null) return;
     update(() {
       cancelGroupEdit(room);
@@ -680,7 +677,7 @@ extension _GroupChat on _OurNetAppState {
   }
 
   void startGroupEdit(EverydayItem item) {
-    final room = activeRoom;
+    final room = openRoom;
     if (room == null) return;
     final body = (item.data['text'] ?? '').toString();
     update(() {

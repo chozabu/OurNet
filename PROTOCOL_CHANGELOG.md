@@ -7,6 +7,23 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: public chats, scopes
+
+- New public kinds `chat`, `chat_msg` and `chat_hide` in spaces
+  `chat:<creator>:<random>`, and text links `ournet://chat/...`
+  (see "Public chats" in `PROTOCOL.md`). Additive: older builds store and pass
+  them on without reading them. Joining a chat subscribes to its space, and
+  subscriptions replicate between a person's own devices, so an older build
+  of that person lists a joined chat among its forums, under its address and
+  with no posts, until it is updated.
+- `Calendar` refuses to write an event with an empty audience. Reading
+  already ignored such events, and no build writes them.
+- The scope switcher (`SCOPES.md`) changes only the UI: no new fields.
+- Local settings, not synced: `lastScope`; read floors `roomFloor/<space>`
+  and `floor/<kind>/<space>` (worked out from the read marks on first use).
+  Group unread counts start from the floor, so an entry that arrives dated
+  below it counts as read.
+
 ## 0.2.29: 0.2.27 is the oldest peer; fewer requests
 
 **Breaking for old peers.** Sync requests and replies must list the

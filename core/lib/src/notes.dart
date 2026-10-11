@@ -336,9 +336,15 @@ class Notes {
   }
 
   /// The notes to list: a person's own, or [group]'s when given. Group notes
-  /// never appear among a person's own.
-  List<String> _ids(String? group) => group == null
-      ? _rooms.keys.toList().reversed.toList()
+  /// never appear among a person's own; [groups] adds those groups' notes to
+  /// them, for a view of everything (the All scope).
+  List<String> _ids(String? group, [Iterable<String> groups = const []]) =>
+      group == null
+      ? [
+          ..._rooms.keys.toList().reversed,
+          for (final g in groups)
+            ...(_groupNotes[g]?.toList() ?? const <String>[]).reversed,
+        ]
       : (_groupNotes[group]?.toList() ?? const <String>[]).reversed.toList();
 
   Future<List<NoteDocument>> list({
@@ -361,11 +367,12 @@ class Notes {
   Future<List<EverydayItem>> summaries({
     bool includeDeleted = false,
     String? group,
+    Iterable<String> groups = const [],
   }) async {
     await refresh();
     final result = <EverydayItem>[];
     final slice = TimeSlice();
-    for (final id in _ids(group)) {
+    for (final id in _ids(group, groups)) {
       var summary = _summaries[id];
       if (summary == null) {
         await slice.pause();

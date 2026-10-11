@@ -24,7 +24,7 @@ extension _GroupForum on _OurNetAppState {
   Future<void> refreshGroupForum() async {
     final forum = roomForum;
     if (forum == null) return;
-    if (activeRoom == null) {
+    if (openRoom == null) {
       roomForum = null;
       return;
     }
@@ -33,6 +33,12 @@ extension _GroupForum on _OurNetAppState {
     } catch (_) {
       roomForum = null;
     }
+  }
+
+  /// Marks everything in a group's forum read, and recounts the badges.
+  void markGroupForumRead(String space) {
+    node.store.markSpaceSeen('room_post', space, node.person);
+    unreadCounts.clear();
   }
 
   /// Posts by others in the open group's forum that have not been read.
@@ -68,6 +74,15 @@ extension _GroupForum on _OurNetAppState {
       for (final p in posts)
         if (contentVisible(p.object)) p.object,
     ];
+    // Open is read, as for a chat: everything in the forum, including what
+    // it does not show, or the badge could never clear.
+    if (groupForumUnreadOf(room) > 0 || groupForumUnread() > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || openRoom?.object.space != space) return;
+        markGroupForumRead(space);
+        redraw();
+      });
+    }
     final heading = thread == null
         ? 'Discussions'
         : forum.shown
@@ -104,9 +119,7 @@ extension _GroupForum on _OurNetAppState {
               ),
             TextButton(
               onPressed: () {
-                for (final o in objects) {
-                  node.store.set('seen/${o.id}', true);
-                }
+                markGroupForumRead(space);
                 refresh();
               },
               child: const Text('Mark read'),

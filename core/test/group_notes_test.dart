@@ -65,6 +65,10 @@ void main() {
       final summaries = await bob.summaries(group: group.object.space);
       expect(summaries.single.data['entry'], note.id);
       expect(summaries.single.data['title'], 'Packing');
+
+      // The All view asks for a person's own notes with their groups' added.
+      final all = await alice.summaries(groups: [group.object.space]);
+      expect(all.map((s) => s.data['title']), unorderedEquals(['Mine', 'Packing']));
     },
   );
 

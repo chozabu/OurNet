@@ -2,6 +2,49 @@ import 'package:test/test.dart';
 import 'package:ournet_core/ournet_core.dart';
 
 void main() {
+  test('unread group entries are counted from where reading got to', () async {
+    final a = Node(await LocalIdentity.create(), Store());
+    final b = Node(await LocalIdentity.create(), Store());
+    addTearDown(() async {
+      await a.close();
+      await b.close();
+    });
+    await a.addContact(b.identity.certificate);
+    await b.addContact(a.identity.certificate);
+    final room = await Everyday(a).createRoom('Family', [b.person]);
+    await syncPair(a, b);
+    final theirs = (await Everyday(b).rooms()).single;
+    Future<void> say(String text) =>
+        Everyday(b).write({'type': 'note', 'text': text}, room: theirs);
+    for (final text in ['One', 'Two', 'Three']) {
+      await say(text);
+    }
+    await Everyday(a).write({'type': 'note', 'text': 'Mine'}, room: room);
+    await syncPair(a, b);
+    final space = room.data['room'] as String;
+    // Only what others wrote, as the object-by-object count says.
+    expect(a.roomUnread(space), 3);
+    expect(
+      a.store.unread('room_item', a.person).where((o) => o.space == space),
+      hasLength(3),
+    );
+    a.blocked.add(b.person);
+    expect(a.roomUnread(space), 0);
+    a.blocked.remove(b.person);
+
+    // Reading moves the floor; only what arrives after it counts.
+    await a.markRoomRead(space);
+    expect(a.roomUnread(space), 0);
+    expect(a.roomReadFloor(space), greaterThan(0));
+    await Future<void>.delayed(const Duration(milliseconds: 2));
+    await say('Four');
+    await syncPair(a, b);
+    expect(a.roomUnread(space), 1);
+    expect(a.roomUnread(space, cap: 0), 0);
+    await a.markRoomRead(space);
+    expect(a.roomUnread(space), 0);
+  });
+
   test('private groups converge offline lists and exclude outsiders', () async {
     final a = Node(await LocalIdentity.create(), Store());
     final b = Node(await LocalIdentity.create(), Store());

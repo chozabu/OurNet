@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'scope_helpers.dart';
 import 'package:ournet/controllers/calendar_controller.dart';
 import 'package:ournet/ui/app.dart';
 import 'package:ournet/ui/calendar_dates.dart';
@@ -410,11 +411,8 @@ void main() {
     expect(find.text('My calendars'), findsOneWidget);
     expect(find.text('Climbing crew'), findsWidgets);
 
-    await tester.tap(find.text('Private groups'));
-    await settled(tester);
-    await tester.tap(find.text('Climbing crew').last);
-    await settled(tester);
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Calendar'));
+    // Picking the group as the scope keeps the Calendar open, on its own.
+    await pickScope(tester, 'Climbing crew');
     await typeSteady(tester);
     expect(find.text('Create'), findsNothing, reason: 'a group calendar has no sidebar');
     expect(find.byTooltip('New event'), findsOneWidget);

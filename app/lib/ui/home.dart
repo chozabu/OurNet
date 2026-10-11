@@ -90,110 +90,84 @@ extension _HomePages on _OurNetAppState {
     },
   );
 
+  /// Every private group with its latest activity, from the scope picker's
+  /// "See all". Opening one picks it as the scope, at its chat.
   Widget groupsPage(BuildContext context) => FutureBuilder<List<EverydayItem>>(
     future: roomsView ??= Everyday(node).rooms(),
     builder: (context, snapshot) {
       if (snapshot.hasError) {
         return empty(
           'Groups could not be loaded',
-          'Try opening Private groups again.',
+          'Try opening Groups again.',
           Icons.error_outline,
         );
       }
       if (!snapshot.hasData) {
         return const Center(child: CircularProgressIndicator());
       }
-      final rooms = snapshot.data!
-          .where((r) => r.data['note'] != true)
-          .toList();
-      if (activeRoom != null &&
-          snapshot.connectionState == ConnectionState.done) {
-        final previousRoom = activeRoom!.object.id;
-        activeRoom = rooms
-            .where((r) => r.object.space == activeRoom!.object.space)
-            .firstOrNull;
-        if (previousRoom != activeRoom?.object.id) everydayView = null;
-      }
-      return browsePane(
-        context,
-        selected: activeRoom != null,
-        back: () => update(() {
-          activeRoom = null;
-          lastRoom = null;
-        }),
-        list: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            FilledButton.icon(
-              onPressed: busy
-                  ? null
-                  : () => act(() => createPrivateGroup(context)),
-              icon: const Icon(Icons.add),
-              label: const Text('Create group'),
-            ),
-            TextButton.icon(
-              onPressed: () => addFriend(context, offerSharedNote: true),
-              icon: const Icon(Icons.person_add_alt),
-              label: const Text('Add friend'),
-            ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: rooms.isEmpty
-                  ? empty(
-                      'Your people, together',
-                      'Create a private group for conversations, files and lists.',
-                      Icons.people_outline,
-                    )
-                  : ListView(
-                      children: [
-                        for (final room in rooms)
-                          ListTile(
-                            leading: const Icon(Icons.lock_outline),
-                            title: Text(room.data['name']),
-                            subtitle: recentActivity(
-                              objectsBySpace('room_item')[room.data['room']] ??
-                                  const [],
-                              '${room.object.audience.length} members · Private',
-                            ),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (groupCalls.infoFor(room.object.space)
-                                    case final call?)
-                                  Padding(
-                                    padding: const EdgeInsets.only(right: 8),
-                                    child: GroupCallChip(
-                                      people: call.people.length,
-                                    ),
-                                  ),
-                                unreadBadge(
-                                  unreadObjects(
-                                    'room_item',
-                                  ).where((o) => o.space == room.data['room']),
-                                ),
-                              ],
-                            ),
-                            selected: activeRoom?.object.id == room.object.id,
-                            onTap: () {
-                              update(() {
-                                activeRoom = room;
-                                everydaySection = 'Conversation';
-                              });
-                              markRoomSeen('${room.data['room']}');
-                            },
+      final rooms = groupRooms(snapshot.data);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FilledButton.icon(
+            onPressed: busy
+                ? null
+                : () => act(() => createPrivateGroup(context)),
+            icon: const Icon(Icons.add),
+            label: const Text('Create group'),
+          ),
+          TextButton.icon(
+            onPressed: () => addFriend(context, offerSharedNote: true),
+            icon: const Icon(Icons.person_add_alt),
+            label: const Text('Add friend'),
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: rooms.isEmpty
+                ? empty(
+                    'Your people, together',
+                    'Create a private group for conversations, files and lists.',
+                    Icons.people_outline,
+                  )
+                : ListView(
+                    children: [
+                      for (final room in rooms)
+                        ListTile(
+                          leading: const Icon(Icons.lock_outline),
+                          title: Text(room.data['name']),
+                          subtitle: recentActivity(
+                            objectsBySpace('room_item')[room.data['room']] ??
+                                const [],
+                            '${room.object.audience.length} members · Private',
                           ),
-                      ],
-                    ),
-            ),
-          ],
-        ),
-        detail: activeRoom == null
-            ? empty(
-                'Private groups',
-                'Choose a group or create one for your people.',
-                Icons.people_outline,
-              )
-            : everydayPage(context),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (groupCalls.infoFor(room.object.space)
+                                  case final call?)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: GroupCallChip(
+                                    people: call.people.length,
+                                  ),
+                                ),
+                              countBadge(groupChatUnread(room)),
+                            ],
+                          ),
+                          onTap: () {
+                            update(
+                              () => showGroup(
+                                room,
+                                section: Destination.messages,
+                              ),
+                            );
+                            markRoomSeen('${room.data['room']}');
+                          },
+                        ),
+                    ],
+                  ),
+          ),
+        ],
       );
     },
   );

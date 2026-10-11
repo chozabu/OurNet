@@ -25,3 +25,5 @@ export 'src/history.dart';
 export 'src/avatars.dart';
 export 'src/connections.dart';
 export 'src/group_access.dart';
+export 'src/scopes.dart';
+export 'src/public_chats.dart';

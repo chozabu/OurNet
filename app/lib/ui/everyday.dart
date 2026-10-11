@@ -6,9 +6,18 @@ extension _EverydayPages on _OurNetAppState {
     if (group != null) {
       return notes.summaries(includeDeleted: true, group: group);
     }
+    // All adds the notes of the groups this person is in; Personal does not.
+    final groups = scope == null
+        ? [
+            for (final room in groupRooms(
+              await (roomsView ??= Everyday(node).rooms()),
+            ))
+              room.object.space,
+          ]
+        : const <String>[];
     return [
       ...await Everyday(node).items(),
-      ...await notes.summaries(includeDeleted: true),
+      ...await notes.summaries(includeDeleted: true, groups: groups),
     ];
   }
 
@@ -270,16 +279,12 @@ extension _EverydayPages on _OurNetAppState {
       final room = await Everyday(
         node,
       ).createRoom(title, selected.toList(), membersInvite: membersInvite);
-      update(() {
-        activeRoom = room;
-        everydaySection = 'Conversation';
-        tab = Destination.groups;
-      });
+      update(() => showGroup(room, section: Destination.messages));
     }
   }
 
   Widget everydayPage(BuildContext context) {
-    final current = activeRoom;
+    final current = openRoom;
     if (current == null) return notesHome(context);
     final EverydayItem room = current;
     final draftKey = 'notes/${room.object.id}';
@@ -293,7 +298,6 @@ extension _EverydayPages on _OurNetAppState {
       switchingDraft = false;
     }
     final colors = Theme.of(context).colorScheme;
-    final typing = MediaQuery.viewInsetsOf(context).bottom > 0;
     final notesTab = everydaySection == 'Notes';
     final chat = everydaySection == 'Conversation';
     final forumTab = everydaySection == 'Forum';
@@ -333,121 +337,6 @@ extension _EverydayPages on _OurNetAppState {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // The notes screen brings its own search and capture bar, which
-          // need the room once the keyboard is up.
-          if (!(typing && notesTab))
-            // One slim row; tapping it opens the group's details.
-            Material(
-              color: inboxDragging
-                  ? colors.tertiaryContainer
-                  : colors.primaryContainer,
-              borderRadius: BorderRadius.circular(16),
-              clipBehavior: Clip.antiAlias,
-              child: InkWell(
-                onTap: () => unawaited(groupInfo(context, room)),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.people_outline, size: 22),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              room.data['name'],
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 17,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                            if (inboxDragging)
-                              const Text(
-                                'Drop to save here',
-                                style: TextStyle(fontSize: 12),
-                              )
-                            else
-                              SyncStatus(
-                                network: network,
-                                people: (room.data['members'] as List)
-                                    .cast<String>(),
-                                prefix:
-                                    '${(room.data['members'] as List).length} members · ',
-                                offline:
-                                    '${(room.data['members'] as List).length} members · offline',
-                                maxLines: 1,
-                                style: const TextStyle(fontSize: 12),
-                              ),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: chatMuted(node, room.object.space)
-                            ? 'Unmute notifications'
-                            : 'Mute notifications',
-                        onPressed: () => toggleGroupMute(room.object.space),
-                        icon: Icon(
-                          chatMuted(node, room.object.space)
-                              ? Icons.volume_off_outlined
-                              : Icons.volume_up_outlined,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Group members',
-                        onPressed: busy
-                            ? null
-                            : () => act(() => manageGroup(context, room)),
-                        icon: const Icon(Icons.manage_accounts_outlined),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          if (!(typing && notesTab))
-            groupCallBanner(context, room.object.space),
-          if (!(typing && notesTab)) groupAddRequestsBanner(context, room),
-          if (!(typing && notesTab)) ...[
-            const SizedBox(height: 6),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  for (final section in [
-                    'Conversation',
-                    'Forum',
-                    'Files',
-                    'Notes',
-                    'Calendar',
-                  ])
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: ChoiceChip(
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(horizontal: 2),
-                        label: section == 'Forum'
-                            ? Badge.count(
-                                count: groupForumUnread(),
-                                isLabelVisible: groupForumUnread() > 0,
-                                offset: const Offset(10, -6),
-                                child: const Text('Forum'),
-                              )
-                            : Text(section),
-                        selected: everydaySection == section,
-                        onSelected: (_) => update(() {
-                          everydaySection = section;
-                          // Each section reads its own data into this view.
-                          everydayView = null;
-                        }),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ],
           Expanded(
             child: chat
                 ? groupChatView(context, room)
@@ -591,7 +480,7 @@ extension _EverydayPages on _OurNetAppState {
   }
 
   Future<void> readEverydayItem(BuildContext context, EverydayItem item) async {
-    if (activeRoom == null && ['note', 'check'].contains(item.data['type'])) {
+    if (openRoom == null && ['note', 'check'].contains(item.data['type'])) {
       await noteAction(() => adoptNote(item));
       return;
     }
@@ -737,7 +626,7 @@ extension _EverydayPages on _OurNetAppState {
 
   /// Shows a group checklist change at once; the list catches up after saving.
   void checkRoomItem(EverydayItem item, bool done) {
-    final p = item.data, room = activeRoom;
+    final p = item.data, room = openRoom;
     update(() => roomChecks[p['entry']] = done);
     unawaited(
       Everyday(node)
@@ -768,7 +657,7 @@ extension _EverydayPages on _OurNetAppState {
       return;
     }
     if (value == 'edit' || value == 'delete') {
-      final room = activeRoom;
+      final room = openRoom;
       act(() async {
         final text = value == 'edit'
             ? await ask(
@@ -822,7 +711,7 @@ extension _EverydayPages on _OurNetAppState {
         'entry': 'pin:${p['entry']}',
         'target': p['entry'],
         'pinned': !pins.contains(p['entry']),
-      }, room: activeRoom),
+      }, room: openRoom),
     );
   }
 }

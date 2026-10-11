@@ -107,6 +107,21 @@ bool validContent(String kind, Json p) {
           p['description'] is String &&
           (p['description'] as String).length <= 4000,
     'forum_hide' => p['object'] is String,
+    // A public chat's name, and one message in it: see `PublicChats`.
+    'chat' =>
+      p['name'] is String &&
+          (p['name'] as String).trim().isNotEmpty &&
+          (p['name'] as String).length <= 100 &&
+          (p['description'] == null ||
+              p['description'] is String &&
+                  (p['description'] as String).length <= 4000),
+    'chat_hide' => p['object'] is String,
+    'chat_msg' =>
+      p['text'] is String &&
+          (p['reply'] == null || p['reply'] is String) &&
+          (p['sent'] == null || p['sent'] is int) &&
+          (p['name'] == null ||
+              p['name'] is String && (p['name'] as String).length <= 100),
     // Content keys for objects written before one of this person's devices
     // existed, re-wrapped for their devices: see [Node.shareKeys].
     'keys' =>

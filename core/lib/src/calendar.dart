@@ -5,6 +5,7 @@ import 'model.dart';
 import 'node.dart';
 import 'note_state.dart';
 import 'recurrence.dart';
+import 'scopes.dart';
 
 /// One version of a calendar entry as stored: an event, a changed occurrence
 /// of a repeating event (an *override*), or a record that one was deleted.
@@ -547,7 +548,12 @@ class Calendar {
     final everyday = Everyday(node);
     final room = await _room(calendar);
     await everyday.prepare(room);
-    return everyday.members(room);
+    final members = await everyday.members(room);
+    // An empty audience would make the event public: calendars are not.
+    if (members.isEmpty && !ScopedSection.calendar.allows(ScopeKind.public)) {
+      throw StateError('Calendar events are private to you or a group');
+    }
+    return members;
   }
 
   /// Publishes a new version of an entry, numbered after everything seen, and

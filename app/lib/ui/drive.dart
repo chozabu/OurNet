@@ -92,32 +92,47 @@ extension _DrivePages on _OurNetAppState {
     }
   }
 
-  Widget filePage(BuildContext context) => Column(
+  Widget filePage(BuildContext context) {
+    // Personal shows the drive and attachments, Public the public files,
+    // All any of them.
+    if (scope == ScopeKind.public) {
+      publicFiles = true;
+      attachmentFiles = false;
+    } else if (scope == ScopeKind.personal && publicFiles) {
+      publicFiles = false;
+    }
+    return _filePage(context);
+  }
+
+  Widget _filePage(BuildContext context) => Column(
     children: [
       Wrap(
         spacing: 8,
         children: [
-          ChoiceChip(
-            label: const Text('Private drive'),
-            selected: !publicFiles && !attachmentFiles,
-            onSelected: (_) => update(() {
-              publicFiles = false;
-              attachmentFiles = false;
-            }),
-          ),
-          ChoiceChip(
-            label: const Text('Attachments'),
-            selected: attachmentFiles,
-            onSelected: (_) => update(() => attachmentFiles = true),
-          ),
-          ChoiceChip(
-            label: const Text('Public files'),
-            selected: publicFiles && !attachmentFiles,
-            onSelected: (_) => update(() {
-              publicFiles = true;
-              attachmentFiles = false;
-            }),
-          ),
+          if (scope != ScopeKind.public) ...[
+            ChoiceChip(
+              label: const Text('Private drive'),
+              selected: !publicFiles && !attachmentFiles,
+              onSelected: (_) => update(() {
+                publicFiles = false;
+                attachmentFiles = false;
+              }),
+            ),
+            ChoiceChip(
+              label: const Text('Attachments'),
+              selected: attachmentFiles,
+              onSelected: (_) => update(() => attachmentFiles = true),
+            ),
+          ],
+          if (scope != ScopeKind.personal)
+            ChoiceChip(
+              label: const Text('Public files'),
+              selected: publicFiles && !attachmentFiles,
+              onSelected: (_) => update(() {
+                publicFiles = true;
+                attachmentFiles = false;
+              }),
+            ),
         ],
       ),
       const SizedBox(height: 12),

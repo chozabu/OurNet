@@ -28,6 +28,46 @@ List<String> texts(Iterable<ForumPost> posts) => [
 ];
 
 void main() {
+  test('unread forum posts are counted from a floor that moves up', () async {
+    final a = Node(await LocalIdentity.create(), Store());
+    addTearDown(a.close);
+    final b = await friend(a);
+    final room = await Everyday(a).createRoom('Trip', [b.person]);
+    await syncPair(a, b);
+    final theirs = (await Everyday(b).rooms()).single;
+    final first = await post(b, theirs, 'One', title: 'Plans');
+    await post(b, theirs, 'Two', parent: first.id);
+    await syncPair(a, b);
+    final space = room.object.space;
+    expect(a.unreadSinceFloor('room_post', space), 2);
+    for (final o in a.store.objects(kind: 'room_post', space: space)) {
+      a.store.set('seen/${o.id}', true);
+    }
+    expect(a.unreadSinceFloor('room_post', space), 0);
+    // Nothing unread: the floor moved to the newest post.
+    expect(
+      a.store.setting('floor/room_post/$space'),
+      a.store.latestIn('room_post', space)!.created,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 2));
+    await post(b, theirs, 'Three', parent: first.id);
+    await syncPair(a, b);
+    expect(a.unreadSinceFloor('room_post', space), 1);
+
+    // Reading the forum marks everything in it, shown or not.
+    await b.publish(
+      'room_post',
+      {'text': 'A copy only the owner may share', 'history': true},
+      space: space,
+      audience: await Everyday(b).members(theirs),
+    );
+    await syncPair(a, b);
+    expect(a.unreadSinceFloor('room_post', space), 2);
+    a.store.markSpaceSeen('room_post', space, a.person);
+    expect(a.unreadSinceFloor('room_post', space), 0);
+    expect(a.store.unread('room_post', a.person), isEmpty);
+  });
+
   test('a group forum is threaded and private to the group', () async {
     final a = Node(await LocalIdentity.create(), Store());
     addTearDown(a.close);

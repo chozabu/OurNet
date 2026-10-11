@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'scope_helpers.dart';
 import 'package:ournet/ui/app.dart';
 import 'package:ournet_core/ournet_core.dart';
 
@@ -82,14 +83,14 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Weekend trip'));
-    await tester.tap(find.text('Weekend trip'));
+    await tester.tap(find.text('Weekend trip').last);
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 150)),
     );
     await tester.pumpAndSettle();
     // Lists became notes: the group's Notes section opens empty, with the
     // same capture bar as a person's own.
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Notes'));
+    await openSection(tester, 'Notes');
     await tester.pumpAndSettle();
     expect(find.text('Take a note…'), findsOneWidget);
     expect(find.text('Lists'), findsNothing);

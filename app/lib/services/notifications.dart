@@ -18,6 +18,7 @@ int notificationId(String key, int range) {
 
 const reminderRange = 0x40000000, _chatRange = 0x20000000;
 const _forumRange = 0x10000000, _callId = 1, _groupRange = 0x08000000;
+const _publicChatRange = 0x04000000;
 
 /// Arrivals signed longer ago than this are history catching up (a newly
 /// linked device, a friend back after weeks) rather than news.
@@ -93,6 +94,7 @@ class Notifications {
   void Function(String person)? onOpenChat;
   void Function(String space)? onOpenForum;
   void Function(String space)? onOpenGroup;
+  void Function(String space)? onOpenPublicChat;
 
   /// Opens the event a reminder was for, by its link.
   void Function(String link)? onOpenEvent;
@@ -213,6 +215,8 @@ class Notifications {
         onOpenForum?.call(key);
       case 'group':
         onOpenGroup?.call(key);
+      case 'pubchat':
+        onOpenPublicChat?.call(key);
       case 'note':
         onOpenNote?.call(key);
       case 'event':
@@ -283,6 +287,7 @@ class Notifications {
     final recent = DateTime.now().subtract(_recent).millisecondsSinceEpoch;
     final chats = <String>{};
     final forums = <String, List<SignedObject>>{};
+    final publicChats = <String, List<SignedObject>>{};
     final groups = <String, List<(SignedObject, Json)>>{};
     final readElsewhere = <String>{};
     while (true) {
@@ -291,6 +296,7 @@ class Notifications {
         'post',
         'room_item',
         'room_read',
+        PublicChats.messageKind,
       ], limit: page);
       for (final (sequence, o) in arrived) {
         cursor = sequence;
@@ -314,6 +320,14 @@ class Notifications {
           final payload = await node.content(o);
           if (payload != null && isGroupChatMessage(payload)) {
             (groups[o.space] ??= []).add((o, payload));
+          }
+        } else if (o.kind == PublicChats.messageKind) {
+          // Public chats notify only where asked to.
+          if (enabled &&
+              o.isPublic &&
+              node.subscriptions.contains(o.space) &&
+              PublicChats.notifiesIn(node, o.space)) {
+            (publicChats[o.space] ??= []).add(o);
           }
         } else if (node.subscriptions.contains(o.space)) {
           (forums[o.space] ??= []).add(o);
@@ -351,6 +365,11 @@ class Notifications {
       for (final MapEntry(key: space, value: posts) in forums.entries) {
         if (showing?.call('forum:$space') != true) {
           await _showForum(space, posts);
+        }
+      }
+      for (final MapEntry(key: space, value: messages) in publicChats.entries) {
+        if (showing?.call('pubchat:$space') != true) {
+          await _showPublicChat(space, messages);
         }
       }
     }
@@ -559,6 +578,45 @@ class Notifications {
 
   String _orNew(String text) => text.isEmpty ? 'New message' : text;
 
+  Future<void> _showPublicChat(
+    String space,
+    List<SignedObject> messages,
+  ) async {
+    final key = 'chatAlerts/$space';
+    final count = (node.store.setting(key) as int? ?? 0) + messages.length;
+    node.store.set(key, count);
+    final latest = messages.last;
+    final payload = latest.data['payload'];
+    final text = payload is Map && payload['text'] is String
+        ? payload['text'] as String
+        : '';
+    final given = payload is Map && payload['name'] is String
+        ? payload['name'] as String
+        : null;
+    final author = profileName(node, latest.author) ?? given ?? 'Someone';
+    final line = previews && text.isNotEmpty
+        ? '$author: ${_orNew(text)}'
+        : 'New message from $author';
+    await plugin.show(
+      id: notificationId(space, _publicChatRange),
+      title: PublicChats.infoOf(node, space)?.name ?? 'Public chat',
+      body: count == 1 ? line : '$count new messages · $line',
+      payload: 'pubchat:$space',
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          'publicchats',
+          'Public chats',
+          channelDescription: 'New messages in public chats set to notify',
+          importance: Importance.low,
+          priority: Priority.low,
+          category: AndroidNotificationCategory.social,
+          onlyAlertOnce: true,
+          number: count,
+        ),
+      ),
+    );
+  }
+
   String _forumName(String space) {
     for (final o in node.store.objects(
       kind: 'forum',
@@ -590,6 +648,12 @@ class Notifications {
       if (node.store.setting(key) == null) return;
       node.store.set(key, null);
       await plugin.cancel(id: notificationId(space, _forumRange));
+    } else if (payload.startsWith('pubchat:')) {
+      final space = payload.substring(8);
+      final key = 'chatAlerts/$space';
+      if (node.store.setting(key) == null) return;
+      node.store.set(key, null);
+      await plugin.cancel(id: notificationId(space, _publicChatRange));
     }
   }
 

@@ -884,6 +884,81 @@ class Store {
     ))
       (row['rowid'] as int, _parse(row['id'] as String, row['wire'] as String)),
   ];
+
+  /// The newest object of [kind] in [space], from the (kind, space, created)
+  /// index: what a list orders a group by, without reading its history.
+  SignedObject? latestIn(String kind, String space) {
+    final rows = _select(
+      'SELECT id, wire FROM objects WHERE kind=? AND space=? '
+      'ORDER BY created DESC LIMIT 1',
+      [kind, space],
+    );
+    if (rows.isEmpty) return null;
+    return _parse(rows.first['id'] as String, rows.first['wire'] as String);
+  }
+
+  /// How many objects of [kind] in [space] were created after [created], by
+  /// anyone but [except]; counted through the (kind, space, created) index.
+  int countAfter(
+    String kind,
+    String space,
+    int created, {
+    Iterable<String> except = const [],
+  }) =>
+      _select(
+            'SELECT COUNT(*) AS n FROM objects WHERE kind=? AND space=? '
+            'AND created>? AND author NOT IN (SELECT value FROM json_each(?))',
+            [kind, space, created, jsonEncode(except.toList())],
+          ).first['n']
+          as int;
+
+  /// How many objects of [kind] in [space] by others are unseen, counting
+  /// only those created after [after] and at most [cap]: a badge's figure.
+  /// Reads index rows after [after] and no object, so a list of groups costs
+  /// what arrived since each was read, not their history.
+  int unreadIn(
+    String kind,
+    String space,
+    String person, {
+    int after = 0,
+    int cap = 100,
+    Iterable<String> blocked = const [],
+  }) =>
+      _select(
+            "SELECT COUNT(*) AS n FROM (SELECT 1 FROM objects o LEFT JOIN settings s ON s.key=? || o.id WHERE o.kind=? AND o.space=? AND o.created>? AND o.author!=? AND o.author NOT IN (SELECT value FROM json_each(?)) AND (s.value IS NULL OR s.value!='true') LIMIT ?)",
+            [
+              kind == 'message' ? 'read/' : 'seen/',
+              kind,
+              space,
+              after,
+              person,
+              jsonEncode(blocked.toList()),
+              cap,
+            ],
+          ).first['n']
+          as int;
+
+  /// Marks every [kind] object in [space] by someone other than [person]
+  /// seen, in one statement: what reading a group's forum does. Covers what
+  /// the forum does not show (shared copies of posts it has, posts it cannot
+  /// read), which would otherwise stay unread for ever.
+  void markSpaceSeen(String kind, String space, String person) => _execute(
+    "INSERT INTO settings(key, value) SELECT 'seen/' || id, 'true' FROM objects "
+    'WHERE kind=? AND space=? AND author!=? AND true '
+    "ON CONFLICT(key) DO UPDATE SET value='true' WHERE settings.value != 'true'",
+    [kind, space, person],
+  );
+
+  /// The newest [kind] object in [space] marked seen: where reading had got
+  /// to, for a space read before read floors were kept.
+  int newestSeen(String kind, String space) =>
+      _select(
+            "SELECT MAX(o.created) AS n FROM objects o JOIN settings s ON s.key='seen/' || o.id AND s.value='true' WHERE o.kind=? AND o.space=?",
+            [kind, space],
+          ).first['n']
+          as int? ??
+      0;
+
   List<SignedObject> unread(String kind, String person) => [
     for (final row in _select(
       "SELECT o.id, o.wire FROM objects o LEFT JOIN settings s ON s.key=? || o.id WHERE o.kind=? AND o.author!=? AND (s.value IS NULL OR s.value!='true')",

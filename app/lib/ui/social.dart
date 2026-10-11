@@ -37,12 +37,13 @@ extension _SocialPages on _OurNetAppState {
     }
   }
 
+  /// A subscribed space that is a public forum: not personal state, the
+  /// public files or a public chat.
+  bool isForumSpace(String s) =>
+      !s.startsWith('_') && s != 'files' && !PublicChats.isChat(s);
+
   Widget communities(BuildContext context) {
-    final forums =
-        node.subscriptions
-            .where((s) => !s.startsWith('_') && s != 'files')
-            .toList()
-          ..sort();
+    final forums = node.subscriptions.where(isForumSpace).toList()..sort();
     return browsePane(
       context,
       selected: showForum,
@@ -95,12 +96,40 @@ extension _SocialPages on _OurNetAppState {
                     selected: forum == space,
                     onTap: () => openForum(forum),
                   ),
+                // All lists the groups' private forums after the public ones.
+                scopedRooms(
+                  (context, rooms) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (rooms.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+                          child: Text(
+                            'In your groups · private',
+                            style: Theme.of(context).textTheme.labelLarge,
+                          ),
+                        ),
+                      for (final room in rooms)
+                        ListTile(
+                          leading: const Icon(Icons.lock_outline),
+                          title: Text(room.data['name']),
+                          subtitle: const Text('Group forum'),
+                          trailing: countBadge(groupForumUnreadOf(room)),
+                          selected: listRoom?.object.space == room.object.space,
+                          onTap: () =>
+                              openGroupInList(room, Destination.forums),
+                        ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
         ],
       ),
-      detail: forums.contains(space) || space == _OurNetAppState.allForums
+      detail: listRoom != null
+          ? groupListDetail(context)
+          : forums.contains(space) || space == _OurNetAppState.allForums
           ? forumDetail(context)
           : empty(
               'Find your discussions',
@@ -121,55 +150,165 @@ extension _SocialPages on _OurNetAppState {
       list: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          FilledButton.icon(
-            onPressed: () => addFriend(context, offerSharedNote: true),
-            icon: const Icon(Icons.person_add_alt),
-            label: const Text('Add friend'),
+          // One main action, and the rest in a menu, so the list keeps
+          // the room on a phone.
+          Row(
+            children: [
+              Expanded(
+                child: scope == ScopeKind.public
+                    ? FilledButton.icon(
+                        onPressed: busy
+                            ? null
+                            : () => act(() => startPublicChat(context)),
+                        icon: const Icon(Icons.add_comment_outlined),
+                        label: const Text('Start a public chat'),
+                      )
+                    : FilledButton.icon(
+                        onPressed: () =>
+                            addFriend(context, offerSharedNote: true),
+                        icon: const Icon(Icons.person_add_alt),
+                        label: const Text('Add friend'),
+                      ),
+              ),
+              if (scope != ScopeKind.personal)
+                PopupMenuButton<String>(
+                  tooltip: 'More ways to chat',
+                  enabled: !busy,
+                  icon: const Icon(Icons.more_vert),
+                  onSelected: (choice) => act(
+                    () => switch (choice) {
+                      'group' => createPrivateGroup(context),
+                      'start' => startPublicChat(context),
+                      _ => joinPublicChat(context),
+                    },
+                  ),
+                  itemBuilder: (_) => [
+                    if (scope == null) ...[
+                      const PopupMenuItem(
+                        value: 'group',
+                        child: ListTile(
+                          leading: Icon(Icons.group_add_outlined),
+                          title: Text('Create group'),
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'start',
+                        child: ListTile(
+                          leading: Icon(Icons.add_comment_outlined),
+                          title: Text('Start a public chat'),
+                        ),
+                      ),
+                    ],
+                    const PopupMenuItem(
+                      value: 'join',
+                      child: ListTile(
+                        leading: Icon(Icons.login),
+                        title: Text('Join a public chat'),
+                      ),
+                    ),
+                  ],
+                ),
+            ],
           ),
           const SizedBox(height: 12),
           Expanded(
-            child: people.isEmpty
-                ? empty(
-                    'Start a conversation',
-                    'Add a friend by QR code, on the same Wi-Fi, or with an invitation.',
-                    Icons.chat_bubble_outline,
-                  )
-                : Builder(
-                    builder: (context) {
-                      final order = chatOrder();
-                      return ListView(
-                        children: [
-                          for (final person in order.active)
-                            chatTile(context, person),
-                          if (order.archived.isNotEmpty)
-                            ListTile(
-                              leading: const Icon(Icons.archive_outlined),
-                              title: Text(
-                                showArchivedChats
-                                    ? 'Hide archived'
-                                    : 'Archived (${order.archived.length})',
-                              ),
-                              onTap: () => update(
-                                () => showArchivedChats = !showArchivedChats,
-                              ),
-                            ),
-                          if (showArchivedChats)
-                            for (final person in order.archived)
-                              chatTile(context, person),
-                        ],
+            // All lists group and public chats among conversations; Public
+            // lists only public chats, Personal only direct messages.
+            child: scopedRooms((context, rooms) {
+              final chats = scope == ScopeKind.personal
+                  ? const <String>[]
+                  : publicChats.joined;
+              final friends = scope != ScopeKind.public;
+              if ((!friends || people.isEmpty) &&
+                  rooms.isEmpty &&
+                  chats.isEmpty) {
+                return friends
+                    ? empty(
+                        'Start a conversation',
+                        'Add a friend by QR code, on the same Wi-Fi, or with an invitation.',
+                        Icons.chat_bubble_outline,
+                      )
+                    : empty(
+                        'No public chats yet',
+                        'Start one and share its address, or join one with an address someone sent you.',
+                        Icons.forum_outlined,
                       );
+              }
+              final order = friends
+                  ? chatOrder()
+                  : (active: const <String>[], archived: const <String>[]);
+              return ListView(
+                children: [
+                  for (final entry in chatEntries(order, rooms, chats: chats))
+                    switch (entry) {
+                      final String person => chatTile(context, person),
+                      final EverydayItem room => groupChatTile(context, room),
+                      (chat: final String chat) => publicChatTile(
+                        context,
+                        chat,
+                      ),
+                      _ => const SizedBox.shrink(),
                     },
-                  ),
+                  if (order.archived.isNotEmpty)
+                    ListTile(
+                      leading: const Icon(Icons.archive_outlined),
+                      title: Text(
+                        showArchivedChats
+                            ? 'Hide archived'
+                            : 'Archived (${order.archived.length})',
+                      ),
+                      onTap: () =>
+                          update(() => showArchivedChats = !showArchivedChats),
+                    ),
+                  if (showArchivedChats)
+                    for (final person in order.archived)
+                      chatTile(context, person),
+                ],
+              );
+            }),
           ),
         ],
       ),
-      detail: messageDetail(context),
-      detailBuilder: (back) => messageDetail(context, back: back),
+      detail: chatDetail(context),
+      detailBuilder: (back) => chatDetail(context, back: back),
     );
+  }
+
+  /// The open public chat, or else the direct conversation.
+  Widget chatDetail(BuildContext context, {VoidCallback? back}) {
+    if (listRoom != null) return groupListDetail(context, back: back);
+    final chat = publicChat;
+    if (chat != null && publicChats.joined.contains(chat)) {
+      return publicChatView(context, chat, back: back);
+    }
+    if (scope == ScopeKind.public) {
+      return empty(
+        'Public chats',
+        'Pick a chat, or start one: anyone with its address can join.',
+        Icons.forum_outlined,
+      );
+    }
+    return messageDetail(context, back: back);
   }
 
   Widget forumDetail(BuildContext context) {
     final all = space == _OurNetAppState.allForums;
+    // Open is read, as for a chat: every post in the forum (or, for All
+    // forums, in each joined one), including any its owner removed, or the
+    // badge could never clear.
+    final spaces = all
+        ? node.subscriptions.where(isForumSpace).toSet()
+        : {space};
+    if (unreadObjects('post').any((o) => spaces.contains(o.space))) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || tab != Destination.forums) return;
+        for (final forum in spaces) {
+          node.store.markSpaceSeen('post', forum, node.person);
+        }
+        unreadCounts.clear();
+        redraw();
+      });
+    }
     return _forumDetail(context, all);
   }
 
@@ -196,9 +335,7 @@ extension _SocialPages on _OurNetAppState {
                   act(() => notes.state.subscribe(space, false));
                   update(() {
                     space =
-                        node.subscriptions
-                            .where((s) => !s.startsWith('_') && s != 'files')
-                            .firstOrNull ??
+                        node.subscriptions.where(isForumSpace).firstOrNull ??
                         'general';
                     showForum = false;
                   });
@@ -260,6 +397,7 @@ extension _SocialPages on _OurNetAppState {
               for (final o in discussionObjects()) {
                 node.store.set('seen/${o.id}', true);
               }
+              unreadCounts.clear();
               refresh();
             },
             child: const Text('Mark read'),

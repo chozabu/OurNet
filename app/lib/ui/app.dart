@@ -73,6 +73,7 @@ import 'calendar_dates.dart' show eventTitle;
 import 'calendar_flows.dart';
 import 'calendar_page.dart';
 import 'event_links.dart';
+import 'chat_links.dart';
 import '../services/speech.dart';
 import 'drawing.dart';
 import 'avatar.dart';
@@ -104,11 +105,13 @@ part 'discovery.dart';
 part 'group_members.dart';
 part 'forum_features.dart';
 part 'notes_home.dart';
+part 'scopes.dart';
+part 'public_chat.dart';
 
 /// Places in the app. [id] is saved as the last destination; keep it stable.
 enum Destination {
   forums(1, 'Forums', Icons.forum_outlined),
-  messages(2, 'Direct messages', Icons.chat_bubble_outline),
+  messages(2, 'Chat', Icons.chat_bubble_outline),
   files(3, 'Files', Icons.folder_outlined),
   network(4, 'Network', Icons.hub_outlined),
   locations(5, 'Locations', Icons.map_outlined),
@@ -116,7 +119,7 @@ enum Destination {
   profile(7, 'Profile', Icons.person_outline),
   settings(8, 'Settings', Icons.settings_outlined),
   notes(9, 'Notes', Icons.note_alt_outlined),
-  groups(10, 'Private groups', Icons.people_outline),
+  groups(10, 'Groups', Icons.people_outline),
   search(11, 'Search', Icons.search),
   calendar(12, 'Calendar', Icons.calendar_month_outlined),
   maps(13, 'Maps', Icons.map_outlined);
@@ -126,16 +129,21 @@ enum Destination {
   final IconData icon;
   const Destination(this.id, this.title, this.icon);
 
-  /// The main navigation list, in order.
-  static const navigation = [
-    notes,
-    calendar,
-    maps,
-    messages,
-    groups,
-    forums,
-    files,
-  ];
+  /// The main navigation list, in order. Groups are not a place of their
+  /// own: picking one as the scope shows its content in these (SCOPES.md).
+  static const navigation = [notes, calendar, maps, messages, forums, files];
+
+  /// The content this destination shows, filtered by the scope; null for
+  /// places that ignore the scope (settings, search…).
+  ScopedSection? get section => switch (this) {
+    notes => ScopedSection.notes,
+    calendar => ScopedSection.calendar,
+    maps => ScopedSection.maps,
+    messages => ScopedSection.chat,
+    forums => ScopedSection.forums,
+    files => ScopedSection.files,
+    _ => null,
+  };
 
   /// Where back leads from a sub-page, which is also what is remembered.
   Destination? get parent => switch (this) {
@@ -250,10 +258,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// The group whose notes are on screen, or null for a person's own. The
   /// notes screen is shared: it filters, searches and selects within
   /// whichever of the two is showing.
-  String? get notesScope =>
-      tab == Destination.groups &&
-          activeRoom != null &&
-          everydaySection == 'Notes'
+  String? get notesScope => tab == Destination.notes && activeRoom != null
       ? activeRoom!.object.space
       : null;
   NotesHomeController get notesController =>
@@ -264,10 +269,46 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   String fileSort = 'Newest';
   String searchScope = 'All';
   Future<List<_SearchHit>>? searchIndex;
+
+  /// The group picked as the scope: the scoped destinations show its
+  /// content. See SCOPES.md.
   EverydayItem? activeRoom;
 
-  /// The group last open, which the Groups destination returns to.
-  EverydayItem? lastRoom;
+  /// The scope when no group is picked: null is All.
+  ScopeKind? viewScope;
+
+  /// A group whose chat or forum is open beside a list in another scope (a
+  /// group's chat among All's conversations), without making it the scope.
+  EverydayItem? listRoom;
+
+  late final PublicChats publicChats;
+
+  /// The public chat open in Chat, instead of a direct conversation.
+  String? publicChat;
+  final publicComposer = TextEditingController();
+  final publicFocus = FocusNode();
+
+  /// Per public chat: how many of its newest messages are shown.
+  final publicChatLimit = <String, int>{};
+
+  /// Messages shown per public chat and limit, read once per change.
+  final publicMessages = <String, List<ChatMessage>>{};
+
+  /// In All, the group new notes go to; null is Personal.
+  String? allNotesTarget;
+
+  /// The groups as last read, for naming them where they are listed among
+  /// other things (a group's notes in All).
+  List<EverydayItem> knownRooms = const [];
+
+  /// Unseen items per kind and space, for the scope lists' badges. Counted
+  /// from where reading got to, and kept until data arrives or something is
+  /// marked read.
+  final unreadCounts = <String, int>{};
+
+  /// The newest object per kind and space, for ordering groups among
+  /// conversations; kept like [unreadCounts].
+  final latestItems = <String, SignedObject?>{};
   Future<List<EverydayItem>>? everydayView;
   Future<List<EverydayItem>>? roomsView;
 
@@ -277,7 +318,15 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   final inboxComposer = TextEditingController();
   final inboxFocus = FocusNode();
   final groupChatScroll = ScrollController();
-  String everydaySection = 'Conversation';
+
+  /// The open group's section: the destination on screen.
+  String get everydaySection => switch (tab) {
+    Destination.forums => 'Forum',
+    Destination.files => 'Files',
+    Destination.notes => 'Notes',
+    Destination.calendar => 'Calendar',
+    _ => 'Conversation',
+  };
   bool inboxDragging = false;
   bool dark = false, busy = false;
   bool compact = false;
@@ -412,6 +461,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     draftStore = DraftStore(node);
     notes = Notes(node);
     personalNotesController = NotesHomeController(notes);
+    publicChats = PublicChats(node, notes.state);
     groupNotesController = NotesHomeController(notes);
     inboxComposer.addListener(
       () => rememberDraft(notesComposerContext, inboxComposer),
@@ -447,6 +497,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           Destination.settings,
         ].where((d) => d.id == saved).firstOrNull ??
         Destination.notes;
+    // A test or a link that names where to open starts in All.
+    if (widget.initialTab == null) restoreScope();
     dark = node.store.setting('dark') == true;
     compact = node.store.setting('compact') == true;
     notesController.notesGrid = node.store.setting('notesGrid') != false;
@@ -536,6 +588,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           }
           ..onOpenChat = openConversation
           ..onOpenForum = openForum
+          ..onOpenPublicChat = openPublicChat
           ..onOpenGroup = (space) {
             unawaited(openGroup(space));
           }
@@ -552,6 +605,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       driveView = null;
       everydayView = null;
       roomsView = null;
+      unreadCounts.clear();
+      latestItems.clear();
+      publicMessages.clear();
       attachmentsView = null;
       addRequestsView.clear();
       await refreshGroupChat();
@@ -747,11 +803,21 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     if (mounted) {
       setState(() {
         final previousRoom = activeRoom?.object.id, previousTab = tab;
+        final previousScope = viewScope;
         action();
-        if (activeRoom != null) lastRoom = activeRoom;
+        if (previousScope != viewScope ||
+            previousRoom != activeRoom?.object.id) {
+          rememberScope();
+        }
+        // All and Personal list different notes.
+        if (previousScope != viewScope) everydayView = null;
         // Filters, drag feedback and delivery labels do not change the data.
         // Keep the loaded items when only presentation state changes.
-        if (previousRoom != activeRoom?.object.id) everydayView = null;
+        if (previousRoom != activeRoom?.object.id) {
+          everydayView = null;
+          // The scope header checks the group against these.
+          roomsView = null;
+        }
         if (tab != previousTab) {
           node.store.set('lastDestination', (tab.parent ?? tab).id);
           unreadMarkerPeer = null;
@@ -765,22 +831,23 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   bool showingNotification(String payload) =>
       foreground &&
       switch (tab) {
+        Destination.messages when openRoom != null =>
+          payload == 'group:${openRoom!.object.space}',
+        Destination.messages when publicChat != null =>
+          payload == 'pubchat:$publicChat',
         Destination.messages => payload == 'chat:$contact',
-        Destination.forums => payload == 'forum:$space',
-        Destination.groups =>
-          activeRoom != null &&
-              everydaySection == 'Conversation' &&
-              payload == 'group:${activeRoom!.object.space}',
+        Destination.forums => activeRoom == null && payload == 'forum:$space',
         _ => false,
       };
 
   /// Clears the notification for the chat or forum on screen.
   void dismissShownNotification() {
     final payload = switch (tab) {
+      Destination.messages when openRoom != null =>
+        'group:${openRoom!.object.space}',
+      Destination.messages when publicChat != null => 'pubchat:$publicChat',
       Destination.messages when contact != null => 'chat:$contact',
-      Destination.forums => 'forum:$space',
-      Destination.groups when activeRoom != null =>
-        'group:${activeRoom!.object.space}',
+      Destination.forums when activeRoom == null => 'forum:$space',
       _ => null,
     };
     if (payload != null && widget.enablePlatform) {
@@ -804,6 +871,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         conversations.showLatest(person);
       }
       tab = Destination.messages;
+      reveal(ScopeKind.personal);
+      publicChat = null;
+      listRoom = null;
       contact = person;
       showConversation = true;
       replyTo = null;
@@ -821,6 +891,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   void openForum(String forum) {
     update(() {
       tab = Destination.forums;
+      reveal(ScopeKind.public);
+      listRoom = null;
       space = forum;
       selectedThread = null;
       replyTo = null;
@@ -857,9 +929,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     );
   }
 
+  /// The person's own notes, leaving a scope that does not show them.
   void showNotes() {
     tab = Destination.notes;
-    activeRoom = null;
+    reveal(ScopeKind.personal);
   }
 
   void redraw() {
@@ -1116,6 +1189,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     unawaited(draftStore.flush().catchError((Object _) {}));
+    publicComposer.dispose();
+    publicFocus.dispose();
     WidgetsBinding.instance.removeObserver(this);
     if (Platform.isWindows && widget.enablePlatform) SystemTray.onClosed = null;
     if (onBackgroundSync == _backgroundSync) onBackgroundSync = null;
@@ -1278,7 +1353,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     builder: (context, child) => EventLinks(
       controller: () => calendarController,
       open: (context, link) => calendarFlows.openLink(context, link),
-      child: child ?? const SizedBox.shrink(),
+      child: ChatLinks(
+        joined: (space) => publicChats.joined.contains(space),
+        open: followChatLink,
+        child: child ?? const SizedBox.shrink(),
+      ),
     ),
     debugShowCheckedModeBanner: false,
     scaffoldMessengerKey: messenger,
@@ -1329,21 +1408,15 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                         leading: Icon(d.icon),
                         title: Text(d.title),
                         trailing: switch (d) {
-                          Destination.forums => navBadge('post'),
-                          Destination.messages => navBadge('message'),
+                          Destination.forums => countBadge(forumsUnread()),
+                          Destination.messages => countBadge(chatsUnread()),
                           _ => null,
                         },
                         selected: tab == d,
                         onTap: () {
+                          // The scope stays: the section shows its part.
                           update(() {
                             tab = d;
-                            if (d == Destination.notes) {
-                              activeRoom = null;
-                            } else if (d == Destination.groups) {
-                              // Back where the person last was, with the same
-                              // section (conversation, forum, notes…) open.
-                              activeRoom ??= lastRoom;
-                            }
                             showConversation = false;
                             showForum = false;
                             everydayView = null;
@@ -1352,6 +1425,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                           if (!wide) Navigator.pop(context);
                         },
                       ),
+                    const Divider(),
+                    scopeList(
+                      context,
+                      dense: true,
+                      after: wide ? null : () => Navigator.pop(context),
+                    ),
                   ],
                 ),
               ),
@@ -1423,19 +1502,17 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                       },
                       icon: Icon(dark ? Icons.light_mode : Icons.dark_mode),
                     ),
-                  if (tab == Destination.groups &&
-                      activeRoom != null &&
-                      groupCalls.infoFor(activeRoom!.object.space) == null) ...[
+                  if (tab.section != null &&
+                      openRoom != null &&
+                      groupCalls.infoFor(openRoom!.object.space) == null) ...[
                     // A call is the group's to start; once one is going the
                     // group page offers Join instead.
                     IconButton(
                       tooltip: 'Start a voice call',
                       onPressed: groupCalls.active
                           ? null
-                          : () => joinGroupCall(
-                              context,
-                              activeRoom!.object.space,
-                            ),
+                          : () =>
+                                joinGroupCall(context, openRoom!.object.space),
                       icon: const Icon(Icons.call_outlined),
                     ),
                     IconButton(
@@ -1444,7 +1521,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                           ? null
                           : () => joinGroupCall(
                               context,
-                              activeRoom!.object.space,
+                              openRoom!.object.space,
                               video: true,
                             ),
                       icon: const Icon(Icons.videocam_outlined),
@@ -1529,7 +1606,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                             padding: tab == Destination.maps
                                 ? EdgeInsets.zero
                                 : EdgeInsets.all(wide ? 24 : 12),
-                            child: page(context),
+                            child: scopedPage(context),
                           ),
                         ),
                         Padding(
@@ -1567,20 +1644,32 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   VoidCallback? backDestination() {
     if (tab.parent case final parent?) return () => tab = parent;
     return switch (tab) {
-      // Backing out to the list is a choice to leave the group.
-      Destination.groups when activeRoom != null => () {
-        activeRoom = null;
-        lastRoom = null;
+      Destination.messages when showConversation && activeRoom == null => () {
+        showConversation = false;
+        listRoom = null;
       },
-      Destination.messages when showConversation =>
-        () => showConversation = false,
-      Destination.forums when showForum => () => showForum = false,
+      Destination.forums when showForum && activeRoom == null => () {
+        showForum = false;
+        listRoom = null;
+      },
+      // Back unwinds the scope after the section: Notes, then All.
+      Destination.notes when scope != null => () => setScope(null),
       Destination.notes => null,
-      _ => showNotes,
+      _ => () => tab = Destination.notes,
     };
   }
 
-  Widget page(BuildContext context) => switch (tab) {
+  Widget page(BuildContext context) {
+    final section = tab.section;
+    if (section != null && !section.allows(scope)) {
+      return scopeUnavailable(context, section);
+    }
+    // A group's content, in whichever section is open.
+    if (section != null && activeRoom != null) return everydayPage(context);
+    return _page(context);
+  }
+
+  Widget _page(BuildContext context) => switch (tab) {
     Destination.forums => communities(context),
     Destination.messages => messages(context),
     Destination.files => filePage(context),
@@ -1592,7 +1681,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     Destination.notes => everydayPage(context),
     Destination.groups => groupsPage(context),
     Destination.search => searchPage(context),
-    Destination.calendar => calendarScreen(context),
+    Destination.calendar =>
+      scope == ScopeKind.personal
+          ? personalCalendarView(context)
+          : calendarScreen(context),
     Destination.maps => MapPage(
       node: node,
       tiles: mapTiles,
@@ -1602,10 +1694,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     ),
   };
 
-  Widget navBadge(String kind) {
-    final count = unread(kind);
-    return Badge.count(count: count, isLabelVisible: count > 0);
-  }
+  Widget navBadge(String kind) => countBadge(unread(kind));
+
+  /// Counts are capped where they are counted (see [Store.unreadIn]).
+  Widget countBadge(int count) =>
+      Badge.count(count: count, maxCount: 99, isLabelVisible: count > 0);
 
   /// A placeholder for nothing to show. Scrolls rather than overflows where
   /// the keyboard leaves it almost no height.

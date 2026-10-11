@@ -204,6 +204,33 @@ Event links are `ournet://event/<calendar>/<entry>` with an optional
 They are text, resolved against the events a device holds: a link to an event
 a device cannot read shows as unavailable.
 
+## Public chats
+
+A public chat is an open, named conversation anyone can start and anyone
+with its address can join (`core/lib/src/public_chats.dart`). Its address is
+the space `chat:<creator person>:<random>`. Two public kinds live there:
+
+- `chat` names it: `{name, description?}` (name 1-100 characters,
+  description up to 4,000). Only records written by the person in the
+  address count, newest first, so nobody else can rename it.
+- `chat_msg` is one message: `{text, sent?, reply?, name?}`. `name` is the
+  display name the sender chose, at most 100 characters. Nothing checks it,
+  so readers show it beside the sender's key and prefer a name they already
+  know for that person. Copies with an audience are ignored.
+- `chat_hide` is `{object}`: the creator removing a message. Only the
+  creator's count.
+
+Chat links are `ournet://chat/<address>` with an optional `?name=`, the
+address percent-encoded. They are text, so builds without them show them as
+written.
+
+Joining is subscribing to the space, a personal register like a forum's.
+Messages travel as other public objects do: to friends subscribed to the
+same chat, who pass them on to theirs. Read state and notifying are local to
+each device: `chatSeen/<space>` is the creation time of the newest message
+read, and `chatNotify/<space>` opts in to notifications. Older builds keep
+and pass on these kinds without reading them.
+
 ## Locations
 
 Live position sharing is not an object kind. A position is a request, like a

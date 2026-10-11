@@ -1704,21 +1704,84 @@ class Node {
           ).then<void>((_) {});
   }
 
+  /// Where reading a group's chat has got to on this device: every entry
+  /// created up to it is read. Kept by [markRoomRead]; worked out once from
+  /// the read marks for a group read before it was kept.
+  int roomReadFloor(String space) {
+    final kept = store.setting('roomFloor/$space');
+    if (kept is int) return kept;
+    final floor = store.newestSeen('room_item', space);
+    store.set('roomFloor/$space', floor);
+    return floor;
+  }
+
+  /// Unread entries by others in a group's chat, up to [cap]: what has
+  /// arrived since [roomReadFloor], so its cost does not grow with history.
+  int roomUnread(String space, {int cap = 100}) => store.unreadIn(
+    'room_item',
+    space,
+    person,
+    after: roomReadFloor(space),
+    cap: cap,
+    blocked: blocked,
+  );
+
+  /// Unseen [kind] objects by others in [space], up to [cap], for spaces read
+  /// one object at a time (a group's forum). Counts from a floor below which
+  /// everything is read: worked out once from the read marks, and moved up
+  /// whenever nothing after it is unread, so the cost stays with what is new.
+  int unreadSinceFloor(String kind, String space, {int cap = 100}) {
+    final key = 'floor/$kind/$space';
+    final kept = store.setting(key);
+    var floor = kept is int ? kept : store.newestSeen(kind, space);
+    final count = store.unreadIn(
+      kind,
+      space,
+      person,
+      after: floor,
+      cap: cap,
+      blocked: blocked,
+    );
+    if (count == 0) {
+      final newest = store.latestIn(kind, space)?.created ?? 0;
+      if (newest > floor) floor = newest;
+    }
+    if (kept != floor) store.set(key, floor);
+    return count;
+  }
+
   /// Sets the local read marks for [space] and returns how many were new.
   int _applyRoomRead(String space, int? upTo, {void Function(int)? newest}) {
     var count = 0, latest = 0;
+    // Everything up to the floor is read already: walk back to it, newest
+    // first, rather than through the group's whole history.
+    final floor = roomReadFloor(space);
     store.batch(() {
-      for (final o in store.allOf(kinds: ['room_item'], space: space)) {
-        if (upTo != null && o.created > upTo) continue;
-        if (o.created > latest) latest = o.created;
-        if (o.author == person || store.setting('seen/${o.id}') == true) {
-          continue;
+      (int, String)? after;
+      walk:
+      while (true) {
+        final page = store.objects(
+          kinds: ['room_item'],
+          space: space,
+          after: after,
+          limit: 512,
+        );
+        if (page.isEmpty) break;
+        for (final o in page) {
+          if (o.created <= floor) break walk;
+          if (upTo != null && o.created > upTo) continue;
+          if (o.created > latest) latest = o.created;
+          if (o.author == person || store.setting('seen/${o.id}') == true) {
+            continue;
+          }
+          store.set('seen/${o.id}', true);
+          count++;
         }
-        store.set('seen/${o.id}', true);
-        count++;
+        after = (page.last.created, page.last.id);
       }
+      if (latest > floor) store.set('roomFloor/$space', latest);
     });
-    newest?.call(latest);
+    newest?.call(latest > 0 ? latest : floor);
     if (count > 0) notify();
     return count;
   }

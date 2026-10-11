@@ -311,10 +311,7 @@ extension _GroupMemberPages on _OurNetAppState {
       );
       if (confirm != true) return;
       await everyday.leave(room);
-      update(() {
-        activeRoom = null;
-        tab = Destination.groups;
-      });
+      update(() => setScope(null));
     }
     if (action == 'add') {
       await everyday.invite(room, asking.toList());
@@ -431,11 +428,7 @@ extension _GroupMemberPages on _OurNetAppState {
         shareHistory: true,
         membersInvite: membersInvite || room.data['invite'] == 'members',
       );
-      update(() {
-        activeRoom = next;
-        tab = Destination.groups;
-        everydaySection = 'Conversation';
-      });
+      update(() => activeRoom = next);
       notice('Membership updated. Changes sync when devices reconnect.');
     }
   }
