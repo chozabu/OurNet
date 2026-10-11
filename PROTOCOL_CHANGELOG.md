@@ -7,7 +7,7 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
-## Unreleased: public chats, scopes
+## 0.2.30: public chats, scopes
 
 - New public kinds `chat`, `chat_msg` and `chat_hide` in spaces
   `chat:<creator>:<random>`, and text links `ournet://chat/...`
