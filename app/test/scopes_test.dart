@@ -40,12 +40,28 @@ void main() {
     expect(find.text('Packing list'), findsOneWidget);
     expect(find.text('Private shopping'), findsNothing);
     expect(find.byTooltip('Group info'), findsOneWidget);
+    // Calls start from the group's chat only, never the app bar.
+    expect(find.byTooltip('Start a voice call'), findsNothing);
 
     // Other sections show the same group.
     await openSection(tester, 'Forums');
     await settled(tester);
     expect(find.byTooltip('Group info'), findsOneWidget);
     expect(find.text('New discussion'), findsWidgets);
+    expect(find.byTooltip('Start a voice call'), findsNothing);
+    await openSection(tester, 'Chat');
+    await settled(tester);
+    expect(find.byTooltip('Start a voice call'), findsOneWidget);
+    expect(find.byTooltip('Start a video call'), findsOneWidget);
+    await openSection(tester, 'Forums');
+    await settled(tester);
+
+    // A group's files take files only: no text box that would post to its
+    // chat.
+    await openSection(tester, 'Files');
+    await settled(tester);
+    expect(find.text('Add file'), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
 
     // A group has no map yet: the section says so and offers All.
     await openSection(tester, 'Maps');
@@ -76,10 +92,19 @@ void main() {
     final (node, [friend]) = await friends(1);
     await tester.pumpWidget(OurNetApp(node: node, enablePlatform: false));
     await settled(tester);
-    await tester.tap(find.byKey(const ValueKey('scope-header')));
+    // The drawer lists sections only.
+    await tester.tap(find.byTooltip('Open navigation menu'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(ListTile, 'Create group'));
-    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      find.descendant(
+        of: find.byType(Drawer),
+        matching: find.text('Create group'),
+      ),
+      findsNothing,
+    );
+    await tester.tap(find.widgetWithText(ListTile, 'Notes').first);
+    await tester.pumpAndSettle();
+    await startCreateGroup(tester);
     await tester.enterText(find.byType(TextField).last, 'Book club');
     await tester.tap(find.text('Save'));
     await tester.pump(const Duration(milliseconds: 300));
@@ -87,9 +112,58 @@ void main() {
     await settled(tester);
     expect(find.byTooltip('Group info'), findsOneWidget);
     expect(find.text('Book club'), findsWidgets);
+    // The group's bar fits its call buttons on a phone.
+    expect(find.byTooltip('Start a voice call'), findsOneWidget);
     // Let the creation's notices and sync timers run out.
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await node.close();
+    await friend.close();
+  });
+
+  testWidgets('the scope header marks what other scopes have unread', (
+    tester,
+  ) async {
+    wide(tester);
+    final (node, [friend]) = await friends(1);
+    final room = (await tester.runAsync(
+      () => Everyday(node).createRoom('Weekend trip', [friend.person]),
+    ))!;
+    await tester.runAsync(() async {
+      await syncPair(node, friend);
+      final theirs = (await Everyday(friend).rooms()).single;
+      await Everyday(
+        friend,
+      ).write({'type': 'note', 'text': 'Who has the tent?'}, room: theirs);
+      await syncPair(node, friend);
+    });
+    expect(node.roomUnread('${room.data['room']}'), 1);
+    await tester.pumpWidget(OurNetApp(node: node, enablePlatform: false));
+    await settled(tester);
+    final elsewhere = find.byKey(const ValueKey('scope-elsewhere-unread'));
+    // All shows everything: nothing is elsewhere.
+    expect(elsewhere, findsNothing);
+
+    // Personal leaves the group out, so its unread message marks the arrow.
+    await pickScope(tester, 'Personal');
+    await settled(tester);
+    expect(elsewhere, findsOneWidget);
+    expect(find.byTooltip('1 unread in other scopes'), findsOneWidget);
+
+    // The group itself shows it: not counted as elsewhere.
+    await pickScope(tester, 'Weekend trip');
+    await settled(tester);
+    expect(elsewhere, findsNothing);
+
+    // Reading it clears the mark in other scopes too.
+    await openSection(tester, 'Chat');
+    await settled(tester);
+    await pickScope(tester, 'Public');
+    await settled(tester);
+    expect(elsewhere, findsNothing);
+
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
     await node.close();

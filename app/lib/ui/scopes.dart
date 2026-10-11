@@ -105,6 +105,48 @@ extension _Scopes on _OurNetAppState {
     };
   });
 
+  /// What is unread that the scope on screen leaves out: direct messages,
+  /// the groups' chats and forums, and joined public chats, except what
+  /// this scope shows. None in All. For the scope header's arrow.
+  int elsewhereUnread() => memo('elsewhereUnread', () {
+    final room = activeRoom;
+    final kind = scope;
+    if (kind == null) return 0;
+    return (kind == ScopeKind.personal ? 0 : unread('message')) +
+        knownRooms
+            .where((r) => r.object.space != room?.object.space)
+            .fold<int>(
+              0,
+              (n, r) => n + groupChatUnread(r) + groupForumUnreadOf(r),
+            ) +
+        (kind == ScopeKind.public
+            ? 0
+            : publicChats.joined.fold<int>(
+                0,
+                (n, chat) =>
+                    n +
+                    memo('chatUnread/$chat', () => publicChats.unread(chat)),
+              ));
+  });
+
+  /// The scope header's dropdown arrow, marked when another scope has
+  /// something unread ([elsewhereUnread]).
+  Widget scopeArrow() {
+    final count = elsewhereUnread();
+    const arrow = Icon(Icons.arrow_drop_down, size: 20);
+    if (count == 0) return arrow;
+    return Tooltip(
+      message: '$count unread in other scopes',
+      child: Badge.count(
+        key: const ValueKey('scope-elsewhere-unread'),
+        count: count,
+        maxCount: 99,
+        offset: const Offset(4, -4),
+        child: arrow,
+      ),
+    );
+  }
+
   /// Unread posts in a group's forum.
   int groupForumUnreadOf(EverydayItem room) =>
       unreadCounts['room_post/${room.object.space}'] ??= node.unreadSinceFloor(
@@ -145,6 +187,23 @@ extension _Scopes on _OurNetAppState {
     final key = '$kind/$space';
     if (latestItems.containsKey(key)) return latestItems[key];
     return latestItems[key] = node.store.latestIn(kind, space);
+  }
+
+  /// The newest [kind] object in [space] that this device shows and [where]
+  /// accepts, for a list row's latest activity. Reads only the newest few
+  /// through the (kind, space, created) index, never the kind's history;
+  /// kept like [latestItems].
+  SignedObject? latestShownIn(
+    String kind,
+    String space, {
+    bool Function(SignedObject)? where,
+  }) {
+    final key = 'shown/$kind/$space';
+    if (latestItems.containsKey(key)) return latestItems[key];
+    return latestItems[key] = node.store
+        .objects(kind: kind, space: space, limit: 20)
+        .where((o) => node.visible(o) && (where?.call(o) ?? true))
+        .firstOrNull;
   }
 
   /// The chat list: friends (a person's ID) and [rooms] (their group chats)
@@ -318,6 +377,7 @@ extension _Scopes on _OurNetAppState {
           room,
           back: back,
           extra: IconButton(
+            visualDensity: VisualDensity.compact,
             tooltip: 'Show only this group',
             onPressed: () => update(() => showGroup(room)),
             icon: const Icon(Icons.filter_center_focus),
@@ -396,105 +456,99 @@ extension _Scopes on _OurNetAppState {
       };
 
   /// The scopes to pick from: All, Personal, Public, each group, and making
-  /// a group. Shared by the side navigation, the drawer and the picker.
+  /// a group. Shown by the scope header's picker ([pickScope]).
   /// [after] runs once one is picked (closing a drawer or sheet).
-  Widget scopeList(
-    BuildContext context, {
-    bool dense = false,
-    VoidCallback? after,
-  }) => _roomsBuilder((context, rooms) {
-    void pick(VoidCallback change) {
-      update(change);
-      after?.call();
-    }
+  Widget scopeList(BuildContext context, {VoidCallback? after}) =>
+      _roomsBuilder((context, rooms) {
+        void pick(VoidCallback change) {
+          update(change);
+          after?.call();
+        }
 
-    Widget kindTile(ScopeKind? kind) {
-      final label = scopeLabel(kind);
-      return ListTile(
-        dense: dense,
-        visualDensity: dense ? VisualDensity.compact : null,
-        leading: Icon(label.icon),
-        title: Text(label.title),
-        subtitle: dense ? null : Text(label.detail),
-        selected: activeRoom == null && viewScope == kind,
-        onTap: () => pick(() => setScope(kind)),
-      );
-    }
+        Widget kindTile(ScopeKind? kind) {
+          final label = scopeLabel(kind);
+          return ListTile(
+            leading: Icon(label.icon),
+            title: Text(label.title),
+            subtitle: Text(label.detail),
+            selected: activeRoom == null && viewScope == kind,
+            onTap: () => pick(() => setScope(kind)),
+          );
+        }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-          child: Text('Showing', style: Theme.of(context).textTheme.labelLarge),
-        ),
-        kindTile(null),
-        kindTile(ScopeKind.personal),
-        kindTile(ScopeKind.public),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 4, 0),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Private groups',
-                  style: Theme.of(context).textTheme.labelLarge,
-                ),
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Text(
+                'Showing',
+                style: Theme.of(context).textTheme.labelLarge,
               ),
-              if (rooms.isNotEmpty)
-                TextButton(
-                  onPressed: () => pick(() => tab = Destination.groups),
-                  child: const Text('See all'),
-                ),
-            ],
-          ),
-        ),
-        for (final room in rooms)
-          ListTile(
-            dense: dense,
-            visualDensity: dense ? VisualDensity.compact : null,
-            leading: const Icon(Icons.lock_outline),
-            title: Text(
-              room.data['name'],
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
             ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (groupCalls.infoFor(room.object.space) case final call?)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: GroupCallChip(people: call.people.length),
+            kindTile(null),
+            kindTile(ScopeKind.personal),
+            kindTile(ScopeKind.public),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 4, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Private groups',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
                   ),
-                countBadge(groupChatUnread(room)),
-              ],
+                  if (rooms.isNotEmpty)
+                    TextButton(
+                      onPressed: () => pick(() => tab = Destination.groups),
+                      child: const Text('See all'),
+                    ),
+                ],
+              ),
             ),
-            selected: activeRoom?.object.space == room.object.space,
-            onTap: () {
-              pick(() => showGroup(room));
-              if (tab == Destination.messages) {
-                markRoomSeen('${room.data['room']}');
-              }
-            },
-          ),
-        ListTile(
-          dense: dense,
-          visualDensity: dense ? VisualDensity.compact : null,
-          leading: const Icon(Icons.add),
-          title: const Text('Create group'),
-          onTap: busy
-              ? null
-              : () {
-                  after?.call();
-                  // The drawer or sheet this sits in has just closed.
-                  final host = noteNavigator.currentContext;
-                  if (host != null) act(() => createPrivateGroup(host));
+            for (final room in rooms)
+              ListTile(
+                leading: const Icon(Icons.lock_outline),
+                title: Text(
+                  room.data['name'],
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (groupCalls.infoFor(room.object.space) case final call?)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: GroupCallChip(people: call.people.length),
+                      ),
+                    countBadge(groupChatUnread(room)),
+                  ],
+                ),
+                selected: activeRoom?.object.space == room.object.space,
+                onTap: () {
+                  pick(() => showGroup(room));
+                  if (tab == Destination.messages) {
+                    markRoomSeen('${room.data['room']}');
+                  }
                 },
-        ),
-      ],
-    );
-  });
+              ),
+            ListTile(
+              leading: const Icon(Icons.add),
+              title: const Text('Create group'),
+              onTap: busy
+                  ? null
+                  : () {
+                      after?.call();
+                      // The drawer or sheet this sits in has just closed.
+                      final host = noteNavigator.currentContext;
+                      if (host != null) act(() => createPrivateGroup(host));
+                    },
+            ),
+          ],
+        );
+      });
 
   /// The scope picker, from the header.
   Future<void> pickScope(BuildContext context) => showModalBottomSheet<void>(
@@ -578,7 +632,7 @@ extension _Scopes on _OurNetAppState {
                     fontWeight: FontWeight.w800,
                   ),
                 ),
-                const Icon(Icons.arrow_drop_down, size: 20),
+                scopeArrow(),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -635,6 +689,7 @@ extension _Scopes on _OurNetAppState {
                 children: [
                   if (back != null)
                     IconButton(
+                      visualDensity: VisualDensity.compact,
                       tooltip: 'Back to list',
                       onPressed: back,
                       icon: const Icon(Icons.arrow_back),
@@ -660,8 +715,7 @@ extension _Scopes on _OurNetAppState {
                                 ),
                               ),
                             ),
-                            if (onTitle != null)
-                              const Icon(Icons.arrow_drop_down, size: 20),
+                            if (onTitle != null) scopeArrow(),
                           ],
                         ),
                         if (inboxDragging)
@@ -681,7 +735,33 @@ extension _Scopes on _OurNetAppState {
                       ],
                     ),
                   ),
+                  if (tab == Destination.messages &&
+                      groupCalls.infoFor(room.object.space) == null) ...[
+                    // A call is the group's to start, from its chat; once
+                    // one is going the banner below offers Join instead.
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: 'Start a video call',
+                      onPressed: groupCalls.active
+                          ? null
+                          : () => joinGroupCall(
+                              context,
+                              room.object.space,
+                              video: true,
+                            ),
+                      icon: const Icon(Icons.videocam_outlined),
+                    ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: 'Start a voice call',
+                      onPressed: groupCalls.active
+                          ? null
+                          : () => joinGroupCall(context, room.object.space),
+                      icon: const Icon(Icons.call_outlined),
+                    ),
+                  ],
                   IconButton(
+                    visualDensity: VisualDensity.compact,
                     tooltip: chatMuted(node, room.object.space)
                         ? 'Unmute notifications'
                         : 'Mute notifications',
@@ -693,6 +773,7 @@ extension _Scopes on _OurNetAppState {
                     ),
                   ),
                   IconButton(
+                    visualDensity: VisualDensity.compact,
                     tooltip: 'Group members',
                     onPressed: busy
                         ? null
@@ -700,6 +781,7 @@ extension _Scopes on _OurNetAppState {
                     icon: const Icon(Icons.manage_accounts_outlined),
                   ),
                   IconButton(
+                    visualDensity: VisualDensity.compact,
                     tooltip: 'Group info',
                     onPressed: () => unawaited(groupInfo(context, room)),
                     icon: const Icon(Icons.info_outline),

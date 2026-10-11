@@ -173,9 +173,15 @@ extension _EverydayPages on _OurNetAppState {
     }
   }
 
-  Future<void> pasteInbox() async {
+  /// Pastes a screenshot as a file, or text as a note or group message.
+  /// [imagesOnly] (a group's files) leaves text alone.
+  Future<void> pasteInbox({bool imagesOnly = false}) async {
     final room = activeRoom;
     final image = await clipboardImage();
+    if (image == null && imagesOnly) {
+      notice('Copy an image to paste it here');
+      return;
+    }
     if (image != null) {
       final temp = File(
         '${(await getTemporaryDirectory()).path}/${randomId()}.png',
@@ -298,27 +304,15 @@ extension _EverydayPages on _OurNetAppState {
       switchingDraft = false;
     }
     final colors = Theme.of(context).colorScheme;
-    final notesTab = everydaySection == 'Notes';
-    final chat = everydaySection == 'Conversation';
-    final forumTab = everydaySection == 'Forum';
-    final calendarTab = everydaySection == 'Calendar';
+    // The group's part of the section on screen; its chat otherwise.
+    final notesTab = tab == Destination.notes;
+    final forumTab = tab == Destination.forums;
+    final calendarTab = tab == Destination.calendar;
+    final filesTab = tab == Destination.files;
+    final chat = !notesTab && !forumTab && !calendarTab && !filesTab;
     ensureRoomForum(room);
     void sendRoomMessage() {
-      unawaited(
-        noteAction(
-          chat
-              ? () => sendGroupMessage(room, draftKey)
-              : () async {
-                  final submitted = inboxComposer.text;
-                  final text = submitted.trim();
-                  if (text.isEmpty) return;
-                  await Everyday(
-                    node,
-                  ).write({'type': 'note', 'text': text}, room: room);
-                  await finishDraft(draftKey, submitted, notes: true);
-                },
-        ),
-      );
+      unawaited(noteAction(() => sendGroupMessage(room, draftKey)));
       inboxFocus.requestFocus();
     }
 
@@ -391,13 +385,13 @@ extension _EverydayPages on _OurNetAppState {
                       if (visible.isEmpty) {
                         return empty(
                           'No files yet',
-                          'Add the first original file below.',
+                          'Add the first file below.',
                           Icons.favorite_border,
                         );
                       }
                       return ListView.builder(
                         key: PageStorageKey(
-                          'everyday/${room.object.id}/$everydaySection',
+                          'everyday/${room.object.id}/${tab.name}',
                         ),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         itemCount: visible.length,
@@ -417,59 +411,27 @@ extension _EverydayPages on _OurNetAppState {
                 child: groupComposer(context, room, sendRoomMessage),
               ),
             )
-          else if (!forumTab && !notesTab && !calendarTab)
-            Container(
+          else if (filesTab)
+            // Files take files only: text goes in the chat or notes.
+            Padding(
               padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                border: Border.all(color: colors.outlineVariant),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Column(
+              child: Row(
                 children: [
-                  Focus(
-                    canRequestFocus: false,
-                    onKeyEvent: (_, event) => enterSends(
-                      inboxComposer,
-                      event,
-                      savingNote ? null : sendRoomMessage,
-                    ),
-                    child: TextField(
-                      controller: inboxComposer,
-                      focusNode: inboxFocus,
-                      minLines: 1,
-                      maxLines: 4,
-                      decoration: InputDecoration(
-                        hintText: 'Write a message…',
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                      ),
-                    ),
+                  FilledButton.tonalIcon(
+                    onPressed: addingAttachment
+                        ? null
+                        : () => attachmentAct(() => pickGroupAttachment(room)),
+                    icon: const Icon(Icons.attach_file),
+                    label: const Text('Add file'),
                   ),
-                  Row(
-                    children: [
-                      IconButton(
-                        tooltip: 'Add original file',
-                        onPressed: addingAttachment
-                            ? null
-                            : () => attachmentAct(
-                                () => pickGroupAttachment(room),
-                              ),
-                        icon: const Icon(Icons.attach_file),
-                      ),
-                      IconButton(
-                        tooltip: 'Paste text or screenshot',
-                        onPressed: addingAttachment
-                            ? null
-                            : () => attachmentAct(pasteInbox),
-                        icon: const Icon(Icons.content_paste),
-                      ),
-                      const Spacer(),
-                      FilledButton.icon(
-                        onPressed: savingNote ? null : sendRoomMessage,
-                        icon: const Icon(Icons.arrow_upward, size: 18),
-                        label: const Text('Add'),
-                      ),
-                    ],
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: 'Paste a screenshot',
+                    onPressed: addingAttachment
+                        ? null
+                        : () =>
+                              attachmentAct(() => pasteInbox(imagesOnly: true)),
+                    icon: const Icon(Icons.content_paste),
                   ),
                 ],
               ),

@@ -32,11 +32,9 @@ extension _HomePages on _OurNetAppState {
     return added?.person;
   }
 
-  Widget recentActivity(List<SignedObject> objects, String fallback) {
-    final visible = objects.where(node.visible).toList()
-      ..sort((a, b) => b.created.compareTo(a.created));
-    if (visible.isEmpty) return Text(fallback);
-    final latest = visible.first;
+  /// A list row's subtitle: [latest]'s preview and time, else [fallback].
+  Widget recentActivity(SignedObject? latest, String fallback) {
+    if (latest == null) return Text(fallback);
     return FutureBuilder<Json?>(
       future: node.content(latest),
       builder: (context, snapshot) {
@@ -136,8 +134,7 @@ extension _HomePages on _OurNetAppState {
                           leading: const Icon(Icons.lock_outline),
                           title: Text(room.data['name']),
                           subtitle: recentActivity(
-                            objectsBySpace('room_item')[room.data['room']] ??
-                                const [],
+                            latestShownIn('room_item', '${room.data['room']}'),
                             '${room.object.audience.length} members · Private',
                           ),
                           trailing: Row(

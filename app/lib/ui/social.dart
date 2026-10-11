@@ -85,9 +85,7 @@ extension _SocialPages on _OurNetAppState {
                     leading: const Icon(Icons.forum_outlined),
                     title: Text(forumName(forum)),
                     subtitle: recentActivity(
-                      (objectsBySpace('post')[forum] ?? const [])
-                          .where((o) => o.isPublic)
-                          .toList(),
+                      latestShownIn('post', forum, where: (o) => o.isPublic),
                       'No discussions yet',
                     ),
                     trailing: unreadBadge(

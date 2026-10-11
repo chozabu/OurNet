@@ -50,8 +50,10 @@ void main() {
       await tester.tap(find.text('Publish discussion'));
       await settle(tester);
       expect(node.store.objects(kind: 'post').single.space, forum.space);
-      await tester.tap(find.widgetWithText(ListTile, 'Create group').first);
-      await tester.pump(const Duration(milliseconds: 300));
+      // The side navigation lists sections only: groups are made from the
+      // scope header's picker.
+      expect(find.widgetWithText(ListTile, 'Create group'), findsNothing);
+      await startCreateGroup(tester);
       await tester.enterText(find.byType(TextField).last, 'Weekend plans');
       await tester.tap(find.text('Save'));
       await tester.pump(const Duration(milliseconds: 300));

@@ -319,14 +319,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   final inboxFocus = FocusNode();
   final groupChatScroll = ScrollController();
 
-  /// The open group's section: the destination on screen.
-  String get everydaySection => switch (tab) {
-    Destination.forums => 'Forum',
-    Destination.files => 'Files',
-    Destination.notes => 'Notes',
-    Destination.calendar => 'Calendar',
-    _ => 'Conversation',
-  };
   bool inboxDragging = false;
   bool dark = false, busy = false;
   bool compact = false;
@@ -1299,15 +1291,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           kind,
         ).where((o) => o.isPublic || o.audience.contains(node.person)).length;
 
-  /// Recent objects of [kind] grouped by space, once per build.
-  Map<String, List<SignedObject>> objectsBySpace(String kind) =>
-      memo('spaces/$kind', () {
-        final result = <String, List<SignedObject>>{};
-        for (final o in node.store.objects(kind: kind)) {
-          (result[o.space] ??= []).add(o);
-        }
-        return result;
-      });
   Future<String?> ask(
     BuildContext context,
     String title, {
@@ -1425,12 +1408,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                           if (!wide) Navigator.pop(context);
                         },
                       ),
-                    const Divider(),
-                    scopeList(
-                      context,
-                      dense: true,
-                      after: wide ? null : () => Navigator.pop(context),
-                    ),
                   ],
                 ),
               ),
@@ -1502,31 +1479,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                       },
                       icon: Icon(dark ? Icons.light_mode : Icons.dark_mode),
                     ),
-                  if (tab.section != null &&
-                      openRoom != null &&
-                      groupCalls.infoFor(openRoom!.object.space) == null) ...[
-                    // A call is the group's to start; once one is going the
-                    // group page offers Join instead.
-                    IconButton(
-                      tooltip: 'Start a voice call',
-                      onPressed: groupCalls.active
-                          ? null
-                          : () =>
-                                joinGroupCall(context, openRoom!.object.space),
-                      icon: const Icon(Icons.call_outlined),
-                    ),
-                    IconButton(
-                      tooltip: 'Start a video call',
-                      onPressed: groupCalls.active
-                          ? null
-                          : () => joinGroupCall(
-                              context,
-                              openRoom!.object.space,
-                              video: true,
-                            ),
-                      icon: const Icon(Icons.videocam_outlined),
-                    ),
-                  ],
                   IconButton(
                     tooltip: 'Search everything',
                     onPressed: () => update(() => tab = Destination.search),

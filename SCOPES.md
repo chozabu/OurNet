@@ -66,12 +66,21 @@ before.
   with its unread count and any call in progress, and Create group.
 - In a group, it also shows members and sync status, plus buttons for mute,
   members and **group info** (ⓘ: who is in it, who can add people, sync,
-  leaving).
+  leaving). In Chat it adds voice and video call buttons, as a direct
+  conversation's header does. Calls are not started from the app bar or
+  from the group's other sections.
 - Group call banners and member add-requests show under it, in every section
   of that group.
 
-On wide screens the side navigation also lists the scopes under the sections,
-as Google Calendar lists calendars. On phones the same list is in the drawer.
+- Outside All, a count on the header's arrow says how much is unread in
+  other scopes: direct messages, the groups' chats and forums, and joined
+  public chats, leaving out whatever the scope on screen shows. It reads the
+  same cached counts as the navigation's badges, never history. The picker
+  then shows which group it is in.
+
+The side navigation and the phone drawer list only the sections. They used
+to list the scopes too, as Google Calendar lists calendars, but the header is
+always one tap away and the list crowded the sections out.
 
 Sections without the header (Settings, Network, Search, Profile) ignore
 the scope.
@@ -146,7 +155,7 @@ OurNet's subscriptions are private, so that would need an opt-in advert).
 ## Steps
 
 1. **Done: UI only.** Scope state, header and picker, a sidebar and drawer
-   list, sections drawn per scope, and the private group page folded into
+   list (since removed: see "The scope header"), sections drawn per scope, and the private group page folded into
    the sections. The old Private groups page remains as a plain list of
    groups, reached from the picker's "See all". The core section table and
    the calendar check are in place. There is no protocol change.
