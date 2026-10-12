@@ -125,7 +125,12 @@ extension _ObjectsPages on _OurNetAppState {
             // In a forum's list of discussions the whole card opens the
             // discussion, so it needs no reply or download buttons.
             final listed = isPost && thread == null;
-            final replies = forum?.replies(o) ?? replyCounts()[o.id] ?? 0;
+            final replies =
+                forum?.replies(o) ??
+                (o.kind == 'room_post'
+                    ? allGroupForums[o.space]?.replies(o.id)
+                    : replyCounts()[o.id]) ??
+                0;
             final small = Theme.of(context).textTheme.bodySmall;
             final card = Card(
               clipBehavior: Clip.antiAlias,
@@ -144,6 +149,14 @@ extension _ObjectsPages on _OurNetAppState {
                     ? null
                     : forum != null
                     ? () => forum.open(o.id)
+                    : o.kind == 'room_post'
+                    ? () {
+                        final group = allGroupForums[o.space];
+                        if (group == null) return;
+                        groupThreads[o.space] = o.id;
+                        groupReplies.remove(o.space);
+                        openGroupInList(group.room, Destination.forums);
+                      }
                     : () => update(() {
                         // From the all-forums view, the discussion opens in
                         // the forum it belongs to.
@@ -176,7 +189,9 @@ extension _ObjectsPages on _OurNetAppState {
                                       forum == null &&
                                       space == _OurNetAppState.allForums)
                                     TextSpan(
-                                      text: ' · ${forumName(o.space)}',
+                                      text: o.kind == 'room_post'
+                                          ? ' · ${allGroupForums[o.space]?.room.data['name']} · Private'
+                                          : ' · ${forumName(o.space)}',
                                       style: small?.copyWith(
                                         fontWeight: FontWeight.normal,
                                         color: Theme.of(
@@ -289,6 +304,7 @@ extension _ObjectsPages on _OurNetAppState {
       update(() {
         selectedThread ??= id;
         replyTo = id;
+        submittedForumThreads.remove('community/$space/$selectedThread');
       });
     }
     WidgetsBinding.instance.addPostFrameCallback(
@@ -538,6 +554,17 @@ extension _ObjectsPages on _OurNetAppState {
       }
     }
     if (isMessage || postSpace != null) await finishDraft(draftKey, submitted);
+    if (postSpace != null &&
+        postData?['parent'] != null &&
+        mounted &&
+        draftKey == composerContext &&
+        composer.text.isEmpty) {
+      update(() {
+        if (draftKey != null) submittedForumThreads.add(draftKey);
+        replyTo = null;
+        composerFocus.unfocus();
+      });
+    }
   });
   void previewImage(BuildContext context, SignedObject object) => act(() async {
     final image = Uint8List.fromList(

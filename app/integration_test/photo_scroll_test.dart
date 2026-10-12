@@ -14,6 +14,7 @@ import 'package:ournet_transport/ournet_transport.dart'
     show Files, PeerNetwork, FolderSync, DiskFolderBackend;
 
 import 'perf_support.dart';
+import '../test/scope_helpers.dart';
 
 /// Repeatable Notes photo-scrolling journey for physical devices.
 ///
@@ -161,6 +162,16 @@ void main() {
       }
       report['importMs'] =
           setup.elapsedMilliseconds - (report['fixtureMs'] as int);
+
+      final forumRoom = await Everyday(node).createRoom('Photo forum', []);
+      final forumPhoto = await files.publish(
+        sources.first.path,
+        audience: [node.person],
+        postSpace: forumRoom.object.space,
+        kind: 'room_post',
+        post: {'title': 'Private forum photo'},
+      );
+      await thumbnails.prepare(forumPhoto);
 
       // Include the bounded shared-checklist row projection among the photos.
       // No originals are touched when its checkbox or collaborator badge updates.
@@ -464,6 +475,33 @@ void main() {
           (warm.last['rssMiB'] as double) - (warm.first['rssMiB'] as double);
       report['warmRssGrowthMiB'] = rssGrowth;
       expect(rssGrowth, lessThan(32));
+
+      // The combined forum feed must use durable previews too, including
+      // while a text-only update refreshes its private forum index.
+      final forumReads = node.blobs.chunkReads;
+      await openSection(tester, 'Forums');
+      await tester.tap(find.widgetWithText(ListTile, 'All forums'));
+      final forumDeadline = DateTime.now().add(const Duration(seconds: 30));
+      while (find.text('Private forum photo').evaluate().isEmpty &&
+          DateTime.now().isBefore(forumDeadline)) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.text('Private forum photo'), findsOneWidget);
+      await RoomForum(
+        node,
+        forumRoom,
+      ).publish({'title': 'Forum update', 'text': 'A text-only update'});
+      while (find.text('Forum update').evaluate().isEmpty &&
+          DateTime.now().isBefore(forumDeadline)) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.text('Forum update'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        node.blobs.chunkReads - forumReads,
+        0,
+        reason: 'All forums read photo originals',
+      );
 
       expect(tester.takeException(), isNull);
       if (enforce) {

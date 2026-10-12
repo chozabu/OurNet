@@ -280,8 +280,14 @@ void main() {
       ),
     );
     await settled(tester);
-    // The navigation and the group's row both say 4.
-    expect(find.text('4'), findsNWidgets(2));
+    // Navigation, the combined feed and the group's row all say 4.
+    expect(find.text('4'), findsNWidgets(3));
+    // The combined feed works without any public subscriptions, and keeps
+    // the group's history validation rules.
+    await tester.tap(find.widgetWithText(ListTile, 'All forums'));
+    await settled(tester);
+    expect(find.text('Parking'), findsOneWidget);
+    expect(find.text('Ghost'), findsNothing);
     await tester.tap(find.widgetWithText(ListTile, 'Group forum'));
     await settled(tester);
     expect(find.text('Parking'), findsOneWidget);

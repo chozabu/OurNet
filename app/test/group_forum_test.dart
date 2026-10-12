@@ -18,6 +18,66 @@ Future<void> steady(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('All forums includes private topics and opens private replies', (
+    tester,
+  ) async {
+    wide(tester);
+    final (node, [friend]) = await friends(1);
+    final room = (await tester.runAsync(
+      () => Everyday(node).createRoom('Private club', [friend.person]),
+    ))!;
+    final privatePost = (await tester.runAsync(
+      () => RoomForum(
+        node,
+        room,
+      ).publish({'title': 'Private topic', 'text': 'Members only'}),
+    ))!;
+    node.subscribe('Public club', true);
+    await tester.runAsync(
+      () => node.publish('post', {
+        'title': 'Public topic',
+        'text': 'For everyone',
+      }, space: 'Public club'),
+    );
+    await tester.pumpWidget(
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.forums,
+      ),
+    );
+    await settled(tester);
+    await tester.tap(find.widgetWithText(ListTile, 'All forums'));
+    await settled(tester);
+    expect(find.text('Private topic'), findsOneWidget);
+    expect(find.text('Public topic'), findsOneWidget);
+    expect(find.textContaining('Private club · Private'), findsOneWidget);
+
+    await tester.tap(find.text('Private topic'));
+    await steady(tester);
+    expect(find.textContaining('Encrypted · group members'), findsOneWidget);
+    await tester.tap(find.byType(TextField).last);
+    await tester.enterText(find.byType(TextField).last, 'Private reply');
+    await tester.pump();
+    await tester.tap(find.text('Comment'));
+    await steady(tester);
+    final forum = RoomForum(node, room);
+    await tester.runAsync(forum.load);
+    expect(forum.thread(privatePost.id).length, 2);
+    expect(node.store.objects(kind: 'post').length, 1);
+
+    await pickScope(tester, 'Public');
+    await settled(tester);
+    await tester.tap(find.widgetWithText(ListTile, 'All forums'));
+    await settled(tester);
+    expect(find.text('Public topic'), findsOneWidget);
+    expect(find.text('Private topic'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await node.close();
+    await friend.close();
+  });
+
   testWidgets('a group has its own private forum', (tester) async {
     wide(tester);
     tester.view.physicalSize = const Size(1200, 1500);
@@ -78,10 +138,19 @@ void main() {
     await tester.tap(open);
     await steady(tester);
     expect(find.byTooltip('All discussions'), findsOneWidget);
-    await tester.enterText(find.byType(TextField).last, 'Lake, please');
+    final field = find.byType(TextField).last;
+    expect(tester.widget<TextField>(field).minLines, 1);
+    expect(find.text('Comment'), findsNothing);
+    await tester.tap(field);
+    await tester.pump();
+    expect(tester.widget<TextField>(field).minLines, 2);
+    expect(find.text('Comment'), findsOneWidget);
+    await tester.enterText(field, 'Lake, please');
     await tester.tap(find.text('Comment'));
     await steady(tester);
     expect(find.text('Lake, please'), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('Comment'), findsNothing);
 
     // Replies are compact rows; folding one hides its text and counts what
     // sits beneath it, and unfolding brings it back.

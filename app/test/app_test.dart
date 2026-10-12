@@ -81,13 +81,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    for (final title in [
-      'Forums',
-      'Chat',
-      'Files',
-      'Notes',
-      'Settings',
-    ]) {
+    for (final title in ['Forums', 'Chat', 'Files', 'Notes', 'Settings']) {
       await tester.tap(find.byTooltip('Open navigation menu'));
       await tester.pumpAndSettle();
       await tester.tap(find.text(title).last);
@@ -175,6 +169,8 @@ void main() {
     expect(find.text('An independently verifiable post'), findsOneWidget);
     await snapshot(tester, 'desktop-discussions');
     await openDiscussion(tester, 'An independently verifiable post');
+    expect(tester.widget<TextField>(find.byType(TextField).last).minLines, 1);
+    expect(find.text('Comment'), findsNothing);
     await tester.tap(find.text('Reply').first);
     await tester.pumpAndSettle();
     await tester.enterText(
@@ -187,6 +183,12 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('A reply within this discussion'), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
+    await tester.tap(find.text('Reply').first);
+    await tester.pump();
+    await tester.pump();
+    expect(tester.widget<TextField>(find.byType(TextField).last).minLines, 2);
+    expect(find.text('Comment'), findsOneWidget);
     expect(
       node.store
           .objects(kind: 'post')

@@ -369,6 +369,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   String? selectedThread;
   String? contact;
   String? replyTo;
+  final submittedForumThreads = <String>{};
   final composer = TextEditingController();
   final composerFocus = FocusNode();
   bool switchingDraft = false;
@@ -432,6 +433,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
 
   /// The open group's forum, read once and kept current.
   RoomForum? roomForum;
+  final allGroupForums = <String, RoomForum>{};
+  Map<String, int> allGroupTopicTimes = const {};
+  Future<List<SignedObject>>? allGroupTopics;
+  Future<List<SignedObject>>? allGroupLoading;
   bool roomForumReady = false;
   Object? roomForumError;
 
@@ -645,6 +650,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       driveView = null;
       everydayView = null;
       roomsView = null;
+      allGroupTopics = null;
       unreadCounts.clear();
       latestItems.clear();
       publicMessages.clear();

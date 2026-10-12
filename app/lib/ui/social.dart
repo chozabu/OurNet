@@ -77,20 +77,26 @@ extension _SocialPages on _OurNetAppState {
             icon: const Icon(Icons.travel_explore),
             label: const Text('Browse forums'),
           ),
-          const Text('Public discussions · visible to others'),
+          Text(
+            scope == null
+                ? 'Public forums and private group discussions'
+                : 'Public discussions · visible to others',
+          ),
           Expanded(
             child: ListView(
               children: [
-                if (forums.isNotEmpty)
+                if (forums.isNotEmpty || scope == null)
                   ListTile(
                     leading: const Icon(Icons.dynamic_feed_outlined),
                     title: const Text('All forums'),
                     subtitle: const Text('Latest discussions from every forum'),
-                    trailing: unreadBadge(
-                      unreadObjects(
-                        'post',
-                      ).where((o) => forums.contains(o.space)),
-                    ),
+                    trailing: scope == null
+                        ? countBadge(forumsUnread())
+                        : unreadBadge(
+                            unreadObjects(
+                              'post',
+                            ).where((o) => forums.contains(o.space)),
+                          ),
                     selected: space == _OurNetAppState.allForums,
                     onTap: () => openForum(_OurNetAppState.allForums),
                   ),
@@ -433,6 +439,11 @@ extension _SocialPages on _OurNetAppState {
               for (final o in discussionObjects()) {
                 node.store.set('seen/${o.id}', true);
               }
+              if (all && scope == null) {
+                for (final group in allGroupForums.values) {
+                  markGroupForumRead(group.space);
+                }
+              }
               unreadCounts.clear();
               refresh();
             },
@@ -441,13 +452,20 @@ extension _SocialPages on _OurNetAppState {
         ],
       ),
       Expanded(
-        child: objectList(
-          context,
-          discussionObjects(),
-          inline: selectedThread == null
-              ? null
-              : InlineReply(replyTo ?? selectedThread!, publicReplyBox),
-        ),
+        child: all && scope == null
+            ? allForumList(context)
+            : objectList(
+                context,
+                discussionObjects(),
+                inline:
+                    selectedThread == null ||
+                        (replyTo == null &&
+                            submittedForumThreads.contains(
+                              'community/$space/$selectedThread',
+                            ))
+                    ? null
+                    : InlineReply(replyTo ?? selectedThread!, publicReplyBox),
+              ),
       ),
     ],
   );
@@ -465,7 +483,15 @@ extension _SocialPages on _OurNetAppState {
           'parent': replyTo ?? selectedThread,
         }, space: space);
         await finishDraft(draftKey, submitted);
-        update(() => replyTo = null);
+        update(() {
+          replyTo = null;
+          if (draftKey != null &&
+              draftKey == composerContext &&
+              composer.text.isEmpty) {
+            submittedForumThreads.add(draftKey);
+            composerFocus.unfocus();
+          }
+        });
       }),
       attach: () => pickFile(
         [],
@@ -1122,77 +1148,85 @@ extension _SocialPages on _OurNetAppState {
       );
     }
     if (inline) {
-      return Padding(
-        padding: const EdgeInsets.only(top: 2, bottom: 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Focus(
-              onKeyEvent: (_, event) {
-                if (event is KeyDownEvent &&
-                    event.logicalKey == LogicalKeyboardKey.escape &&
-                    cancelReply != null) {
-                  cancelReply();
-                  return KeyEventResult.handled;
-                }
-                return enterSends(composer, event, busy ? null : send);
-              },
-              child: TextField(
-                controller: composer,
-                focusNode: composerFocus,
-                minLines: 2,
-                maxLines: 8,
-                decoration: InputDecoration(
-                  hintText: hint ?? 'Write a reply…',
-                  isDense: true,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 4),
-            Row(
+      return ListenableBuilder(
+        listenable: Listenable.merge([composerFocus, composer]),
+        builder: (context, _) {
+          final expanded = composerFocus.hasFocus || composer.text.isNotEmpty;
+          return Padding(
+            padding: const EdgeInsets.only(top: 2, bottom: 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (attach != null)
-                  IconButton(
-                    tooltip: 'Attach file',
-                    visualDensity: VisualDensity.compact,
-                    onPressed: busy ? null : attach,
-                    icon: const Icon(Icons.attach_file),
-                  ),
-                IconButton(
-                  tooltip: 'Mention a calendar event',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: busy
-                      ? null
-                      : () => unawaited(insertEventLink(context, composer)),
-                  icon: const Icon(Icons.event_outlined),
-                ),
-                if (desktop)
-                  Expanded(
-                    child: Text(
-                      sendHint,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
+                Focus(
+                  onKeyEvent: (_, event) {
+                    if (event is KeyDownEvent &&
+                        event.logicalKey == LogicalKeyboardKey.escape &&
+                        cancelReply != null) {
+                      cancelReply();
+                      return KeyEventResult.handled;
+                    }
+                    return enterSends(composer, event, busy ? null : send);
+                  },
+                  child: TextField(
+                    controller: composer,
+                    focusNode: composerFocus,
+                    minLines: expanded ? 2 : 1,
+                    maxLines: expanded ? 8 : 1,
+                    decoration: InputDecoration(
+                      hintText: hint ?? 'Write a reply…',
+                      isDense: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                     ),
-                  )
-                else
-                  const Spacer(),
-                if (cancelReply != null)
-                  TextButton(
-                    onPressed: cancelReply,
-                    child: const Text('Cancel'),
                   ),
-                const SizedBox(width: 4),
-                FilledButton(
-                  onPressed: busy ? null : send,
-                  child: const Text('Comment'),
                 ),
+                if (expanded) const SizedBox(height: 4),
+                if (expanded)
+                  Row(
+                    children: [
+                      if (attach != null)
+                        IconButton(
+                          tooltip: 'Attach file',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: busy ? null : attach,
+                          icon: const Icon(Icons.attach_file),
+                        ),
+                      IconButton(
+                        tooltip: 'Mention a calendar event',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: busy
+                            ? null
+                            : () =>
+                                  unawaited(insertEventLink(context, composer)),
+                        icon: const Icon(Icons.event_outlined),
+                      ),
+                      if (desktop)
+                        Expanded(
+                          child: Text(
+                            sendHint,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        )
+                      else
+                        const Spacer(),
+                      if (cancelReply != null)
+                        TextButton(
+                          onPressed: cancelReply,
+                          child: const Text('Cancel'),
+                        ),
+                      const SizedBox(width: 4),
+                      FilledButton(
+                        onPressed: busy ? null : send,
+                        child: const Text('Comment'),
+                      ),
+                    ],
+                  ),
               ],
             ),
-          ],
-        ),
+          );
+        },
       );
     }
     return Padding(
