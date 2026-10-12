@@ -7,6 +7,8 @@ import '../services/typing.dart';
 import '../services/location_share.dart';
 import '../services/map_tiles.dart';
 import 'map_page.dart';
+import 'storage_page.dart';
+import 'stats_page.dart';
 import '../controllers/notes_home_controller.dart';
 import '../controllers/conversation_controller.dart';
 import '../services/background_sync.dart';
@@ -124,7 +126,9 @@ enum Destination {
   groups(10, 'Groups', Icons.people_outline),
   search(11, 'Search', Icons.search),
   calendar(12, 'Calendar', Icons.calendar_month_outlined),
-  maps(13, 'Maps', Icons.map_outlined);
+  maps(13, 'Maps', Icons.map_outlined),
+  storage(14, 'Storage', Icons.storage),
+  stats(15, 'Network stats', Icons.insights);
 
   final int id;
   final String title;
@@ -149,7 +153,7 @@ enum Destination {
 
   /// Where back leads from a sub-page, which is also what is remembered.
   Destination? get parent => switch (this) {
-    network || profile => settings,
+    network || profile || storage || stats => settings,
     locations => messages,
     _ => null,
   };
@@ -1659,6 +1663,21 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     Destination.messages => messages(context),
     Destination.files => filePage(context),
     Destination.network => networkPage(context),
+    Destination.storage => StoragePage(
+      node: node,
+      nameOf: name,
+      editLimits: () => editStorageLimits(context),
+    ),
+    Destination.stats => StatsPage(
+      network: network,
+      deviceName: (device) {
+        final contact = node.contacts[device];
+        if (contact == null) return 'Unknown device';
+        return contact.person == node.person
+            ? '${deviceLabel(contact)} (yours)'
+            : '${name(contact.person)} · ${deviceLabel(contact)}';
+      },
+    ),
     Destination.locations => locations(context),
     Destination.voting => voting(context),
     Destination.profile => profile(context),

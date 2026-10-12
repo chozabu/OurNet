@@ -281,6 +281,30 @@ extension _SettingsPages on _OurNetAppState {
     ...?(node.store.setting('clearedRemoved') as List?)?.cast<String>(),
   };
 
+  /// Asks for the storage limit and the level that warns before it.
+  Future<void> editStorageLimits(BuildContext context) => act(() async {
+    final limit = await ask(
+      context,
+      'Storage limit (GB)',
+      initial: gigabytesText(node.store.storageLimit),
+    );
+    if (limit == null || !context.mounted) return;
+    final warning = await ask(
+      context,
+      'Warn when storage passes (GB)',
+      initial: gigabytesText(node.store.storageWarning),
+    );
+    if (warning == null) return;
+    final limitBytes = gigabytes(limit);
+    final warningBytes = gigabytes(warning);
+    if (limitBytes == null || warningBytes == null) {
+      throw StateError('Enter sizes in GB, greater than 0');
+    }
+    node.store.set('storageLimit', limitBytes);
+    node.store.set('storageWarning', warningBytes);
+    update(() {});
+  });
+
   Widget settings(BuildContext context) => ListView(
     children: [
       ListTile(
@@ -309,31 +333,20 @@ extension _SettingsPages on _OurNetAppState {
           'files from friends are refused; what you write is still saved.',
         ),
         isThreeLine: true,
+        onTap: () => update(() => tab = Destination.storage),
         trailing: TextButton(
-          onPressed: () => act(() async {
-            final limit = await ask(
-              context,
-              'Storage limit (GB)',
-              initial: gigabytesText(node.store.storageLimit),
-            );
-            if (limit == null || !context.mounted) return;
-            final warning = await ask(
-              context,
-              'Warn when storage passes (GB)',
-              initial: gigabytesText(node.store.storageWarning),
-            );
-            if (warning == null) return;
-            final limitBytes = gigabytes(limit);
-            final warningBytes = gigabytes(warning);
-            if (limitBytes == null || warningBytes == null) {
-              throw StateError('Enter sizes in GB, greater than 0');
-            }
-            node.store.set('storageLimit', limitBytes);
-            node.store.set('storageWarning', warningBytes);
-            update(() {});
-          }),
+          onPressed: () => editStorageLimits(context),
           child: const Text('Change'),
         ),
+      ),
+      ListTile(
+        leading: const Icon(Icons.insights),
+        title: const Text('Network stats'),
+        subtitle: const Text(
+          'Live bandwidth, totals, per-device traffic and connection health',
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => update(() => tab = Destination.stats),
       ),
       ListTile(
         leading: const Icon(Icons.archive_outlined),

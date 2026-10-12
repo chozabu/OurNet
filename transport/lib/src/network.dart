@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:iroh_quic/iroh_quic.dart' as iroh;
 import 'package:ournet_core/ournet_core.dart';
 import 'sync_queue.dart';
+import 'traffic.dart';
 
 part 'pairing.dart';
 part 'friend_invitation.dart';
@@ -29,7 +30,22 @@ class PeerNetwork {
   /// one release differ per platform; the version says which side is older.
   final String version;
 
+  /// What has moved over the network: see [TrafficStats].
+  final traffic = TrafficStats();
+
+  /// Connections open now, those kept for reuse, and requests being answered.
+  int get openConnections => _connections.length;
+  int get pooledConnections => _pool.length;
+  int get servingNow => _activeInbound;
+
+  /// Times the endpoint was rebuilt after the relay stayed unreachable.
+  int get watchdogRestarts => _watchdogRestarts;
+
   PeerNetwork(this.node, {this.build = '', this.version = ''}) {
+    traffic
+      ..load(node.store.setting('trafficStats'))
+      ..onSave = ((json) => node.store.set('trafficStats', json))
+      ..openWire = _openWire;
     final saved = node.store.setting('peerHealth');
     if (saved is Map) {
       for (final MapEntry(:key, :value) in saved.entries) {
@@ -476,6 +492,31 @@ class PeerNetwork {
   /// Outgoing connections opened since this network was created.
   int dialed = 0;
 
+  final _accounted = Expando<bool>();
+
+  /// Wire bytes of the connections still open.
+  Flow _openWire() {
+    final open = Flow();
+    for (final connection in _connections) {
+      if (_accounted[connection] == true) continue;
+      try {
+        final s = connection.stats;
+        open.add(s.udpTxBytes, s.udpRxBytes);
+      } catch (_) {}
+    }
+    return open;
+  }
+
+  /// Adds a connection's final wire bytes to the totals, once.
+  void _account(iroh.Connection connection, [String? device]) {
+    if (_accounted[connection] == true) return;
+    _accounted[connection] = true;
+    try {
+      final s = connection.stats;
+      traffic.recordWire(device, s.udpTxBytes, s.udpRxBytes);
+    } catch (_) {}
+  }
+
   Future<iroh.Connection> _connect(String device) async {
     if (!node.allowedPeer(device)) throw StateError('Device not admitted');
     final ep = _endpoint;
@@ -497,6 +538,7 @@ class PeerNetwork {
       return await pending.timeout(const Duration(seconds: 15));
     } catch (_) {
       abandoned = true;
+      traffic.dialFailures++;
       rethrow;
     }
   }
@@ -556,8 +598,10 @@ class PeerNetwork {
       );
     } on StateError {
       // A refusal, or a request never sent: not a sign of being out of reach.
+      traffic.refused++;
       rethrow;
     } catch (_) {
+      traffic.failed++;
       _outOfReach.add(device);
       rethrow;
     }
@@ -570,7 +614,7 @@ class PeerNetwork {
       if (pooled != null) {
         final reused = pooled.uses++ > 0;
         try {
-          return await _exchange(pooled.connection, request);
+          return await _exchange(pooled.connection, request, device);
         } on TimeoutException {
           _drop(device, pooled);
           rethrow;
@@ -587,20 +631,36 @@ class PeerNetwork {
     final connection = await _connect(device);
     _connections.add(connection);
     try {
-      return await _exchange(connection, request);
+      return await _exchange(connection, request, device);
     } finally {
+      _account(connection, device);
       connection.close();
       _connections.remove(connection);
     }
   }
 
-  Future<Uint8List> _exchange(iroh.Connection connection, Json request) async {
+  Future<Uint8List> _exchange(
+    iroh.Connection connection,
+    Json request, [
+    String? device,
+  ]) async {
+    final timer = Stopwatch()..start();
     final (send, recv) = await connection.openBi();
-    await send.writeAll(bytes(request));
+    final out = bytes(request);
+    await send.writeAll(out);
     await send.finish();
-    return await recv
+    final data = await recv
         .readToEnd(3 * 1024 * 1024)
         .timeout(const Duration(seconds: 20));
+    traffic.recordExchange(
+      device: device,
+      type: '${request['type']}',
+      outbound: true,
+      sent: out.length,
+      received: data.length,
+      took: timer.elapsed,
+    );
+    return data;
   }
 
   /// Requests one connection carries at once, each on its own stream, for a
@@ -652,6 +712,7 @@ class PeerNetwork {
     pooled.idle?.cancel();
     if (identical(_pool[device], pooled)) _pool.remove(device);
     _connections.remove(pooled.connection);
+    _account(pooled.connection, device);
     pooled.connection.close();
   }
 
@@ -1060,6 +1121,7 @@ class PeerNetwork {
           idle.close();
         }
         _activeInbound++;
+        traffic.inboundConnections++;
         _connections.add(connection);
         final job = _serve(connection, peer);
         _jobs.add(job);
@@ -1102,6 +1164,7 @@ class PeerNetwork {
     } catch (_) {
       // The caller gave up first.
     } finally {
+      _account(connection);
       connection.close();
     }
   }
@@ -1164,6 +1227,7 @@ class PeerNetwork {
     } finally {
       await Future.wait(answering.toList());
       _idleInbound.remove(connection);
+      _account(connection, peer);
       connection.close();
     }
   }
@@ -1294,15 +1358,28 @@ class PeerNetwork {
             throw StateError('Unknown request');
         }
       }
+      var sent = 0;
       if (body == null) {
-        await send.writeAll(bytes(reply));
+        final out = bytes(reply);
+        sent = out.length;
+        await send.writeAll(out);
       } else {
-        await send.writeAll([...bytes(reply), 0x0a]);
+        final head = [...bytes(reply), 0x0a];
+        sent = head.length;
+        await send.writeAll(head);
         for (final chunk in body) {
+          sent += chunk.length;
           await send.writeAll(chunk);
         }
       }
       await send.finish();
+      traffic.recordExchange(
+        device: peer,
+        type: '${j['type']}',
+        outbound: false,
+        sent: sent,
+        received: raw.length,
+      );
       return true;
     } catch (e) {
       log('Rejected request: $e');
@@ -1461,10 +1538,12 @@ class PeerNetwork {
       _drop(key, value);
     }
     for (final connection in _connections.toList()) {
+      _account(connection);
       connection.close();
     }
     await endpoint?.close();
     await Future.wait(_jobs.toList());
+    traffic.flush();
     try {
       _rememberUnsaved();
       if (_marks.isNotEmpty) _saveMarks();
