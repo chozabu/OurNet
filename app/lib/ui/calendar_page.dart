@@ -120,6 +120,23 @@ class _CalendarPageState extends State<CalendarPage> {
 
   Future<void> _create() => flows.create(context, calendar: c.group);
 
+  /// The narrow layout's + button: a day picked in the month or day view
+  /// starts the event there at 9:00, as tapping a day does on wide windows.
+  /// Today keeps the usual next-half-hour start.
+  Future<void> _createOnFocus() {
+    final day = dateOnly(c.focus);
+    final picked = (c.view == CalendarView.month || c.view == CalendarView.day) &&
+        !sameDay(day, DateTime.now());
+    if (!picked) return _create();
+    final start = DateTime(day.year, day.month, day.day, 9);
+    return flows.create(
+      context,
+      start: start,
+      end: start.add(Duration(minutes: c.defaultMinutes)),
+      calendar: c.group,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -148,7 +165,7 @@ class _CalendarPageState extends State<CalendarPage> {
                 ? null
                 : FloatingActionButton(
                     tooltip: 'New event',
-                    onPressed: _create,
+                    onPressed: _createOnFocus,
                     child: const Icon(Icons.add),
                   ),
             body: Row(
