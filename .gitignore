@@ -24,3 +24,6 @@ PrivateData/
 
 # Screen recordings for Play Console declarations - large, kept locally
 store/play-demo/
+
+# Third-party source checkouts used for reviews
+.research/
