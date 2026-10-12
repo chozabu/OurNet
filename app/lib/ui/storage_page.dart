@@ -172,7 +172,7 @@ class _StoragePageState extends State<StoragePage> {
           await widget.editLimits();
           if (mounted) await load();
         },
-        child: const Text('Change limits'),
+        child: const Text('Change limit and warning'),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -207,6 +207,8 @@ class _StoragePageState extends State<StoragePage> {
                       '${sizeText(r.limit - r.stored)} left before friends’ items are refused.',
             style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
+          const SizedBox(height: 8),
+          const Text('At the limit, messages, posts and files from friends are refused. What you write is still saved.'),
           const SizedBox(height: 14),
           FigureGrid([
             Figure(value: countText(r.objectCount), label: 'items stored', icon: Icons.article_outlined),

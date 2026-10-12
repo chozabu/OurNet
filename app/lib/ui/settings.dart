@@ -305,6 +305,145 @@ extension _SettingsPages on _OurNetAppState {
     update(() {});
   });
 
+  void openDiagnostics(BuildContext context) {
+    var copying = false;
+    String? error;
+    unawaited(
+      Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => StatefulBuilder(
+            builder: (context, setPageState) => Scaffold(
+              appBar: AppBar(
+                title: const Text('Diagnostics'),
+                actions: [
+                  IconButton(
+                    tooltip: 'Refresh status',
+                    onPressed: () => setPageState(() {}),
+                    icon: const Icon(Icons.refresh),
+                  ),
+                ],
+              ),
+              body: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  const ListTile(
+                    title: Text('OurNet $appVersion'),
+                    subtitle: Text('Build $buildId'),
+                  ),
+                  ListTile(
+                    title: const Text('Network'),
+                    subtitle: Text(
+                      '${network.running ? "Running" : "Stopped"} · ${network.local ? "Local mode" : "Internet mode"}\n'
+                      '${network.relays.where((r) => r.connected).length} relays connected',
+                    ),
+                  ),
+                  ListTile(
+                    title: const Text('Stored items and devices'),
+                    subtitle: Text(
+                      '${node.store.count} items · ${node.contacts.length} devices',
+                    ),
+                  ),
+                  ListTile(
+                    title: const Text('Sync errors'),
+                    subtitle: Text(
+                      network.syncErrors.isEmpty
+                          ? 'No device sync errors'
+                          : network.syncErrors.entries
+                                .map((e) => '${short(e.key)}: ${e.value}')
+                                .join('\n'),
+                    ),
+                  ),
+                  ListTile(
+                    title: const Text('Offline drive'),
+                    subtitle: Text(
+                      driveSync.error ??
+                          (driveSync.enabled ? 'Enabled' : 'Disabled'),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Early test release: the encryption has not been independently audited. To report a problem, copy diagnostics and send them with a description of what happened. Message contents and keys are excluded.',
+                  ),
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton.icon(
+                      onPressed: copying
+                          ? null
+                          : () async {
+                              setPageState(() {
+                                copying = true;
+                                error = null;
+                              });
+                              try {
+                                await Clipboard.setData(
+                                  ClipboardData(
+                                    text: jsonEncode({
+                                      'version': appVersion,
+                                      'build': buildId,
+                                      'platform': Platform.operatingSystem,
+                                      'objects': node.store.count,
+                                      'devices': node.contacts.length,
+                                      'networkRunning': network.running,
+                                      'sync': syncDiagnostics(network),
+                                      'blockedPeople': node.blocked
+                                          .map(short)
+                                          .toList(),
+                                      'history': await historyReport(node),
+                                      'driveOffline': driveSync.enabled,
+                                      'driveError': driveSync.error,
+                                      'performance': performance.snapshot(),
+                                    }, toEncodable: (Object? o) => '$o'),
+                                  ),
+                                );
+                                notice(
+                                  'Diagnostics copied; message contents and keys are excluded',
+                                );
+                              } catch (e) {
+                                if (context.mounted) {
+                                  setPageState(
+                                    () => error =
+                                        'Could not copy diagnostics: $e',
+                                  );
+                                }
+                              } finally {
+                                if (context.mounted) {
+                                  setPageState(() => copying = false);
+                                }
+                              }
+                            },
+                      icon: copying
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.copy),
+                      label: Text(
+                        copying ? 'Preparing diagnostics…' : 'Copy diagnostics',
+                      ),
+                    ),
+                  ),
+                  if (error != null) Text(error!),
+                  const SizedBox(height: 24),
+                  Text(
+                    'Recent network activity',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  if (network.events.isEmpty) const Text('No recent activity'),
+                  for (final event in network.events.take(30))
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: SelectableText(event),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget settings(BuildContext context) => ListView(
     children: [
       ListTile(
@@ -329,15 +468,10 @@ extension _SettingsPages on _OurNetAppState {
         leading: const Icon(Icons.storage),
         title: const Text('Storage'),
         subtitle: Text(
-          '${storageSummary(node.store)}. At the limit, messages, posts and '
-          'files from friends are refused; what you write is still saved.',
+          '${bytesText(node.store.storedBytes)} used · ${bytesText(node.store.storageLimit)} limit',
         ),
-        isThreeLine: true,
         onTap: () => update(() => tab = Destination.storage),
-        trailing: TextButton(
-          onPressed: () => editStorageLimits(context),
-          child: const Text('Change'),
-        ),
+        trailing: const Icon(Icons.chevron_right),
       ),
       ListTile(
         leading: const Icon(Icons.insights),
@@ -374,40 +508,11 @@ extension _SettingsPages on _OurNetAppState {
         ).catchError((Object e) => notice('Could not restore: $e')),
       ),
       ListTile(
-        title: const Text('OurNet $appVersion'),
-        subtitle: const Text(
-          'Build $buildId\n'
-          'Early test release: the encryption has not been independently '
-          'audited. To report a problem, copy diagnostics and send them '
-          'with a description of what happened.',
-        ),
-        isThreeLine: true,
-        trailing: TextButton(
-          onPressed: () => act(() async {
-            await Clipboard.setData(
-              ClipboardData(
-                text: jsonEncode({
-                  'version': appVersion,
-                  'build': buildId,
-                  'platform': Platform.operatingSystem,
-                  'objects': node.store.count,
-                  'devices': node.contacts.length,
-                  'networkRunning': network.running,
-                  'sync': syncDiagnostics(network),
-                  'blockedPeople': node.blocked.map(short).toList(),
-                  'history': await historyReport(node),
-                  'driveOffline': driveSync.enabled,
-                  'driveError': driveSync.error,
-                  'performance': performance.snapshot(),
-                }, toEncodable: (Object? o) => '$o'),
-              ),
-            );
-            notice(
-              'Diagnostics copied; message contents and keys are excluded',
-            );
-          }),
-          child: const Text('Copy diagnostics'),
-        ),
+        leading: const Icon(Icons.bug_report_outlined),
+        title: const Text('Diagnostics'),
+        subtitle: const Text('Status and problem reports'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => openDiagnostics(context),
       ),
       SwitchListTile(
         title: const Text('Compact spacing'),

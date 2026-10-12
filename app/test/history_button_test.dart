@@ -92,6 +92,11 @@ void main() {
     await settle(tester);
     await tester.tap(find.text('Settings').first);
     await settle(tester);
+    expect(find.text('Copy diagnostics'), findsNothing);
+    await tester.tap(find.text('Diagnostics'));
+    await settle(tester);
+    expect(find.text('No device sync errors'), findsOneWidget);
+    expect(find.text('Recent network activity'), findsOneWidget);
     await tester.tap(find.text('Copy diagnostics'));
     await tester.pump(const Duration(milliseconds: 500));
     await tester.runAsync(
