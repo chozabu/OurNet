@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:math';
 
 /// Bytes sent and received, and how many exchanges they came from.
-class Flow {
+class ByteCount {
   int tx, rx, n;
-  Flow([this.tx = 0, this.rx = 0, this.n = 0]);
+  ByteCount([this.tx = 0, this.rx = 0, this.n = 0]);
 
   int get total => tx + rx;
 
@@ -16,21 +16,21 @@ class Flow {
 
   List<int> toJson() => [tx, rx, n];
 
-  static Flow parse(Object? json) {
+  static ByteCount parse(Object? json) {
     if (json is List && json.length >= 2 && json.every((e) => e is int)) {
-      return Flow(json[0] as int, json[1] as int, json.length > 2 ? json[2] as int : 0);
+      return ByteCount(json[0] as int, json[1] as int, json.length > 2 ? json[2] as int : 0);
     }
-    return Flow();
+    return ByteCount();
   }
 }
 
 /// What has passed between this device and one other.
 class DeviceTraffic {
-  /// Request and reply bytes; [Flow.n] counts exchanges.
-  final Flow payload = Flow();
+  /// Request and reply bytes; [ByteCount.n] counts exchanges.
+  final ByteCount payload = ByteCount();
 
   /// Bytes on the wire, including encryption and protocol overhead.
-  final Flow wire = Flow();
+  final ByteCount wire = ByteCount();
 
   /// Smoothed time to answer a small request, this session.
   double? latencyMs;
@@ -67,7 +67,7 @@ class TrafficStats {
 
   /// Where the totals are kept, and the wire total of connections still open.
   void Function(Map<String, Object?> json)? onSave;
-  Flow Function()? openWire;
+  ByteCount Function()? openWire;
 
   /// When this session began.
   final DateTime started = DateTime.now();
@@ -75,13 +75,13 @@ class TrafficStats {
   /// When the lifetime totals began.
   DateTime since = DateTime.now();
 
-  final Flow payload = Flow();
-  final Flow wire = Flow();
-  final Flow sessionPayload = Flow();
-  final Flow sessionWire = Flow();
+  final ByteCount payload = ByteCount();
+  final ByteCount wire = ByteCount();
+  final ByteCount sessionPayload = ByteCount();
+  final ByteCount sessionWire = ByteCount();
   final Map<String, DeviceTraffic> devices = {};
-  final Map<String, Flow> requestsOut = {};
-  final Map<String, Flow> requestsIn = {};
+  final Map<String, ByteCount> requestsOut = {};
+  final Map<String, ByteCount> requestsIn = {};
   final Map<String, DayTraffic> days = {};
 
   /// This session only.
@@ -97,9 +97,9 @@ class TrafficStats {
     return devices[id] = DeviceTraffic();
   }
 
-  Flow _type(Map<String, Flow> map, String type) {
+  ByteCount _type(Map<String, ByteCount> map, String type) {
     final key = map.containsKey(type) || map.length < _maxTypes ? type : 'other';
-    return map[key] ??= Flow();
+    return map[key] ??= ByteCount();
   }
 
   String? _dayKey;
@@ -164,12 +164,12 @@ class TrafficStats {
   }
 
   /// Wire totals including connections still open.
-  Flow wireNow({bool session = false}) {
+  ByteCount wireNow({bool session = false}) {
     final base = session ? sessionWire : wire;
     final open = openWire?.call();
     return open == null
-        ? Flow(base.tx, base.rx, base.n)
-        : Flow(base.tx + open.tx, base.rx + open.rx, base.n);
+        ? ByteCount(base.tx, base.rx, base.n)
+        : ByteCount(base.tx + open.tx, base.rx + open.rx, base.n);
   }
 
   // --- Live rates, sampled only while something watches ---
@@ -179,7 +179,7 @@ class TrafficStats {
   Stream<void> get ticks => _ticks.stream;
   Timer? _timer;
   int _watchers = 0;
-  Flow? _last;
+  ByteCount? _last;
   DateTime? _lastAt;
 
   /// Starts sampling once a second until the returned function is called.
@@ -285,7 +285,7 @@ class TrafficStats {
     if (json['since'] case final int ms) {
       since = DateTime.fromMillisecondsSinceEpoch(ms);
     }
-    final p = Flow.parse(json['p']), w = Flow.parse(json['w']);
+    final p = ByteCount.parse(json['p']), w = ByteCount.parse(json['w']);
     payload.add(p.tx, p.rx, p.n);
     wire.add(w.tx, w.rx, w.n);
     if (json['dev'] case final Map dev) {
@@ -293,7 +293,7 @@ class TrafficStats {
         if (e.key is! String || e.value is! Map) continue;
         final d = _device(e.key as String);
         final v = e.value as Map;
-        final dp = Flow.parse(v['p']), dw = Flow.parse(v['w']);
+        final dp = ByteCount.parse(v['p']), dw = ByteCount.parse(v['w']);
         d.payload.add(dp.tx, dp.rx, dp.n);
         d.wire.add(dw.tx, dw.rx, dw.n);
       }
@@ -301,7 +301,7 @@ class TrafficStats {
     for (final (key, into) in [('out', requestsOut), ('in', requestsIn)]) {
       if (json[key] case final Map m) {
         for (final e in m.entries) {
-          if (e.key is String) into[e.key as String] = Flow.parse(e.value);
+          if (e.key is String) into[e.key as String] = ByteCount.parse(e.value);
         }
       }
     }

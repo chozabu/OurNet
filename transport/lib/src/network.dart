@@ -495,8 +495,8 @@ class PeerNetwork {
   final _accounted = Expando<bool>();
 
   /// Wire bytes of the connections still open.
-  Flow _openWire() {
-    final open = Flow();
+  ByteCount _openWire() {
+    final open = ByteCount();
     for (final connection in _connections) {
       if (_accounted[connection] == true) continue;
       try {

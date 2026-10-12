@@ -303,7 +303,7 @@ class _StatsPageState extends State<StatsPage> {
   }
 
   Widget _types(BuildContext context, StatColors colors) {
-    Widget table(String title, Map<String, Flow> map) {
+    Widget table(String title, Map<String, ByteCount> map) {
       final rows = map.entries.toList()..sort((a, b) => b.value.total.compareTo(a.value.total));
       final peak = rows.isEmpty ? 1 : rows.first.value.total;
       return Column(
