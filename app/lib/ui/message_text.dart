@@ -1,9 +1,10 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:ournet_core/ournet_core.dart' show Calendar, PublicChats;
+import 'package:ournet_core/ournet_core.dart' show Calendar, Links, PublicChats;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'chat_links.dart';
+import 'object_links.dart';
 import 'event_links.dart';
 
 /// Message text with tappable links and light formatting, as other
@@ -51,6 +52,15 @@ class MessageText extends StatefulWidget {
   /// [text] without formatting markers, for previews and copies.
   static String plain(String text) => text
       .replaceAll(Calendar.linkPattern, '📅 Calendar event')
+      .replaceAllMapped(Links.pattern, (m) {
+        final link = Links.parse(m.group(0)!);
+        return switch (link?.type) {
+          'forum' => '💬 ${link!.space}',
+          'post' => '💬 ${link!.title ?? 'Forum post'}',
+          'message' => '💬 Chat message',
+          _ => m.group(0)!,
+        };
+      })
       .replaceAllMapped(
         PublicChats.linkPattern,
         (m) =>
@@ -184,6 +194,10 @@ class _MessageTextState extends State<MessageText> {
         ...Calendar.linkPattern.allMatches(text),
       if (text.contains('ournet://chat/'))
         ...PublicChats.linkPattern.allMatches(text),
+      if (text.contains('ournet://forum/') ||
+          text.contains('ournet://post/') ||
+          text.contains('ournet://message/'))
+        ...Links.pattern.allMatches(text),
     ]..sort((a, b) => a.start.compareTo(b.start));
     for (final m in links) {
       if (m.start < from) continue;
@@ -193,6 +207,8 @@ class _MessageTextState extends State<MessageText> {
         chip = EventLinkChip(link, style: base);
       } else if (PublicChats.parseLink(link) != null) {
         chip = ChatLinkChip(link, style: base);
+      } else if (Links.parse(link) != null) {
+        chip = ObjectLinkChip(link, style: base);
       } else {
         continue;
       }

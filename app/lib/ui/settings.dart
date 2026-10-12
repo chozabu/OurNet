@@ -469,6 +469,18 @@ extension _SettingsPages on _OurNetAppState {
         value: typing.enabled,
         onChanged: (v) => update(() => node.store.set('typingIndicator', v)),
       ),
+      SwitchListTile(
+        title: const Text('Show public forums and chats to friends'),
+        subtitle: const Text(
+          'Friends can find the public forums and chats you follow under '
+          'Browse. You can also turn it off for one forum or chat from its menu.',
+        ),
+        value: listings.enabled,
+        onChanged: (v) => act(() async {
+          await listings.setEnabled(v);
+          refresh();
+        }),
+      ),
       const Divider(),
       SpeechSettings(speech: speech, notice: notice),
       ListTile(

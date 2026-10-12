@@ -19,6 +19,19 @@ extension _ForumFeatures on _OurNetAppState {
   })[id];
 
   String forumName(String id) => forumInfo(id)?['name'] as String? ?? id;
+
+  /// What the forum is for: its owner's description, or for a forum called by
+  /// name what its adverts say.
+  String? forumDescription(String id) {
+    final own = forumInfo(id)?['description'];
+    if (own is String && own.isNotEmpty) return own;
+    final listed = memo(
+      'forumDescription/$id',
+      () => listings.descriptionOf(id),
+    );
+    return listed.isEmpty ? null : listed;
+  }
+
   bool ownsForum(String id) => id.startsWith('forum2:${node.person}:');
   bool contentVisible(SignedObject o) {
     if (!node.visible(o) ||

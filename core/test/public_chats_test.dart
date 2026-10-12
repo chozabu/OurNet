@@ -112,14 +112,15 @@ void main() {
     final text = 'Join us: $link. See you there!';
     final found = PublicChats.linkPattern.firstMatch(text)!.group(0)!;
     expect(PublicChats.parseLink(found)!.space, space);
-    expect(PublicChats.parseLink('ournet://chat/general'), isNull);
+    expect(PublicChats.parseLink('ournet://chat/!!!'), isNull);
     expect(PublicChats.parseLink('ournet://event/a/b'), isNull);
   });
 
   test('addresses and names are checked', () async {
     expect(PublicChats.isChat('forum2:x:y'), isFalse);
-    expect(PublicChats.isChat('chat:x'), isFalse);
-    await expectLater(alice.join('general'), throwsArgumentError);
+    expect(PublicChats.isChat('chat:x:y:z'), isFalse);
+    expect(PublicChats.isChat('chat:'), isFalse);
+    await expectLater(alice.join('!!!'), throwsArgumentError);
     await expectLater(alice.create('  '), throwsArgumentError);
     expect(validContent('chat', {'name': '', 'description': ''}), isFalse);
     expect(

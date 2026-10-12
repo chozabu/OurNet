@@ -27,7 +27,7 @@ void main() {
       expect(find.text('Home'), findsNothing);
       await tester.tap(find.text('Forums').first);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Start a forum'));
+      await tester.tap(find.text('Start or join a forum'));
       await tester.pump(const Duration(milliseconds: 300));
       await tester.enterText(find.byType(TextField).last, 'Garden club');
       await tester.tap(find.text('Save'));
@@ -38,8 +38,9 @@ void main() {
       );
       await tester.tap(find.text('Save'));
       await settle(tester);
-      final forum = node.store.objects(kind: 'forum').single;
-      expect(node.subscriptions, contains(forum.space));
+      // A forum is called by its name, and has no record of its own.
+      const forum = 'garden-club';
+      expect(node.subscriptions, contains(forum));
       await tester.tap(find.text('New discussion'));
       await tester.pump(const Duration(milliseconds: 300));
       await tester.enterText(find.byType(TextField).first, 'Welcome');
@@ -49,7 +50,7 @@ void main() {
       );
       await tester.tap(find.text('Publish discussion'));
       await settle(tester);
-      expect(node.store.objects(kind: 'post').single.space, forum.space);
+      expect(node.store.objects(kind: 'post').single.space, forum);
       // The side navigation lists sections only: groups are made from the
       // scope header's picker.
       expect(find.widgetWithText(ListTile, 'Create group'), findsNothing);

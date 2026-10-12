@@ -231,6 +231,59 @@ each device: `chatSeen/<space>` is the creation time of the newest message
 read, and `chatNotify/<space>` opts in to notifications. Older builds keep
 and pass on these kinds without reading them.
 
+### Public names
+
+Public forums and chats are found by name, as on Reddit: nothing decides who
+owns a name, and everyone who types "cooking" is in the same place. A name is
+turned into an address by `PublicNames.slug`: lower case, spaces as hyphens,
+only letters, digits, `-` and `_`, at most 60 characters, never `files`.
+
+- A public forum's space is the slug itself (`cooking`), the same shape as the
+  named forums from before, so older builds read it as they do those.
+  `forum2:<owner>:<random>` forums keep their owner-bound moderation.
+- A public chat's space is `chat:<slug>`. Chats with `chat:<creator>:<random>`
+  keep their creator. A named chat has no creator, so no record names it and
+  nobody can remove another person's message; blocking a sender is each
+  person's own. Older builds do not know `chat:<slug>` as a chat and list it
+  among forums, and do not carry its messages for friends who joined it.
+- Two groups that start the same name without knowing of each other end up
+  in one forum or chat. That is intended: where it is not wanted a more
+  specific name, or a private group (which does not use names), does the job.
+
+All public content is signed by its author's device and not encrypted:
+`chat_msg` and forum `post` have an empty audience and a plain payload.
+
+### Listings
+
+A public forum or chat that a person follows is advertised to their friends
+with a public `listing` in the internal space `_listing`, so that friends can
+browse what exists instead of being sent an address.
+
+- `listing`: `{space, type, name, description?}` or `{space, off: true}`.
+  `type` is `forum` or `chat` (`name` 1-100 characters, `description` up to
+  500). One per person and space: the newest counts, and `off` takes it down.
+  It expires after 30 days and is renewed after 10 while followed.
+- Written by default for every public space the person follows except
+  `general`, until they turn it off for the space or altogether (personal
+  state, `note_self` field `noAdvert`, target the space or `*`).
+- Goes from its author to their friends only: a device offers a listing only
+  when its person wrote it, and friends do not pass it on. A device follows
+  `_listing` as a space, so builds without listings are never offered one.
+  Browse counts only listings from the person's own contacts.
+- Subscribing to a listed space makes the advertising friend the first source
+  of its posts, since they follow it too.
+
+### Links
+
+Links are text, as for chats. Besides `ournet://chat/<name or address>`,
+`ournet://forum/<name or address>` is a forum, `ournet://post/<space>/<id>`
+(optional `?title=`) a forum post and `ournet://message/<space>/<id>` a message
+in a public chat. A device not yet in the space joins it, then opens the link;
+a post not held yet shows once it has synced. Links to things only some people
+can read (a note, a group message) are resolved only against what a device
+holds and show as unavailable to anyone else, as event links do; they are not
+implemented yet.
+
 ## Locations
 
 Live position sharing is not an object kind. A position is a request, like a

@@ -23,7 +23,7 @@ void main() {
     await pickScope(tester, 'Public');
     expect(find.text('No public chats yet'), findsOneWidget);
 
-    await tester.tap(find.text('Start a public chat'));
+    await tester.tap(find.text('Start or join a public chat'));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.enterText(find.byType(TextField).last, 'Night owls');
     await tester.tap(find.text('Save'));
@@ -32,7 +32,9 @@ void main() {
     await tester.tap(find.text('Save'));
     await settled(tester);
     final space = PublicChats(node, NoteState(node)).joined.single;
-    expect(find.text('Night owls'), findsWidgets);
+    // Called by name: the name is the address.
+    expect(space, 'chat:night-owls');
+    expect(find.text('night-owls'), findsWidgets);
     expect(find.text('For late talkers'), findsOneWidget);
     expect(find.text('Say hello'), findsOneWidget);
 
@@ -59,7 +61,7 @@ void main() {
     expect(find.textContaining('I am'), findsWidgets);
     await openSection(tester, 'Forums');
     await settled(tester);
-    expect(find.text('Night owls'), findsNothing);
+    expect(find.text('night-owls'), findsNothing);
 
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());

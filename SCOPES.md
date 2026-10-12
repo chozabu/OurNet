@@ -119,27 +119,31 @@ to your drive. Group and public chats are written in by opening them.
 ## Public chats
 
 Public chats are open, named conversations, like RetroShare's chat lobbies.
-Anyone can start one and names it at creation, with an optional line saying
-what it is for. Anyone with its address can join. Wire format: "Public
+A chat is called by its name, and the name is the address (`chat:cooking`):
+typing a name starts the chat or, if it exists, joins it. Nobody owns it.
+Chats made before names keep their creator and address. Anyone can join. Wire format: "Public
 chats" in `PROTOCOL.md`; code: `PublicChats` in core, and `public_chat.dart`
 in the app.
 
 - They are listed in Chat, under Public and among everything else in All.
-  Start one, or join one by pasting a link or address, from Chat's menu (or
-  its main button under Public).
+  Under Public, "Friends follow" lists the chats friends are in, each with a
+  count and a Join button (see "Finding public forums and chats"). Start or
+  join one by name, or paste a link, from Chat's main button.
 - **Inviting.** The chat menu's "Invite friends…" sends chosen friends a
   direct message with a chat link, and "Copy chat link" copies one. A chat
   link (`ournet://chat/<address>?name=…`) shows in any message, post or note
   as a chip with the chat's name. Tapping it joins the chat if need be, then
   opens it.
-- **Moderation.** The creator can remove any message (long-press or right
-  click, then "Remove from chat"), for everyone. Anyone can block a sender
-  from their details, which hides their messages everywhere.
+- **Moderation.** A chat with a creator lets them remove any message
+  (long-press or right click, then "Remove from chat"), for everyone. A chat
+  called by name has no owner and so no one to remove messages; anyone can
+  block a sender from their details, which hides their messages everywhere.
+  People who want moderation use a private group or a more specific name.
 - **Notifications** are off per chat until "Notify me" is ticked in the chat
   menu: open chats can be busy. They go to their own quiet Android channel.
 - Messages reach friends who joined the same chat, and their friends who
-  joined, and so on, as forum posts do. There is no directory of chats: an
-  address is shared like a forum's.
+  joined, and so on, as forum posts do. Friends find chats through listings.
+- Messages are signed by their author and not encrypted.
 - A message carries the display name its sender chose. Nothing checks it,
   so it is shown beside the sender's key unless this device already knows a
   name for them.
@@ -148,9 +152,36 @@ in the app.
   time. Unread is counted the same way, from the time this device last read
   the chat.
 
-Not done yet: replies, attachments, slow-mode or posting limits, and a way
-to discover chats friends are in (RetroShare lists its lobbies to friends;
-OurNet's subscriptions are private, so that would need an opt-in advert).
+Not done yet: replies, attachments, and slow-mode or posting limits.
+
+## Finding public forums and chats
+
+Following a public forum or chat used to be private, so the only way in was
+an address someone sent. Now each person's devices tell their friends what
+public forums and chats they follow (`Listings`, wire format in `PROTOCOL.md`).
+
+- **On by default**, for every public forum and chat except the default
+  "general". Settings has a switch for all of it, and each forum or chat's
+  menu has "Show to friends in Browse" for that one.
+- **Friends only.** A listing goes to the author's friends and is not passed
+  on, so it cannot flood strangers, and the person who advertises is always
+  someone you know. It also means the friend you find a forum through follows
+  it, so its posts reach you once you join.
+- **Browse.** Forums and Public chats show "Friends follow": the most followed
+  few not yet joined, each with "3 friends", its description and Join, and
+  "Browse all" for a searchable list that also takes a typed name.
+- **Names are addresses.** A public forum is called by its name (`cooking`),
+  so typing a name from "Start or join a forum" joins it or starts it. No one
+  owns a name, so two groups can end up in one forum; they can use a more
+  specific name or a private group. Private groups do not use names.
+  `forum2:` forums from before names keep their owner and moderation. Owners
+  can still remove posts there.
+- **Links.** `ournet://forum/cooking`, `ournet://post/...` and
+  `ournet://message/...` show as chips in any message, post or note, and join
+  then open the thing. "Copy link" is in the forum menu, a post's menu and a
+  chat message's menu. Links to notes and to messages in groups would work
+  the same way but show as unavailable to people who cannot read them, as
+  event links do; they are not built yet.
 
 ## Steps
 

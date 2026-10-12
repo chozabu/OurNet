@@ -116,6 +116,21 @@ bool validContent(String kind, Json p) {
               p['description'] is String &&
                   (p['description'] as String).length <= 4000),
     'chat_hide' => p['object'] is String,
+    // A friend's advert for a public forum or chat they follow: see
+    // `Listings`. `off` takes an earlier one down.
+    'listing' =>
+      p['space'] is String &&
+          (p['space'] as String).isNotEmpty &&
+          (p['space'] as String).length <= 200 &&
+          (p['off'] == null || p['off'] is bool) &&
+          (p['off'] == true ||
+              ['forum', 'chat'].contains(p['type']) &&
+                  p['name'] is String &&
+                  (p['name'] as String).trim().isNotEmpty &&
+                  (p['name'] as String).length <= 100 &&
+                  (p['description'] == null ||
+                      p['description'] is String &&
+                          (p['description'] as String).length <= 500)),
     'chat_msg' =>
       p['text'] is String &&
           (p['reply'] == null || p['reply'] is String) &&
@@ -446,7 +461,7 @@ bool _noteValue(String field, Object? v, Json p) {
 
 /// Personal note state, readable only by this person's own devices.
 bool _selfValue(String field, Object? v) => switch (field) {
-  'pin' || 'archive' || 'labelDeleted' => v is bool,
+  'pin' || 'archive' || 'labelDeleted' || 'noAdvert' => v is bool,
   // The removal (operation ID) this person emptied from Removed.
   'purged' => v is String && v.length <= 128,
   // The device that shares this person's position with friends ('' for none).

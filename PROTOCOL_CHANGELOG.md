@@ -7,6 +7,19 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: public names, friend listings, forum and message links
+
+- Public forums and chats are called by name (`PublicNames`): a forum's space
+  is its slug, a chat's is `chat:<slug>`. Older owner-bound spaces keep working.
+  An older build lists `chat:<slug>` among its forums and does not carry its
+  messages for friends.
+- New public kind `listing` in the internal space `_listing`, and personal
+  state `noAdvert`. Only builds that follow `_listing` are offered listings,
+  and listings are offered only by their author, so older builds see nothing
+  new on the wire. No change to `requiredCaps`.
+- New text links `ournet://forum/...`, `ournet://post/...`,
+  `ournet://message/...`; builds without them show the text as written.
+
 ## 0.2.30: public chats, scopes
 
 - New public kinds `chat`, `chat_msg` and `chat_hide` in spaces

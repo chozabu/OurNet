@@ -19,39 +19,58 @@ extension _PublicChatPages on _OurNetAppState {
     return own == 'You' ? null : own;
   }
 
-  Future<void> startPublicChat(BuildContext context) async {
-    final name = await ask(
-      context,
-      'Start a public chat',
-      hint: 'Name your chat',
-    );
-    if (name == null || name.trim().isEmpty) return;
-    if (!context.mounted) return;
-    final description = await ask(
-      context,
-      'What is it for?',
-      hint: 'Optional: a line for people who join',
-      lines: 2,
-    );
-    if (description == null) return;
-    final space = await publicChats.create(name, description: description);
-    openPublicChat(space);
-    notice(
-      'Public chat started. Copy its address from the chat menu to invite people.',
-    );
-  }
-
-  Future<void> joinPublicChat(BuildContext context) async {
-    final address = await ask(
-      context,
-      'Join a public chat',
-      hint: 'Paste the chat address someone sent you',
-    );
-    if (address == null || address.trim().isEmpty) return;
-    final space = await publicChats.join(address);
+  /// Starts or joins the public chat a name, address or link points at. A
+  /// chat's name is its address, so one that exists is joined and one that
+  /// does not is started.
+  Future<void> startPublicChat(BuildContext context, {String? typed}) async {
+    final value =
+        typed ??
+        await ask(
+          context,
+          'Start or join a public chat',
+          hint: 'Chat name, or paste an address or link',
+        );
+    if (value == null || value.trim().isEmpty) return;
+    final text = value.trim();
+    // Addresses and links, including chats from before names, are joined as
+    // they are.
+    if (PublicChats.parseLink(text) != null || PublicChats.isChat(text)) {
+      final space = await publicChats.join(text);
+      openPublicChat(space);
+      if (network.running) unawaited(network.syncAll());
+      unawaited(listings.refresh());
+      return;
+    }
+    final space = PublicNames.chatSpace(text);
+    if (space == null) {
+      throw StateError('Choose a chat name with letters or digits.');
+    }
+    final known =
+        publicChats.joined.contains(space) ||
+        listings.found().any((l) => l.space == space);
+    var description = '';
+    if (!known) {
+      if (!context.mounted) return;
+      final entered = await ask(
+        context,
+        'Start "${PublicChats.slugOf(space)}"',
+        hint: 'Optional: what is this chat for?',
+        lines: 2,
+      );
+      if (entered == null) return;
+      description = entered.trim();
+    }
+    await publicChats.startOrJoin(text);
+    await listings.advertise(space, description: description);
     openPublicChat(space);
     if (network.running) unawaited(network.syncAll());
+    if (!known) {
+      notice('Joined the chat. Friends will see it under Friends follow.');
+    }
   }
+
+  Future<void> joinPublicChat(BuildContext context, {String? typed}) =>
+      startPublicChat(context, typed: typed);
 
   /// A chat link was tapped: joins the chat if need be, then opens it.
   Future<void> followChatLink(String space) async {
@@ -221,7 +240,12 @@ extension _PublicChatPages on _OurNetAppState {
     final limit = publicChatLimit[space] ?? 100;
     final description = memo(
       'chatAbout/$space',
-      () => publicChats.info(space)?.description ?? '',
+      () {
+        final own = publicChats.info(space)?.description ?? '';
+        // A chat called by name has no owner's record: friends' adverts say
+        // what it is for.
+        return own.isNotEmpty ? own : listings.descriptionOf(space);
+      },
     );
     // Reading the chat marks it read on this device, after the frame.
     if (messages.isNotEmpty &&
@@ -314,9 +338,18 @@ extension _PublicChatPages on _OurNetAppState {
                   );
                   notice('Chat link copied. Anyone you send it to can join.');
                 }
+                if (action == 'advert') {
+                  act(
+                    () => listings.setAdvertised(
+                      space,
+                      !listings.advertises(space),
+                    ),
+                  );
+                }
                 if (action == 'leave') {
                   act(() async {
                     await publicChats.leave(space);
+                    unawaited(listings.refresh());
                     update(() {
                       publicChat = null;
                       showConversation = false;
@@ -335,6 +368,11 @@ extension _PublicChatPages on _OurNetAppState {
                   child: Text('Invite friends…'),
                 ),
                 PopupMenuItem(value: 'copy', child: Text('Copy chat link')),
+                CheckedPopupMenuItem(
+                  value: 'advert',
+                  checked: listings.advertises(space),
+                  child: const Text('Show to friends in Browse'),
+                ),
                 PopupMenuItem(value: 'leave', child: Text('Leave chat')),
               ],
             ),
@@ -419,6 +457,7 @@ extension _PublicChatPages on _OurNetAppState {
         ),
         items: [
           const PopupMenuItem(value: 'copy', child: Text('Copy text')),
+          const PopupMenuItem(value: 'link', child: Text('Copy link')),
           if (!mine)
             const PopupMenuItem(
               value: 'person',
@@ -433,6 +472,11 @@ extension _PublicChatPages on _OurNetAppState {
         case 'copy':
           await Clipboard.setData(ClipboardData(text: m.text));
           notice('Copied');
+        case 'link':
+          await Clipboard.setData(
+            ClipboardData(text: Links.message(space, m.object.id)),
+          );
+          notice('Link copied');
         case 'person':
           await showPersonDetails(context, m.object.author);
         case 'hide':

@@ -1,6 +1,7 @@
 import 'model.dart';
 import 'node.dart';
 import 'note_state.dart';
+import 'public_names.dart';
 
 /// One message in a public chat, as a list shows it.
 typedef ChatMessage = ({
@@ -37,7 +38,20 @@ class PublicChats {
   final NoteState state;
   PublicChats(this.node, this.state);
 
-  static bool isChat(String space) => creatorOf(space) != null;
+  /// A chat is one with an owner (`chat:<creator>:<random>`) or, since public
+  /// names, one called by name (`chat:<name>`). See [PublicNames].
+  static bool isChat(String space) =>
+      creatorOf(space) != null || slugOf(space) != null;
+
+  /// The name of the public chat at [space] when it is called by name, which
+  /// nobody owns; null for any other space.
+  static String? slugOf(String space) {
+    if (!space.startsWith(prefix)) return null;
+    final name = space.substring(prefix.length);
+    return name.isNotEmpty && !name.contains(':') && PublicNames.slug(name) == name
+        ? name
+        : null;
+  }
 
   /// The person who started the chat at [space], or null for any other
   /// space.
@@ -54,9 +68,13 @@ class PublicChats {
   /// A link to the chat at [space], to send to people: their app shows it as
   /// a chip that joins and opens it. [name] lets the chip name the chat
   /// before its record has reached them.
-  static String link(String space, {String? name}) =>
-      'ournet://chat/${Uri.encodeComponent(space)}'
-      '${name == null || name.isEmpty ? '' : '?name=${Uri.encodeQueryComponent(name)}'}';
+  static String link(String space, {String? name}) {
+    // A chat called by name is linked by that name.
+    final slug = slugOf(space);
+    if (slug != null) return 'ournet://chat/${Uri.encodeComponent(slug)}';
+    return 'ournet://chat/${Uri.encodeComponent(space)}'
+        '${name == null || name.isEmpty ? '' : '?name=${Uri.encodeQueryComponent(name)}'}';
+  }
 
   /// The chat a [link] names, and the name it carries; null if it is not a
   /// chat link.
@@ -66,10 +84,15 @@ class PublicChats {
       return null;
     }
     final parts = uri.pathSegments;
-    if (parts.length != 1 || !isChat(parts.single)) return null;
+    if (parts.length != 1) return null;
+    // `ournet://chat/cooking` names the chat called cooking.
+    final space = isChat(parts.single)
+        ? parts.single
+        : PublicNames.chatSpace(parts.single);
+    if (space == null || !isChat(space)) return null;
     final name = uri.queryParameters['name']?.trim();
     return (
-      space: parts.single,
+      space: space,
       name: name == null || name.isEmpty
           ? null
           : name.length > 100
@@ -104,10 +127,24 @@ class PublicChats {
     return space;
   }
 
+  /// Starts the public chat called [name], or joins it if it exists: a name
+  /// is the address, so everyone who types it is in the same chat. Returns
+  /// its address.
+  Future<String> startOrJoin(String name) async {
+    final space = PublicNames.chatSpace(name);
+    if (space == null) {
+      throw ArgumentError('A public chat needs a name of letters or digits');
+    }
+    await state.subscribe(space, true);
+    return space;
+  }
+
   /// Joins the chat at [address] (or a chat link): its messages sync from
   /// now on.
   Future<String> join(String address) async {
-    final space = parseLink(address.trim())?.space ?? address.trim();
+    final text = address.trim();
+    final space = parseLink(text)?.space ??
+        (isChat(text) ? text : PublicNames.chatSpace(text) ?? text);
     if (!isChat(space)) {
       throw ArgumentError('That is not a public chat address');
     }
@@ -125,7 +162,10 @@ class PublicChats {
   /// [info], for code without a [PublicChats] (notifications).
   static ({String name, String description})? infoOf(Node node, String space) {
     final creator = creatorOf(space);
-    if (creator == null) return null;
+    if (creator == null) {
+      final named = slugOf(space);
+      return named == null ? null : (name: named, description: '');
+    }
     for (final o in node.store.objects(
       kind: recordKind,
       space: space,

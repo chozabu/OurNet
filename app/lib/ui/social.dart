@@ -1,39 +1,53 @@
 part of 'app.dart';
 
 extension _SocialPages on _OurNetAppState {
-  Future<void> joinForum(BuildContext context, {bool create = false}) async {
-    final value = await ask(
-      context,
-      create ? 'Start a forum' : 'Join forum',
-      hint: create
-          ? 'Name your public forum'
-          : 'Paste a forum address, or enter a legacy forum name',
-    );
-    if (value == null || value.isEmpty) return;
-    if (value.startsWith('_') || value == 'files') {
-      throw StateError('Choose a public forum name other than files.');
+  /// Starts or joins the public forum a name, address or link points at. A
+  /// forum's name is its address, so one that exists is joined and one that
+  /// does not is started. [typed] is words already entered, such as from
+  /// Browse.
+  Future<void> joinForum(BuildContext context, {String? typed}) async {
+    final value =
+        typed ??
+        await ask(
+          context,
+          'Start or join a forum',
+          hint: 'Forum name, or paste an address or link',
+        );
+    if (value == null || value.trim().isEmpty) return;
+    final text = value.trim();
+    final linked = Links.parse(text);
+    final listed = listings.found().map((l) => l.space).toSet();
+    // An address as it stands (a forum from before names, or one a friend
+    // follows), else the name as it is turned into one.
+    final id = linked != null && linked.type == 'forum'
+        ? linked.space
+        : node.subscriptions.contains(text) || listed.contains(text)
+        ? text
+        : PublicNames.forumFrom(text);
+    if (id == null) {
+      throw StateError(
+        'Choose a forum name with letters or digits, other than files.',
+      );
     }
-    final id = create ? 'forum2:${node.person}:${randomId()}' : value;
-    if (create) {
+    final known = node.subscriptions.contains(id) || listed.contains(id);
+    var description = '';
+    if (!known && PublicNames.forum2Owner(id) == null) {
       if (!context.mounted) return;
-      final description = await ask(
+      final entered = await ask(
         context,
-        'Forum description',
-        hint: 'What is this forum for?',
+        'Start "$id"',
+        hint: 'Optional: what is this forum for?',
         lines: 3,
       );
-      if (description == null) return;
-      await node.publish('forum', {
-        'name': value,
-        'description': description,
-      }, space: id);
+      if (entered == null) return;
+      description = entered.trim();
     }
     await notes.state.subscribe(id, true);
+    await listings.advertise(id, description: description);
     openForum(id);
-    if (create) {
-      notice(
-        'Forum created. Start a discussion, then copy the forum address to invite people.',
-      );
+    if (network.running) unawaited(network.syncAll());
+    if (!known) {
+      notice('Joined "$id". Friends will see it under Friends follow.');
     }
   }
 
@@ -52,16 +66,16 @@ extension _SocialPages on _OurNetAppState {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           FilledButton.icon(
-            onPressed: busy
-                ? null
-                : () => act(() => joinForum(context, create: true)),
+            onPressed: busy ? null : () => act(() => joinForum(context)),
             icon: const Icon(Icons.add),
-            label: const Text('Start a forum'),
+            label: const Text('Start or join a forum'),
           ),
           TextButton.icon(
-            onPressed: busy ? null : () => act(() => joinForum(context)),
-            icon: const Icon(Icons.login),
-            label: const Text('Join forum'),
+            onPressed: busy
+                ? null
+                : () => act(() => browseSpaces(context, 'forum')),
+            icon: const Icon(Icons.travel_explore),
+            label: const Text('Browse forums'),
           ),
           const Text('Public discussions · visible to others'),
           Expanded(
@@ -94,6 +108,7 @@ extension _SocialPages on _OurNetAppState {
                     selected: forum == space,
                     onTap: () => openForum(forum),
                   ),
+                suggestedSpaces(context, 'forum'),
                 // All lists the groups' private forums after the public ones.
                 scopedRooms(
                   (context, rooms) => Column(
@@ -159,7 +174,7 @@ extension _SocialPages on _OurNetAppState {
                             ? null
                             : () => act(() => startPublicChat(context)),
                         icon: const Icon(Icons.add_comment_outlined),
-                        label: const Text('Start a public chat'),
+                        label: const Text('Start or join a public chat'),
                       )
                     : FilledButton.icon(
                         onPressed: () =>
@@ -177,7 +192,7 @@ extension _SocialPages on _OurNetAppState {
                     () => switch (choice) {
                       'group' => createPrivateGroup(context),
                       'start' => startPublicChat(context),
-                      _ => joinPublicChat(context),
+                      _ => browseSpaces(context, 'chat'),
                     },
                   ),
                   itemBuilder: (_) => [
@@ -193,7 +208,7 @@ extension _SocialPages on _OurNetAppState {
                         value: 'start',
                         child: ListTile(
                           leading: Icon(Icons.add_comment_outlined),
-                          title: Text('Start a public chat'),
+                          title: Text('Start or join a public chat'),
                         ),
                       ),
                     ],
@@ -201,7 +216,7 @@ extension _SocialPages on _OurNetAppState {
                       value: 'join',
                       child: ListTile(
                         leading: Icon(Icons.login),
-                        title: Text('Join a public chat'),
+                        title: Text('Browse public chats'),
                       ),
                     ),
                   ],
@@ -226,10 +241,18 @@ extension _SocialPages on _OurNetAppState {
                         'Add a friend by QR code, on the same Wi-Fi, or with an invitation.',
                         Icons.chat_bubble_outline,
                       )
-                    : empty(
-                        'No public chats yet',
-                        'Start one and share its address, or join one with an address someone sent you.',
-                        Icons.forum_outlined,
+                    : ListView(
+                        children: [
+                          SizedBox(
+                            height: 240,
+                            child: empty(
+                              'No public chats yet',
+                              'Start one by its name, or join one friends follow.',
+                              Icons.forum_outlined,
+                            ),
+                          ),
+                          suggestedSpaces(context, 'chat'),
+                        ],
                       );
               }
               final order = friends
@@ -261,6 +284,8 @@ extension _SocialPages on _OurNetAppState {
                   if (showArchivedChats)
                     for (final person in order.archived)
                       chatTile(context, person),
+                  if (scope == ScopeKind.public)
+                    suggestedSpaces(context, 'chat'),
                 ],
               );
             }),
@@ -325,8 +350,16 @@ extension _SocialPages on _OurNetAppState {
               tooltip: 'Forum options',
               onSelected: (action) {
                 if (action == 'copy') {
-                  Clipboard.setData(ClipboardData(text: space));
-                  notice('Forum address copied');
+                  Clipboard.setData(ClipboardData(text: Links.forum(space)));
+                  notice('Forum link copied. Anyone you send it to can join.');
+                }
+                if (action == 'advert') {
+                  act(
+                    () => listings.setAdvertised(
+                      space,
+                      !listings.advertises(space),
+                    ),
+                  );
                 }
                 if (action == 'edit') act(() => forumSettings(context));
                 if (action == 'leave') {
@@ -342,7 +375,12 @@ extension _SocialPages on _OurNetAppState {
               itemBuilder: (_) => [
                 const PopupMenuItem(
                   value: 'copy',
-                  child: Text('Copy forum address'),
+                  child: Text('Copy forum link'),
+                ),
+                CheckedPopupMenuItem(
+                  value: 'advert',
+                  checked: listings.advertises(space),
+                  child: const Text('Show to friends in Browse'),
                 ),
                 if (ownsForum(space))
                   const PopupMenuItem(
@@ -354,10 +392,10 @@ extension _SocialPages on _OurNetAppState {
             ),
         ],
       ),
-      if (!all && forumInfo(space)?['description'] != null)
+      if (!all && forumDescription(space) != null)
         Align(
           alignment: Alignment.centerLeft,
-          child: Text(forumInfo(space)!['description']),
+          child: Text(forumDescription(space)!),
         ),
       if (selectedThread == null && !all)
         Align(

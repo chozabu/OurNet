@@ -74,6 +74,7 @@ import 'calendar_flows.dart';
 import 'calendar_page.dart';
 import 'event_links.dart';
 import 'chat_links.dart';
+import 'object_links.dart';
 import '../services/speech.dart';
 import 'drawing.dart';
 import 'avatar.dart';
@@ -107,6 +108,7 @@ part 'forum_features.dart';
 part 'notes_home.dart';
 part 'scopes.dart';
 part 'public_chat.dart';
+part 'browse.dart';
 
 /// Places in the app. [id] is saved as the last destination; keep it stable.
 enum Destination {
@@ -226,6 +228,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// have not yet heard of it. Each pass covers only what arrived since.
   CoalescedTask? _keyGrants;
 
+  /// Keeps this person's adverts for the public forums and chats they follow
+  /// in step with what they follow: see [Listings].
+  CoalescedTask? _listings;
+  Timer? _listingsRenewal;
+  String _listingsKey = '';
+
   /// Publishes who this person is connected to when that changes.
   CoalescedTask? _friendList;
 
@@ -282,6 +290,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   EverydayItem? listRoom;
 
   late final PublicChats publicChats;
+  late final Listings listings;
 
   /// The public chat open in Chat, instead of a direct conversation.
   String? publicChat;
@@ -454,6 +463,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     notes = Notes(node);
     personalNotesController = NotesHomeController(notes);
     publicChats = PublicChats(node, notes.state);
+    listings = Listings(node, notes.state);
     groupNotesController = NotesHomeController(notes);
     inboxComposer.addListener(
       () => rememberDraft(notesComposerContext, inboxComposer),
@@ -611,6 +621,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _changes = node.changes.stream.listen((_) {
       _dataRefresh.schedule();
       _keyGrants?.schedule();
+      // Only what is followed or switched off changes what is advertised.
+      final key = '${node.subscriptions.length}/${notes.state.version}';
+      if (key != _listingsKey) {
+        _listingsKey = key;
+        _listings?.schedule();
+      }
       _friendList?.schedule();
       _groupInvites?.schedule();
       if (widget.enablePlatform) unawaited(offerHistory());
@@ -627,6 +643,16 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         (e) => network.log('Could not share keys with your devices: $e'),
         delay: const Duration(seconds: 2),
       )..schedule();
+      _listings = CoalescedTask(
+        () => listings.refresh(),
+        (e) => network.log('Could not update your public adverts: $e'),
+        delay: const Duration(seconds: 20),
+      )..schedule();
+      // Adverts last 30 days and are renewed after 10.
+      _listingsRenewal = Timer.periodic(
+        const Duration(hours: 12),
+        (_) => _listings?.schedule(),
+      );
       _friendList = CoalescedTask(
         () => node.connections.publish(),
         (e) => network.log('Could not publish your friend list: $e'),
@@ -1190,6 +1216,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _changes?.cancel();
     _dataRefresh.close();
     _keyGrants?.close();
+    _listings?.close();
+    _listingsRenewal?.cancel();
     _friendList?.close();
     _groupInvites?.close();
     _readTimer?.cancel();
@@ -1339,7 +1367,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       child: ChatLinks(
         joined: (space) => publicChats.joined.contains(space),
         open: followChatLink,
-        child: child ?? const SizedBox.shrink(),
+        child: ObjectLinks(
+          joined: (space) => node.subscriptions.contains(space),
+          preview: (link) => Links.preview(node, link),
+          open: followObjectLink,
+          child: child ?? const SizedBox.shrink(),
+        ),
       ),
     ),
     debugShowCheckedModeBanner: false,

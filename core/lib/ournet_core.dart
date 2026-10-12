@@ -27,3 +27,6 @@ export 'src/connections.dart';
 export 'src/group_access.dart';
 export 'src/scopes.dart';
 export 'src/public_chats.dart';
+export 'src/public_names.dart';
+export 'src/listings.dart';
+export 'src/links.dart';

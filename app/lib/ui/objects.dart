@@ -363,6 +363,18 @@ extension _ObjectsPages on _OurNetAppState {
       if (action == 'provenance') provenance(context, o);
       if (action == 'profile') unawaited(showPersonDetails(context, author));
       if (action == 'copy') Clipboard.setData(ClipboardData(text: copy!));
+      if (action == 'link') {
+        Clipboard.setData(
+          ClipboardData(
+            text: Links.post(
+              o.space,
+              o.id,
+              title: o.data['payload']['title'] as String?,
+            ),
+          ),
+        );
+        notice('Link copied');
+      }
     },
     itemBuilder: (_) => [
       if (author != node.person)
@@ -377,6 +389,8 @@ extension _ObjectsPages on _OurNetAppState {
         ),
       if (copy != null && copy.isNotEmpty)
         const PopupMenuItem(value: 'copy', child: Text('Copy text')),
+      if (o.kind == 'post' && o.isPublic)
+        const PopupMenuItem(value: 'link', child: Text('Copy link')),
       if (provenanceItem)
         const PopupMenuItem(
           value: 'provenance',

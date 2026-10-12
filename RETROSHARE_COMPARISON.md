@@ -211,8 +211,14 @@ friends and not relayed automatically. A flood then needs real friends to
 choose to pass a forum on, and every hop is accountable. For posts to reach a
 new subscriber C whose friend B does not follow the forum, prefer admitting
 C's device to a subscriber for that forum's space only (scoped admission, as
-group members are admitted) over making B carry posts it does not read. Not
-yet decided or built.
+group members are admitted) over making B carry posts it does not read.
+
+Built (October 2026) as friends-only adverts: see "Finding public forums and
+chats" in [SCOPES.md](SCOPES.md). Adverts go to direct friends and are not
+relayed, are on by default for public forums and chats, and can be switched
+off per space or altogether. Only the carrier question is settled by
+construction: the friend who advertises a space follows it. Friends of
+friends are not covered yet.
 
 ### 3. Per-path evidence (done)
 Evidence used to be one set per object, merged between every holder and

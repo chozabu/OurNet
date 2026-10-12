@@ -9,6 +9,7 @@ import 'blob_worker.dart';
 import 'locations.dart';
 import 'avatars.dart';
 import 'connections.dart';
+import 'listings.dart';
 import 'group_access.dart';
 
 /// What a person chose about someone else, kept alike on all their devices.
@@ -122,6 +123,9 @@ class Node {
       contacts[c.device] = c;
     }
     subscriptions.addAll(store.subscribedSpaces());
+    // Friends' listings of public forums and chats (see Listings) travel as
+    // a followed space, so builds without them are never offered any.
+    subscriptions.add(Listings.home);
     blocked.addAll((store.setting('blocked') as List? ?? []).cast<String>());
     forgotten.addAll(
       (store.setting('forgotten') as List? ?? []).cast<String>(),
@@ -1122,6 +1126,9 @@ class Node {
       return o.audience.contains(peer.person) ||
           o.via.contains(peer.person) ||
           groups.reaches(o.space, peer.person);
+    // A listing goes from the person who wrote it to their friends and no
+    // further (see Listings): friends do not pass them on.
+    if (o.kind == Listings.kind && o.author != person) return false;
     // As [receive] accepts them. An own device offered posts from a forum it
     // does not follow drops them, and every later page offered the same ones
     // again, so nothing older than them ever reached it.
