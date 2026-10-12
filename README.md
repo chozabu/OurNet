@@ -31,7 +31,8 @@ The focus is on **identity, accountability and trust**:
 Today it covers Keep-style notes and checklists (including voice notes with
 on-device transcription), 1:1 and group conversations, file sharing, private
 groups with shared lists, a calendar of your own with a private calendar for
-each group ([CALENDAR.md](CALENDAR.md)), and private drive sync across your own
+each group ([CALENDAR.md](CALENDAR.md)), an activity feed of what friends did
+([ACTIVITY.md](ACTIVITY.md)), and private drive sync across your own
 devices. It runs on Windows and Android. The longer-term vision, which includes communities,
 wikis, maps and calls, is described in [CORE_IDEA.md](CORE_IDEA.md).
 

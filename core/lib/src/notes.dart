@@ -376,85 +376,97 @@ class Notes {
       var summary = _summaries[id];
       if (summary == null) {
         await slice.pause();
-        final note = await get(id, includeUnavailable: true);
-        if (note == null) continue;
-        final text = note.text.isEmpty && note.checks.isNotEmpty
-            ? note.checks
-                  .take(12)
-                  .map((c) => '${note.done(c) ? '☑' : '☐'} ${note.itemText(c)}')
-                  .join('\n')
-            : note.text;
-        final unchecked = note.checks.where((c) => !note.done(c)).toList();
-        final transcripts = note.files
-            .map(note.transcript)
-            .where((t) => t.isNotEmpty)
-            .join('\n');
-        summary = EverydayItem(note.room.object, {
-          'entry': id,
-          'type': 'shared_note',
-          'title': bounded(note.rawTitle, 100),
-          'label': note.label,
-          'text': bounded(text, 512),
-          'body': bounded(note.text, 512),
-          'checklist': note.checks.isNotEmpty,
-          'epoch': note.epoch,
-          'color': note.color ?? 'default',
-          'updated': note.updated,
-          'owner': note.room.data['owner'],
-          'people': note.members.take(8).toList(),
-          // Unchecked items first, in list order, as a bounded card preview.
-          'checks': [
-            for (final id in unchecked.take(8))
-              {
-                'id': id,
-                'text': bounded(note.itemText(id), 160),
-                'done': false,
-                'indent': note.indent(id),
-                'parents': note.parents('check:$id:done'),
-              },
-          ],
-          'moreUnchecked': (unchecked.length - 8).clamp(0, maxChecks),
-          'checkedCount': note.checks.length - unchecked.length,
-          'deleted': note.deleted || !note.available,
-          'removed': note.deleted,
-          if (note.deleted)
-            ...() {
-              final removal = note.heads['deleted']!.firstWhere(
-                (r) => r.data['value'] == true,
-              );
-              return {
-                'removal': removal.object.id,
-                'removedAt': removal.object.created,
-              };
-            }(),
-          'deletedParents': note.parents('deleted'),
-          'available': note.available,
-          'members': note.members.length,
-          'conflicts': note.hasConflicts,
-          'background': note.background ?? 'none',
-          'format': note.format,
-          'created': note.created,
-          'transcript': bounded(transcripts, 512),
-          // Attachment references only; cards read stored previews by object.
-          'files': [
-            for (final f in note.files.take(6))
-              {
-                // Chunk references and key, as a file payload for previews.
-                ..._fileFields(note.file(f)!.data),
-                'id': f,
-                'object': note.file(f)!.object.id,
-                'kind': note.fileMeta(f)['kind'],
-                'duration': note.fileMeta(f)['duration'],
-              },
-          ],
-          'fileCount': note.files.length,
-        });
-        _summaries[id] = summary;
+        summary = await _project(id);
+        if (summary == null) continue;
       }
       if (includeDeleted || summary.data['deleted'] != true)
         result.add(summary);
     }
     return result;
+  }
+
+  /// One note's list projection, as [summaries] gives it; null if there is
+  /// no such note. For showing a single note elsewhere (the activity feed).
+  Future<EverydayItem?> summary(String id) async {
+    await refresh();
+    return _summaries[id] ?? await _project(id);
+  }
+
+  Future<EverydayItem?> _project(String id) async {
+    final note = await get(id, includeUnavailable: true);
+    if (note == null) return null;
+    final text = note.text.isEmpty && note.checks.isNotEmpty
+        ? note.checks
+              .take(12)
+              .map((c) => '${note.done(c) ? '☑' : '☐'} ${note.itemText(c)}')
+              .join('\n')
+        : note.text;
+    final unchecked = note.checks.where((c) => !note.done(c)).toList();
+    final transcripts = note.files
+        .map(note.transcript)
+        .where((t) => t.isNotEmpty)
+        .join('\n');
+    final summary = EverydayItem(note.room.object, {
+      'entry': id,
+      'type': 'shared_note',
+      'title': bounded(note.rawTitle, 100),
+      'label': note.label,
+      'text': bounded(text, 512),
+      'body': bounded(note.text, 512),
+      'checklist': note.checks.isNotEmpty,
+      'epoch': note.epoch,
+      'color': note.color ?? 'default',
+      'updated': note.updated,
+      'owner': note.room.data['owner'],
+      'people': note.members.take(8).toList(),
+      // Unchecked items first, in list order, as a bounded card preview.
+      'checks': [
+        for (final id in unchecked.take(8))
+          {
+            'id': id,
+            'text': bounded(note.itemText(id), 160),
+            'done': false,
+            'indent': note.indent(id),
+            'parents': note.parents('check:$id:done'),
+          },
+      ],
+      'moreUnchecked': (unchecked.length - 8).clamp(0, maxChecks),
+      'checkedCount': note.checks.length - unchecked.length,
+      'deleted': note.deleted || !note.available,
+      'removed': note.deleted,
+      if (note.deleted)
+        ...() {
+          final removal = note.heads['deleted']!.firstWhere(
+            (r) => r.data['value'] == true,
+          );
+          return {
+            'removal': removal.object.id,
+            'removedAt': removal.object.created,
+          };
+        }(),
+      'deletedParents': note.parents('deleted'),
+      'available': note.available,
+      'members': note.members.length,
+      'conflicts': note.hasConflicts,
+      'background': note.background ?? 'none',
+      'format': note.format,
+      'created': note.created,
+      'transcript': bounded(transcripts, 512),
+      // Attachment references only; cards read stored previews by object.
+      'files': [
+        for (final f in note.files.take(6))
+          {
+            // Chunk references and key, as a file payload for previews.
+            ..._fileFields(note.file(f)!.data),
+            'id': f,
+            'object': note.file(f)!.object.id,
+            'kind': note.fileMeta(f)['kind'],
+            'duration': note.fileMeta(f)['duration'],
+          },
+      ],
+      'fileCount': note.files.length,
+    });
+    return _summaries[id] = summary;
   }
 
   Future<NoteDocument?> get(

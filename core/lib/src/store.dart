@@ -285,6 +285,8 @@ class Store {
       [changeLogLimit],
     );
 
+    _arrivals();
+
     db.execute('''CREATE TABLE IF NOT EXISTS previews(
       id TEXT PRIMARY KEY, bytes BLOB NOT NULL, size INTEGER NOT NULL, used INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS previews_used ON previews(used);
@@ -884,6 +886,95 @@ class Store {
     ))
       (row['rowid'] as int, _parse(row['id'] as String, row['wire'] as String)),
   ];
+
+  /// The kinds the activity feed shows (see ACTIVITY.md). Their arrivals are
+  /// recorded as they are stored; renaming the trigger in [_arrivals] is what
+  /// makes a changed list take effect.
+  static const activityKinds = [
+    'post',
+    'room_post',
+    'note_op',
+    'cal_event',
+    'room_item',
+    'inbox',
+    'drive',
+    'file',
+    'message',
+    'chat_msg',
+  ];
+
+  /// How late an object may arrive and still count as news: one created
+  /// longer before it arrives is history (a new device's first sync, a group
+  /// joined with its history), and is placed at the time it was created.
+  static const lateArrival = 7 * 24 * 3600 * 1000;
+
+  static const _nowMs =
+      "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
+
+  /// When each object the activity feed shows reached this device. Local
+  /// only, holding object IDs and times and no content. Objects from before
+  /// the table are given their creation time, for the last 30 days.
+  void _arrivals() {
+    final kinds = activityKinds.map((k) => "'$k'").join(',');
+    if (db
+        .select("SELECT name FROM sqlite_master WHERE name='arrivals'")
+        .isEmpty) {
+      final since =
+          DateTime.now().millisecondsSinceEpoch - 30 * 24 * 3600 * 1000;
+      db.execute('''BEGIN IMMEDIATE;
+        CREATE TABLE arrivals(id TEXT PRIMARY KEY, at INTEGER NOT NULL);
+        CREATE INDEX arrivals_order ON arrivals(at DESC, id);
+        INSERT OR IGNORE INTO arrivals
+          SELECT id, MIN(created, $_nowMs) FROM objects
+          WHERE created > $since AND kind IN ($kinds);
+        COMMIT;
+      ''');
+    }
+    db.execute('''
+      CREATE TRIGGER IF NOT EXISTS arrival_added_1 AFTER INSERT ON objects
+      WHEN NEW.kind IN ($kinds) BEGIN
+        INSERT OR IGNORE INTO arrivals VALUES(NEW.id,
+          CASE WHEN NEW.created > $_nowMs - $lateArrival THEN $_nowMs
+          ELSE NEW.created END);
+      END;
+      CREATE TRIGGER IF NOT EXISTS arrival_removed AFTER DELETE ON objects
+      BEGIN DELETE FROM arrivals WHERE id=OLD.id; END;
+    ''');
+  }
+
+  /// Objects the activity feed shows, by when they arrived: newest first
+  /// before [before] (an arrival time and ID), or oldest first after [after],
+  /// for catching up. Reads the arrival index, then only the rows returned.
+  List<(int, SignedObject)> arrivals({
+    (int, String)? before,
+    (int, String)? after,
+    int limit = 256,
+  }) {
+    final where = before != null
+        ? 'WHERE (a.at,a.id)<(?,?) ORDER BY a.at DESC,a.id DESC'
+        : after != null
+        ? 'WHERE (a.at,a.id)>(?,?) ORDER BY a.at,a.id'
+        : 'ORDER BY a.at DESC,a.id DESC';
+    final cursor = before ?? after;
+    return [
+      for (final row in _select(
+        'SELECT a.at, o.id, o.wire FROM arrivals a JOIN objects o ON o.id=a.id '
+        '$where LIMIT ?',
+        [?cursor?.$1, ?cursor?.$2, limit.clamp(1, 512)],
+      ))
+        (row['at'] as int, _parse(row['id'] as String, row['wire'] as String)),
+    ];
+  }
+
+  /// The newest arrival recorded: where catching up starts from.
+  (int, String)? get newestArrival {
+    final rows = _select(
+      'SELECT at, id FROM arrivals ORDER BY at DESC, id DESC LIMIT 1',
+    );
+    return rows.isEmpty
+        ? null
+        : (rows.first['at'] as int, rows.first['id'] as String);
+  }
 
   /// The newest object of [kind] in [space], from the (kind, space, created)
   /// index: what a list orders a group by, without reading its history.

@@ -108,6 +108,7 @@ part 'discovery.dart';
 part 'group_members.dart';
 part 'forum_features.dart';
 part 'notes_home.dart';
+part 'activity.dart';
 part 'scopes.dart';
 part 'public_chat.dart';
 part 'browse.dart';
@@ -128,7 +129,8 @@ enum Destination {
   calendar(12, 'Calendar', Icons.calendar_month_outlined),
   maps(13, 'Maps', Icons.map_outlined),
   storage(14, 'Storage', Icons.storage),
-  stats(15, 'Network stats', Icons.insights);
+  stats(15, 'Network stats', Icons.insights),
+  activity(16, 'Activity', Icons.dynamic_feed_outlined);
 
   final int id;
   final String title;
@@ -137,7 +139,15 @@ enum Destination {
 
   /// The main navigation list, in order. Groups are not a place of their
   /// own: picking one as the scope shows its content in these (SCOPES.md).
-  static const navigation = [notes, calendar, maps, messages, forums, files];
+  static const navigation = [
+    activity,
+    notes,
+    calendar,
+    maps,
+    messages,
+    forums,
+    files,
+  ];
 
   /// The content this destination shows, filtered by the scope; null for
   /// places that ignore the scope (settings, search…).
@@ -148,6 +158,7 @@ enum Destination {
     messages => ScopedSection.chat,
     forums => ScopedSection.forums,
     files => ScopedSection.files,
+    activity => ScopedSection.activity,
     _ => null,
   };
 
@@ -240,6 +251,19 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
 
   /// Publishes who this person is connected to when that changes.
   CoalescedTask? _friendList;
+
+  /// What happened lately (ACTIVITY.md), kept current as things arrive.
+  late final Activity activity = Activity(node, notes: notes);
+  late final CoalescedTask _activityRefresh;
+  StreamSubscription<Set<String>>? _activityChanges;
+
+  /// The activity feed's sections switched off, saved.
+  Set<ActivitySection> activityHidden = {ActivitySection.chat};
+  bool activityLoadingMore = false;
+
+  /// Arrivals seen before the Activity page was opened: rows after it stay
+  /// marked new while the page is open. Cleared on leaving it.
+  int? activityFloor;
 
   /// Folds the people members added into the records of groups this person
   /// owns: see [Everyday.settleInvites].
@@ -602,6 +626,15 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
             unawaited(openEventLink(link));
           };
     _deliveryRefresh = CoalescedTask(loadDeliveryLabels, (e) => notice('$e'));
+    activityHidden = restoreActivityHidden();
+    _activityRefresh = CoalescedTask(() async {
+      if (await activity.refresh()) redraw();
+    }, (e) => notice('Activity: $e'));
+    _activityChanges = node.onChangesTo(
+      Activity.kinds,
+      _activityRefresh.schedule,
+    );
+    _activityRefresh.schedule();
     _dataRefresh = CoalescedTask(() async {
       await messageUpdates.catchUp();
       for (final person in await conversations.refreshConversations()) {
@@ -1223,6 +1256,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _listings?.close();
     _listingsRenewal?.cancel();
     _friendList?.close();
+    _activityChanges?.cancel();
+    _activityRefresh.close();
     _groupInvites?.close();
     _readTimer?.cancel();
     typing
@@ -1430,12 +1465,14 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                         trailing: switch (d) {
                           Destination.forums => countBadge(forumsUnread()),
                           Destination.messages => countBadge(chatsUnread()),
+                          Destination.activity => countBadge(activityUnseen()),
                           _ => null,
                         },
                         selected: tab == d,
                         onTap: () {
                           // The scope stays: the section shows its part.
                           update(() {
+                            if (d != tab) activityFloor = null;
                             tab = d;
                             showConversation = false;
                             showForum = false;
@@ -1654,7 +1691,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       return scopeUnavailable(context, section);
     }
     // A group's content, in whichever section is open.
-    if (section != null && activeRoom != null) return everydayPage(context);
+    if (section != null &&
+        section != ScopedSection.activity &&
+        activeRoom != null) {
+      return everydayPage(context);
+    }
     return _page(context);
   }
 
@@ -1683,6 +1724,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     Destination.profile => profile(context),
     Destination.settings => settings(context),
     Destination.notes => everydayPage(context),
+    Destination.activity => activityPage(context),
     Destination.groups => groupsPage(context),
     Destination.search => searchPage(context),
     Destination.calendar =>

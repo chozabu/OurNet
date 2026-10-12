@@ -812,6 +812,7 @@ extension _Scopes on _OurNetAppState {
       ScopedSection.maps =>
         'Maps show you and the friends sharing their location with you. '
             'They are not split by group yet.',
+      ScopedSection.activity => 'Activity covers every scope.',
     };
     return Center(
       child: SingleChildScrollView(
