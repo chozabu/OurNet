@@ -144,20 +144,16 @@ extension _NotesHome on _OurNetAppState {
 
   /// Replaces the current snackbar with "Note [done]" / "N notes [done]".
   void notesNotice(List<String> ids, String done, {VoidCallback? onUndo}) {
-    messenger.currentState
-      ?..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          // Action snackbars persist by default; these should time out.
-          persist: false,
-          content: Text(
-            ids.length == 1 ? 'Note $done' : '${ids.length} notes $done',
-          ),
-          action: onUndo == null
-              ? null
-              : SnackBarAction(label: 'Undo', onPressed: onUndo),
+    messenger.currentState?.showNotice(
+      AppNotice(
+        content: Text(
+          ids.length == 1 ? 'Note $done' : '${ids.length} notes $done',
         ),
-      );
+        action: onUndo == null
+            ? null
+            : SnackBarAction(label: 'Undo', onPressed: onUndo),
+      ),
+    );
   }
 
   /// One Undo snackbar for a whole removal, however many notes it covers.

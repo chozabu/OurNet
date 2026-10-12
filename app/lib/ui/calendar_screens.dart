@@ -31,17 +31,15 @@ extension _CalendarScreens on _OurNetAppState {
   }) {
     final state = messenger.currentState;
     if (state == null) return;
-    state
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: Duration(seconds: action == null ? 4 : 7),
-          action: action == null || onAction == null
-              ? null
-              : SnackBarAction(label: action, onPressed: onAction),
-        ),
-      );
+    state.showNotice(
+      AppNotice(
+        content: Text(message),
+        duration: Duration(seconds: action == null ? 4 : 7),
+        action: action == null || onAction == null
+            ? null
+            : SnackBarAction(label: action, onPressed: onAction),
+      ),
+    );
   }
 
   Widget calendarScreen(BuildContext context) =>

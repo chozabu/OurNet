@@ -1,3 +1,4 @@
+import 'app_notice.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -1504,22 +1505,19 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
       return;
     }
     if (!mounted) return;
-    ScaffoldMessenger.maybeOf(context)
-      ?..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          persist: false,
-          content: const Text('Attachment removed'),
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: () async {
-              final latest = await widget.notes.get(current.id);
-              if (latest == null) return;
-              await run(() => widget.notes.set(latest, field, false));
-            },
-          ),
+    ScaffoldMessenger.maybeOf(context)?.showNotice(
+      AppNotice(
+        content: const Text('Attachment removed'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () async {
+            final latest = await widget.notes.get(current.id);
+            if (latest == null) return;
+            await run(() => widget.notes.set(latest, field, false));
+          },
         ),
-      );
+      ),
+    );
   }
 
   Future<void> addMenu() async {

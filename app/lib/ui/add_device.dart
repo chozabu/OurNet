@@ -1,3 +1,4 @@
+import 'app_notice.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -225,8 +226,8 @@ class _AddDevicePageState extends State<AddDevicePage> {
                     ClipboardData(text: session!.invitation),
                   );
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
+                    ScaffoldMessenger.of(context).showNotice(
+                      const AppNotice(
                         content: Text('Pairing invitation copied'),
                       ),
                     );

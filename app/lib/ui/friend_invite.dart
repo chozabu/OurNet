@@ -1,3 +1,4 @@
+import 'app_notice.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -171,8 +172,8 @@ class _FriendInvitePageState extends State<FriendInvitePage> {
       );
       expiry.cancel();
       if (approved == true && !mounted) {
-        messenger?.showSnackBar(
-          SnackBar(content: Text('You and ${cert.label} are now friends')),
+        messenger?.showNotice(
+          AppNotice(content: Text('You and ${cert.label} are now friends')),
         );
       }
       return approved == true;
@@ -373,8 +374,8 @@ class _FriendInvitePageState extends State<FriendInvitePage> {
                     ClipboardData(text: session.invitation),
                   );
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
+                    ScaffoldMessenger.of(context).showNotice(
+                      const AppNotice(
                         content: Text(
                           'Invitation copied · send it in any message app',
                         ),

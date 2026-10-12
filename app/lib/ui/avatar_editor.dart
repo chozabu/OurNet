@@ -1,3 +1,4 @@
+import 'app_notice.dart';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -222,7 +223,7 @@ class _AvatarCropPageState extends State<AvatarCropPage> {
         setState(() => _cropping = false);
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Could not use it: $e')));
+        ).showNotice(AppNotice(content: Text('Could not use it: $e')));
       }
     }
   }

@@ -457,7 +457,7 @@ class _OfflineMapsPageState extends State<OfflineMapsPage> {
     try {
       tiles.addRegion(choice.name, view.bounds, 0, choice.maxZoom);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showNotice(AppNotice(content: Text('$e')));
     }
   }
 

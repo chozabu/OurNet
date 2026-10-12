@@ -1,3 +1,4 @@
+import 'app_notice.dart';
 import 'chat_composer.dart';
 import 'conversation_history.dart';
 import 'conversation_search.dart';
@@ -1065,7 +1066,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   }
 
   void notice(String text) {
-    messenger.currentState?.showSnackBar(SnackBar(content: Text(text)));
+    messenger.currentState?.showNotice(AppNotice(content: Text(text)));
   }
 
   Future<void> act(Future<void> Function() action) async {

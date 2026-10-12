@@ -1,3 +1,4 @@
+import 'app_notice.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -93,8 +94,8 @@ class _EventLinkChipState extends State<EventLinkChip> {
             if (links == null) return;
             final opened = await links.open(context, widget.link);
             if (!opened && context.mounted) {
-              ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-                const SnackBar(
+              ScaffoldMessenger.maybeOf(context)?.showNotice(
+                const AppNotice(
                   content: Text('That event is not available on this device yet.'),
                 ),
               );

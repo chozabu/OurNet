@@ -639,9 +639,8 @@ extension _EverydayPages on _OurNetAppState {
           'sent': Everyday.sentOf(item),
         }, room: room);
         if (value == 'delete' && mounted) {
-          messenger.currentState?.showSnackBar(
-            SnackBar(
-              persist: false,
+          messenger.currentState?.showNotice(
+            AppNotice(
               content: const Text('Item removed'),
               action: SnackBarAction(
                 label: 'Undo',

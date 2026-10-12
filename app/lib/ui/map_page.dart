@@ -1,3 +1,4 @@
+import 'app_notice.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -310,7 +311,7 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
 
   void _say(String text) => ScaffoldMessenger.maybeOf(
     context,
-  )?.showSnackBar(SnackBar(content: Text(text)));
+  )?.showNotice(AppNotice(content: Text(text)));
 
   // Build.
 
