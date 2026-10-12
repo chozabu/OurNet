@@ -197,7 +197,7 @@ class Listings {
           if (live) await withdraw(s);
           continue;
         }
-        if (live && current != null && current.created > stale) continue;
+        if (live && current.created > stale) continue;
         await advertise(
           s,
           description: current?.payload['description'] as String? ?? '',

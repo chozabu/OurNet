@@ -153,7 +153,7 @@ extension _BrowsePages on _OurNetAppState {
     );
     // The dialog may still be animating out with the field in it.
     Future<void>.delayed(const Duration(seconds: 1), query.dispose);
-    if (picked == null) return;
+    if (picked == null || !context.mounted) return;
     if (picked is Listing) {
       await joinListed(picked);
       if (picked.type == 'chat') {
