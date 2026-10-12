@@ -64,8 +64,10 @@ class NoteState {
 
   /// Follows or unfollows [space] on every device this person has.
   Future<void> subscribe(String space, bool enabled) async {
-    node.subscribe(space, enabled);
     await set('follow', space, enabled);
+    // set() first refreshes and applies the previous follow registers. Apply
+    // the new local choice afterwards so that refresh cannot undo it.
+    node.subscribe(space, enabled);
   }
 
   /// Republishes every personal value, encrypted to the devices admitted now.

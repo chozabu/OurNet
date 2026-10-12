@@ -131,6 +131,9 @@ void main() {
     await syncPair(a, b);
     expect(lb.found(), hasLength(1));
     await sa.subscribe('cooking', false);
+    expect(sa.value('follow', 'cooking'), isFalse);
+    expect(a.subscriptions, isNot(contains('cooking')));
+    expect(a.store.subscribedSpaces(), isNot(contains('cooking')));
     await la.refresh();
     await syncPair(a, b);
     expect(lb.found(), isEmpty);

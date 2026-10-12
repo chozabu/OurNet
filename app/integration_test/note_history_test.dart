@@ -113,6 +113,21 @@ void main() {
       report['quietSyncMs'] = quiet.elapsedMilliseconds;
       log('quiet sync ${quiet.elapsed}');
 
+      // Changing a followed forum after loading history must leave local
+      // subscriptions in agreement with the synced follow register, even
+      // though saving the choice first refreshes the previous registers.
+      const followSpace = 'history-follow-check';
+      final otherState = NoteState(other);
+      for (final following in [true, false, true, false]) {
+        await notes.state.subscribe(followSpace, following);
+        expect(phone.subscriptions.contains(followSpace), following);
+        expect(phone.store.subscribedSpaces().contains(followSpace), following);
+        await syncPair(phone, other, rounds: 1000);
+        await otherState.refresh();
+        expect(other.subscriptions.contains(followSpace), following);
+        expect(otherState.value('follow', followSpace), following);
+      }
+
       // Exercise several bounded cursor pages even in the small fixture. A
       // refresh must not reread the prefix of history for each older page.
       InventoryCursor? cursor;

@@ -193,10 +193,19 @@ void main() {
     expect(laptop.subscriptions, containsAll(['forum2:a:one', 'forum2:b:two']));
 
     await laptopNotes.state.subscribe('forum2:a:one', false);
+    expect(laptop.subscriptions, isNot(contains('forum2:a:one')));
+    expect(laptop.store.subscribedSpaces(), isNot(contains('forum2:a:one')));
     await syncPair(laptop, phone, rounds: 64);
     await phoneNotes.refresh();
     expect(phone.subscriptions, isNot(contains('forum2:a:one')));
     expect(phone.subscriptions, contains('forum2:b:two'));
+
+    await laptopNotes.state.subscribe('forum2:a:one', true);
+    expect(laptop.subscriptions, contains('forum2:a:one'));
+    expect(laptop.store.subscribedSpaces(), contains('forum2:a:one'));
+    await syncPair(laptop, phone, rounds: 64);
+    await phoneNotes.refresh();
+    expect(phone.subscriptions, containsAll(['forum2:a:one', 'forum2:b:two']));
   });
 
   test('a new device reads the conversations from before it', () async {
