@@ -42,7 +42,7 @@ void main() {
       () => Future<void>.delayed(const Duration(milliseconds: 100)),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Take a note…'));
+    await tester.tap(find.text('Take a personal note…'));
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const ValueKey('note-text')),

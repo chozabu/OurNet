@@ -49,6 +49,15 @@ class NoteEditor extends StatefulWidget {
 
   /// For a new note: the group whose space it is created in.
   final String? group;
+
+  /// Where a new note may be created, as (group, name) with a null group
+  /// for Personal. When set (in All, where notes from several places are
+  /// listed together) the editor shows where the note lives, and a new
+  /// note can be sent elsewhere until it is first saved.
+  final List<(String?, String)>? destinations;
+
+  /// Called when a new note's destination is changed in the editor.
+  final void Function(String? group)? onDestination;
   final bool checklist;
   final DraftStore drafts;
   final PeerNetwork? network;
@@ -78,6 +87,8 @@ class NoteEditor extends StatefulWidget {
     required this.notes,
     this.id,
     this.group,
+    this.destinations,
+    this.onDestination,
     this.checklist = false,
     required this.drafts,
     this.network,
@@ -138,6 +149,9 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
   bool loading = true, applying = false, showChecked = true;
   bool formatting = false, attaching = false, pickingImage = false;
   String? focusedItem;
+
+  /// For a new note: the group it will be created in (null: Personal).
+  late String? group = widget.group;
   late bool checklistMode = widget.checklist;
 
   final undoStack = <EditorSnapshot>[];
@@ -765,7 +779,7 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
           return;
         }
         final created = await widget.notes.create(
-          group: widget.group,
+          group: group,
           stableId: stableId,
           title: title,
           text: text,
@@ -1825,6 +1839,60 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
     );
   }
 
+  /// In All, where the note lives: a chip that changes a new note's
+  /// destination until it is first saved, then a plain label (a note
+  /// cannot move between Personal and a group). Null elsewhere.
+  Widget? destination(BuildContext context) {
+    final destinations = widget.destinations;
+    if (destinations == null) return null;
+    final at = id == null ? group : Notes.groupOf(id!);
+    final name = at == null
+        ? 'Personal'
+        : destinations.where((d) => d.$1 == at).firstOrNull?.$2 ?? 'Group';
+    final icon = Icon(
+      at == null ? Icons.person_outline : Icons.lock_outline,
+      size: 18,
+    );
+    if (id != null) {
+      return Tooltip(
+        message: at == null ? 'A personal note' : 'A note in $name',
+        child: Chip(
+          avatar: icon,
+          label: Text(name, overflow: TextOverflow.ellipsis),
+          visualDensity: VisualDensity.compact,
+        ),
+      );
+    }
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: PopupMenuButton<String>(
+        tooltip: 'Where this note is saved',
+        onSelected: (value) {
+          final chosen = value.isEmpty ? null : value;
+          setState(() => group = chosen);
+          widget.onDestination?.call(chosen);
+        },
+        itemBuilder: (_) => [
+          for (final (space, label) in destinations)
+            CheckedPopupMenuItem(
+              value: space ?? '',
+              checked: space == group,
+              child: Text(label),
+            ),
+        ],
+        child: IgnorePointer(
+          child: InputChip(
+            avatar: icon,
+            label: Text(name, overflow: TextOverflow.ellipsis),
+            deleteIcon: const Icon(Icons.arrow_drop_down, size: 18),
+            onDeleted: () {},
+            visualDensity: VisualDensity.compact,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final current = note;
@@ -1886,6 +1954,8 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
         appBar: AppBar(
           backgroundColor: background,
           scrolledUnderElevation: 0,
+          titleSpacing: 0,
+          title: destination(context),
           actions: [
             IconButton(
               tooltip: pinned ? 'Unpin' : 'Pin',

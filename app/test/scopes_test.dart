@@ -306,7 +306,7 @@ void main() {
     ))!;
     await tester.pumpWidget(OurNetApp(node: node, enablePlatform: false));
     await settled(tester);
-    expect(find.text('Take a note…'), findsOneWidget);
+    expect(find.text('Take a personal note…'), findsOneWidget);
     await tester.tap(find.byTooltip('New notes are personal'));
     await tester.pumpAndSettle();
     await tester.tap(
@@ -332,6 +332,53 @@ void main() {
     }
     expect(inGroup.single.data['title'], 'Campsite ideas');
     expect((await tester.runAsync(() => notes.summaries()))!, isEmpty);
+    await node.close();
+    await friend.close();
+  });
+
+  testWidgets('in All, the editor shows and changes where a note goes', (
+    tester,
+  ) async {
+    wide(tester);
+    final (node, [friend]) = await friends(1);
+    final room = (await tester.runAsync(
+      () => Everyday(node).createRoom('Weekend trip', [friend.person]),
+    ))!;
+    await tester.pumpWidget(OurNetApp(node: node, enablePlatform: false));
+    await settled(tester);
+    await tester.tap(find.text('Take a personal note…'));
+    await settled(tester);
+    await tester.tap(find.byTooltip('Where this note is saved'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.widgetWithText(CheckedPopupMenuItem<String>, 'Weekend trip'),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('note-title')),
+      'Campsite ideas',
+    );
+    final notes = Notes(node);
+    List<EverydayItem> inGroup = const [];
+    for (var i = 0; i < 30 && inGroup.isEmpty; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      inGroup = (await tester.runAsync(
+        () => notes.summaries(group: room.object.space),
+      ))!;
+    }
+    expect(inGroup.single.data['title'], 'Campsite ideas');
+    // Once saved the note cannot move: the chip is only a label now.
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Where this note is saved'), findsNothing);
+    expect(find.byTooltip('A note in Weekend trip'), findsOneWidget);
+    // The capture bar follows the editor's choice.
+    await tester.pageBack();
+    await settled(tester);
+    expect(find.text('Take a note for Weekend trip…'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
     await node.close();
     await friend.close();
   });

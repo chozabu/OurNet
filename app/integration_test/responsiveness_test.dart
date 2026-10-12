@@ -85,7 +85,7 @@ void main() {
         await tester.pump();
         expect(find.text('Saving attachment locally…'), findsOneWidget);
         // Writing a note stays responsive while the import runs.
-        await tester.tap(find.text('Take a note…'));
+        await tester.tap(find.text('Take a personal note…'));
         await tester.pumpAndSettle();
         final body = find.byKey(const ValueKey('note-text'));
         await tester.enterText(body, 'Typed during import');

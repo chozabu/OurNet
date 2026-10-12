@@ -18,6 +18,8 @@ extension _NotesHome on _OurNetAppState {
     notes: notes,
     id: id,
     group: newNoteGroup,
+    destinations: scope == null ? noteDestinations : null,
+    onDestination: (group) => update(() => allNotesTarget = group),
     checklist: checklist,
     drafts: draftStore,
     network: network,
@@ -716,9 +718,17 @@ extension _NotesHome on _OurNetAppState {
     return knownRooms.any((r) => r.object.space == chosen) ? chosen : null;
   }
 
-  /// In All, the capture bar's choice of where new notes go.
+  /// Where a note can be created from All: Personal, then each group.
+  List<(String?, String)> get noteDestinations => [
+    (null, 'Personal'),
+    for (final room in knownRooms) (room.object.space, '${room.data['name']}'),
+  ];
+
+  /// In All, the capture bar's choice of where new notes go. Named beside
+  /// the icon when there is room; the hint names it either way.
   Widget noteTargetPicker(BuildContext context) {
     final target = newNoteGroup;
+    final wide = MediaQuery.sizeOf(context).width >= 600;
     return PopupMenuButton<String>(
       tooltip: target == null
           ? 'New notes are personal'
@@ -726,16 +736,11 @@ extension _NotesHome on _OurNetAppState {
       onSelected: (value) =>
           update(() => allNotesTarget = value.isEmpty ? null : value),
       itemBuilder: (_) => [
-        CheckedPopupMenuItem(
-          value: '',
-          checked: target == null,
-          child: const Text('Personal'),
-        ),
-        for (final room in knownRooms)
+        for (final (space, label) in noteDestinations)
           CheckedPopupMenuItem(
-            value: room.object.space,
-            checked: target == room.object.space,
-            child: Text('${room.data['name']}'),
+            value: space ?? '',
+            checked: target == space,
+            child: Text(label),
           ),
       ],
       child: Padding(
@@ -747,6 +752,17 @@ extension _NotesHome on _OurNetAppState {
               target == null ? Icons.person_outline : Icons.lock_outline,
               size: 20,
             ),
+            if (wide) ...[
+              const SizedBox(width: 6),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 160),
+                child: Text(
+                  target == null ? 'Personal' : groupName(target),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
             const Icon(Icons.arrow_drop_down, size: 18),
           ],
         ),
@@ -782,9 +798,11 @@ extension _NotesHome on _OurNetAppState {
                     vertical: 16,
                   ),
                   child: Text(
-                    scope == null && target != null
-                        ? 'Take a note for ${groupName(target)}…'
-                        : 'Take a note…',
+                    scope != null
+                        ? 'Take a note…'
+                        : target == null
+                        ? 'Take a personal note…'
+                        : 'Take a note for ${groupName(target)}…',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: colors.onSurfaceVariant),
