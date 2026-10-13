@@ -23,7 +23,7 @@
 
 /// Bumped when the pipe protocol or what the helper allows changes; the app
 /// reinstalls a helper older than the one it ships.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -383,6 +383,29 @@ mod windows {
         }
     }
 
+    /// Keeps the adapter to its own routes. Left to Windows' defaults it
+    /// gets IPv6 with placeholder DNS servers (fec0::…) and a lower metric
+    /// than Wi-Fi, so name lookups and IPv6 traffic for the internet are
+    /// tried on it first and go nowhere. It carries IPv4 for 10.77.0.0/16
+    /// only: no IPv6, no DNS, and the highest metric.
+    fn isolate(index: u32) {
+        let i = format!("interface={index}");
+        let run = |args: &[&str]| {
+            let _ = std::process::Command::new("netsh").args(args).output();
+        };
+        run(&["interface", "ipv6", "set", "interface", &i, "routerdiscovery=disabled", "advertise=disabled"]);
+        run(&["interface", "ipv6", "delete", "dnsservers", &format!("name={index}"), "all"]);
+        run(&["interface", "ipv4", "set", "dnsservers", &format!("name={index}"), "source=static", "address=none", "register=none", "validate=no"]);
+        run(&["interface", "ipv4", "set", "interface", &i, "metric=9000"]);
+        run(&["interface", "ipv6", "set", "interface", &i, "metric=9000"]);
+        // Unbinds IPv6 from the adapter altogether.
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &format!(
+                "Get-NetAdapter -InterfaceIndex {index} | Disable-NetAdapterBinding -ComponentID ms_tcpip6"
+            )])
+            .output();
+    }
+
     /// Opens the adapter as asked, within what the helper allows.
     fn open(body: &[u8], adapter: &mut Option<Arc<wintun::Adapter>>) -> Result<Arc<wintun::Session>, String> {
         let v: Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
@@ -419,6 +442,7 @@ mod windows {
             .map_err(|e| format!("address: {e}"))?;
         let _ = adapter.set_mtu(mtu);
         let index = adapter.get_adapter_index().map_err(|e| e.to_string())?;
+        isolate(index);
         for route in &routes {
             let _ = std::process::Command::new("netsh")
                 .args(["interface", "ipv4", "add", "route", route, &format!("interface={index}"), "store=active"])
