@@ -126,6 +126,42 @@ class PluginManifest {
     );
   }
 
+  /// Why friends on this version and [next] could not read each other's
+  /// data; empty when they can. Each side checks the other's objects with
+  /// its own rules, so an existing field's rule may not change either way,
+  /// a kind may not go, and a new field may not be required (older objects
+  /// lack it). New kinds and optional fields are fine. Semantics are not
+  /// checked: no manifest can show them.
+  List<String> incompatibleWith(PluginManifest next) {
+    final problems = <String>[];
+    final before = json['kinds'] as Map? ?? const {};
+    final after = next.json['kinds'] as Map? ?? const {};
+    for (final MapEntry(key: kind, value: fields) in after.entries) {
+      final old = before[kind] as Map?;
+      for (final MapEntry(key: field, value: rule) in (fields as Map).entries) {
+        if (old?[field] == null) {
+          if (old != null && rule is Map && rule['required'] == true) {
+            problems.add('$kind.$field is new and required');
+          }
+        } else if (canonical(old![field]) != canonical(rule)) {
+          problems.add('$kind.$field changed');
+        }
+      }
+    }
+    for (final MapEntry(key: kind, value: fields) in before.entries) {
+      if (after[kind] == null) {
+        problems.add('$kind is gone');
+        continue;
+      }
+      for (final field in (fields as Map).keys) {
+        if ((after[kind] as Map)[field] == null) {
+          problems.add('$kind.$field is gone');
+        }
+      }
+    }
+    return problems;
+  }
+
   static final _name = RegExp(r'^[a-z][a-z0-9_]{0,31}$');
 }
 

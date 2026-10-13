@@ -1779,6 +1779,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       plugins: plugins!,
       notice: notice,
       pickPackage: pickPluginPackage,
+      savePackage: (name, bytes) async {
+        await FilePicker.saveFile(fileName: name, bytes: bytes);
+      },
+      nameOf: name,
     ),
     Destination.maps => MapPage(
       node: node,
@@ -1800,6 +1804,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
             directory: '${path.replaceFirst(RegExp(r'\.db$'), '')}-plugins',
           )
           ..link = network
+          ..fetch = ((o) => files.readBytes(o, limit: PluginPackage.maxBytes))
           ..nameOf = name
           ..follow = notes.state.subscribe
           ..openTun = openPluginInterface

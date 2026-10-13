@@ -1,14 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:ournet_native/plugin_host.dart';
 
+import 'fast_crypto.dart' show sha256Hex;
 import 'model.dart';
 import 'node.dart';
 import 'plugin_manifest.dart';
+import 'plugin_release.dart';
 import 'registry.dart';
 
 /// How plugins reach their copies on friends' devices: the network.
@@ -37,62 +41,183 @@ typedef PluginNotice = ({
   String body,
 });
 
-/// A package as read from its file: `manifest.json`, `plugin.wasm`,
-/// optionally `ui.rfwtxt` and files under `assets/`.
+/// A package: `manifest.json`, `plugin.wasm`, optionally `ui.rfwtxt` and
+/// files under `assets/`, and `signature.json`, its [PluginRelease] when it
+/// was published. The [digest] names the contents, not the zip, so the same
+/// package zipped again is the same package.
 class PluginPackage {
   final PluginManifest manifest;
-  final Uint8List wasm;
-  final String? ui;
-  final Map<String, Uint8List> assets;
-  PluginPackage._(this.manifest, this.wasm, this.ui, this.assets);
 
-  /// Largest package, unpacked: generous for code, small for a phone.
+  /// Every entry but `signature.json`, as it was in the zip.
+  final Map<String, Uint8List> files;
+
+  /// `signature.json`, unverified: see [Plugins.releaseOf].
+  final Json? signature;
+
+  /// SHA-256 over the canonical list of `[name, sha256(bytes)]` for [files],
+  /// sorted by name (names are ASCII, so that is byte order).
+  late final String digest = sha256Hex(
+    bytes([
+      for (final name in files.keys.toList()..sort())
+        [name, sha256Hex(files[name]!)],
+    ]),
+  );
+  late final String manifestHash = sha256Hex(files['manifest.json']!);
+
+  PluginPackage._(this.manifest, this.files, this.signature);
+
+  Uint8List get wasm => files['plugin.wasm']!;
+
+  /// RFW's parser takes Unix line ends only; Windows checkouts and editors
+  /// write others.
+  String? get ui => files['ui.rfwtxt'] == null
+      ? null
+      : utf8.decode(files['ui.rfwtxt']!).replaceAll('\r\n', '\n');
+
+  Map<String, Uint8List> get assets => {
+    for (final MapEntry(:key, :value) in files.entries)
+      if (key.startsWith('assets/')) key.substring(7): value,
+  };
+
+  /// Largest package, zipped or not: generous for code, small for a phone.
   static const maxBytes = 32 * 1024 * 1024;
+  static const maxEntries = 300;
 
-  /// Reads a package, throwing [FormatException] for anything not to install.
+  /// Reads a package, throwing [FormatException] for anything not to
+  /// install: an unexpected or repeated entry, or one larger than it says.
+  /// Sizes are checked before anything is inflated.
   factory PluginPackage.read(Uint8List bytes) {
+    if (bytes.length > maxBytes) throw const FormatException('Too large');
+    final decoder = ZipDecoder();
     final Archive archive;
     try {
-      archive = ZipDecoder().decodeBytes(bytes);
+      archive = decoder.decodeBytes(bytes);
     } catch (_) {
       throw const FormatException('Not a plugin package');
     }
-    var total = 0;
-    Json? manifest;
-    Uint8List? wasm;
-    String? ui;
-    final assets = <String, Uint8List>{};
-    for (final file in archive.files) {
-      if (!file.isFile) continue;
-      total += file.size;
-      if (total > maxBytes) throw const FormatException('Package too large');
-      final content = file.readBytes() ?? Uint8List(0);
-      switch (file.name) {
-        case 'manifest.json':
-          manifest = jsonDecode(utf8.decode(content)) as Json;
-        case 'plugin.wasm':
-          wasm = content;
-        case 'ui.rfwtxt':
-          // RFW's parser takes Unix line ends only; Windows checkouts and
-          // editors write others.
-          ui = utf8.decode(content).replaceAll('\r\n', '\n');
-        default:
-          final name = file.name.startsWith('assets/')
-              ? file.name.substring(7)
-              : null;
-          if (name != null && _assetName.hasMatch(name)) assets[name] = content;
+    final headers = decoder.directory.fileHeaders;
+    final names = {for (final h in headers) h.filename};
+    if (headers.length > maxEntries || names.length != headers.length) {
+      throw const FormatException('Repeated or too many entries');
+    }
+    final entries = [
+      for (final f in archive.files)
+        if (f.isFile) f,
+    ];
+    if (entries.fold(0, (n, f) => n + f.size) > maxBytes) {
+      throw const FormatException('Too large');
+    }
+    final files = <String, Uint8List>{};
+    Json? signature;
+    for (final f in entries) {
+      if (!_entry.hasMatch(f.name)) {
+        throw FormatException('Unexpected ${f.name}');
+      }
+      final out = _Capped(f.size);
+      try {
+        f.decompress(out);
+      } on FormatException {
+        rethrow;
+      } catch (_) {
+        throw FormatException('Damaged ${f.name}');
+      }
+      final content = out.getBytes();
+      if (content.length != f.size) throw FormatException('Damaged ${f.name}');
+      if (f.name == 'signature.json') {
+        signature = _json(content);
+      } else {
+        files[f.name] = content;
       }
     }
-    if (manifest == null || wasm == null) {
+    return PluginPackage.of(files, signature: signature);
+  }
+
+  /// [read] on another isolate: decoding and hashing keep off the caller's.
+  static Future<PluginPackage> decode(Uint8List bytes) =>
+      Isolate.run(() => PluginPackage.read(bytes)..digest);
+
+  /// A package from its entries, as [read] gives them.
+  factory PluginPackage.of(Map<String, Uint8List> files, {Json? signature}) {
+    final manifest = files['manifest.json'];
+    if (manifest == null || files['plugin.wasm'] == null) {
       throw const FormatException(
         'A package needs manifest.json and plugin.wasm',
       );
     }
-    return PluginPackage._(PluginManifest.parse(manifest), wasm, ui, assets);
+    return PluginPackage._(
+      PluginManifest.parse(_json(manifest)),
+      Map.unmodifiable(files),
+      signature,
+    );
   }
 
-  static final _assetName = RegExp(r'^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$');
+  /// This package as a zip, carrying [release] in `signature.json`.
+  Uint8List signedWith(PluginRelease release) {
+    final out = Archive();
+    for (final MapEntry(:key, :value) in files.entries) {
+      out.addFile(ArchiveFile.bytes(key, value));
+    }
+    out.addFile(
+      ArchiveFile.bytes(
+        'signature.json',
+        utf8.encode(canonical(release.toJson())),
+      ),
+    );
+    return ZipEncoder().encodeBytes(out);
+  }
+
+  static Json _json(List<int> content) {
+    try {
+      return jsonDecode(utf8.decode(content)) as Json;
+    } catch (_) {
+      throw const FormatException('Not JSON');
+    }
+  }
+
+  static final _entry = RegExp(
+    r'^(manifest\.json|plugin\.wasm|ui\.rfwtxt|signature\.json|'
+    r'assets/[A-Za-z0-9_][A-Za-z0-9_.-]{0,99})$',
+  );
 }
+
+/// Inflates into memory, refusing to grow past what the entry declared.
+class _Capped extends OutputMemoryStream {
+  final int limit;
+  _Capped(this.limit);
+  void _room(int n) {
+    if (length + n > limit) throw const FormatException('Damaged package');
+  }
+
+  @override
+  void writeByte(int value) {
+    _room(1);
+    super.writeByte(value);
+  }
+
+  @override
+  void writeBytes(List<int> bytes, {int? length}) {
+    _room(length ?? bytes.length);
+    super.writeBytes(bytes, length: length);
+  }
+
+  @override
+  void writeStream(InputStream stream) {
+    _room(stream.length);
+    super.writeStream(stream);
+  }
+}
+
+/// A plugin offered to this person: shared by a friend, or a newer release
+/// from the publisher of one installed here.
+typedef PluginOffer = ({
+  PluginRelease release,
+
+  /// The `plugin_package` carrying it; its author shared it.
+  SignedObject distribution,
+
+  /// Installing it replaces a plugin of the same ID by another publisher.
+  bool replaces,
+});
 
 /// An installed plugin and its state on this device.
 class InstalledPlugin {
@@ -102,8 +227,14 @@ class InstalledPlugin {
   PluginStatus status = PluginStatus.stopped;
   String? error;
   String? ui;
+
+  /// What it was installed from; null for an unsigned package.
+  PluginRelease? release;
   InstalledPlugin._(this.manifest, this.granted, this.enabled, this.ui);
   String get id => manifest.id;
+
+  /// Who signed it; updates must come from them.
+  String? get publisher => release?.publisher;
 }
 
 /// Installs, runs and answers plugins (PLUGINS.md). Each runs in the native
@@ -112,6 +243,11 @@ class InstalledPlugin {
 /// history scan), carries its live messages and keeps what its surfaces
 /// show. Its kinds, sections and live requests go into [Node.registry], next
 /// to the built-in ones.
+///
+/// Signed releases (plugins/STORE-PLAN.md): an installed plugin is pinned to
+/// its publisher, and each version is unpacked into a directory of its own
+/// (`<id>/v/<digest>`) before it replaces the last, which stays with a copy
+/// of the storage it had. A new version that fails to start goes back to it.
 class Plugins {
   final Node node;
 
@@ -122,6 +258,10 @@ class Plugins {
 
   /// The network, once there is one: live messages need it.
   PluginLink? link;
+
+  /// Reads the package a `plugin_package` carries, fetching chunks this
+  /// device lacks from friends. Without it, only local chunks are read.
+  Future<Uint8List> Function(SignedObject distribution)? fetch;
 
   /// Private groups this person is in, for `identity.groups` and publishing
   /// to a group.
@@ -145,13 +285,9 @@ class Plugins {
   /// Where compiled code is kept; [directory]'s `.cache` unless given.
   final String cache;
 
-  Plugins(
-    this.node, {
-    required this.directory,
-    String? cache,
-    PluginHost? host,
-  }) : cache = cache ?? '$directory/.cache',
-       host = host ?? PluginHost.instance {
+  Plugins(this.node, {required this.directory, String? cache, PluginHost? host})
+    : cache = cache ?? '$directory/.cache',
+      host = host ?? PluginHost.instance {
     node.registry.handle(
       liveRequest,
       _answerRequest,
@@ -201,26 +337,42 @@ class Plugins {
   Json surface(String plugin, String surface) =>
       _surfaces[plugin]?[surface] ?? const {};
 
+  /// Per plugin: `grants`, `enabled`, `active` (the digest of the version in
+  /// use; absent for one installed before versions, kept in its directory),
+  /// `release`, `trial` (a new version that has not yet started), `previous`
+  /// (`{digest, grants, release}`, to go back to) and `skipped` releases.
   Json get _settings => (node.store.setting('plugins') as Map?)?.cast() ?? {};
   void _saveSettings(Json settings) => node.store.set('plugins', settings);
+  Json _of(String id) => (_settings[id] as Map?)?.cast() ?? {};
+  void _set(String id, Json? s) =>
+      _saveSettings({..._settings, id: ?s}..removeWhere((k, v) => v == null));
+
+  /// Where the code of [digest] (null: from before versions) is unpacked.
+  String _code(String id, Object? digest) =>
+      digest == null ? '$directory/$id' : '$directory/$id/v/$digest';
 
   /// Reads installed plugins and starts the enabled ones.
   Future<void> load() async {
-    final settings = _settings;
-    for (final MapEntry(key: id, value: s) in settings.entries) {
+    for (final MapEntry(key: id, value: s) in _settings.entries) {
       if (s is! Map) continue;
       try {
-        final dir = '$directory/$id';
+        final code = _code(id, s['active']);
         final manifest = PluginManifest.parse(
-          jsonDecode(await File('$dir/manifest.json').readAsString()) as Json,
+          jsonDecode(await File('$code/manifest.json').readAsString()) as Json,
         );
-        final ui = File('$dir/ui.rfwtxt');
-        final plugin = InstalledPlugin._(
-          manifest,
-          {...(s['grants'] as List? ?? const []).cast<String>()},
-          s['enabled'] != false,
-          await ui.exists() ? await ui.readAsString() : null,
-        );
+        final ui = File('$code/ui.rfwtxt');
+        final plugin =
+            InstalledPlugin._(
+                manifest,
+                {...(s['grants'] as List? ?? const []).cast<String>()},
+                s['enabled'] != false,
+                await ui.exists()
+                    ? (await ui.readAsString()).replaceAll('\r\n', '\n')
+                    : null,
+              )
+              ..release = s['release'] is Map
+                  ? PluginRelease.of(SignedObject.fromJson(s['release']))
+                  : null;
         _installed[id] = plugin;
         _register(plugin);
         if (plugin.enabled) await _start(plugin);
@@ -230,14 +382,30 @@ class Plugins {
     }
   }
 
+  /// The release [package] carries, verified and checked against it; null
+  /// for an unsigned package. Throws [FormatException] for one that does not
+  /// verify.
+  Future<PluginRelease?> releaseOf(PluginPackage package) async {
+    if (package.signature == null) return null;
+    final release = await PluginRelease.verify(package.signature, node);
+    release.check(package);
+    return release;
+  }
+
   /// Installs [package] with [grants] (which the person agreed to, from
-  /// [PluginPackage.manifest]'s `grants`) and starts it. Installing a plugin
-  /// already installed updates it in place: its storage stays, and a running
-  /// one is reloaded with its state. A new version asking for more grants
-  /// must be given them here.
+  /// [PluginPackage.manifest]'s `grants`) and starts it; a new version asking
+  /// for more grants must be given them here. [release] (by default the one
+  /// the package carries) must describe it.
+  ///
+  /// Installing over the same ID from the same publisher (or over an
+  /// unsigned one) updates it: storage stays, a copy is kept, and if the new
+  /// version fails to start the previous one comes back with that copy. From
+  /// another publisher it is another plugin: the one installed is removed
+  /// first, with everything it kept.
   Future<InstalledPlugin> install(
     PluginPackage package, {
     required Set<String> grants,
+    PluginRelease? release,
   }) async {
     final manifest = package.manifest;
     if (!grants.containsAll(manifest.grants)) {
@@ -245,50 +413,354 @@ class Plugins {
         'Grant ${manifest.grants.difference(grants).join(', ')} first',
       );
     }
-    final dir = Directory('$directory/${manifest.id}');
-    await dir.create(recursive: true);
-    await File(
-      '${dir.path}/manifest.json',
-    ).writeAsString(jsonEncode(manifest.json));
-    await File('${dir.path}/plugin.wasm').writeAsBytes(package.wasm);
-    final ui = File('${dir.path}/ui.rfwtxt');
-    if (package.ui != null) {
-      await ui.writeAsString(package.ui!);
-    } else if (await ui.exists()) {
-      await ui.delete();
+    if (release == null) {
+      release = await releaseOf(package);
+    } else {
+      release.check(package);
     }
-    if (package.assets.isNotEmpty) {
-      await Directory('${dir.path}/assets').create();
-      for (final MapEntry(:key, :value) in package.assets.entries) {
-        await File('${dir.path}/assets/$key').writeAsBytes(value);
-      }
+    final id = manifest.id;
+    final existing = _installed[id];
+    if (existing?.publisher != null &&
+        existing!.publisher != release?.publisher) {
+      await uninstall(id);
     }
-    final existing = _installed[manifest.id];
-    final plugin =
-        existing ?? InstalledPlugin._(manifest, {...grants}, true, package.ui);
+    await _unpack(package);
+    final old = _of(id);
+    final update = old.isNotEmpty && old['active'] != package.digest;
+    if (update) {
+      final cursors = node.store.setting('pluginCursor/$id');
+      node.store.set('pluginCursorSnapshot/$id', cursors);
+    }
+    _set(id, {
+      'grants': grants.intersection(manifest.grants).toList()..sort(),
+      'enabled': true,
+      'active': package.digest,
+      'release': ?release?.toJson(),
+      'skipped': ?old['skipped'],
+      if (update) ...{
+        'trial': true,
+        'previous': {
+          'digest': ?old['active'],
+          'grants': old['grants'],
+          'release': ?old['release'],
+        },
+      } else
+        'previous': ?old['previous'],
+    });
+    _stop(id);
+    final plugin = _installed[id] ??= InstalledPlugin._(
+      manifest,
+      {},
+      true,
+      package.ui,
+    );
     plugin
       ..manifest = manifest
       ..ui = package.ui
+      ..release = release
       ..enabled = true;
     plugin.granted
       ..clear()
       ..addAll(grants.intersection(manifest.grants));
-    _installed[manifest.id] = plugin;
-    _saveSettings({
-      ..._settings,
-      manifest.id: {'grants': plugin.granted.toList()..sort(), 'enabled': true},
-    });
-    node.registry.removeOwner(manifest.id);
+    node.registry.removeOwner(id);
     _register(plugin);
-    final running = _running[manifest.id];
-    if (running != null && running.handle != null) {
-      plugin.status = PluginStatus.starting;
-      host!.reload(running.handle!, package.wasm);
-    } else {
-      await _start(plugin);
-    }
-    _changed(manifest.id);
+    if (release != null) await _followPublisher(release.publisher, true);
+    await _start(plugin, storage: update ? 'snapshot' : null);
+    _changed(id);
     return plugin;
+  }
+
+  /// Writes [package] to its version directory, whole or not at all.
+  Future<void> _unpack(PluginPackage package) async {
+    final code = Directory(_code(package.manifest.id, package.digest));
+    if (await code.exists()) return;
+    final part = Directory('${code.path}.part');
+    if (await part.exists()) await part.delete(recursive: true);
+    for (final MapEntry(:key, :value) in package.files.entries) {
+      final file = File('${part.path}/$key');
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(value, flush: true);
+    }
+    await part.rename(code.path);
+  }
+
+  /// The new version of [id] did not start: back to the previous one, with
+  /// the storage and cursors it had, and the new release skipped.
+  Future<void> _rollBack(String id, String error) async {
+    final s = _of(id);
+    final previous = (s['previous'] as Map?)?.cast<String, Object?>();
+    final plugin = _installed[id];
+    if (previous == null || plugin == null) return;
+    _stop(id);
+    final failed = s['release'] is Map
+        ? SignedObject.fromJson(s['release']).id
+        : null;
+    _set(id, {
+      'grants': previous['grants'],
+      'enabled': true,
+      'active': ?previous['digest'],
+      'release': ?previous['release'],
+      'skipped': [...?(s['skipped'] as List?), ?failed],
+    });
+    node.store.set(
+      'pluginCursor/$id',
+      node.store.setting('pluginCursorSnapshot/$id'),
+    );
+    node.store.set('pluginCursorSnapshot/$id', null);
+    final code = _code(id, previous['digest']);
+    final ui = File('$code/ui.rfwtxt');
+    plugin
+      ..manifest = PluginManifest.parse(
+        jsonDecode(await File('$code/manifest.json').readAsString()) as Json,
+      )
+      ..ui = await ui.exists()
+          ? (await ui.readAsString()).replaceAll('\r\n', '\n')
+          : null
+      ..release = previous['release'] is Map
+          ? PluginRelease.of(
+              SignedObject.fromJson((previous['release'] as Map).cast()),
+            )
+          : null;
+    plugin.granted
+      ..clear()
+      ..addAll((previous['grants'] as List).cast());
+    node.registry.removeOwner(id);
+    _register(plugin);
+    await _start(plugin, storage: 'restore');
+    _notice(
+      id,
+      'error',
+      '${plugin.manifest.name} went back to ${plugin.manifest.version}',
+      error,
+    );
+    _changed(id);
+  }
+
+  /// The new version of [id] started: it stays, and versions other than it
+  /// and the previous one go.
+  Future<void> _confirm(String id) async {
+    final s = _of(id);
+    if (s['trial'] != true) return;
+    _set(id, {...s}..remove('trial'));
+    node.store.set('pluginCursorSnapshot/$id', null);
+    final keep = {s['active'], (s['previous'] as Map?)?['digest']};
+    final versions = Directory('$directory/$id/v');
+    if (!await versions.exists()) return;
+    await for (final dir in versions.list()) {
+      if (!keep.contains(dir.uri.pathSegments.lastWhere((p) => p.isNotEmpty))) {
+        await dir.delete(recursive: true);
+      }
+    }
+  }
+
+  /// Follows [publisher]'s releases on all this person's devices, while any
+  /// installed plugin is theirs.
+  Future<void> _followPublisher(String publisher, bool on) async {
+    if (!on && _installed.values.any((p) => p.publisher == publisher)) return;
+    final space = PluginRelease.space(publisher);
+    await (follow?.call(space, on) ??
+        Future.sync(() => node.subscribe(space, on)));
+  }
+
+  /// Signs [package] as a release by this person and offers it: publicly,
+  /// in their release space, or only to [people]. Returns the package with
+  /// its release, to share as a file.
+  ///
+  /// Refused for a plugin ID installed here from someone else, a version
+  /// not after this person's last release of it, or a manifest friends on
+  /// that release could not exchange data with
+  /// ([PluginManifest.incompatibleWith]).
+  Future<Uint8List> publish(
+    PluginPackage package, {
+    String changes = '',
+    List<String> people = const [],
+  }) async {
+    final m = package.manifest;
+    final publisher = _installed[m.id]?.publisher;
+    if (publisher != null && publisher != node.person) {
+      throw StateError('${m.name} here is someone else\'s');
+    }
+    final last = await _lastRelease(m.id);
+    if (last != null) {
+      final (release, before) = last;
+      if (compareVersions(m.version, release.version) <= 0) {
+        throw StateError('Publish a version after ${release.version}');
+      }
+      final problems = before?.manifest.incompatibleWith(m) ?? const [];
+      if (problems.isNotEmpty) {
+        throw StateError(
+          'Friends on ${release.version} could not read its data: '
+          '${problems.join(', ')}. Use new kinds or fields instead.',
+        );
+      }
+    }
+    final release = PluginRelease.of(
+      await node.publish(
+        PluginRelease.kind,
+        PluginRelease.describe(package, changes: changes),
+        space: PluginRelease.space(node.person),
+        keep: people.isEmpty,
+      ),
+    )!;
+    final signed = package.signedWith(release);
+    await _distribute(release, signed, people);
+    return signed;
+  }
+
+  /// This person's newest release of [plugin], and its package when its
+  /// chunks are here.
+  Future<(PluginRelease, PluginPackage?)?> _lastRelease(String plugin) async {
+    for (final o in node.store.objects(
+      kind: PluginRelease.packageKind,
+      author: node.person,
+      limit: 200,
+    )) {
+      final payload = await node.content(o);
+      final release = payload == null
+          ? null
+          : PluginRelease.of(SignedObject.fromJson(payload['release']));
+      if (release == null ||
+          release.publisher != node.person ||
+          release.plugin != plugin) {
+        continue;
+      }
+      final bytes = await _readLocal(payload!);
+      return (
+        release,
+        bytes == null ? null : await PluginPackage.decode(bytes),
+      );
+    }
+    return null;
+  }
+
+  /// Shares installed plugin [id], as released, with [people].
+  Future<void> share(String id, List<String> people) async {
+    final plugin = _installed[id];
+    final release = plugin?.release;
+    if (release == null) throw StateError('Only signed plugins can be shared');
+    final code = _code(id, _of(id)['active']);
+    final files = <String, Uint8List>{};
+    await for (final f in Directory(code).list(recursive: true)) {
+      if (f is File) {
+        files[f.path.substring(code.length + 1).replaceAll(r'\', '/')] = await f
+            .readAsBytes();
+      }
+    }
+    await _distribute(
+      release,
+      PluginPackage.of(files).signedWith(release),
+      people,
+    );
+  }
+
+  /// Stores [package]'s chunks (sealed with a new key unless public) and
+  /// publishes a distribution of [release] for [people], or everyone
+  /// following its publisher.
+  Future<void> _distribute(
+    PluginRelease release,
+    Uint8List package,
+    List<String> people,
+  ) async {
+    final key = people.isEmpty
+        ? null
+        : List.generate(32, (_) => Random.secure().nextInt(256));
+    final chunks = [
+      for (var at = 0; at < package.length; at += chunkBytes)
+        await node.blobs.encode(
+          Uint8List.sublistView(
+            package,
+            at,
+            min(at + chunkBytes, package.length),
+          ),
+          key,
+        ),
+    ];
+    await node.publish(
+      PluginRelease.packageKind,
+      {
+        'release': release.toJson(),
+        'name': '${release.plugin}-${release.version}.ournet-plugin',
+        'size': package.length,
+        'chunks': chunks,
+        'chunkBytes': chunkBytes,
+        'key': key == null ? null : b64(key),
+      },
+      space: PluginRelease.space(node.person),
+      audience: people,
+    );
+  }
+
+  Future<Uint8List?> _readLocal(Json payload) => node.blobs.readLocal(
+    (payload['chunks'] as List).cast(),
+    payload['key'] == null ? null : unb64(payload['key']),
+    limit: PluginPackage.maxBytes,
+    expectedSize: payload['size'] as int,
+  );
+
+  final _verified = <String, PluginRelease?>{};
+
+  /// What is offered to this person, newest first: plugins friends shared
+  /// that are not installed here, and newer releases from the publishers of
+  /// installed ones. Reads the newest [limit] distributions, through the
+  /// kind index; releases already checked are remembered.
+  Future<List<PluginOffer>> offers({int limit = 200}) async {
+    final found = <String, PluginOffer>{};
+    for (final o in node.store.objects(
+      kind: PluginRelease.packageKind,
+      limit: limit,
+    )) {
+      final payload = await node.content(o);
+      if (payload == null) continue;
+      final wire = payload['release'];
+      final key = wire is Map ? canonical(wire) : '';
+      final PluginRelease? release;
+      if (_verified.containsKey(key)) {
+        release = _verified[key];
+      } else {
+        try {
+          release = _verified[key] = await PluginRelease.verify(wire, node);
+        } catch (_) {
+          _verified[key] = null;
+          continue;
+        }
+      }
+      if (release == null) continue;
+      final installed = _installed[release.plugin];
+      final skipped = (_of(release.plugin)['skipped'] as List?) ?? const [];
+      final newest = found['${release.publisher} ${release.plugin}'];
+      if (skipped.contains(release.id) ||
+          (installed != null &&
+              installed.publisher == release.publisher &&
+              compareVersions(release.version, installed.manifest.version) <=
+                  0) ||
+          (newest != null &&
+              compareVersions(release.version, newest.release.version) <= 0)) {
+        continue;
+      }
+      found['${release.publisher} ${release.plugin}'] = (
+        release: release,
+        distribution: o,
+        replaces: installed != null && installed.publisher != release.publisher,
+      );
+    }
+    return found.values.toList();
+  }
+
+  /// Fetches, checks and installs [offer] with [grants] (see [install]).
+  Future<InstalledPlugin> installOffer(
+    PluginOffer offer, {
+    required Set<String> grants,
+  }) async {
+    final payload = await node.content(offer.distribution);
+    if (payload == null) throw StateError('Not readable here');
+    final bytes =
+        await (fetch?.call(offer.distribution) ?? _readLocal(payload)) ??
+        (throw StateError('Not on this device yet'));
+    return install(
+      await PluginPackage.decode(bytes),
+      grants: grants,
+      release: offer.release,
+    );
   }
 
   /// Removes [id] and everything it kept on this device. Objects it
@@ -296,12 +768,14 @@ class Plugins {
   Future<void> uninstall(String id) async {
     _stop(id);
     node.registry.removeOwner(id);
-    _installed.remove(id);
+    final publisher = _installed.remove(id)?.publisher;
     _surfaces.remove(id);
-    _saveSettings({..._settings}..remove(id));
+    _set(id, null);
     node.store.set('pluginCursor/$id', null);
+    node.store.set('pluginCursorSnapshot/$id', null);
     final dir = Directory('$directory/$id');
     if (await dir.exists()) await dir.delete(recursive: true);
+    if (publisher != null) await _followPublisher(publisher, false);
     _changed(id);
   }
 
@@ -309,11 +783,7 @@ class Plugins {
     final plugin = _installed[id];
     if (plugin == null || plugin.enabled == on) return;
     plugin.enabled = on;
-    final settings = _settings;
-    _saveSettings({
-      ...settings,
-      id: {...(settings[id] as Map? ?? {}), 'enabled': on},
-    });
+    _set(id, {..._of(id), 'enabled': on});
     if (on) {
       await _start(plugin);
     } else {
@@ -345,11 +815,12 @@ class Plugins {
     'args': jsonEncode(args),
   });
 
-  /// Development: reinstalls a plugin whenever its package in [folder]
-  /// (`<id>.ournet-plugin`, as `plugins/pack --watch` writes) changes, hot
-  /// reloading it with its state. Only plugins already installed, and only
-  /// when the new version asks for no more than was granted. Desktop only:
-  /// returns false where the folder cannot be watched.
+  /// Development: hot reloads an installed plugin, keeping its state,
+  /// whenever its package in [folder] (`<id>.ournet-plugin`, as
+  /// `plugins/pack --watch` writes) changes. Only plugins that are unsigned
+  /// or this person's own, and only when the new version asks for no more
+  /// than was granted. Desktop only: returns false where the folder cannot
+  /// be watched.
   bool watch(String folder) {
     unwatch();
     final dir = Directory(folder);
@@ -365,20 +836,10 @@ class Plugins {
         _reloads[id]?.cancel();
         _reloads[id] = Timer(const Duration(milliseconds: 200), () async {
           try {
-            final package = PluginPackage.read(
-              await File(event.path).readAsBytes(),
+            await _reload(
+              plugin,
+              await PluginPackage.decode(await File(event.path).readAsBytes()),
             );
-            if (!plugin.granted.containsAll(package.manifest.grants)) {
-              _notice(
-                id,
-                'error',
-                'Not reloaded',
-                'It asks for more: reinstall it',
-              );
-              return;
-            }
-            await install(package, grants: plugin.granted);
-            _notice(id, 'log', 'info', 'Reloaded ${package.manifest.version}');
           } catch (e) {
             _notice(id, 'error', 'Not reloaded', '$e');
           }
@@ -388,6 +849,32 @@ class Plugins {
     } catch (_) {
       return false;
     }
+  }
+
+  Future<void> _reload(InstalledPlugin plugin, PluginPackage package) async {
+    final id = plugin.id;
+    if (plugin.publisher != null && plugin.publisher != node.person) {
+      throw StateError("It is someone else's: install it instead");
+    }
+    if (!plugin.granted.containsAll(package.manifest.grants)) {
+      throw StateError('It asks for more: reinstall it');
+    }
+    await _unpack(package);
+    _set(id, {..._of(id), 'active': package.digest});
+    plugin
+      ..manifest = package.manifest
+      ..ui = package.ui;
+    node.registry.removeOwner(id);
+    _register(plugin);
+    final running = _running[id];
+    if (running?.handle != null) {
+      plugin.status = PluginStatus.starting;
+      host!.reload(running!.handle!, package.wasm);
+    } else {
+      await _start(plugin);
+    }
+    _notice(id, 'log', 'info', 'Reloaded ${package.manifest.version}');
+    _changed(id);
   }
 
   void unwatch() {
@@ -419,7 +906,9 @@ class Plugins {
     }
   }
 
-  Future<void> _start(InstalledPlugin plugin) async {
+  /// Starts [plugin]; [storage] is `snapshot` or `restore` for the host to
+  /// copy its storage aside first or put the copy back.
+  Future<void> _start(InstalledPlugin plugin, {String? storage}) async {
     if (_closed || _running.containsKey(plugin.id)) return;
     final host = this.host;
     if (host == null) {
@@ -432,7 +921,9 @@ class Plugins {
     final dir = '$directory/${plugin.id}';
     final Uint8List wasm;
     try {
-      wasm = await File('$dir/plugin.wasm').readAsBytes();
+      wasm = await File(
+        '${_code(plugin.id, _of(plugin.id)['active'])}/plugin.wasm',
+      ).readAsBytes();
     } catch (e) {
       plugin
         ..status = PluginStatus.failed
@@ -451,6 +942,7 @@ class Plugins {
         'dir': dir,
         'cache': cache,
         'grants': plugin.granted.toList(),
+        'storage': ?storage,
       },
       wasm,
       (message) => _received(running, message),
@@ -537,6 +1029,7 @@ class Plugins {
           '${h['error']}',
         );
         _changed(plugin.id);
+        if (!reloaded) _failedTrial(plugin.id, '${h['error']}');
       case 'trap':
         plugin
           ..status = PluginStatus.failed
@@ -548,6 +1041,7 @@ class Plugins {
           '${h['error']}',
         );
         _changed(plugin.id);
+        _failedTrial(plugin.id, '${h['error']}');
       case 'result':
         final call = running.calls.remove(h['id']);
         if (call == null) return;
@@ -606,6 +1100,11 @@ class Plugins {
     }
   }
 
+  /// A new version that fails before it has started goes back.
+  void _failedTrial(String id, String error) {
+    if (_of(id)['trial'] == true) unawaited(_rollBack(id, error));
+  }
+
   Future<void> _ready(_Running running, {required bool reloaded}) async {
     final plugin = running.plugin;
     // Running once it has set itself up: what it shows needs that.
@@ -618,6 +1117,7 @@ class Plugins {
     }
     plugin.status = PluginStatus.running;
     _changed(plugin.id);
+    unawaited(_confirm(plugin.id));
     if (plugin.granted.contains('live')) {
       node.registry.advertise(plugin.id, 'p:${plugin.id}');
       node.registry.handleDatagrams('p:${plugin.id}', (device, data) {
@@ -872,6 +1372,9 @@ class Plugins {
       final answer = await link.request(device, {
         'type': liveRequest,
         'plugin': running.plugin.id,
+        // Receivers running another publisher's plugin of that ID refuse it;
+        // builds before publishers ignore it.
+        'publisher': ?running.plugin.publisher,
         'payload': b64(body),
       });
       bytes = Uint8List.fromList(unb64('${answer['payload']}'));
@@ -895,6 +1398,12 @@ class Plugins {
     final running = _running['${request['plugin']}'];
     if (running == null || !running.plugin.granted.contains('live')) {
       throw StateError('Plugin not running');
+    }
+    final publisher = request['publisher'];
+    if (publisher != null &&
+        running.plugin.publisher != null &&
+        publisher != running.plugin.publisher) {
+      throw StateError('Another plugin by that name runs here');
     }
     final payload = request['payload'];
     if (payload is! String || payload.length > maxLiveBytes * 4 ~/ 3 + 4) {

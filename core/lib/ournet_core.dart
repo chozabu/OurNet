@@ -6,6 +6,7 @@ export 'src/model.dart';
 export 'src/registry.dart';
 export 'src/plugin_manifest.dart';
 export 'src/plugins.dart';
+export 'src/plugin_release.dart';
 export 'package:ournet_native/plugin_host.dart' show PluginHost;
 export 'src/node.dart';
 export 'src/store.dart';

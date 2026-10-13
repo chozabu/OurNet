@@ -169,6 +169,10 @@ struct LoadConfig {
     /// The interfaces granted, by name (`live`, `identity`, …). A component
     /// importing anything else is refused.
     grants: Vec<String>,
+    /// Before anything runs: `snapshot` copies the storage file aside (new
+    /// code is about to use it), `restore` puts that copy back (a rollback).
+    #[serde(default)]
+    storage: Option<String>,
 }
 
 /// Interfaces every plugin has.
@@ -184,6 +188,25 @@ struct Storage {
 }
 
 impl Storage {
+    /// Applies [LoadConfig::storage]. Runs after the previous instance has
+    /// written its storage and exited, so the copy is whole.
+    fn prepare(dir: &Path, step: Option<&str>) {
+        let (live, aside) = (dir.join("storage.bin"), dir.join("storage.snapshot"));
+        let (from, to) = match step {
+            Some("snapshot") => (live, aside),
+            Some("restore") => (aside, live),
+            _ => return,
+        };
+        // Copied aside and renamed, so a crash leaves the old or the new. No
+        // file to copy means no storage then: none afterwards either.
+        let part = to.with_extension("part");
+        if fs::copy(&from, &part).is_ok() {
+            let _ = fs::rename(&part, &to);
+        } else {
+            let _ = fs::remove_file(&to);
+        }
+    }
+
     fn open(dir: Option<&Path>) -> Storage {
         let path = dir.map(|d| d.join("storage.bin"));
         let mut map = BTreeMap::new();
@@ -661,6 +684,9 @@ impl Running {
         jobs: Sender<Job>,
         packets: Arc<AtomicUsize>,
     ) -> Result<Running, String> {
+        if let Some(dir) = &config.dir {
+            Storage::prepare(dir, config.storage.as_deref());
+        }
         let engine = engine()?;
         let component = compile(engine, wasm, config.cache.as_deref())?;
         check_imports(engine, &component, &config.grants)?;

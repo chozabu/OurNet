@@ -2,8 +2,9 @@
 
 Status: implemented on Windows and Android (October 2026): the registry, the
 WebAssembly host, the app's plugin pages, live messages, datagrams, virtual
-interfaces and five first-party plugins. Distribution over F2F, scripting and
-the media interface are still to do; see Status below. Answers open decision 11
+interfaces, five first-party plugins, and signed releases shared between
+friends (phase 1 of [plugins/STORE-PLAN.md](plugins/STORE-PLAN.md)). Scripting,
+the store plugin and the media interface are still to do; see Status below. Answers open decision 11
 in [CORE_IDEA.md](CORE_IDEA.md) ("What may plugins access, execute and
 publish?").
 
@@ -295,6 +296,44 @@ everything else OurNet signs, so the app needs no TOML parser), `plugin.wasm`
 Packages ship in `app/assets/plugins` and install from Settings › Plugins, as
 do files.
 
+### Releases (`core/lib/src/plugin_release.dart`)
+
+Phase 1 of [plugins/STORE-PLAN.md](plugins/STORE-PLAN.md):
+
+- **Digest.** A package's `digest` is SHA-256 over the canonical list of
+  `[name, sha256]` of its entries, so it names the contents, not the zip.
+  Reading refuses unexpected names, repeated entries, more than 300 entries
+  and more than 32 MiB, checks sizes before inflating, and stops inflating an
+  entry at the size it declared.
+- **Release.** `plugin_release` is an ordinary signed object, public-shaped,
+  in `_plugins:<publisher>`: id, version, API, name, summary, grants, kind
+  names, the manifest's hash, the digest and what changed. A package carries
+  it as `signature.json` (outside the digest). A release that does not match
+  its package, or is signed by a removed device or a blocked person, is
+  refused.
+- **Distribution.** `plugin_package` carries a release and the chunks of one
+  zip of it, signed by whoever shares it: the publisher's own, public in their
+  release space, or a friend's, sealed for chosen people. Chunks travel as any
+  file's do (`Plugins.fetch` is `Files.readBytes`).
+- **Pinning.** An installed plugin keeps its publisher, and its device follows
+  their release space. Offers (`Plugins.offers`) are plugins friends shared
+  and newer releases from the publishers of installed ones. The same ID from
+  another publisher is another plugin: installing it removes the first with
+  everything it kept. Live requests name the sender's publisher, and a device
+  running another publisher's plugin of that ID refuses them.
+- **Versions.** Each version unpacks to `<id>/v/<digest>` before the setting
+  that names the active one flips. An update starts with `storage:
+  "snapshot"`, so the host copies `storage.bin` aside after the previous
+  instance has written it; if the new version fails before `init` returns,
+  the previous version starts with `storage: "restore"` and its insertion
+  cursors, and the failed release is skipped. Hot reload (the developer
+  folder) stays for unsigned plugins and the person's own.
+- **Publishing** (desktop, Settings › Plugins › Publish a package) signs a
+  release; a later one must have a later version, and refuses a manifest
+  whose existing field rules changed, kinds or fields went, or new fields are
+  required (`PluginManifest.incompatibleWith`), since friends run mixed
+  versions.
+
 ## First-party plugins
 
 | Plugin | Shows | Uses |
@@ -315,14 +354,14 @@ host; `app/test/plugin_view_test.dart` draws each plugin with RFW (set
 |---|---|
 | 0. Registry | Done: kinds, requests, datagrams, sections, capabilities |
 | 1. WASM host, v0.1 API, app pages, manifest and grants, hot reload | Done. Polls and a public-chat port were not written; the wiki and microblog prove the objects API instead |
-| 2. Scripting, F2F distribution, per-plugin traffic and storage in Settings | Not started |
+| 2. Scripting, F2F distribution, per-plugin traffic and storage in Settings | Signed releases, sharing and manual updates done (STORE-PLAN.md phase 1); the rest not started |
 | 3. Streams, datagrams, canvas | Datagrams and canvas done; nothing needs streams yet |
 | 4. Single library with iroh, `media`, `tun` and a VPN | `tun` and the VPN plugin done; iroh is still separate; `media` not started |
 
 Not yet verified: the helper's Wintun adapter on a real network (its pipes
 and protocol are tested), and the VPN on an Android device.
-Next, in order of use: per-plugin traffic in Settings; `plugin_release` objects
-so friends can share plugins; a foreground service keeping the VPN up when
+Next, in order of use: per-plugin traffic in Settings; the store plugin
+(STORE-PLAN.md phase 2); a foreground service keeping the VPN up when
 Android backgrounds the app; measured budgets in `PERFORMANCE.md`; then the
 single iroh library.
 

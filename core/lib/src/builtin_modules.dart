@@ -91,6 +91,47 @@ bool _listing(Json p) =>
                 p['description'] is String &&
                     (p['description'] as String).length <= 500));
 
+/// Signed plugin releases and the packages that carry them: see
+/// `PluginRelease` and plugins/STORE-PLAN.md.
+const pluginReleasesModule = Module(
+  'plugin_releases',
+  kinds: {'plugin_release': _pluginRelease, 'plugin_package': _pluginPackage},
+);
+
+/// What a publisher signed about one version: who it is, what it may reach,
+/// and the digest of its contents.
+bool _pluginRelease(Json p) =>
+    p['id'] is String &&
+    PluginKinds.id.hasMatch(p['id']) &&
+    _line(p['version'], 32) &&
+    _line(p['api'], 8) &&
+    _line(p['name'], 50) &&
+    _text(p['summary'], 500) &&
+    _sha256.hasMatch('${p['digest']}') &&
+    _sha256.hasMatch('${p['manifest']}') &&
+    _names(p['grants'], 8) &&
+    _names(p['kinds'], 32) &&
+    (p['changes'] == null || _text(p['changes'], 4096));
+
+/// A release and the chunks of one encoding of its package (the shared
+/// file fields are checked for every kind).
+bool _pluginPackage(Json p) =>
+    p['release'] is Map &&
+    p['chunks'] is List &&
+    p['size'] is int &&
+    p['size'] <= 32 * 1024 * 1024;
+
+bool _line(Object? v, int limit) =>
+    v is String && v.trim().isNotEmpty && v.length <= limit;
+
+bool _names(Object? v, int limit) =>
+    v is List &&
+    v.length <= limit &&
+    v.every((n) => n is String && _pluginName.hasMatch(n));
+
+final _sha256 = RegExp(r'^[0-9a-f]{64}$');
+final _pluginName = RegExp(r'^[a-z][a-z0-9_]{0,31}$');
+
 /// Private groups: membership, keys and their shared items. See `Everyday` and `GroupAccess`.
 const groupsModule = Module(
   'groups',

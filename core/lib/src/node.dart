@@ -280,6 +280,10 @@ class Node {
     /// The plugin that wrote it, as `<id>@<version>`: signed with the object
     /// so readers can tell. Builds without plugins ignore it.
     String? app,
+
+    /// False signs without storing: for an object that only travels inside
+    /// others, such as a private plugin release.
+    bool keep = true,
   }) {
     if (_closing || _pendingPublications >= 32) {
       return Future.error(
@@ -298,6 +302,7 @@ class Node {
       extra: recipients,
       seal: seal,
       app: app,
+      keep: keep,
     );
     if (store.path == null) return run();
     _pendingPublications++;
@@ -320,6 +325,7 @@ class Node {
     List<DeviceCertificate> extra = const [],
     GroupKey? seal,
     String? app,
+    bool keep = true,
   }) async {
     if (!registry.accepts(kind, content)) {
       throw StateError('Invalid $kind content');
@@ -388,6 +394,7 @@ class Node {
     if (revoked.contains(identity.device)) {
       throw StateError('This device has been revoked');
     }
+    if (!keep) return object;
     store.put(object);
     if (kind == 'avatar') avatars.changed(person);
     if (kind == Connections.listKind) connections.changed();
@@ -958,8 +965,7 @@ class Node {
         // Refused items are compared and offered again as usual.
       }
       for (final item in sent) {
-        if (_parse(item)?.object.id case final id?
-            when store.get(id) != null) {
+        if (_parse(item)?.object.id case final id? when store.get(id) != null) {
           accepted.add(id);
         }
       }
@@ -982,7 +988,8 @@ class Node {
       'changes': changeInventory(peerDevice, changed),
       'view': changeInventory(peerDevice, store.routesOf(ids)),
     };
-    if (request['caps'] case final List caps when caps.contains('delta_items')) {
+    if (request['caps'] case final List caps
+        when caps.contains('delta_items')) {
       var more = false;
       reply['items'] = await offer(
         peerDevice,
