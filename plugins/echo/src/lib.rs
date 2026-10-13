@@ -42,6 +42,15 @@ impl Plugin for Echo {
                 let device = args["device"].as_str().unwrap_or("");
                 ournet_plugin::send(device, b"ping");
             }
+            "datagram" => {
+                let device = args["device"].as_str().unwrap_or("");
+                let sent = ournet_plugin::datagram(device, b"tick");
+                ui::update(surface, &json!({"datagramSent": sent.is_ok()}));
+            }
+            "tun" => {
+                let opened = ournet_plugin::tun::open("10.77.0.1", 16, &[], 1280);
+                ui::update(surface, &json!({"tun": opened.err().unwrap_or_else(|| "open".into())}));
+            }
             "spin" => loop {
                 std::hint::black_box(0);
             },
@@ -72,6 +81,18 @@ impl Plugin for Echo {
         };
         self.replies.push(text.clone());
         ui::update("Echo", &json!({"reply": text}));
+    }
+
+    fn on_datagram(&mut self, device: &str, data: &[u8]) {
+        let text = String::from_utf8_lossy(data);
+        ui::update("Echo", &json!({"datagram": format!("{text} from {}", &device[..4.min(device.len())])}));
+    }
+
+    fn on_packet(&mut self, packet: &[u8]) {
+        // Back to the system, reversed, so a test can tell it went through.
+        let mut out = packet.to_vec();
+        out.reverse();
+        ournet_plugin::tun::write(&out);
     }
 
     fn on_timer(&mut self, token: u64) {

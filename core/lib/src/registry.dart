@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'builtin_modules.dart';
 import 'model.dart';
@@ -12,6 +13,10 @@ typedef ContentCheck = bool Function(Json payload);
 /// Answers one live request from an admitted device: the device and the
 /// request as sent (`{type, …}`), returning the reply. Nothing is stored.
 typedef RequestHandler = Future<Json> Function(String device, Json request);
+
+/// Takes one live datagram from an admitted device: unreliable, unordered,
+/// and never answered.
+typedef DatagramHandler = void Function(String device, Uint8List data);
 
 /// What a feature contributes to the host: the kinds it owns and how their
 /// content is checked. Built-in features declare one as a constant (see
@@ -155,6 +160,7 @@ class Registry {
       <String, ({String owner, RequestHandler handle, bool poolable})>{};
   final _sections = <String, PluginSection>{};
   final _capabilities = <String, String>{};
+  final _datagrams = <String, ({String owner, DatagramHandler handle})>{};
   final _changes = StreamController<void>.broadcast();
 
   /// Fires when sections are added or removed.
@@ -222,9 +228,22 @@ class Registry {
   void advertise(String owner, String capability) =>
       _capabilities[capability] = owner;
 
-  /// Stops advertising what [owner] can do.
-  void withdraw(String owner) =>
-      _capabilities.removeWhere((_, o) => o == owner);
+  /// Takes datagrams on [channel] (`p:<plugin>` for a plugin's).
+  void handleDatagrams(
+    String channel,
+    DatagramHandler handler, {
+    required String owner,
+  }) => _datagrams[channel] = (owner: owner, handle: handler);
+
+  DatagramHandler? datagramHandler(String channel) =>
+      _datagrams[channel]?.handle;
+
+  /// Stops what [owner] offers while it runs: the capabilities it
+  /// advertises and the datagrams it takes.
+  void withdraw(String owner) {
+    _capabilities.removeWhere((_, o) => o == owner);
+    _datagrams.removeWhere((_, v) => v.owner == owner);
+  }
 
   /// What modules add to this build's capabilities, sorted.
   List<String> get capabilities => _capabilities.keys.toList()..sort();

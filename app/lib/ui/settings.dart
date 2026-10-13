@@ -464,6 +464,18 @@ extension _SettingsPages on _OurNetAppState {
         trailing: const Icon(Icons.chevron_right),
         onTap: () => update(() => tab = Destination.network),
       ),
+      if (plugins != null)
+        ListTile(
+          leading: const Icon(Icons.extension_outlined),
+          title: const Text('Plugins'),
+          subtitle: Text(
+            plugins!.installed.isEmpty
+                ? 'Games, wikis and more, sandboxed'
+                : plugins!.installed.map((p) => p.manifest.name).join(', '),
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => update(() => tab = Destination.plugins),
+        ),
       ListTile(
         leading: const Icon(Icons.storage),
         title: const Text('Storage'),

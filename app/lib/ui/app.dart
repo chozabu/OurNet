@@ -8,6 +8,8 @@ import '../services/typing.dart';
 import '../services/location_share.dart';
 import '../services/map_tiles.dart';
 import 'map_page.dart';
+import 'plugin_view.dart';
+import 'plugins_page.dart';
 import 'storage_page.dart';
 import 'stats_page.dart';
 import '../controllers/notes_home_controller.dart';
@@ -131,7 +133,11 @@ enum Destination {
   maps(13, 'Maps', Icons.map_outlined),
   storage(14, 'Storage', Icons.storage),
   stats(15, 'Network stats', Icons.insights),
-  activity(16, 'Activity', Icons.dynamic_feed_outlined);
+  activity(16, 'Activity', Icons.dynamic_feed_outlined),
+
+  /// A plugin's section: which one is [_OurNetAppState.pluginSection].
+  plugin(17, 'Plugin', Icons.extension_outlined),
+  plugins(18, 'Plugins', Icons.extension_outlined);
 
   final int id;
   final String title;
@@ -165,7 +171,7 @@ enum Destination {
 
   /// Where back leads from a sub-page, which is also what is remembered.
   Destination? get parent => switch (this) {
-    network || profile || storage || stats => settings,
+    network || profile || storage || stats || plugins => settings,
     locations => messages,
     _ => null,
   };
@@ -320,6 +326,15 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
 
   late final PublicChats publicChats;
   late final Listings listings;
+
+  /// Installed plugins; null where they cannot run (tests, in-memory
+  /// profiles). See PLUGINS.md.
+  Plugins? plugins;
+
+  /// The plugin section open, for [Destination.plugin].
+  PluginSection? pluginSection;
+  StreamSubscription<PluginNotice>? _pluginNotices;
+  StreamSubscription<void>? _pluginSections;
 
   /// The public chat open in Chat, instead of a direct conversation.
   String? publicChat;
@@ -540,6 +555,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     notesController.notesGrid = node.store.setting('notesGrid') != false;
     accent = node.store.setting('accent') as int? ?? 0xff137d72;
     network = Network(node)..addListener(refresh);
+    startPlugins();
     typing = Typing(network)..addListener(redraw);
     locationShare = LocationShare(
       network,
@@ -1251,6 +1267,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     unawaited(draftStore.flush().catchError((Object _) {}));
+    _pluginNotices?.cancel();
+    _pluginSections?.cancel();
+    unawaited(plugins?.close());
     publicComposer.dispose();
     publicFocus.dispose();
     WidgetsBinding.instance.removeObserver(this);
@@ -1493,6 +1512,22 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                 ),
               ),
               const Divider(),
+              for (final s in pluginSections)
+                ListTile(
+                  leading: Icon(pluginIcon(s.icon)),
+                  title: Text(s.title),
+                  selected:
+                      tab == Destination.plugin && pluginSection?.id == s.id,
+                  onTap: () {
+                    update(() {
+                      tab = Destination.plugin;
+                      pluginSection = s;
+                      showConversation = false;
+                      showForum = false;
+                    });
+                    if (!wide) Navigator.pop(context);
+                  },
+                ),
               ListTile(
                 leading: const Icon(Icons.settings_outlined),
                 title: const Text('Settings'),
@@ -1738,6 +1773,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       scope == ScopeKind.personal
           ? personalCalendarView(context)
           : calendarScreen(context),
+    Destination.plugin => pluginPage(context),
+    Destination.plugins => PluginsPage(
+      plugins: plugins!,
+      notice: notice,
+      pickPackage: pickPluginPackage,
+    ),
     Destination.maps => MapPage(
       node: node,
       tiles: mapTiles,
@@ -1746,6 +1787,108 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       onMessage: openConversation,
     ),
   };
+
+  /// Loads installed plugins beside the profile, where files can be kept.
+  void startPlugins() {
+    final path = node.store.path;
+    if (!widget.enablePlatform || path == null) return;
+    final everyday = Everyday(node);
+    final plugins = this.plugins =
+        Plugins(
+            node,
+            directory: '${path.replaceFirst(RegExp(r'\.db$'), '')}-plugins',
+          )
+          ..link = network
+          ..nameOf = name
+          ..follow = notes.state.subscribe
+          ..groups = () async => [
+            for (final room in await everyday.rooms())
+              (
+                space: room.object.space,
+                name: '${room.data['name']}',
+                members: await everyday.members(room),
+              ),
+          ];
+    _pluginNotices = plugins.notices.listen((n) {
+      if (n.kind == 'log') return;
+      notice(
+        n.kind == 'notify' ? '${n.title}: ${n.body}' : '${n.title}. ${n.body}',
+      );
+    });
+    _pluginSections = node.registry.changes.listen((_) => redraw());
+    unawaited(
+      plugins.load().then((_) {
+        final folder = node.store.setting('pluginDevFolder');
+        if (folder is String && !Platform.isAndroid) plugins.watch(folder);
+        redraw();
+      }, onError: (Object e) => notice('Plugins: $e')),
+    );
+  }
+
+  /// Sections of plugins that are switched on, for navigation.
+  List<PluginSection> get pluginSections => [
+    for (final s in node.registry.sections)
+      if (plugins?[s.plugin]?.enabled ?? false) s,
+  ];
+
+  /// The Material icon a manifest names; a generic one for others.
+  static IconData pluginIcon(String name) => switch (name) {
+    'menu_book' => Icons.menu_book_outlined,
+    'article' => Icons.article_outlined,
+    'campaign' => Icons.campaign_outlined,
+    'casino' => Icons.casino_outlined,
+    'grid' => Icons.grid_3x3,
+    'sports' => Icons.sports_esports_outlined,
+    'vpn' => Icons.vpn_lock_outlined,
+    'chat' => Icons.chat_outlined,
+    'bug_report' => Icons.bug_report_outlined,
+    'poll' => Icons.poll_outlined,
+    _ => Icons.extension_outlined,
+  };
+
+  Widget pluginPage(BuildContext context) {
+    final section = pluginSection;
+    final plugins = this.plugins;
+    if (section == null || plugins == null) {
+      return empty(
+        'Nothing here',
+        'Pick a plugin in the menu.',
+        Icons.extension_outlined,
+      );
+    }
+    if (!section.allows(scope)) {
+      return empty(
+        section.title,
+        '${section.title} has nothing in this scope.',
+        pluginIcon(section.icon),
+      );
+    }
+    final room = activeRoom;
+    return PluginView(
+      key: ValueKey(section.id),
+      plugins: plugins,
+      plugin: section.plugin,
+      surface: section.surface,
+      context: room != null
+          ? {
+              'scope': 'group',
+              'space': room.object.space,
+              'name': '${room.data['name']}',
+            }
+          : {'scope': scope?.name ?? 'all'},
+      nameOf: name,
+      avatar: (person, size) => conversationAvatar(person, radius: size / 2),
+    );
+  }
+
+  Future<Uint8List?> pickPluginPackage() async {
+    final picked = await FilePicker.pickFiles(
+      dialogTitle: 'Choose a plugin',
+      type: FileType.custom,
+      allowedExtensions: const ['ournet-plugin'],
+    );
+    return picked.singleOrNull?.readAsBytes();
+  }
 
   Widget navBadge(String kind) => countBadge(unread(kind));
 

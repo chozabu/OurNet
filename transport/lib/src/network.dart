@@ -326,7 +326,114 @@ class PeerNetwork implements PluginLink {
     'blobs',
     'friend',
     'pair',
+    'datagrams',
   };
+
+  /// Connections carrying live datagrams, by device: one this device dialled
+  /// or one a peer opened, whichever is up. See [datagram].
+  final _datagramLinks = <String, _DatagramLink>{};
+  final _datagramDials = <String, Future<_DatagramLink?>>{};
+
+  /// How long a datagram link stays up with nothing sent or received.
+  static const datagramIdle = Duration(seconds: 30);
+
+  /// Sends [data] to [device] as one QUIC datagram on [channel] (a plugin's
+  /// is `p:<id>`): unreliable, unordered and unanswered, for real-time state
+  /// and packets. The first one to a device opens a link, kept while used;
+  /// the peer delivers it to [Registry.handleDatagrams]. False when it could
+  /// not be sent at all. Builds without datagrams refuse the link.
+  @override
+  Future<bool> datagram(String device, String channel, List<int> data) async {
+    if (!node.allowedPeer(device) || channel.length > 64) return false;
+    var link = _datagramLinks[device];
+    if (link == null || link.closed) {
+      link = await (_datagramDials[device] ??= _dialDatagrams(
+        device,
+      ).whenComplete(() => _datagramDials.remove(device)));
+    }
+    if (link == null) return false;
+    final name = utf8.encode(channel);
+    final frame = Uint8List(2 + name.length + data.length)
+      ..[0] = 1
+      ..[1] = name.length
+      ..setRange(2, 2 + name.length, name)
+      ..setRange(2 + name.length, 2 + name.length + data.length, data);
+    try {
+      link.connection.sendDatagram(frame);
+      link.used = DateTime.now();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<_DatagramLink?> _dialDatagrams(String device) async {
+    try {
+      final connection = await _connect(device);
+      _connections.add(connection);
+      final link = _DatagramLink(connection, () {
+        _account(connection, device);
+        _connections.remove(connection);
+        if (_datagramLinks[device]?.connection == connection) {
+          _datagramLinks.remove(device);
+        }
+      });
+      _datagramLinks[device] = link;
+      final (send, recv) = await connection.openBi();
+      await send.writeAll(bytes({'type': 'datagrams', ..._stamp}));
+      await send.finish();
+      // The peer answers when it ends the link, or refuses it at once.
+      unawaited(
+        recv
+            .readToEnd(64 * 1024)
+            .then((_) => link.close(), onError: (Object _) => link.close()),
+      );
+      unawaited(_readDatagrams(link, device));
+      link.idle = Timer.periodic(const Duration(seconds: 5), (_) {
+        if (DateTime.now().difference(link.used) > datagramIdle) link.close();
+      });
+      return link;
+    } catch (e) {
+      log('No datagram link to $device: $e');
+      return null;
+    }
+  }
+
+  /// Serves the datagram link a peer opened on [connection], until it ends.
+  Future<void> _datagramSession(iroh.Connection connection, String peer) {
+    final link = _DatagramLink(connection, () {
+      if (_datagramLinks[peer]?.connection == connection) {
+        _datagramLinks.remove(peer);
+      }
+    });
+    _datagramLinks[peer] = link;
+    return _readDatagrams(link, peer);
+  }
+
+  Future<void> _readDatagrams(_DatagramLink link, String device) async {
+    try {
+      while (!link.closed) {
+        final frame = await link.connection.readDatagram();
+        link.used = DateTime.now();
+        if (frame.length < 2 || frame[0] != 1 || frame.length < 2 + frame[1]) {
+          continue;
+        }
+        if (!node.allowedPeer(device)) break;
+        final channel = utf8.decode(
+          Uint8List.sublistView(frame, 2, 2 + frame[1]),
+          allowMalformed: true,
+        );
+        node.registry
+            .datagramHandler(channel)
+            ?.call(device, Uint8List.sublistView(frame, 2 + frame[1]));
+      }
+    } catch (_) {
+      // Closed: by either side, or the network.
+    } finally {
+      link.close();
+    }
+  }
+
   static final _alpn = utf8.encode('ournet/2');
 
   void log(String message) {
@@ -1232,7 +1339,7 @@ class PeerNetwork implements PluginLink {
           next = null;
           first = false;
           late final Future<void> job;
-          job = _answer(peer, send, recv)
+          job = _answer(peer, send, recv, connection)
               .then((served) => refused |= !served)
               .whenComplete(() => answering.remove(job));
           answering.add(job);
@@ -1257,6 +1364,7 @@ class PeerNetwork implements PluginLink {
     String peer,
     iroh.SendStream send,
     iroh.RecvStream recv,
+    iroh.Connection connection,
   ) async {
     try {
       final raw = await recv
@@ -1361,6 +1469,11 @@ class PeerNetwork implements PluginLink {
               for (final b in blobs)
                 if (b != null) Uint8List.fromList(b),
             ];
+          case 'datagrams':
+            // Held open while the caller sends datagrams on this connection;
+            // the reply goes when it ends.
+            await _datagramSession(connection, peer);
+            reply = {};
           default:
             final handler = node.registry.handler('${j['type']}');
             if (handler == null) throw StateError('Unknown request');
@@ -1546,6 +1659,9 @@ class PeerNetwork implements PluginLink {
     for (final MapEntry(:key, :value) in _pool.entries.toList()) {
       _drop(key, value);
     }
+    for (final link in _datagramLinks.values.toList()) {
+      link.close();
+    }
     for (final connection in _connections.toList()) {
       _account(connection);
       connection.close();
@@ -1564,6 +1680,22 @@ class PeerNetwork implements PluginLink {
 }
 
 /// A connection to one device kept for the requests that follow.
+class _DatagramLink {
+  _DatagramLink(this.connection, this._closed);
+  final iroh.Connection connection;
+  final void Function() _closed;
+  DateTime used = DateTime.now();
+  Timer? idle;
+  bool closed = false;
+  void close() {
+    if (closed) return;
+    closed = true;
+    idle?.cancel();
+    _closed();
+    connection.close();
+  }
+}
+
 class _Pooled {
   _Pooled(this.connection);
   final iroh.Connection connection;

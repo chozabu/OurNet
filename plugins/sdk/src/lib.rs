@@ -52,6 +52,10 @@ pub trait Plugin: Default + 'static {
     /// The reply to [send] request [id].
     fn on_reply(&mut self, _id: u64, _reply: Result<Vec<u8>, String>) {}
     fn on_timer(&mut self, _token: u64) {}
+    /// A [datagram] from this plugin on a friend's [device].
+    fn on_datagram(&mut self, _device: &str, _data: &[u8]) {}
+    /// An IP packet the system sent into this plugin's [tun] interface.
+    fn on_packet(&mut self, _packet: &[u8]) {}
     fn save_state(&mut self) -> Vec<u8> {
         Vec::new()
     }
@@ -208,6 +212,28 @@ pub fn send(device: &str, payload: &[u8]) -> u64 {
     host::live::send(device, payload)
 }
 
+/// Sends one unreliable, unordered datagram (at most 1100 bytes) to this
+/// plugin on [device]; it arrives as [Plugin::on_datagram], or not at all.
+pub fn datagram(device: &str, data: &[u8]) -> Result<(), String> {
+    host::live::datagram(device, data)
+}
+
+/// A virtual network interface, for plugins granted `tun`.
+pub mod tun {
+    use super::host::tun;
+    /// Opens it as `address`/`prefix`, routing `routes` (CIDRs) through it.
+    pub fn open(address: &str, prefix: u8, routes: &[String], mtu: u16) -> Result<(), String> {
+        tun::open(address, prefix, routes, mtu)
+    }
+    /// Hands an IP packet to the system.
+    pub fn write(packet: &[u8]) {
+        tun::write(packet)
+    }
+    pub fn close() {
+        tun::close()
+    }
+}
+
 /// What the app shows.
 pub mod ui {
     use super::{host, Value};
@@ -268,6 +294,12 @@ macro_rules! plugin {
             }
             fn on_timer(token: u64) {
                 __ournet_with(|p| $crate::Plugin::on_timer(p, token))
+            }
+            fn on_datagram(device: ::std::string::String, data: ::std::vec::Vec<u8>) {
+                __ournet_with(|p| $crate::Plugin::on_datagram(p, &device, &data))
+            }
+            fn on_packet(packet: ::std::vec::Vec<u8>) {
+                __ournet_with(|p| $crate::Plugin::on_packet(p, &packet))
             }
             fn save_state() -> ::std::vec::Vec<u8> {
                 __ournet_with(|p| $crate::Plugin::save_state(p))

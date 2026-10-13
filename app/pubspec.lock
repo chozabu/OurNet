@@ -1202,6 +1202,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.3.0"
+  rfw:
+    dependency: "direct main"
+    description:
+      name: rfw
+      sha256: "5658376150d984e8ac4a7e1b16facdaf3c32685873b00b73715252946e9ef7ca"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.1.4"
   share_plus:
     dependency: "direct main"
     description:

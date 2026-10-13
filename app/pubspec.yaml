@@ -50,6 +50,7 @@ dependencies:
   geolocator: ^14.1.1
   http: ^1.6.0
   vector_tile_renderer: ^5.2.1
+  rfw: ^1.1.4
 dev_dependencies:
   integration_test:
     sdk: flutter

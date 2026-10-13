@@ -18,6 +18,9 @@ abstract interface class PluginLink {
 
   /// Whether [device] said it runs [plugin].
   bool runs(String device, String plugin);
+
+  /// Sends one unreliable datagram on [channel]; false if it could not go.
+  Future<bool> datagram(String device, String channel, List<int> data);
 }
 
 /// A private group, as plugins see it.
@@ -128,6 +131,15 @@ class Plugins {
   /// Follows a space on all this person's devices; defaults to this one.
   Future<void> Function(String space, bool on)? follow;
 
+  /// Opens a virtual network interface for [plugin] (granted `tun`), asking
+  /// the person or the system as the platform needs, and says how the host
+  /// reaches it: `{"fd": n}` (Android), `{"wintun": name}` (Windows) or
+  /// `{"memory": true}` (packets come to [tunPackets]). Null: no VPNs here.
+  Future<Json> Function(String plugin, Json settings)? openTun;
+
+  /// Closes what [openTun] opened for [plugin].
+  void Function(String plugin)? closeTun;
+
   Plugins(this.node, {required this.directory, PluginHost? host})
     : host = host ?? PluginHost.instance {
     node.registry.handle(
@@ -148,6 +160,8 @@ class Plugins {
   final _running = <String, _Running>{};
   final _surfaces = <String, Map<String, Json>>{};
   final _changes = StreamController<String>.broadcast();
+  final _tunPackets =
+      StreamController<({String plugin, Uint8List packet})>.broadcast();
   final _notices = StreamController<PluginNotice>.broadcast();
   bool _closed = false;
 
@@ -157,6 +171,18 @@ class Plugins {
   /// Fires with a plugin's ID when its status or what it shows changes.
   Stream<String> get changes => _changes.stream;
   Stream<PluginNotice> get notices => _notices.stream;
+
+  /// Packets plugins write to memory interfaces (see [openTun]).
+  Stream<({String plugin, Uint8List packet})> get tunPackets =>
+      _tunPackets.stream;
+
+  /// Hands [packet] to [plugin] as if its interface received it from the
+  /// system: for memory interfaces.
+  void tunReceive(String plugin, Uint8List packet) {
+    final running = _running[plugin];
+    if (running?.handle == null) return;
+    host!.call(running!.handle!, {'call': 'packet', 'quiet': true}, packet);
+  }
 
   List<InstalledPlugin> get installed => List.unmodifiable(_installed.values);
   InstalledPlugin? operator [](String id) => _installed[id];
@@ -309,13 +335,68 @@ class Plugins {
     'args': jsonEncode(args),
   });
 
+  /// Development: reinstalls a plugin whenever its package in [folder]
+  /// (`<id>.ournet-plugin`, as `plugins/pack --watch` writes) changes, hot
+  /// reloading it with its state. Only plugins already installed, and only
+  /// when the new version asks for no more than was granted. Desktop only:
+  /// returns false where the folder cannot be watched.
+  bool watch(String folder) {
+    unwatch();
+    final dir = Directory(folder);
+    if (!dir.existsSync()) return false;
+    try {
+      _watching = dir.watch().listen((event) {
+        final name = event.path.split(RegExp(r'[/\\]')).last;
+        if (!name.endsWith('.ournet-plugin')) return;
+        final id = name.substring(0, name.length - '.ournet-plugin'.length);
+        final plugin = _installed[id];
+        if (plugin == null) return;
+        // Writers replace the file whole; several events come for one write.
+        _reloads[id]?.cancel();
+        _reloads[id] = Timer(const Duration(milliseconds: 200), () async {
+          try {
+            final package = PluginPackage.read(
+              await File(event.path).readAsBytes(),
+            );
+            if (!plugin.granted.containsAll(package.manifest.grants)) {
+              _notice(
+                id,
+                'error',
+                'Not reloaded',
+                'It asks for more: reinstall it',
+              );
+              return;
+            }
+            await install(package, grants: plugin.granted);
+            _notice(id, 'log', 'info', 'Reloaded ${package.manifest.version}');
+          } catch (e) {
+            _notice(id, 'error', 'Not reloaded', '$e');
+          }
+        });
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void unwatch() {
+    _watching?.cancel();
+    _watching = null;
+  }
+
+  StreamSubscription<FileSystemEvent>? _watching;
+  final _reloads = <String, Timer>{};
+
   Future<void> close() async {
+    unwatch();
     _closed = true;
     for (final id in _running.keys.toList()) {
       _stop(id);
     }
     node.registry.unhandle(liveRequest, _answerRequest);
     await _changes.close();
+    await _tunPackets.close();
     await _notices.close();
   }
 
@@ -482,11 +563,23 @@ class Plugins {
         if (data == null) return;
         final surfaces = _surfaces[plugin.id] ??= {};
         final surface = '${h['surface']}';
-        surfaces[surface] = Map.unmodifiable({
-          ...?surfaces[surface],
-          ...data,
-        }..removeWhere((_, v) => v == null));
+        surfaces[surface] = Map.unmodifiable(
+          {...?surfaces[surface], ...data}..removeWhere((_, v) => v == null),
+        );
         _changed(plugin.id);
+      case 'datagram':
+        final link = this.link;
+        if (link != null && plugin.granted.contains('live')) {
+          unawaited(
+            link.datagram('${h['device']}', 'p:${plugin.id}', message.body),
+          );
+        }
+      case 'tun.write':
+        if (!_tunPackets.isClosed) {
+          _tunPackets.add((plugin: plugin.id, packet: message.body));
+        }
+      case 'tun.close':
+        closeTun?.call(plugin.id);
       case 'ui.notify':
         _notice(plugin.id, 'notify', '${h['title']}', '${h['body']}');
       case 'log':
@@ -516,6 +609,15 @@ class Plugins {
     }
     if (plugin.granted.contains('live')) {
       node.registry.advertise(plugin.id, 'p:${plugin.id}');
+      node.registry.handleDatagrams('p:${plugin.id}', (device, data) {
+        final handle = running.handle;
+        if (handle == null || _running[plugin.id] != running) return;
+        host!.call(handle, {
+          'call': 'datagram',
+          'device': device,
+          'quiet': true,
+        }, data);
+      }, owner: plugin.id);
     }
     final kinds = plugin.manifest.kinds.keys.toSet();
     running.changes ??= node.onChangesTo(kinds, () => _feed(running));
@@ -728,6 +830,10 @@ class Plugins {
               'devices': devices,
             },
         ];
+      case 'tun.open':
+        final open = openTun;
+        if (open == null) throw StateError('VPNs do not run on this device');
+        return open(plugin.id, args);
       case 'identity.groups':
         return [
           for (final g in await groups?.call() ?? const <PluginGroup>[])

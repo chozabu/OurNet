@@ -11,7 +11,7 @@ import 'package:test/test.dart';
 /// tests drive it through the real native host.
 void main() {
   final package = File('test/fixtures/echo.ournet-plugin').readAsBytesSync();
-  const grants = {'objects', 'identity', 'live'};
+  const grants = {'objects', 'identity', 'live', 'tun'};
   late Directory temp;
   final cleanup = <Future<void> Function()>[];
 
@@ -227,6 +227,39 @@ void main() {
       'error: Plugin not running',
     );
   });
+
+  test("datagrams reach the plugin on a friend's device", () async {
+    final (a, pa) = await device('a');
+    final (b, pb) = await device('b');
+    pa.link = _Wire(a, b);
+    pb.link = _Wire(b, a);
+    for (final p in [pa, pb]) {
+      await p.install(PluginPackage.read(package), grants: grants);
+      await running(p);
+    }
+    pa.event('echo', 'Echo', 'datagram', {'device': b.identity.device});
+    expect(
+      (await until(pb, (d) => d['datagram'] != null))['datagram'],
+      'tick from ${a.identity.device.substring(0, 4)}',
+    );
+  });
+
+  test("packets pass through a plugin's interface", () async {
+    final (_, plugins) = await device();
+    Json? opened;
+    plugins.openTun = (plugin, settings) async {
+      opened = settings;
+      return {'memory': true};
+    };
+    await plugins.install(PluginPackage.read(package), grants: grants);
+    await running(plugins);
+    plugins.event('echo', 'Echo', 'tun', {});
+    expect((await until(plugins, (d) => d['tun'] != null))['tun'], 'open');
+    expect(opened, containsPair('address', '10.77.0.1'));
+    final back = plugins.tunPackets.first;
+    plugins.tunReceive('echo', Uint8List.fromList([1, 2, 3, 4]));
+    expect((await back).packet, [4, 3, 2, 1]);
+  });
 }
 
 /// Delivers live requests straight to the other node's handler, as the
@@ -240,4 +273,11 @@ class _Wire implements PluginLink {
   )!(from.identity.device, request);
   @override
   bool runs(String device, String plugin) => true;
+  @override
+  Future<bool> datagram(String device, String channel, List<int> data) async {
+    to.registry
+        .datagramHandler(channel)
+        ?.call(from.identity.device, Uint8List.fromList(data));
+    return true;
+  }
 }

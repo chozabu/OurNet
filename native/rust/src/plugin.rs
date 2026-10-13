@@ -16,9 +16,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -30,7 +30,8 @@ use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDea
 
 wasmtime::component::bindgen!({ path: "wit", world: "plugin" });
 
-use ournet::plugin::{clock, identity, live, log, objects, storage, types, ui};
+use crate::tun as interface;
+use ournet::plugin::{clock, identity, live, log, objects, storage, tun, types, ui};
 
 /// Posts one message to Dart: the plugin's handle and a buffer Dart frees
 /// with `ournet_free`.
@@ -56,6 +57,15 @@ const STORAGE_QUOTA: usize = 16 << 20;
 const SEND_RATE: f64 = 60.0;
 const SEND_BURST: f64 = 120.0;
 
+/// `live.datagram`: per second on average, and in a burst; and the largest.
+const DATAGRAM_RATE: f64 = 4000.0;
+const DATAGRAM_BURST: f64 = 8000.0;
+const DATAGRAM_BYTES: usize = 1100;
+
+/// Packets from a `tun` interface waiting for the plugin; more are dropped,
+/// as a congested link would (TCP sends them again).
+const PACKET_QUEUE: usize = 1024;
+
 /// Epoch ticks are wall time; the deadline callback turns them into CPU time.
 const TICK: Duration = Duration::from_millis(10);
 
@@ -73,6 +83,9 @@ struct Handle {
 enum Job {
     Call(Vec<u8>),
     Reload(Vec<u8>),
+    /// An IP packet from the plugin's `tun` interface.
+    Packet(Vec<u8>),
+    Stop,
 }
 
 fn engine() -> Result<&'static Engine, String> {
@@ -230,6 +243,24 @@ struct Host {
     waited: Duration,
     send_tokens: f64,
     send_refill: Instant,
+    datagram_tokens: f64,
+    datagram_refill: Instant,
+    /// This plugin's own queue, for packets from its interface.
+    jobs: Sender<Job>,
+    packets: Arc<AtomicUsize>,
+    tun: Option<interface::Tun>,
+}
+
+/// A token bucket: whether one more may go now.
+fn take(tokens: &mut f64, refill: &mut Instant, rate: f64, burst: f64) -> bool {
+    let now = Instant::now();
+    *tokens = (*tokens + now.duration_since(*refill).as_secs_f64() * rate).min(burst);
+    *refill = now;
+    if *tokens < 1.0 {
+        return false;
+    }
+    *tokens -= 1.0;
+    true
 }
 
 impl Host {
@@ -466,11 +497,8 @@ impl live::Host for Host {
     fn send(&mut self, device: String, payload: Vec<u8>) -> u64 {
         self.next_send += 1;
         let id = self.next_send;
-        let now = Instant::now();
-        let elapsed = now.duration_since(self.send_refill).as_secs_f64();
-        self.send_refill = now;
-        self.send_tokens = (self.send_tokens + elapsed * SEND_RATE).min(SEND_BURST);
-        if self.send_tokens < 1.0 || payload.len() > 1 << 20 {
+        let allowed = take(&mut self.send_tokens, &mut self.send_refill, SEND_RATE, SEND_BURST);
+        if !allowed || payload.len() > 256 << 10 {
             // Answered at once, as a reply the plugin handles like any other.
             post(
                 self.handle,
@@ -479,13 +507,69 @@ impl live::Host for Host {
             );
             return id;
         }
-        self.send_tokens -= 1.0;
         post(
             self.handle,
             &json!({"type": "send", "request": id, "device": device}),
             Some(&payload),
         );
         id
+    }
+    fn datagram(&mut self, device: String, data: Vec<u8>) -> Result<(), String> {
+        if data.len() > DATAGRAM_BYTES {
+            return Err("datagram too large".into());
+        }
+        if !take(&mut self.datagram_tokens, &mut self.datagram_refill, DATAGRAM_RATE, DATAGRAM_BURST) {
+            return Err("rate limited".into());
+        }
+        post(self.handle, &json!({"type": "datagram", "device": device}), Some(&data));
+        Ok(())
+    }
+}
+
+impl tun::Host for Host {
+    fn open(&mut self, address: String, prefix: u8, routes: Vec<String>, mtu: u16) -> Result<(), String> {
+        let ip: std::net::Ipv4Addr = address.parse().map_err(|_| "not an IPv4 address")?;
+        if prefix > 32 || !(576..=9000).contains(&mtu) || routes.len() > 32 {
+            return Err("bad interface settings".into());
+        }
+        self.tun = None;
+        let answer = self.ask(
+            "tun.open",
+            json!({"address": address, "prefix": prefix, "routes": routes, "mtu": mtu}),
+        )?;
+        let kind = if let Some(fd) = answer.get("fd").and_then(Value::as_i64) {
+            interface::Kind::Fd(fd as i32)
+        } else if let Some(name) = answer.get("wintun").and_then(Value::as_str) {
+            interface::Kind::Wintun(name.into())
+        } else if answer.get("memory").and_then(Value::as_bool) == Some(true) {
+            interface::Kind::Memory
+        } else {
+            return Err("the app opened no interface".into());
+        };
+        let jobs = self.jobs.clone();
+        let pending = self.packets.clone();
+        let deliver: interface::Deliver = Box::new(move |packet| {
+            if pending.load(Ordering::Relaxed) >= PACKET_QUEUE {
+                return true;
+            }
+            pending.fetch_add(1, Ordering::Relaxed);
+            jobs.send(Job::Packet(packet)).is_ok()
+        });
+        let handle = self.handle;
+        let memory = Box::new(move |packet: &[u8]| post(handle, &json!({"type": "tun.write"}), Some(packet)));
+        let config = interface::Config { address: ip, prefix, routes: &routes, mtu };
+        self.tun = Some(interface::Tun::open(kind, &config, deliver, memory)?);
+        Ok(())
+    }
+    fn write(&mut self, packet: Vec<u8>) {
+        if let Some(tun) = &self.tun {
+            tun.write(&packet);
+        }
+    }
+    fn close(&mut self) {
+        if self.tun.take().is_some() {
+            self.notice("tun.close", json!({}));
+        }
     }
 }
 
@@ -562,6 +646,8 @@ impl Running {
         wasm: &[u8],
         handle: u64,
         answers: Receiver<(u64, Vec<u8>)>,
+        jobs: Sender<Job>,
+        packets: Arc<AtomicUsize>,
     ) -> Result<Running, String> {
         let engine = engine()?;
         let component = compile(engine, wasm, config.cache.as_deref())?;
@@ -586,6 +672,11 @@ impl Running {
             waited: Duration::ZERO,
             send_tokens: SEND_BURST,
             send_refill: Instant::now(),
+            datagram_tokens: DATAGRAM_BURST,
+            datagram_refill: Instant::now(),
+            jobs,
+            packets,
+            tun: None,
         };
         let mut store = Store::new(engine, host);
         Self::configure(&mut store);
@@ -693,8 +784,20 @@ impl Running {
                 };
                 self.run(|p, s| p.call_on_reply(s, request, reply))
             }
+            // A packet into a memory interface, from Dart (tests).
+            Some("packet") if self.store.data().tun.is_some() => {
+                self.run(|p, s| p.call_on_packet(s, body))
+            }
+            Some("datagram") => {
+                let device = text("device");
+                self.run(|p, s| p.call_on_datagram(s, &device, body))
+            }
             _ => Err("unknown call".into()),
         };
+        // High-rate calls (datagrams) ask for no result unless they fail.
+        if call.get("quiet").and_then(Value::as_bool) == Some(true) && result.is_ok() {
+            return;
+        }
         let header = match &result {
             Ok(()) => json!({"type": "result", "id": id}),
             Err(e) => json!({"type": "result", "id": id, "error": e}),
@@ -745,11 +848,12 @@ fn run_plugin(
     handle: u64,
     config: LoadConfig,
     wasm: Vec<u8>,
-    jobs: Receiver<Job>,
+    (jobs, queue): (Sender<Job>, Receiver<Job>),
     answers: Receiver<(u64, Vec<u8>)>,
 ) {
     let id = config.id.clone();
-    let mut running = match Running::start(config, &wasm, handle, answers) {
+    let packets = Arc::new(AtomicUsize::new(0));
+    let mut running = match Running::start(config, &wasm, handle, answers, jobs, packets.clone()) {
         Ok(r) => r,
         Err(error) => {
             post(handle, &json!({"type": "failed", "error": error}), None);
@@ -761,11 +865,15 @@ fn run_plugin(
     loop {
         let next = running.timers();
         let job = match next {
-            Some(wait) => jobs.recv_timeout(wait),
-            None => jobs.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            Some(wait) => queue.recv_timeout(wait),
+            None => queue.recv().map_err(|_| RecvTimeoutError::Disconnected),
         };
         match job {
             Ok(Job::Call(message)) => running.call(&message),
+            Ok(Job::Packet(packet)) => {
+                packets.fetch_sub(1, Ordering::Relaxed);
+                let _ = running.run(|p, s| p.call_on_packet(s, &packet));
+            }
             Ok(Job::Reload(wasm)) => {
                 let header = match running.reload(&wasm) {
                     Ok(()) => json!({"type": "loaded", "id": id, "reloaded": true}),
@@ -774,10 +882,14 @@ fn run_plugin(
                 post(handle, &header, None);
             }
             Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break,
+            Ok(Job::Stop) | Err(RecvTimeoutError::Disconnected) => break,
         }
     }
-    running.store.data_mut().storage.flush();
+    let host = running.store.data_mut();
+    host.storage.flush();
+    if host.tun.take().is_some() {
+        host.notice("tun.close", json!({}));
+    }
 }
 
 unsafe fn bytes<'a>(data: *const u8, len: usize) -> &'a [u8] {
@@ -833,6 +945,7 @@ pub unsafe extern "C" fn ournet_plugin_load(
         };
         let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
         let (jobs, job_queue) = mpsc::channel();
+        let own_jobs = jobs.clone();
         let (answers, answer_queue) = mpsc::channel();
         let name = format!("ournet-plugin-{}", config.id);
         let started = thread::Builder::new()
@@ -840,7 +953,7 @@ pub unsafe extern "C" fn ournet_plugin_load(
             .stack_size(8 << 20)
             .spawn(move || {
                 let _ = catch_unwind(AssertUnwindSafe(|| {
-                    run_plugin(handle, config, wasm, job_queue, answer_queue)
+                    run_plugin(handle, config, wasm, (own_jobs, job_queue), answer_queue)
                 }));
             });
         if started.is_err() {
@@ -886,9 +999,13 @@ pub unsafe extern "C" fn ournet_plugin_reload(handle: u64, wasm: *const u8, len:
 /// storage and exits. Dart ignores anything still posted for it.
 #[no_mangle]
 pub unsafe extern "C" fn ournet_plugin_stop(handle: u64) -> i32 {
-    PLUGINS
-        .lock()
-        .ok()
-        .and_then(|mut p| p.as_mut()?.remove(&handle))
-        .is_some() as i32
+    let removed = PLUGINS.lock().ok().and_then(|mut p| p.as_mut()?.remove(&handle));
+    match removed {
+        Some(plugin) => {
+            // Its interface's reader holds the queue open too.
+            let _ = plugin.jobs.send(Job::Stop);
+            1
+        }
+        None => 0,
+    }
 }

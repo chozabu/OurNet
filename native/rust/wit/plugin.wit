@@ -121,6 +121,22 @@ interface live {
   /// Sends `payload` to `device`'s copy of this plugin. Returns a request
   /// ID; the answer arrives as `on-reply` with it. Rate-limited.
   send: func(device: string, payload: list<u8>) -> u64;
+  /// Sends `data` to `device`'s copy of this plugin as one datagram:
+  /// unreliable, unordered, unanswered, at most 1100 bytes. For real-time
+  /// state and packets. Fails at once only when it cannot be sent at all.
+  datagram: func(device: string, data: list<u8>) -> result<_, string>;
+}
+
+/// A virtual network interface, for a VPN. A privileged grant: the person
+/// is asked again by the system when it opens.
+interface tun {
+  /// Opens the interface with IPv4 `address`/`prefix`, routing `routes`
+  /// (CIDRs, such as "10.77.0.0/16") through it. IP packets the system
+  /// sends into it arrive as `on-packet`.
+  open: func(address: string, prefix: u8, routes: list<string>, mtu: u16) -> result<_, string>;
+  /// Hands one IP packet to the system, as if it arrived on the interface.
+  write: func(packet: list<u8>);
+  close: func();
 }
 
 /// What the app shows. Widgets come from the package's RFW library; a
@@ -141,6 +157,7 @@ world plugin {
   import objects;
   import identity;
   import live;
+  import tun;
   import ui;
 
   /// Called once after loading, and after a hot reload's `restore`.
@@ -159,6 +176,10 @@ world plugin {
   /// The answer to `live.send` request `id`.
   export on-reply: func(id: u64, reply: result<list<u8>, string>);
   export on-timer: func(token: u64);
+  /// A datagram from `device`'s copy of this plugin.
+  export on-datagram: func(device: string, data: list<u8>);
+  /// An IP packet the system sent into this plugin's `tun` interface.
+  export on-packet: func(packet: list<u8>);
   /// Hot reload: what the next version's `restore` receives.
   export save-state: func() -> list<u8>;
   export restore: func(state: list<u8>);

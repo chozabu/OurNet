@@ -20,6 +20,10 @@ wasmtime = { version = "=48.0.5", default-features = false, features = ["runtime
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+[target.'cfg(windows)'.dependencies]
+# Virtual network interfaces for VPN plugins (src/tun.rs); loads wintun.dll at run time.
+wintun = "=0.5.1"
+
 [profile.release]
 opt-level = 3
 lto = "fat"
