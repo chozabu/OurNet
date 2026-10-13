@@ -105,10 +105,7 @@ void main() {
 
     await sb.subscribe(cooking.space, true);
     await syncPair(a, b);
-    await a.publish('post', {
-      'title': 'Soup',
-      'text': 'Salt',
-    }, space: 'cooking');
+    await a.publish('post', {'title': 'Soup', 'text': 'Salt'}, space: 'cooking');
     await syncPair(a, b);
     expect(
       b.store.objects(kind: 'post', space: 'cooking').single.author,
@@ -206,18 +203,18 @@ void main() {
     expect(Links.parse('https://example.com/forum/x'), isNull);
 
     final text = 'See $post, and $forum. Also $message!';
-    expect(Links.pattern.allMatches(text).map((m) => m.group(0)), [
-      post,
-      forum,
-      message,
-    ]);
+    expect(
+      Links.pattern.allMatches(text).map((m) => m.group(0)),
+      [post, forum, message],
+    );
   });
 
   test('a link previews what this device holds', () async {
-    final root = await a.publish('post', {
-      'title': 'Best soup?',
-      'text': 'Asking for a friend',
-    }, space: 'cooking');
+    final root = await a.publish(
+      'post',
+      {'title': 'Best soup?', 'text': 'Asking for a friend'},
+      space: 'cooking',
+    );
     final link = Links.parse(Links.post('cooking', root.id))!;
     expect(Links.preview(a, link), 'Best soup?');
     // Not held, so nothing to show.

@@ -345,67 +345,70 @@ void main() {
     expect(orderBetween('k', 'k').compareTo('k') > 0, true);
   });
 
-  test('items keep order and colour converges between collaborators', () async {
-    final note = await alice.create(
-      title: '',
-      items: ['Milk', 'Eggs', 'Bread'],
-      color: 'mint',
-    );
-    expect(note.checks.map(note.itemText), ['Milk', 'Eggs', 'Bread']);
-    expect(note.rawTitle, '');
-    expect(note.label, 'Milk');
-    await alice.changeMembers(note.id, [b.person]);
-    await syncPair(a, b);
-    var theirs = (await bob.get(note.id))!;
-    expect(theirs.color, 'mint');
-    final [milk, eggs, bread] = theirs.checks;
-    // Bob moves Bread first while Alice renames Milk and adds an item.
-    await bob.edit(
-      note.id,
-      theirs.epoch,
-      'check:$bread:order',
-      orderBetween(null, theirs.order(milk)),
-      theirs.parents('check:$bread:order'),
-    );
-    var mine = (await alice.get(note.id))!;
-    final ids = await alice.apply(note.id, mine.epoch, [
-      (
-        field: 'check:$milk:text',
-        value: 'Oat milk',
-        parents: mine.parents('check:$milk:text'),
-      ),
-      (field: 'check:new1:text', value: 'Jam', parents: const []),
-      (
-        field: 'check:new1:order',
-        value: orderBetween(mine.order(eggs), null),
-        parents: const [],
-      ),
-      (field: 'color', value: 'dusk', parents: mine.parents('color')),
-    ]);
-    expect(ids.every((id) => id != null), true);
-    await syncPair(a, b);
-    mine = (await alice.get(note.id))!;
-    theirs = (await bob.get(note.id))!;
-    for (final doc in [mine, theirs]) {
-      expect(doc.checks.map(doc.itemText), [
+  test(
+    'items keep order and colour converges between collaborators',
+    () async {
+      final note = await alice.create(
+        title: '',
+        items: ['Milk', 'Eggs', 'Bread'],
+        color: 'mint',
+      );
+      expect(note.checks.map(note.itemText), ['Milk', 'Eggs', 'Bread']);
+      expect(note.rawTitle, '');
+      expect(note.label, 'Milk');
+      await alice.changeMembers(note.id, [b.person]);
+      await syncPair(a, b);
+      var theirs = (await bob.get(note.id))!;
+      expect(theirs.color, 'mint');
+      final [milk, eggs, bread] = theirs.checks;
+      // Bob moves Bread first while Alice renames Milk and adds an item.
+      await bob.edit(
+        note.id,
+        theirs.epoch,
+        'check:$bread:order',
+        orderBetween(null, theirs.order(milk)),
+        theirs.parents('check:$bread:order'),
+      );
+      var mine = (await alice.get(note.id))!;
+      final ids = await alice.apply(note.id, mine.epoch, [
+        (
+          field: 'check:$milk:text',
+          value: 'Oat milk',
+          parents: mine.parents('check:$milk:text'),
+        ),
+        (field: 'check:new1:text', value: 'Jam', parents: const []),
+        (
+          field: 'check:new1:order',
+          value: orderBetween(mine.order(eggs), null),
+          parents: const [],
+        ),
+        (field: 'color', value: 'dusk', parents: mine.parents('color')),
+      ]);
+      expect(ids.every((id) => id != null), true);
+      await syncPair(a, b);
+      mine = (await alice.get(note.id))!;
+      theirs = (await bob.get(note.id))!;
+      for (final doc in [mine, theirs]) {
+        expect(doc.checks.map(doc.itemText), [
+          'Bread',
+          'Oat milk',
+          'Eggs',
+          'Jam',
+        ]);
+        expect(doc.color, 'dusk');
+        expect(doc.hasConflicts, false);
+      }
+      final summary = (await alice.summaries()).single.data;
+      expect(summary['color'], 'dusk');
+      expect((summary['checks'] as List).map((c) => c['text']), [
         'Bread',
         'Oat milk',
         'Eggs',
         'Jam',
       ]);
-      expect(doc.color, 'dusk');
-      expect(doc.hasConflicts, false);
-    }
-    final summary = (await alice.summaries()).single.data;
-    expect(summary['color'], 'dusk');
-    expect((summary['checks'] as List).map((c) => c['text']), [
-      'Bread',
-      'Oat milk',
-      'Eggs',
-      'Jam',
-    ]);
-    expect(summary['checkedCount'], 0);
-  });
+      expect(summary['checkedCount'], 0);
+    },
+  );
 
   test('batched edits reject a full list without publishing', () async {
     final note = await alice.create(checklist: true);

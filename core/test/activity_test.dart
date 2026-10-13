@@ -34,53 +34,43 @@ void main() {
     expect(posts.count, 2);
     expect(posts.public, isTrue);
     expect(posts.people, [b.person]);
-    expect(
-      posts.items.map((i) => i.data!['text']),
-      containsAll(['One', 'Two']),
-    );
+    expect(posts.items.map((i) => i.data!['text']), containsAll(['One', 'Two']));
     // The friend added in setUp is news too.
     expect(
-      feed.entries
-          .where((e) => e.section == ActivitySection.people)
-          .single
-          .space,
+      feed.entries.where((e) => e.section == ActivitySection.people).single.space,
       b.person,
     );
   });
 
-  test(
-    'what this device did is left out; other devices of mine are not',
-    () async {
-      await a.publish('post', {'text': 'Mine, from here'});
-      final feed = Activity(a);
-      await feed.refresh();
-      expect(
-        feed.entries.where((e) => e.section == ActivitySection.posts),
-        isEmpty,
-      );
-    },
-  );
+  test('what this device did is left out; other devices of mine are not',
+      () async {
+    await a.publish('post', {'text': 'Mine, from here'});
+    final feed = Activity(a);
+    await feed.refresh();
+    expect(
+      feed.entries.where((e) => e.section == ActivitySection.posts),
+      isEmpty,
+    );
+  });
 
-  test(
-    'refresh takes in only what arrived since, and new rows count',
-    () async {
-      final feed = Activity(a);
-      await feed.refresh();
-      feed.markSeen();
-      expect(feed.unseen(), 0);
-      await Future<void>.delayed(const Duration(milliseconds: 5));
-      await b.publish('post', {'text': 'Later', 'title': 'News'});
-      await syncPair(a, b);
-      expect(await feed.refresh(), isTrue);
-      expect(feed.entries.first.section, ActivitySection.posts);
-      expect(feed.isNew(feed.entries.first), isTrue);
-      expect(feed.unseen(), 1);
-      feed.markSeen();
-      expect(feed.unseen(), 0);
-      // Nothing new: nothing changes.
-      expect(await feed.refresh(), isFalse);
-    },
-  );
+  test('refresh takes in only what arrived since, and new rows count',
+      () async {
+    final feed = Activity(a);
+    await feed.refresh();
+    feed.markSeen();
+    expect(feed.unseen(), 0);
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    await b.publish('post', {'text': 'Later', 'title': 'News'});
+    await syncPair(a, b);
+    expect(await feed.refresh(), isTrue);
+    expect(feed.entries.first.section, ActivitySection.posts);
+    expect(feed.isNew(feed.entries.first), isTrue);
+    expect(feed.unseen(), 1);
+    feed.markSeen();
+    expect(feed.unseen(), 0);
+    // Nothing new: nothing changes.
+    expect(await feed.refresh(), isFalse);
+  });
 
   test('group notes, chat and forum posts belong to their group', () async {
     final room = await Everyday(a).createRoom('Trip', [b.person]);
@@ -115,11 +105,10 @@ void main() {
     final inGroup = feed.entries
         .where((e) => e.inScope(ScopeKind.group, group: space))
         .toList();
-    expect(inGroup.map((e) => e.section).toSet(), {
-      ActivitySection.notes,
-      ActivitySection.chat,
-      ActivitySection.posts,
-    });
+    expect(
+      inGroup.map((e) => e.section).toSet(),
+      {ActivitySection.notes, ActivitySection.chat, ActivitySection.posts},
+    );
     final noteRow = inGroup.firstWhere(
       (e) => e.section == ActivitySection.notes,
     );
@@ -134,9 +123,7 @@ void main() {
       isEmpty,
     );
     expect(
-      feed.entries
-          .where((e) => e.inScope(ScopeKind.public))
-          .map((e) => e.space),
+      feed.entries.where((e) => e.inScope(ScopeKind.public)).map((e) => e.space),
       isNot(contains(space)),
     );
   });
@@ -165,10 +152,8 @@ void main() {
     await syncPair(a, b);
     final feed = Activity(a);
     await feed.refresh();
-    expect(
-      feed.entries.where((e) => e.section == ActivitySection.posts),
-      hasLength(5),
-    );
+    expect(feed.entries.where((e) => e.section == ActivitySection.posts),
+        hasLength(5));
     expect(feed.exhausted, isTrue);
     expect(await feed.more(), isFalse);
     expect(rows(feed), contains('posts f4 1'));

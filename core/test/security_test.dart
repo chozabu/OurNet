@@ -244,20 +244,15 @@ void main() {
     final members = [a.person, bad.person]..sort();
     // Backdated so it is read before the owner's own record.
     final forger = Node(bad.identity, bad.store, clock: () => 1);
-    await forger.publish(
-      'room',
-      {
-        'room': note.id,
-        'note': true,
-        'owner': bad.person,
-        'name': 'taken',
-        'members': members,
-        'epoch': 'forged',
-        'archived': true,
-      },
-      space: note.id,
-      audience: members,
-    );
+    await forger.publish('room', {
+      'room': note.id,
+      'note': true,
+      'owner': bad.person,
+      'name': 'taken',
+      'members': members,
+      'epoch': 'forged',
+      'archived': true,
+    }, space: note.id, audience: members);
     await syncPair(bad, a);
     note = (await Notes(a).get(note.id))!;
     expect(note.room.data['owner'], a.person);
@@ -266,16 +261,13 @@ void main() {
   });
 
   test('an order key that blocks insertion is refused and never hangs', () {
-    expect(
-      validContent('note_op', {
-        'epoch': 'e',
-        'field': 'check:one:order',
-        'value': 'A0',
-        'parents': <String>[],
-        'clock': 1,
-      }),
-      isFalse,
-    );
+    expect(validContent('note_op', {
+      'epoch': 'e',
+      'field': 'check:one:order',
+      'value': 'A0',
+      'parents': <String>[],
+      'clock': 1,
+    }), isFalse);
     expect(orderBetween(null, '0').endsWith('0'), isFalse);
     expect(orderBetween('A', 'A00').compareTo('A') > 0, isTrue);
   });

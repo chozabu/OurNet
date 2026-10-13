@@ -40,14 +40,7 @@ void main() {
     });
 
     test('survives its own wire form', () {
-      const f = Fix(
-        lat: 51.5074123,
-        lng: -0.1278456,
-        at: t,
-        accuracy: 7.2,
-        heading: 271.6,
-        speed: 3.456,
-      );
+      const f = Fix(lat: 51.5074123, lng: -0.1278456, at: t, accuracy: 7.2, heading: 271.6, speed: 3.456);
       final back = Fix.parse(f.toJson(), now: t)!;
       expect(back.lat, closeTo(f.lat, 1e-7));
       expect(back.lng, closeTo(f.lng, 1e-7));
@@ -92,13 +85,13 @@ void main() {
       var store = Store(path: path);
       var l = Locations(store, clock: () => t);
       for (var i = 0; i < 500; i++) {
-        l.update(
-          'a',
-          Fix(lat: 1, lng: 1 + i / 1000, at: t + i, device: 'phone'),
-        );
+        l.update('a', Fix(lat: 1, lng: 1 + i / 1000, at: t + i, device: 'phone'));
       }
       l.update('b', fix(5, 5, t));
-      expect(store.db.select('SELECT COUNT(*) c FROM positions').first['c'], 2);
+      expect(
+        store.db.select('SELECT COUNT(*) c FROM positions').first['c'],
+        2,
+      );
       store.close();
       // A year later.
       store = Store(path: path);
@@ -114,48 +107,39 @@ void main() {
       store.close();
     });
 
-    test(
-      'own devices keep a row each, and the newest stands for the person',
-      () {
-        final dir = Directory.systemTemp.createTempSync('ournet_loc');
-        addTearDown(() => dir.deleteSync(recursive: true));
-        final path = '${dir.path}/p.db';
-        var store = Store(path: path);
-        var l = Locations(store, clock: () => t);
-        Fix on(String label, double lat, int at) =>
-            Fix(lat: lat, lng: 0, at: at, device: label);
-        expect(l.updateDevice('d1', on('Pixel', 1, t), person: 'me'), isTrue);
-        expect(
-          l.updateDevice('d2', on('Desk', 2, t + 5), person: 'me'),
-          isTrue,
-        );
-        // A late fix from a device changes neither its row nor the person's.
-        expect(
-          l.updateDevice('d1', on('Pixel', 9, t - 5), person: 'me'),
-          isFalse,
-        );
-        expect(l.ofDevice('d1')!.lat, 1);
-        expect(l.ofDevice('d2')!.device, 'Desk');
-        expect(l.of('me')!.lat, 2);
-        // The phone moving again is newer than the laptop's confirmation.
-        l.updateDevice('d1', on('Pixel', 3, t + 9), person: 'me');
-        expect(l.of('me')!.device, 'Pixel');
-        expect(l.devices.length, 2);
-        store.close();
+    test('own devices keep a row each, and the newest stands for the person', () {
+      final dir = Directory.systemTemp.createTempSync('ournet_loc');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final path = '${dir.path}/p.db';
+      var store = Store(path: path);
+      var l = Locations(store, clock: () => t);
+      Fix on(String label, double lat, int at) =>
+          Fix(lat: lat, lng: 0, at: at, device: label);
+      expect(l.updateDevice('d1', on('Pixel', 1, t), person: 'me'), isTrue);
+      expect(l.updateDevice('d2', on('Desk', 2, t + 5), person: 'me'), isTrue);
+      // A late fix from a device changes neither its row nor the person's.
+      expect(l.updateDevice('d1', on('Pixel', 9, t - 5), person: 'me'), isFalse);
+      expect(l.ofDevice('d1')!.lat, 1);
+      expect(l.ofDevice('d2')!.device, 'Desk');
+      expect(l.of('me')!.lat, 2);
+      // The phone moving again is newer than the laptop's confirmation.
+      l.updateDevice('d1', on('Pixel', 3, t + 9), person: 'me');
+      expect(l.of('me')!.device, 'Pixel');
+      expect(l.devices.length, 2);
+      store.close();
 
-        store = Store(path: path);
-        l = Locations(store, clock: () => t + 86400000);
-        expect(l.ofDevice('d2')!.lat, 2);
-        expect(l.of('me')!.lat, 3);
-        l.forgetDevice('d2');
-        expect(l.ofDevice('d2'), isNull);
-        expect(
-          store.db.select('SELECT COUNT(*) c FROM device_positions').first['c'],
-          1,
-        );
-        store.close();
-      },
-    );
+      store = Store(path: path);
+      l = Locations(store, clock: () => t + 86400000);
+      expect(l.ofDevice('d2')!.lat, 2);
+      expect(l.of('me')!.lat, 3);
+      l.forgetDevice('d2');
+      expect(l.ofDevice('d2'), isNull);
+      expect(
+        store.db.select('SELECT COUNT(*) c FROM device_positions').first['c'],
+        1,
+      );
+      store.close();
+    });
 
     test('sending to own devices is on until switched off', () {
       final store = Store();

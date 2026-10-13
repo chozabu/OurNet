@@ -129,8 +129,7 @@ void main() {
           id,
     };
     Set<String> offered(Node peer) =>
-        (a.inventoryAfter(peerDevice: peer.identity.device)['have'] as Json)
-            .keys
+        (a.inventoryAfter(peerDevice: peer.identity.device)['have'] as Json).keys
             .toSet();
     await a.publish('post', {'text': 'public'});
     await a.publish('post', {'text': 'elsewhere'}, space: 'other');
