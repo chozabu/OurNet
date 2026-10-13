@@ -154,6 +154,7 @@ class Registry {
   final _requests =
       <String, ({String owner, RequestHandler handle, bool poolable})>{};
   final _sections = <String, PluginSection>{};
+  final _capabilities = <String, String>{};
   final _changes = StreamController<void>.broadcast();
 
   /// Fires when sections are added or removed.
@@ -216,11 +217,24 @@ class Registry {
   /// Plugin sections, in the order they were added.
   List<PluginSection> get sections => List.unmodifiable(_sections.values);
 
+  /// Tells peers [owner] can do [capability] (`p:<plugin>` for a plugin that
+  /// takes live messages), in the capabilities sync messages carry.
+  void advertise(String owner, String capability) =>
+      _capabilities[capability] = owner;
+
+  /// Stops advertising what [owner] can do.
+  void withdraw(String owner) =>
+      _capabilities.removeWhere((_, o) => o == owner);
+
+  /// What modules add to this build's capabilities, sorted.
+  List<String> get capabilities => _capabilities.keys.toList()..sort();
+
   /// Takes away everything [owner] contributed: on unloading a plugin, and
   /// before its new version registers again.
   void removeOwner(String owner) {
     _kinds.removeWhere((_, v) => v.owner == owner);
     _requests.removeWhere((_, v) => v.owner == owner);
+    withdraw(owner);
     final before = _sections.length;
     _sections.removeWhere((_, v) => v.plugin == owner);
     if (_sections.length != before) _changes.add(null);

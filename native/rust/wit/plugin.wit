@@ -1,0 +1,165 @@
+/// The OurNet plugin API. A plugin is a WebAssembly component targeting the
+/// `plugin` world. The host signs, encrypts, stores and syncs on its behalf;
+/// a plugin never holds keys. Every call into a plugin runs on that plugin's
+/// own thread, never the app's UI thread. See PLUGINS.md.
+///
+/// Additive within 0.x: new functions go in new interfaces, so an older
+/// plugin keeps linking.
+package ournet:plugin@0.1.0;
+
+interface types {
+  /// A signed object as this device reads it. `payload` is the decrypted
+  /// content as JSON text. Person IDs are root public keys.
+  record object {
+    id: string,
+    author: string,
+    device: string,
+    kind: string,
+    space: string,
+    /// Empty for public objects.
+    audience: list<string>,
+    /// Milliseconds since the epoch, as signed by the author's device.
+    created: u64,
+    payload: string,
+  }
+
+  /// Who an object is for.
+  variant audience {
+    /// This person's own devices.
+    personal,
+    /// These people, and this person.
+    people(list<string>),
+    /// The members of the private group the space belongs to.
+    group,
+    /// Everyone who follows the space.
+    public,
+  }
+
+  /// Newest first. `before` continues a page: pass the last object's
+  /// `created` and `id`.
+  record filter {
+    kind: string,
+    space: option<string>,
+    author: option<string>,
+    before: option<tuple<u64, string>>,
+    limit: u32,
+  }
+}
+
+interface log {
+  enum level { debug, info, warn, error }
+  log: func(level: level, message: string);
+}
+
+/// Time, and timers that call `on-timer` on this plugin's thread.
+interface clock {
+  /// Milliseconds since the epoch.
+  now: func() -> u64;
+  /// Calls `on-timer(token)` once, after `delay` milliseconds. Setting a
+  /// token again moves it.
+  set-timer: func(token: u64, delay: u32);
+  cancel-timer: func(token: u64);
+}
+
+/// Private to this plugin on this device; not synced. Kept by the host.
+interface storage {
+  get: func(key: string) -> option<list<u8>>;
+  /// Fails when the plugin's quota would be exceeded.
+  set: func(key: string, value: list<u8>) -> result<_, string>;
+  remove: func(key: string);
+  /// Keys starting with `prefix`, sorted.
+  keys: func(prefix: string) -> list<string>;
+}
+
+/// Signed, synced objects. A plugin publishes and is sent its own kinds,
+/// `x.<plugin>.<name>`; their payloads must match the manifest's schema.
+interface objects {
+  use types.{object, audience, filter};
+
+  /// Signs and stores a new object, then syncs it. Returns its ID. A
+  /// `group` audience needs a group's space; `public` needs a space of this
+  /// plugin's (`x.<plugin>…`).
+  publish: func(kind: string, space: string, to: audience, payload: string) -> result<string, string>;
+  get: func(id: string) -> option<object>;
+  /// Read through the host's indexes; at most 500 a page.
+  query: func(filter: filter) -> list<object>;
+  /// Follows (or stops following) a public space of this plugin's, so its
+  /// objects are fetched from friends who have them.
+  follow: func(space: string, on: bool) -> result<_, string>;
+}
+
+/// Read-only views of this person and their friends. No keys.
+interface identity {
+  record device {
+    id: string,
+    name: string,
+    /// Heard from recently.
+    online: bool,
+    /// Has said it runs this plugin.
+    has-plugin: bool,
+  }
+  record contact {
+    person: string,
+    name: string,
+    devices: list<device>,
+  }
+  record group {
+    space: string,
+    name: string,
+    members: list<string>,
+  }
+  /// This person.
+  me: func() -> string;
+  /// This device.
+  this-device: func() -> string;
+  contacts: func() -> list<contact>;
+  groups: func() -> list<group>;
+}
+
+/// Live messages to this plugin on friends' devices: nothing is stored.
+interface live {
+  /// Sends `payload` to `device`'s copy of this plugin. Returns a request
+  /// ID; the answer arrives as `on-reply` with it. Rate-limited.
+  send: func(device: string, payload: list<u8>) -> u64;
+}
+
+/// What the app shows. Widgets come from the package's RFW library; a
+/// plugin updates the data they read.
+interface ui {
+  /// Sets top-level keys of the data `surface` renders, from a JSON
+  /// object; a null value removes its key. Other keys stay as they were.
+  update: func(surface: string, data: string);
+  /// Shows a notification.
+  notify: func(title: string, body: string);
+}
+
+world plugin {
+  use types.{object};
+  import log;
+  import clock;
+  import storage;
+  import objects;
+  import identity;
+  import live;
+  import ui;
+
+  /// Called once after loading, and after a hot reload's `restore`.
+  export init: func();
+  /// New objects of this plugin's kinds, in the order they were stored,
+  /// including ones stored while it was not running. Each arrives once.
+  export on-objects: func(objects: list<object>);
+  /// A surface was shown. `context` is JSON: `{"scope": "personal" |
+  /// "group" | "public", "space"?: string, "name"?: string}`.
+  export on-open: func(surface: string, context: string);
+  /// A widget in `surface` fired event `name` with JSON `args`.
+  export on-event: func(surface: string, name: string, args: string);
+  /// A live message from `device`'s copy of this plugin; the result is
+  /// sent back as the reply.
+  export on-request: func(device: string, payload: list<u8>) -> result<list<u8>, string>;
+  /// The answer to `live.send` request `id`.
+  export on-reply: func(id: u64, reply: result<list<u8>, string>);
+  export on-timer: func(token: u64);
+  /// Hot reload: what the next version's `restore` receives.
+  export save-state: func() -> list<u8>;
+  export restore: func(state: list<u8>);
+}

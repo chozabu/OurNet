@@ -1,0 +1,12 @@
+[package]
+name = "echo"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Test plugin: exercises every part of the plugin API."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ournet-plugin.workspace = true

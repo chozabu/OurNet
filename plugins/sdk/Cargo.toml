@@ -1,0 +1,11 @@
+[package]
+name = "ournet-plugin"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Write OurNet plugins in Rust: bindings to the plugin world and a friendlier surface over them."
+
+[dependencies]
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "realloc", "std"] }
+serde.workspace = true
+serde_json.workspace = true

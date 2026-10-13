@@ -1,0 +1,16 @@
+{
+  "id": "echo",
+  "name": "Echo",
+  "version": "0.1.0",
+  "api": "0.1",
+  "description": "Test plugin for the plugin host: answers, stores, publishes and echoes.",
+  "grants": ["objects", "identity", "live"],
+  "kinds": {
+    "note": {
+      "text": {"type": "string", "max": 1000, "required": true}
+    }
+  },
+  "sections": [
+    {"name": "echo", "title": "Echo", "icon": "bug_report", "surface": "Echo"}
+  ]
+}

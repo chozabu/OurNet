@@ -276,6 +276,10 @@ class Node {
     /// The group key to seal with, instead of the space's current one: for
     /// copies written ahead of the record that holds a new key.
     GroupKey? seal,
+
+    /// The plugin that wrote it, as `<id>@<version>`: signed with the object
+    /// so readers can tell. Builds without plugins ignore it.
+    String? app,
   }) {
     if (_closing || _pendingPublications >= 32) {
       return Future.error(
@@ -293,6 +297,7 @@ class Node {
       expires: expires,
       extra: recipients,
       seal: seal,
+      app: app,
     );
     if (store.path == null) return run();
     _pendingPublications++;
@@ -314,6 +319,7 @@ class Node {
     required int expires,
     List<DeviceCertificate> extra = const [],
     GroupKey? seal,
+    String? app,
   }) async {
     if (!registry.accepts(kind, content)) {
       throw StateError('Invalid $kind content');
@@ -366,6 +372,7 @@ class Node {
       'audience': audience.isEmpty ? <String>[] : (recipients.toList()..sort()),
       'via': via.toSet().toList()..sort(),
       'payload': content,
+      'app': ?app,
     };
     final object = await _preparePublication(
       data,

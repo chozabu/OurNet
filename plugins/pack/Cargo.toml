@@ -1,0 +1,11 @@
+[package]
+name = "pack"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Builds OurNet plugins into installable packages."
+
+[dependencies]
+wit-component = "0.261"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+serde_json.workspace = true

@@ -1,10 +1,13 @@
-//! C functions behind `package:ournet_native`. Each returns 1 on success and
+//! C functions behind `package:ournet_native`. The plugin host is in
+//! [plugin]; the rest is crypto and imaging. Each of those returns 1 on success and
 //! 0 on failure (invalid input, a signature that does not verify, a box that
 //! does not open). Dart checks every length before calling and falls back to
 //! its own implementation on 0, so these never decide a result Dart would
 //! not.
 
 use std::slice;
+
+mod plugin;
 
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, Tag};

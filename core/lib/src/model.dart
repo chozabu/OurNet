@@ -481,6 +481,10 @@ class SignedObject {
   bool get hasExpiry => expires != 0;
   List<String> get audience => (data['audience'] as List).cast<String>();
   bool get isPublic => audience.isEmpty;
+
+  /// The plugin that wrote this object, `<id>@<version>`; null for objects
+  /// the app wrote itself.
+  String? get app => data['app'] as String?;
   Json toJson() => {
     'data': data,
     'signature': signature,
@@ -506,6 +510,8 @@ class SignedObject {
           audience.length > 64 ||
           (data['via'] as List).length > 64 ||
           !(data['via'] as List).every((v) => v is String) ||
+          (data['app'] != null &&
+              (data['app'] is! String || (data['app'] as String).length > 64)) ||
           data['payload'] is! Map<String, dynamic>)
         return false;
       if (isPublic && !validContent(kind, data['payload'])) return false;

@@ -13,7 +13,7 @@ part 'friend_invitation.dart';
 
 /// The only application module that knows the iroh API. Protocol and policy
 /// remain in the Dart core. Connections authenticate independent device keys.
-class PeerNetwork {
+class PeerNetwork implements PluginLink {
   PairingSession? pairing;
   FriendSession? friendInvitation;
   final Node node;
@@ -243,6 +243,15 @@ class PeerNetwork {
     'blob_batch',
   ];
 
+  /// [caps], and what modules add (plugins that take live messages). A peer
+  /// takes at most 32, so modules get what the built-in ones leave.
+  List<String> get _caps => [
+    ...caps,
+    ...node.registry.capabilities
+        .where((c) => c.length <= 32)
+        .take(32 - caps.length),
+  ];
+
   /// Capabilities a peer must list to sync with this build: 0.2.27 and later.
   /// Older builds are refused, so the sync paths they needed are gone.
   static const requiredCaps = {'cursor_paging', 'multi_request', 'since_sync'};
@@ -255,11 +264,15 @@ class PeerNetwork {
   /// Capabilities each peer last announced; empty for builds that predate them.
   final Map<String, Set<String>> peerCaps = {};
 
+  @override
+  bool runs(String device, String plugin) =>
+      peerCaps[device]?.contains('p:$plugin') ?? false;
+
   /// Build, version and capability fields for outgoing sync messages.
   Json get _stamp => {
     if (build.isNotEmpty) 'build': build,
     if (version.isNotEmpty) 'version': version,
-    'caps': caps,
+    'caps': _caps,
   };
 
   final Map<String, int> _progress = {};
@@ -1015,7 +1028,7 @@ class PeerNetwork {
           'type': 'push',
           'items': outgoing,
           'view': ids,
-          'caps': caps,
+          'caps': _caps,
         });
         _progress[device] = _progress[device]! + outgoing.length;
         _activity();
@@ -1068,7 +1081,7 @@ class PeerNetwork {
     final reply = await request(device, {
       'type': 'push',
       'items': items,
-      'caps': caps,
+      'caps': _caps,
     });
     return reply['changed'] as int? ?? 0;
   }

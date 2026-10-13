@@ -18,6 +18,8 @@ void main(List<String> args) async {
       crate.resolve('Cargo.toml'),
       crate.resolve('Cargo.lock'),
       crate.resolve('src/lib.rs'),
+      crate.resolve('src/plugin.rs'),
+      crate.resolve('wit/plugin.wit'),
     ]);
     if (triple == null || !await _installed(triple)) {
       stderr.writeln(

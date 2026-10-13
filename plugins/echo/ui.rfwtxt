@@ -1,0 +1,12 @@
+import core.widgets;
+import core.material;
+
+widget Echo = Center(
+  child: Column(
+    mainAxisSize: "min",
+    children: [
+      Text(text: data.text),
+      ElevatedButton(onPressed: event "ping" { }, child: Text(text: "Ping")),
+    ],
+  ),
+);
