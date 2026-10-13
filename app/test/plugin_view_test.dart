@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -26,11 +25,19 @@ class Rig {
   final GlobalKey shotKey = GlobalKey();
   Rig(this.tester, this.node, this.plugins);
 
-  static Future<Rig> start(WidgetTester tester, List<String> ids) async {
+  static Future<Rig> start(
+    WidgetTester tester,
+    List<String> ids, {
+    bool friend = false,
+  }) async {
     await tester.runAsync(_loadFonts);
     final temp = Directory.systemTemp.createTempSync('ournet-plugin-view');
     final (node, plugins) = (await tester.runAsync(() async {
       final node = Node(await LocalIdentity.create(), Store());
+      if (friend) {
+        final other = await LocalIdentity.create(label: 'Sam');
+        await node.addContact(other.certificate);
+      }
       final plugins = Plugins(node, directory: temp.path);
       for (final id in ids) {
         final p = bundled(id);
@@ -94,7 +101,9 @@ class Rig {
           for (final e in find.byType(Text).evaluate())
             (e.widget as Text).data ?? '',
         ];
-        fail('Timed out. Showing $texts; plugin status ${[for (final p in plugins.installed) '${p.id} ${p.status} ${p.error}']}');
+        fail(
+          'Timed out. Showing $texts; plugin status ${[for (final p in plugins.installed) '${p.id} ${p.status} ${p.error}']}',
+        );
       }
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 20)),
@@ -185,5 +194,74 @@ void main() {
       () => find.textContaining('characters').evaluate().length == 2,
     );
     await rig.shot('wiki-history');
+  });
+
+  testWidgets('the microblog posts, likes and replies', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final rig = await Rig.start(tester, ['microblog']);
+    await rig.show('microblog', 'Feed', context: const {'scope': 'public'});
+    await rig.untilText('Microblog');
+    await tester.enterText(find.byType(TextField), 'Hello, *friends*');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await rig.untilText('Reply');
+    await tester.tap(find.text('♡ '));
+    await rig.untilText('♥ 1');
+    await tester.tap(find.text('Reply'));
+    await rig.untilText('Your reply');
+    await tester.enterText(find.byType(TextField), 'And a reply');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await rig.untilText('Reply · 1');
+    await rig.shot('microblog');
+  });
+
+  testWidgets('noughts and crosses starts a game with a friend', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final rig = await Rig.start(tester, ['tictactoe'], friend: true);
+    await rig.show('tictactoe', 'Games');
+    await rig.untilText('New game');
+    await tester.tap(find.text('New game'));
+    await rig.untilText('Play with…');
+    await tester.tap(find.text('Friend'));
+    await rig.untilText('Your turn (X)');
+    await tester.tap(find.byType(OutlinedButton).at(4));
+    await rig.untilText('Their turn');
+    expect(find.text('X'), findsOneWidget);
+    await rig.shot('tictactoe');
+  });
+
+  testWidgets('pong practice draws a moving court', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final rig = await Rig.start(tester, ['pong']);
+    await rig.show('pong', 'Pong');
+    await rig.untilText('Practise');
+    await tester.tap(find.text('Practise'));
+    await rig.untilText('Practice');
+    final first = rig.plugins.surface('pong', 'Pong')['frame'];
+    await rig.until(
+      () => rig.plugins.surface('pong', 'Pong')['frame'] != first,
+    );
+    expect(find.byType(CustomPaint), findsWidgets);
+    await rig.shot('pong');
+  });
+
+  testWidgets('the friend network shows this device and is off', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final rig = await Rig.start(tester, ['vpn']);
+    await rig.show('vpn', 'Vpn');
+    await rig.untilText('Turn on');
+    expect(find.textContaining('This device: 10.77.'), findsOneWidget);
+    await rig.shot('vpn');
   });
 }

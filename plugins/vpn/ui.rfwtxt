@@ -1,0 +1,46 @@
+// Switching the network on, and who is on it. Events: src/lib.rs.
+import core.widgets;
+import core.material;
+import ournet;
+
+widget Vpn = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    Padding(
+      padding: [16.0, 12.0, 16.0, 4.0],
+      child: Row(
+        children: [
+          Expanded(child: Text(text: "Friend network", style: { fontSize: 22.0, fontWeight: "w600" })),
+          ElevatedButton(onPressed: event "toggle" { }, child: Text(text: data.action)),
+        ],
+      ),
+    ),
+    Padding(padding: [16.0, 0.0, 16.0, 4.0], child: Text(text: data.status)),
+    Padding(padding: [16.0, 0.0, 16.0, 8.0], child: Text(text: data.address, style: { fontSize: 18.0, fontWeight: "w500" })),
+    Padding(padding: [16.0, 0.0, 16.0, 8.0], child: Text(text: data.traffic, style: { fontSize: 12.0 })),
+    Divider(),
+    Expanded(
+      child: ListView(
+        children: [
+          ...for peer in data.peers:
+            ListTile(
+              leading: Avatar(person: peer.person, size: 36.0),
+              title: Row(children: [PersonName(person: peer.person), Text(text: [" · ", peer.device])]),
+              subtitle: Text(text: [peer.ip, "  ", peer.state]),
+              trailing: switch peer.own {
+                true: Text(text: "Yours"),
+                default: TextButton(onPressed: event "allow" { person: peer.person }, child: Text(text: peer.allow)),
+              },
+            ),
+          switch data.nobody {
+            true: Padding(
+              padding: [16.0, 16.0, 16.0, 16.0],
+              child: Text(text: "None of your devices or friends run Friend network yet."),
+            ),
+            default: SizedBoxShrink(),
+          },
+        ],
+      ),
+    ),
+  ],
+);

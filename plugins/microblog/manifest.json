@@ -1,0 +1,22 @@
+{
+  "id": "microblog",
+  "name": "Microblog",
+  "version": "0.1.0",
+  "api": "0.1",
+  "description": "Short posts. In public, your friends follow you and you follow them; in a group, posts stay with its members. Likes and replies included.",
+  "grants": ["objects", "identity"],
+  "kinds": {
+    "post": {
+      "text": {"type": "string", "max": 1000, "required": true},
+      "reply": {"type": "string", "max": 128},
+      "sent": {"type": "int", "min": 0}
+    },
+    "like": {
+      "post": {"type": "string", "max": 128, "required": true},
+      "on": {"type": "bool", "required": true}
+    }
+  },
+  "sections": [
+    {"name": "microblog", "title": "Microblog", "icon": "campaign", "surface": "Feed", "scopes": ["group", "public"]}
+  ]
+}

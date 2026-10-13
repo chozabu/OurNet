@@ -1,0 +1,12 @@
+[package]
+name = "pong"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Real-time pong against a friend's device, over datagrams."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ournet-plugin.workspace = true

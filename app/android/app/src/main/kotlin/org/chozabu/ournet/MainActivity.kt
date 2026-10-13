@@ -103,6 +103,7 @@ class MainActivity : FlutterActivity() {
         WidgetStore.attach(applicationContext, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/widgets"))
         WidgetStore.receiveLaunch(applicationContext, intent)
         SystemSpeech.attach(applicationContext, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/speech"))
+        FriendVpn.attach(this, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/vpn"))
         MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/clipboard").setMethodCallHandler { call, result ->
             if (call.method != "image") result.notImplemented()
             else worker.execute {
@@ -146,6 +147,7 @@ class MainActivity : FlutterActivity() {
     }
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (folders?.activityResult(requestCode, resultCode, data) == true) return
+        if (FriendVpn.activityResult(requestCode, resultCode)) return
         super.onActivityResult(requestCode, resultCode, data)
     }
     override fun onNewIntent(intent: Intent) {

@@ -1,0 +1,22 @@
+{
+  "id": "tictactoe",
+  "name": "Noughts and crosses",
+  "version": "0.1.0",
+  "api": "0.1",
+  "description": "Play noughts and crosses with a friend, at your own pace: every move is a signed object that syncs like a message, so you can play across days and devices.",
+  "grants": ["objects", "identity"],
+  "kinds": {
+    "game": {
+      "x": {"type": "string", "max": 64, "required": true},
+      "o": {"type": "string", "max": 64, "required": true}
+    },
+    "move": {
+      "game": {"type": "string", "max": 128, "required": true},
+      "n": {"type": "int", "min": 0, "max": 8, "required": true},
+      "cell": {"type": "int", "min": 0, "max": 8, "required": true}
+    }
+  },
+  "sections": [
+    {"name": "tictactoe", "title": "Noughts and crosses", "icon": "grid", "surface": "Games", "scopes": ["personal"]}
+  ]
+}

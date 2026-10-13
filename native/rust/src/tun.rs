@@ -25,6 +25,8 @@ pub enum Kind {
     Memory,
 }
 
+// Android's VpnService sets these itself; Windows applies them here.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub struct Config<'a> {
     pub address: std::net::Ipv4Addr,
     pub prefix: u8,
@@ -72,8 +74,17 @@ impl Tun {
                 std::thread::Builder::new()
                     .name("ournet-tun".into())
                     .spawn(move || {
+                        use std::os::fd::AsRawFd;
                         let mut buf = vec![0u8; mtu.max(1500) + 64];
                         while !stopped.load(Ordering::Relaxed) {
+                            // Waits a little at a time, so closing is noticed
+                            // even when nothing arrives.
+                            let mut poll = libc::pollfd { fd: reader.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+                            match unsafe { libc::poll(&mut poll, 1, 250) } {
+                                0 => continue,
+                                n if n < 0 => break,
+                                _ => {}
+                            }
                             match reader.read(&mut buf) {
                                 Ok(0) | Err(_) => break,
                                 Ok(n) => {

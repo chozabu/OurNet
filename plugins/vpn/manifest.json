@@ -1,0 +1,11 @@
+{
+  "id": "vpn",
+  "name": "Friend network",
+  "version": "0.1.0",
+  "api": "0.1",
+  "description": "A private network (10.77.0.0/16) between your devices and friends you allow, carried by OurNet's encrypted links: reach your own computer from your phone, or share a game server with a friend. It does not route the internet.",
+  "grants": ["identity", "live", "tun"],
+  "sections": [
+    {"name": "vpn", "title": "Friend network", "icon": "vpn", "surface": "Vpn", "scopes": ["personal"]}
+  ]
+}

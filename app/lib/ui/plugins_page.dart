@@ -10,6 +10,9 @@ const grantMeanings = {
   'objects': 'Save and sync its own data, signed by you',
   'identity': "See your friends' and groups' names and who is in each group",
   'live': "Exchange live messages with friends' devices that run it",
+  'tun':
+      'Run a network interface (a VPN) for traffic to your devices and '
+      'friends; the system asks too',
 };
 
 /// Settings › Plugins: what is installed, what ships with the app, and

@@ -1,0 +1,11 @@
+{
+  "id": "pong",
+  "name": "Pong",
+  "version": "0.1.0",
+  "api": "0.1",
+  "description": "Real-time pong with a friend whose device is online and runs it, straight between your devices. Or practise against the computer.",
+  "grants": ["identity", "live"],
+  "sections": [
+    {"name": "pong", "title": "Pong", "icon": "sports", "surface": "Pong", "scopes": ["personal"]}
+  ]
+}

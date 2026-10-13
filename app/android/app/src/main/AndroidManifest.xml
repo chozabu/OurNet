@@ -38,6 +38,15 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Peer-to-peer messaging without a server: keeps an encrypted connection to the user's friends' devices open so their messages and calls arrive immediately. Turned off in the app's settings." />
         </service>
+        <!-- The friend network plugin's interface: see FriendVpn and PLUGINS.md. -->
+        <service
+            android:name=".FriendVpn"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
         <receiver android:name=".ConnectionService$Starter" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

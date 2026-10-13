@@ -165,6 +165,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "microblog"
+version = "0.1.0"
+dependencies = [
+ "ournet-plugin",
+ "serde",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -190,6 +198,13 @@ dependencies = [
  "serde_json",
  "wit-component 0.261.0",
  "zip",
+]
+
+[[package]]
+name = "pong"
+version = "0.1.0"
+dependencies = [
+ "ournet-plugin",
 ]
 
 [[package]]
@@ -307,10 +322,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "tictactoe"
+version = "0.1.0"
+dependencies = [
+ "ournet-plugin",
+ "serde",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+
+[[package]]
+name = "vpn"
+version = "0.1.0"
+dependencies = [
+ "ournet-plugin",
+ "serde",
+]
 
 [[package]]
 name = "wasm-encoder"

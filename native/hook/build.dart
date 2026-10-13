@@ -41,6 +41,12 @@ void main(List<String> args) async {
           : '$triple$api';
       environment['${prefix}_LINKER'] = clang.toFilePath();
       environment['${prefix}_RUSTFLAGS'] = '-C link-arg=--target=$clangTarget';
+      // C parts of dependencies (wasmtime's helpers), built by the cc crate.
+      final cc = triple.replaceAll('-', '_');
+      environment['CC_$cc'] = clang.toFilePath();
+      environment['CFLAGS_$cc'] = '--target=$clangTarget';
+      final ar = code.cCompiler?.archiver;
+      if (ar != null) environment['AR_$cc'] = ar.toFilePath();
     }
     final result = await Process.run(
       'cargo',

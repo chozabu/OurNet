@@ -1,0 +1,106 @@
+// Games against friends, and one board. Events are handled in src/lib.rs.
+import core.widgets;
+import core.material;
+import ournet;
+
+widget Games = switch data.mode {
+  "board": Board(),
+  "pick": Pick(),
+  default: Lobby(),
+};
+
+widget Lobby = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    Padding(
+      padding: [16.0, 12.0, 16.0, 8.0],
+      child: Row(
+        children: [
+          Expanded(child: Text(text: "Noughts and crosses", style: { fontSize: 22.0, fontWeight: "w600" })),
+          ElevatedButton(onPressed: event "new" { }, child: Text(text: "New game")),
+        ],
+      ),
+    ),
+    Expanded(
+      child: ListView(
+        children: [
+          ...for game in data.games:
+            ListTile(
+              leading: Avatar(person: game.opponent, size: 36.0),
+              title: Row(children: [Text(text: "With "), PersonName(person: game.opponent)]),
+              subtitle: Text(text: game.status),
+              onTap: event "open" { id: game.id },
+            ),
+          switch data.empty {
+            true: Padding(padding: [16.0, 16.0, 16.0, 16.0], child: Text(text: "No games yet: start one with a friend.")),
+            default: SizedBoxShrink(),
+          },
+        ],
+      ),
+    ),
+  ],
+);
+
+widget Pick = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    Padding(
+      padding: [8.0, 8.0, 16.0, 8.0],
+      child: Row(
+        children: [
+          TextButton(onPressed: event "back" { }, child: Text(text: "‹ Games")),
+          Text(text: "Play with…", style: { fontSize: 20.0, fontWeight: "w600" }),
+        ],
+      ),
+    ),
+    Expanded(
+      child: ListView(
+        children: [
+          ...for friend in data.friends:
+            ListTile(
+              leading: Avatar(person: friend.id, size: 36.0),
+              title: PersonName(person: friend.id),
+              onTap: event "start" { person: friend.id },
+            ),
+          switch data.noFriends {
+            true: Padding(padding: [16.0, 16.0, 16.0, 16.0], child: Text(text: "Connect with a friend first.")),
+            default: SizedBoxShrink(),
+          },
+        ],
+      ),
+    ),
+  ],
+);
+
+widget Board = Column(
+  children: [
+    Padding(
+      padding: [8.0, 8.0, 16.0, 8.0],
+      child: Row(
+        children: [
+          TextButton(onPressed: event "back" { }, child: Text(text: "‹ Games")),
+          Expanded(child: Row(children: [Text(text: "You against "), PersonName(person: data.board.opponent, bold: true)])),
+        ],
+      ),
+    ),
+    Padding(padding: [16.0, 4.0, 16.0, 16.0], child: Text(text: data.board.status, style: { fontSize: 18.0 })),
+    ...for row in data.board.rows:
+      Row(
+        mainAxisAlignment: "center",
+        children: [
+          ...for cell in row:
+            Padding(
+              padding: [4.0, 4.0, 4.0, 4.0],
+              child: SizedBox(
+                width: 88.0,
+                height: 88.0,
+                child: OutlinedButton(
+                  onPressed: event "play" { cell: cell.i },
+                  child: Text(text: cell.mark, style: { fontSize: 40.0, fontWeight: "w700" }),
+                ),
+              ),
+            ),
+        ],
+      ),
+  ],
+);

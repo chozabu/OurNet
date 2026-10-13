@@ -1,0 +1,112 @@
+// The feed: a composer, then posts newest first. In public it also lists
+// friends to follow. Events are handled in src/lib.rs.
+import core.widgets;
+import core.material;
+import ournet;
+
+widget Feed = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    Padding(
+      padding: [16.0, 12.0, 16.0, 0.0],
+      child: Row(
+        children: [
+          Expanded(child: Text(text: data.heading, style: { fontSize: 22.0, fontWeight: "w600" })),
+          switch data.public {
+            true: TextButton(onPressed: event "people" { }, child: Text(text: data.peopleLabel)),
+            default: SizedBoxShrink(),
+          },
+        ],
+      ),
+    ),
+    Padding(padding: [16.0, 2.0, 16.0, 4.0], child: Text(text: data.where)),
+    switch data.showPeople {
+      true: People(),
+      default: SizedBoxShrink(),
+    },
+    switch data.replying {
+      "": SizedBoxShrink(),
+      default: Padding(
+        padding: [16.0, 4.0, 8.0, 0.0],
+        child: Row(
+          children: [
+            Expanded(child: Text(text: ["Replying to ", data.replying], style: { fontSize: 12.0 })),
+            TextButton(onPressed: event "noreply" { }, child: Text(text: "Cancel")),
+          ],
+        ),
+      ),
+    },
+    Padding(
+      padding: [16.0, 4.0, 16.0, 8.0],
+      child: TextInput(hint: data.hint, value: data.draft, clearOnSubmit: true, onSubmitted: event "post" { }),
+    ),
+    Divider(),
+    Expanded(
+      child: ListView(
+        children: [
+          ...for post in data.posts:
+            Padding(
+              padding: [12.0, 8.0, 12.0, 4.0],
+              child: Row(
+                crossAxisAlignment: "start",
+                children: [
+                  Avatar(person: post.author, size: 40.0),
+                  SizedBox(width: 12.0),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: "start",
+                      children: [
+                        Row(
+                          children: [
+                            PersonName(person: post.author, bold: true),
+                            Text(text: " · "),
+                            TimeAgo(at: post.at),
+                          ],
+                        ),
+                        switch post.replyTo {
+                          "": SizedBoxShrink(),
+                          default: Text(text: ["↳ ", post.replyTo], style: { fontSize: 12.0, color: 0xFF777777 }),
+                        },
+                        Padding(padding: [0.0, 4.0, 0.0, 0.0], child: Markup(text: post.text)),
+                        Row(
+                          children: [
+                            TextButton(onPressed: event "like" { id: post.id }, child: Text(text: post.likes)),
+                            TextButton(onPressed: event "reply" { id: post.id }, child: Text(text: post.replies)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          switch data.empty {
+            true: Padding(padding: [16.0, 16.0, 16.0, 16.0], child: Text(text: data.emptyText)),
+            default: SizedBoxShrink(),
+          },
+        ],
+      ),
+    ),
+  ],
+);
+
+widget People = Card(
+  margin: [16.0, 4.0, 16.0, 8.0],
+  child: Column(
+    children: [
+      ...for person in data.people:
+        ListTile(
+          leading: Avatar(person: person.id, size: 32.0),
+          title: PersonName(person: person.id),
+          trailing: TextButton(
+            onPressed: event "follow" { person: person.id },
+            child: Text(text: person.action),
+          ),
+        ),
+      switch data.noPeople {
+        true: Padding(padding: [16.0, 16.0, 16.0, 16.0], child: Text(text: "Connect with friends to follow them here.")),
+        default: SizedBoxShrink(),
+      },
+    ],
+  ),
+);

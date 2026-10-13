@@ -1,0 +1,13 @@
+[package]
+name = "tictactoe"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Noughts and crosses with a friend, one signed move at a time."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ournet-plugin.workspace = true
+serde.workspace = true

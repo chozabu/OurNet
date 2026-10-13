@@ -1801,6 +1801,14 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           ..link = network
           ..nameOf = name
           ..follow = notes.state.subscribe
+          ..openTun = openPluginInterface
+          ..closeTun = (_) {
+            if (Platform.isAndroid) {
+              unawaited(
+                _vpn.invokeMethod<void>('close').catchError((Object _) {}),
+              );
+            }
+          }
           ..groups = () async => [
             for (final room in await everyday.rooms())
               (
@@ -1823,6 +1831,25 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         redraw();
       }, onError: (Object e) => notice('Plugins: $e')),
     );
+  }
+
+  static const _vpn = MethodChannel('ournet/vpn');
+
+  /// A virtual network interface for a plugin granted `tun`: Android's
+  /// VpnService, which asks the person first, or a Wintun adapter on
+  /// Windows (wintun.dll beside the app, run as administrator).
+  Future<Json> openPluginInterface(String plugin, Json settings) async {
+    if (Platform.isAndroid) {
+      try {
+        final fd = await _vpn.invokeMethod<int>('open', settings);
+        if (fd == null) throw StateError('Android opened no interface');
+        return {'fd': fd};
+      } on PlatformException catch (e) {
+        throw StateError(e.message ?? 'Android refused');
+      }
+    }
+    if (Platform.isWindows) return {'wintun': 'OurNet'};
+    throw StateError('VPNs do not run on this system yet');
   }
 
   /// Sections of plugins that are switched on, for navigation.
