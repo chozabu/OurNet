@@ -73,7 +73,9 @@ class PluginPackage {
         case 'plugin.wasm':
           wasm = content;
         case 'ui.rfwtxt':
-          ui = utf8.decode(content);
+          // RFW's parser takes Unix line ends only; Windows checkouts and
+          // editors write others.
+          ui = utf8.decode(content).replaceAll('\r\n', '\n');
         default:
           final name = file.name.startsWith('assets/')
               ? file.name.substring(7)

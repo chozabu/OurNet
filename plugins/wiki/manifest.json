@@ -1,0 +1,19 @@
+{
+  "id": "wiki",
+  "name": "Wiki",
+  "version": "0.1.0",
+  "api": "0.1",
+  "description": "Linked pages anyone in the scope can edit: your own notes, a group's shared knowledge, or a public commons among friends. Every edit is kept, signed by who made it.",
+  "grants": ["objects", "identity"],
+  "kinds": {
+    "page": {
+      "title": {"type": "string", "max": 200, "required": true},
+      "body": {"type": "string", "max": 60000},
+      "base": {"type": "string", "max": 128},
+      "deleted": {"type": "bool"}
+    }
+  },
+  "sections": [
+    {"name": "wiki", "title": "Wiki", "icon": "menu_book", "surface": "Wiki"}
+  ]
+}

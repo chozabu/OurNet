@@ -1,0 +1,178 @@
+// The wiki's one surface: a page list, a page, its editor or its history,
+// as `data.mode` says. Event names are handled in src/lib.rs.
+//
+// ListView builds its children lazily, during layout: they use library
+// widgets directly, not ones declared here, which would subscribe to data
+// mid-build.
+import core.widgets;
+import core.material;
+import ournet;
+
+widget Wiki = switch data.mode {
+  "read": WikiRead(),
+  "edit": WikiEdit(),
+  "history": WikiHistory(),
+  default: WikiList(),
+};
+
+widget Byline = Row(
+  children: [
+    Text(text: args.label),
+    PersonName(person: args.person),
+    Text(text: " · "),
+    TimeAgo(at: args.at),
+  ],
+);
+
+widget WikiList = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    Padding(
+      padding: [16.0, 12.0, 16.0, 0.0],
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(text: data.heading, style: { fontSize: 22.0, fontWeight: "w600" }),
+          ),
+          ElevatedButton(onPressed: event "new" { }, child: Text(text: "New page")),
+        ],
+      ),
+    ),
+    Padding(padding: [16.0, 2.0, 16.0, 4.0], child: Text(text: data.where)),
+    Padding(
+      padding: [16.0, 0.0, 16.0, 8.0],
+      child: TextInput(hint: "Search pages", value: data.search, onChanged: event "search" { }),
+    ),
+    Expanded(
+      child: ListView(
+        children: [
+          ...for page in data.pages:
+            ListTile(
+              title: Text(text: page.title),
+              subtitle: Row(
+                children: [
+                  Text(text: "Edited by "),
+                  PersonName(person: page.author),
+                  Text(text: " · "),
+                  TimeAgo(at: page.at),
+                ],
+              ),
+              onTap: event "open" { title: page.title },
+            ),
+          switch data.empty {
+            true: Padding(
+              padding: [16.0, 16.0, 16.0, 16.0],
+              child: Text(text: data.emptyText),
+            ),
+            default: SizedBoxShrink(),
+          },
+        ],
+      ),
+    ),
+  ],
+);
+
+widget WikiRead = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    Padding(
+      padding: [8.0, 8.0, 16.0, 0.0],
+      child: Row(
+        children: [
+          TextButton(onPressed: event "back" { }, child: Text(text: "‹ Pages")),
+          Expanded(
+            child: Text(text: data.page.title, style: { fontSize: 22.0, fontWeight: "w600" }),
+          ),
+          TextButton(onPressed: event "history" { }, child: Text(text: "History")),
+          ElevatedButton(onPressed: event "edit" { }, child: Text(text: "Edit")),
+        ],
+      ),
+    ),
+    Padding(
+      padding: [16.0, 4.0, 16.0, 8.0],
+      child: Byline(label: data.page.label, person: data.page.author, at: data.page.at),
+    ),
+    switch data.page.notice {
+      "": SizedBoxShrink(),
+      default: Padding(
+        padding: [16.0, 0.0, 16.0, 8.0],
+        child: Text(text: data.page.notice, style: { color: 0xFFB26A00 }),
+      ),
+    },
+    Divider(),
+    Expanded(
+      child: SingleChildScrollView(
+        padding: [16.0, 8.0, 16.0, 24.0],
+        child: Markup(text: data.page.body, onLink: event "link" { }),
+      ),
+    ),
+  ],
+);
+
+widget WikiEdit = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    Padding(
+      padding: [8.0, 8.0, 16.0, 0.0],
+      child: Row(
+        children: [
+          TextButton(onPressed: event "cancel" { }, child: Text(text: "Cancel")),
+          Expanded(child: Text(text: data.editing, style: { fontSize: 18.0, fontWeight: "w600" })),
+          ElevatedButton(onPressed: event "save" { }, child: Text(text: "Save")),
+        ],
+      ),
+    ),
+    Padding(
+      padding: [16.0, 8.0, 16.0, 8.0],
+      child: TextInput(label: "Title", value: data.draftTitle, onChanged: event "title" { }),
+    ),
+    Expanded(
+      child: SingleChildScrollView(
+        padding: [16.0, 0.0, 16.0, 8.0],
+        child: TextInput(label: "Text", value: data.draftBody, lines: 14, onChanged: event "body" { }),
+      ),
+    ),
+    Padding(
+      padding: [16.0, 0.0, 16.0, 12.0],
+      child: Text(
+        text: "# heading, **bold**, *italic*, - lists, [[Page name]] links to a page.",
+        style: { fontSize: 12.0 },
+      ),
+    ),
+  ],
+);
+
+widget WikiHistory = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    Padding(
+      padding: [8.0, 8.0, 16.0, 0.0],
+      child: Row(
+        children: [
+          TextButton(onPressed: event "back" { }, child: Text(text: "‹ Page")),
+          Expanded(
+            child: Text(text: ["History of ", data.page.title], style: { fontSize: 20.0, fontWeight: "w600" }),
+          ),
+        ],
+      ),
+    ),
+    Expanded(
+      child: ListView(
+        children: [
+          ...for rev in data.history:
+            ListTile(
+              title: Row(
+                children: [
+                  PersonName(person: rev.author),
+                  Text(text: " · "),
+                  TimeAgo(at: rev.at),
+                ],
+              ),
+              subtitle: Text(text: rev.summary),
+              onTap: event "revision" { id: rev.id },
+            ),
+        ],
+      ),
+    ),
+  ],
+);

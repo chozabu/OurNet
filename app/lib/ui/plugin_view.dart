@@ -39,6 +39,24 @@ class _PluginViewState extends State<PluginView> {
   static const _material = LibraryName(['core', 'material']);
   static const _ournet = LibraryName(['ournet']);
 
+  /// RFW's core widgets, with a ListView that resolves its children as it
+  /// builds: RFW's builds them lazily, during layout, where a child reading
+  /// data for the first time cannot subscribe to it. Plugin lists are short.
+  static final _coreWidgets = LocalWidgetLibrary({
+    ...createCoreWidgets().widgets,
+    'ListView': (context, source) => ListView(
+      scrollDirection:
+          ArgumentDecoders.enumValue<Axis>(Axis.values, source, [
+            'scrollDirection',
+          ]) ??
+          Axis.vertical,
+      reverse: source.v<bool>(['reverse']) ?? false,
+      shrinkWrap: source.v<bool>(['shrinkWrap']) ?? false,
+      padding: ArgumentDecoders.edgeInsets(source, ['padding']),
+      children: source.childList(['children']),
+    ),
+  });
+
   /// Parsed libraries by plugin and source: parsing costs, rendering does not.
   static final _parsed = <String, (int, RemoteWidgetLibrary)>{};
 
@@ -54,7 +72,7 @@ class _PluginViewState extends State<PluginView> {
   void initState() {
     super.initState();
     runtime
-      ..update(_core, createCoreWidgets())
+      ..update(_core, _coreWidgets)
       ..update(_material, createMaterialWidgets())
       ..update(
         _ournet,

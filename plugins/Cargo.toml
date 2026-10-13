@@ -4,7 +4,7 @@
 # which writes `dist/<id>.ournet-plugin`. See PLUGINS.md.
 [workspace]
 resolver = "2"
-members = ["sdk", "pack", "echo"]
+members = ["sdk", "pack", "echo", "wiki"]
 
 [workspace.package]
 edition = "2021"

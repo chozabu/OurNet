@@ -381,6 +381,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wiki"
+version = "0.1.0"
+dependencies = [
+ "ournet-plugin",
+ "serde",
+]
+
+[[package]]
 name = "wit-bindgen"
 version = "0.62.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
