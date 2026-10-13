@@ -545,8 +545,8 @@ impl tun::Host for Host {
         )?;
         let kind = if let Some(fd) = answer.get("fd").and_then(Value::as_i64) {
             interface::Kind::Fd(fd as i32)
-        } else if let Some(name) = answer.get("wintun").and_then(Value::as_str) {
-            interface::Kind::Wintun(name.into())
+        } else if let Some(name) = answer.get("pipe").and_then(Value::as_str) {
+            interface::Kind::Pipe(name.into())
         } else if answer.get("memory").and_then(Value::as_bool) == Some(true) {
             interface::Kind::Memory
         } else {

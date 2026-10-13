@@ -23,9 +23,6 @@ serde_json = "1"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-[target.'cfg(windows)'.dependencies]
-# Virtual network interfaces for VPN plugins (src/tun.rs); loads wintun.dll at run time.
-wintun = "=0.5.1"
 
 [profile.release]
 opt-level = 3

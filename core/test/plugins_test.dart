@@ -248,6 +248,59 @@ void main() {
     );
   });
 
+  test(
+    "on Windows, packets pass through the network helper's pipes",
+    () async {
+      final helper = File(
+        '../native/tun-helper/target/release/ournet-tun.exe',
+      ).absolute.path;
+      final who = await Process.run('whoami', ['/user', '/fo', 'csv', '/nh']);
+      final sid = RegExp(r'S-1-[0-9-]+').firstMatch('${who.stdout}')!.group(0)!;
+      final name = 'ournet-tun-test-${DateTime.now().microsecondsSinceEpoch}';
+      final loopback = await Process.start(helper, ['loopback', name, sid]);
+      final lines = <String>[];
+      loopback.stdout
+          .transform(const SystemEncoding().decoder)
+          .transform(const LineSplitter())
+          .listen(lines.add);
+      Future<String> line(int n) async {
+        final deadline = DateTime.now().add(const Duration(seconds: 10));
+        while (lines.length <= n && DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        return lines.length > n ? lines[n] : 'nothing';
+      }
+
+      expect(await line(0), 'ready');
+      final (_, plugins) = await device();
+      plugins.openTun = (_, _) async => {'pipe': name};
+      await plugins.install(PluginPackage.read(package), grants: grants);
+      await running(plugins);
+      plugins.event('echo', 'Echo', 'tun', {});
+      expect((await until(plugins, (d) => d['tun'] != null))['tun'], 'open');
+      // The helper sent a packet as the system would; echo sends it back
+      // reversed, through the pipe.
+      final back = await line(1);
+      expect(
+        back,
+        '040302010100'
+        '4d0a0200'
+        '4d0a0000'
+        '11400000'
+        '00001800'
+        '0045',
+      );
+      expect(await loopback.exitCode, 0);
+    },
+    skip:
+        Platform.isWindows &&
+            File(
+              '../native/tun-helper/target/release/ournet-tun.exe',
+            ).existsSync()
+        ? false
+        : 'needs Windows and a built native/tun-helper',
+  );
+
   test("packets pass through a plugin's interface", () async {
     final (_, plugins) = await device();
     Json? opened;

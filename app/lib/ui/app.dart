@@ -5,6 +5,7 @@ import 'conversation_search.dart';
 import 'chat_bubble.dart';
 import 'message_text.dart';
 import '../services/typing.dart';
+import '../services/windows_tun.dart';
 import '../services/location_share.dart';
 import '../services/map_tiles.dart';
 import 'map_page.dart';
@@ -1836,8 +1837,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   static const _vpn = MethodChannel('ournet/vpn');
 
   /// A virtual network interface for a plugin granted `tun`: Android's
-  /// VpnService, which asks the person first, or a Wintun adapter on
-  /// Windows (wintun.dll beside the app, run as administrator).
+  /// VpnService, which asks the person first, or on Windows the network
+  /// helper service, installed once after Windows asks (see [WindowsTun]).
   Future<Json> openPluginInterface(String plugin, Json settings) async {
     if (Platform.isAndroid) {
       try {
@@ -1848,7 +1849,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         throw StateError(e.message ?? 'Android refused');
       }
     }
-    if (Platform.isWindows) return {'wintun': 'OurNet'};
+    if (Platform.isWindows) {
+      await WindowsTun.ensure();
+      return {'pipe': WindowsTun.pipe};
+    }
     throw StateError('VPNs do not run on this system yet');
   }
 

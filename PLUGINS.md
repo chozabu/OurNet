@@ -261,9 +261,19 @@ Learned building it:
   1024 waiting), and `tun.write` goes straight to the system. The hop to a
   friend still passes through Dart's iroh, one datagram each, until phase 4's
   single library. Android opens the interface through `FriendVpn` (a
-  VpnService, with the system's consent) and hands its descriptor to Rust;
-  Windows opens a Wintun adapter, which needs `wintun.dll` beside the app and
-  administrator rights; tests use a memory interface.
+  VpnService, with the system's consent) and hands its descriptor to Rust.
+  On Windows the app never runs as administrator: a small service,
+  `ournet-tun` (`native/tun-helper`), runs as SYSTEM and owns a Wintun
+  adapter, and the native host exchanges packets with it over two named
+  pipes only the installing person (and administrators) may open. The
+  helper sets up only addresses and routes inside 10.77.0.0/16, never a
+  default route or DNS. It ships beside the app with Wintun (signed by
+  WireGuard; redistributable alongside software that uses its API), and the
+  app installs it to `%ProgramData%\OurNet\tun` the first time a VPN opens,
+  after one UAC prompt, and again when it ships a newer one. A Store-declared
+  packaged service would avoid the prompt but needs Microsoft to approve the
+  restricted `packagedServices` capability. Tests use a memory interface, and
+  the helper's `loopback` mode for the pipes.
 - **Real-time** play is datagrams plus Rust timers: Pong's host steps at 30 Hz
   and sends the whole state each tick, so a lost datagram costs one frame.
 - **Size**: wasmtime with Cranelift takes the native library to 13 MB on
@@ -309,8 +319,8 @@ host; `app/test/plugin_view_test.dart` draws each plugin with RFW (set
 | 3. Streams, datagrams, canvas | Datagrams and canvas done; nothing needs streams yet |
 | 4. Single library with iroh, `media`, `tun` and a VPN | `tun` and the VPN plugin done; iroh is still separate; `media` not started |
 
-Not yet verified: the Windows Wintun path (needs `wintun.dll` and an elevated
-app), and anything on an Android device (the APK builds for arm64 and armv7).
+Not yet verified: the helper's Wintun adapter on a real network (its pipes
+and protocol are tested), and the VPN on an Android device.
 Next, in order of use: per-plugin traffic in Settings; `plugin_release` objects
 so friends can share plugins; a foreground service keeping the VPN up when
 Android backgrounds the app; measured budgets in `PERFORMANCE.md`; then the

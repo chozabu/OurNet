@@ -82,6 +82,28 @@ endif()
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../native/irohdart_ffi.dll"
   DESTINATION "${CMAKE_INSTALL_PREFIX}" COMPONENT Runtime)
 
+# The network helper VPN plugins use (native/tun-helper, PLUGINS.md): a
+# service the app installs once, with the person's consent, so that it never
+# runs as administrator. Shipped beside the app with Wintun, which it loads.
+set(OURNET_TUN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../native/tun-helper")
+set(OURNET_TUN_BUILD "${CMAKE_BINARY_DIR}/ournet-tun")
+if(FLUTTER_TARGET_PLATFORM STREQUAL "windows-arm64")
+  set(OURNET_TUN_TRIPLE "aarch64-pc-windows-msvc")
+  set(OURNET_TUN_ARCH "arm64")
+else()
+  set(OURNET_TUN_TRIPLE "x86_64-pc-windows-msvc")
+  set(OURNET_TUN_ARCH "amd64")
+endif()
+set(OURNET_TUN_EXE "${OURNET_TUN_BUILD}/${OURNET_TUN_TRIPLE}/release/ournet-tun.exe")
+add_custom_target(ournet_tun ALL
+  COMMAND cargo build --release --locked --target ${OURNET_TUN_TRIPLE}
+    --manifest-path "${OURNET_TUN_DIR}/Cargo.toml" --target-dir "${OURNET_TUN_BUILD}"
+  BYPRODUCTS "${OURNET_TUN_EXE}"
+  WORKING_DIRECTORY "${OURNET_TUN_DIR}"
+  VERBATIM)
+install(FILES "${OURNET_TUN_EXE}" "${OURNET_TUN_DIR}/wintun/${OURNET_TUN_ARCH}/wintun.dll"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}" COMPONENT Runtime)
+
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)
 

@@ -4,8 +4,10 @@
 //!
 //! The app decides how an interface is made, since that is where the person
 //! is asked: Android's VpnService hands over a file descriptor; on Windows
-//! this opens a Wintun adapter (wintun.dll beside the app, administrator
-//! rights); tests use a memory interface whose packets go to Dart.
+//! the `ournet-tun` helper service (native/tun-helper), installed once with
+//! the person's consent, owns a Wintun adapter and passes packets over named
+//! pipes, so the app never runs as administrator; tests use a memory
+//! interface whose packets go to Dart.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -18,14 +20,14 @@ pub enum Kind {
     /// A descriptor the system gave the app (Android).
     #[allow(dead_code)]
     Fd(i32),
-    /// A Wintun adapter with this name.
+    /// The Windows helper's pipes, `\\.\pipe\<name>.up` and `.down`.
     #[allow(dead_code)]
-    Wintun(String),
+    Pipe(String),
     /// Packets are handed to [write] instead (tests).
     Memory,
 }
 
-// Android's VpnService sets these itself; Windows applies them here.
+// Android's VpnService sets these itself; the Windows helper is sent them.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub struct Config<'a> {
     pub address: std::net::Ipv4Addr,
@@ -43,7 +45,7 @@ enum Inner {
     #[cfg(unix)]
     Fd(std::fs::File),
     #[cfg(windows)]
-    Wintun(Arc<wintun::Session>),
+    Pipe(std::sync::Mutex<std::fs::File>),
     Memory(Box<dyn Fn(&[u8]) + Send>),
 }
 
@@ -99,26 +101,21 @@ impl Tun {
                 Inner::Fd(file)
             }
             #[cfg(windows)]
-            Kind::Wintun(name) => {
-                let session = wintun_open(&name, config)?;
-                let reader = session.clone();
-                let stopped = stop.clone();
+            Kind::Pipe(name) => {
+                let (up, mut down) = pipe_open(&name, config)?;
                 std::thread::Builder::new()
                     .name("ournet-tun".into())
                     .spawn(move || {
-                        while !stopped.load(Ordering::Relaxed) {
-                            match reader.receive_blocking() {
-                                Ok(packet) => {
-                                    if !deliver(packet.bytes().to_vec()) {
-                                        break;
-                                    }
-                                }
-                                Err(_) => break,
+                        // Ends when the helper closes its end, after this
+                        // side's `up` is dropped.
+                        while let Some((kind, body)) = read_frame(&mut down) {
+                            if kind == 2 && !deliver(body) {
+                                break;
                             }
                         }
                     })
                     .map_err(|e| e.to_string())?;
-                Inner::Wintun(session)
+                Inner::Pipe(std::sync::Mutex::new(up))
             }
             #[allow(unreachable_patterns)]
             _ => return Err("not available on this system".into()),
@@ -136,12 +133,9 @@ impl Tun {
                 let _ = file.write(packet);
             }
             #[cfg(windows)]
-            Inner::Wintun(session) => {
-                if let Ok(len) = u16::try_from(packet.len()) {
-                    if let Ok(mut out) = session.allocate_send_packet(len) {
-                        out.bytes_mut().copy_from_slice(packet);
-                        session.send_packet(out);
-                    }
+            Inner::Pipe(up) => {
+                if let Ok(mut up) = up.lock() {
+                    write_frame(&mut up, 2, packet);
                 }
             }
             Inner::Memory(write) => write(packet),
@@ -153,51 +147,70 @@ impl Drop for Tun {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         #[cfg(windows)]
-        if let Inner::Wintun(session) = &self.inner {
-            // Wakes the reader, which then stops.
-            let _ = session.shutdown();
+        if let Inner::Pipe(up) = &self.inner {
+            if let Ok(mut up) = up.lock() {
+                write_frame(&mut up, 3, &[]);
+            }
         }
     }
 }
 
+/// The helper's frames: a little-endian u32 length of what follows, a type
+/// byte, the body. See native/tun-helper.
 #[cfg(windows)]
-fn wintun_open(name: &str, config: &Config) -> Result<Arc<wintun::Session>, String> {
-    let wintun = unsafe { wintun::load() }
-        .map_err(|_| "wintun.dll is missing: put it beside OurNet (wintun.net)".to_string())?;
-    let adapter = match wintun::Adapter::open(&wintun, name) {
-        Ok(a) => a,
-        Err(_) => wintun::Adapter::create(&wintun, name, "OurNet", None)
-            .map_err(|e| format!("cannot create the adapter (run as administrator?): {e}"))?,
-    };
-    let mask = if config.prefix == 0 {
-        0
-    } else {
-        u32::MAX << (32 - config.prefix.min(32) as u32)
-    };
-    adapter
-        .set_network_addresses_tuple(
-            std::net::IpAddr::V4(config.address),
-            std::net::IpAddr::V4(std::net::Ipv4Addr::from(mask)),
-            None,
-        )
-        .map_err(|e| format!("cannot set its address: {e}"))?;
-    let _ = adapter.set_mtu(config.mtu as usize);
-    for route in config.routes {
-        let index = adapter.get_adapter_index().map_err(|e| e.to_string())?;
-        let _ = std::process::Command::new("netsh")
-            .args([
-                "interface",
-                "ipv4",
-                "add",
-                "route",
-                route,
-                &format!("interface={index}"),
-                "store=active",
-            ])
-            .output();
+fn write_frame(out: &mut std::fs::File, kind: u8, body: &[u8]) -> bool {
+    use std::io::Write;
+    let mut frame = Vec::with_capacity(5 + body.len());
+    frame.extend_from_slice(&((body.len() + 1) as u32).to_le_bytes());
+    frame.push(kind);
+    frame.extend_from_slice(body);
+    out.write_all(&frame).is_ok()
+}
+
+#[cfg(windows)]
+fn read_frame(input: &mut std::fs::File) -> Option<(u8, Vec<u8>)> {
+    use std::io::Read;
+    let mut head = [0u8; 4];
+    input.read_exact(&mut head).ok()?;
+    let len = u32::from_le_bytes(head) as usize;
+    if len == 0 || len > 1 << 16 {
+        return None;
     }
-    adapter
-        .start_session(wintun::MAX_RING_CAPACITY)
-        .map(Arc::new)
-        .map_err(|e| e.to_string())
+    let mut body = vec![0u8; len];
+    input.read_exact(&mut body).ok()?;
+    let kind = body.remove(0);
+    Some((kind, body))
+}
+
+/// Connects to the helper and asks it to open the interface.
+#[cfg(windows)]
+fn pipe_open(name: &str, config: &Config) -> Result<(std::fs::File, std::fs::File), String> {
+    let missing = |e: std::io::Error| format!("the OurNet network helper is not running ({e})");
+    let mut up = std::fs::OpenOptions::new()
+        .write(true)
+        .open(format!(r"\\.\pipe\{name}.up"))
+        .map_err(missing)?;
+    let mut down = std::fs::OpenOptions::new()
+        .read(true)
+        .open(format!(r"\\.\pipe\{name}.down"))
+        .map_err(missing)?;
+    let open = serde_json::json!({
+        "address": config.address.to_string(),
+        "prefix": config.prefix,
+        "routes": config.routes,
+        "mtu": config.mtu,
+    });
+    if !write_frame(&mut up, 1, open.to_string().as_bytes()) {
+        return Err("the network helper closed".into());
+    }
+    match read_frame(&mut down) {
+        Some((4, body)) => {
+            let status: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            match status.get("error").and_then(|e| e.as_str()) {
+                Some(error) => Err(format!("the network helper refused: {error}")),
+                None => Ok((up, down)),
+            }
+        }
+        _ => Err("the network helper did not answer".into()),
+    }
 }

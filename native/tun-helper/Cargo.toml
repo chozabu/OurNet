@@ -1,0 +1,29 @@
+[package]
+name = "ournet-tun"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "OurNet's Windows network helper: a service that owns the Wintun adapter VPN plugins use, so the app never needs administrator rights."
+
+[[bin]]
+name = "ournet-tun"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+wintun = "=0.5.1"
+windows-service = "0.8"
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Pipes",
+  "Win32_System_IO",
+] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = "symbols"
