@@ -18,9 +18,15 @@ From PowerShell in the repository root:
 
 This opens the release build in two visible windows with independent identities.
 Use `-Debug` if you specifically want the debug executable. Do not open the same
-profile twice. `-Build` creates a new dated release package from a source snapshot;
-it does not overwrite running release binaries. Close a profile's old window
-before launching that same profile on the new build. For hot reload instead:
+profile twice. `-Build` creates a new dated release package from a source snapshot.
+Local release launches use the stable `dist/windows-local/ournet.exe` path so
+Windows can reuse firewall permissions across builds. When the selected package
+changes, the runner silently closes all windows running from that local folder
+before updating it (with forced termination if normal closing does not exit).
+Store installs and copies launched from dated packages stay open; close those
+yourself before reusing their profiles. The first stable-path launch may still
+ask for firewall permission; existing location-history entries remain.
+For hot reload instead:
 `cd app; flutter run -d windows`.
 
 To package for other people, `.\tool\package.ps1` builds the dated zip (with the
