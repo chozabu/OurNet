@@ -4,7 +4,7 @@
 //! Each plugin runs on a thread of its own, so a slow or looping plugin
 //! never holds up the app or another plugin. Dart drives it with messages:
 //! it queues calls (`ournet_plugin_call`), and is posted results, imports to
-//! answer and notices through the callback given to `ournet_plugins_init`.
+//! answer and notices through the callback given when it was loaded.
 //! A message is a line of JSON, optionally followed by raw bytes after a
 //! newline, so payloads travel without re-encoding.
 //!
@@ -18,7 +18,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -69,10 +69,14 @@ const PACKET_QUEUE: usize = 1024;
 /// Epoch ticks are wall time; the deadline callback turns them into CPU time.
 const TICK: Duration = Duration::from_millis(10);
 
-static POST: OnceLock<Post> = OnceLock::new();
+/// Where each plugin's messages go: the callback of the isolate that loaded
+/// it, so several isolates in one process each hear their own plugins.
+static POSTS: RwLock<Option<HashMap<u64, Post>>> = RwLock::new(None);
 static ENGINE: OnceLock<Result<Engine, String>> = OnceLock::new();
 static PLUGINS: Mutex<Option<HashMap<u64, Handle>>> = Mutex::new(None);
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
+/// The thread of the latest instance started for each plugin directory.
+static INSTANCES: Mutex<Option<HashMap<PathBuf, thread::JoinHandle<()>>>> = Mutex::new(None);
 
 /// What Dart holds of a running plugin: where its jobs and answers go.
 struct Handle {
@@ -123,7 +127,9 @@ fn engine() -> Result<&'static Engine, String> {
 
 /// Posts [header] (and [body] after a newline) to Dart for [handle].
 fn post(handle: u64, header: &Value, body: Option<&[u8]>) {
-    let Some(post) = POST.get() else { return };
+    let Some(post) = POSTS.read().ok().and_then(|p| p.as_ref()?.get(&handle).copied()) else {
+        return;
+    };
     let mut bytes = serde_json::to_vec(header).unwrap_or_default();
     if let Some(body) = body {
         bytes.push(b'\n');
@@ -609,7 +615,8 @@ fn compile(engine: &Engine, wasm: &[u8], cache: Option<&Path>) -> Result<Compone
     let component = Component::new(engine, wasm).map_err(|e| format!("{e:#}"))?;
     if let (Some(path), Ok(bytes)) = (&cached, component.serialize()) {
         let _ = fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
-        let next = path.with_extension("next");
+        // Several plugins may compile the same package at once.
+        let next = path.with_extension(format!("{}.next", NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)));
         if fs::write(&next, bytes).is_ok() {
             let _ = fs::rename(&next, path);
         }
@@ -905,12 +912,11 @@ fn with_plugin<R>(handle: u64, f: impl FnOnce(&Handle) -> R) -> Option<R> {
     plugins.as_ref()?.get(&handle).map(f)
 }
 
-/// Sets the function results and imports are posted through. Returns the
-/// host version, or 0 when plugins cannot run here (no engine for this CPU).
+/// Returns the host version, or 0 when plugins cannot run here (no engine
+/// for this CPU).
 #[no_mangle]
-pub unsafe extern "C" fn ournet_plugins_init(callback: Post) -> u32 {
+pub unsafe extern "C" fn ournet_plugins_init() -> u32 {
     catch_unwind(|| {
-        let _ = POST.set(callback);
         if engine().is_err() {
             return 0;
         }
@@ -930,6 +936,7 @@ pub unsafe extern "C" fn ournet_plugins_init(callback: Post) -> u32 {
 /// handle, or 0 for a config that does not parse.
 #[no_mangle]
 pub unsafe extern "C" fn ournet_plugin_load(
+    post: Post,
     config: *const u8,
     config_len: usize,
     wasm: *const u8,
@@ -944,21 +951,37 @@ pub unsafe extern "C" fn ournet_plugin_load(
             return 0;
         };
         let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut posts) = POSTS.write() {
+            posts.get_or_insert_with(HashMap::new).insert(handle, post);
+        }
         let (jobs, job_queue) = mpsc::channel();
         let own_jobs = jobs.clone();
         let (answers, answer_queue) = mpsc::channel();
         let name = format!("ournet-plugin-{}", config.id);
+        // A plugin started again (a restart, the profile opened again) waits
+        // for its previous instance to finish and write its storage.
+        let key = config.dir.clone();
+        let (previous_tx, previous_rx) = mpsc::channel::<Option<thread::JoinHandle<()>>>();
         let started = thread::Builder::new()
             .name(name)
             .stack_size(8 << 20)
             .spawn(move || {
+                if let Ok(Some(previous)) = previous_rx.recv() {
+                    let _ = previous.join();
+                }
                 let _ = catch_unwind(AssertUnwindSafe(|| {
                     run_plugin(handle, config, wasm, (own_jobs, job_queue), answer_queue)
                 }));
+                if let Ok(mut posts) = POSTS.write() {
+                    posts.as_mut().map(|p| p.remove(&handle));
+                }
             });
-        if started.is_err() {
-            return 0;
-        }
+        let Ok(thread) = started else { return 0 };
+        let previous = match (key, INSTANCES.lock()) {
+            (Some(dir), Ok(mut instances)) => instances.get_or_insert_with(HashMap::new).insert(dir, thread),
+            _ => None,
+        };
+        let _ = previous_tx.send(previous);
         if let Ok(mut plugins) = PLUGINS.lock() {
             plugins
                 .get_or_insert_with(HashMap::new)

@@ -28,7 +28,11 @@ void main() {
 
   Future<(Node, Plugins)> device([String name = 'a']) async {
     final node = Node(await LocalIdentity.create(), Store());
-    final plugins = Plugins(node, directory: '${temp.path}/$name');
+    final plugins = Plugins(
+      node,
+      directory: '${temp.path}/$name',
+      cache: sharedCache,
+    );
     cleanup.add(() async {
       await plugins.close();
       await node.close();
@@ -160,11 +164,11 @@ void main() {
 
   test('installed plugins start again with the profile', () async {
     final node = Node(await LocalIdentity.create(), Store());
-    final first = Plugins(node, directory: temp.path);
+    final first = Plugins(node, directory: temp.path, cache: sharedCache);
     await first.install(PluginPackage.read(package), grants: grants);
     await running(first);
     await first.close();
-    final second = Plugins(node, directory: temp.path);
+    final second = Plugins(node, directory: temp.path, cache: sharedCache);
     cleanup.add(() async {
       await second.close();
       await node.close();
@@ -281,3 +285,6 @@ class _Wire implements PluginLink {
     return true;
   }
 }
+
+/// Compiled plugins, kept between tests: compiling each time is slow.
+final sharedCache = '${Directory.systemTemp.path}/ournet-plugin-cache';

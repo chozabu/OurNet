@@ -23,7 +23,10 @@ void main() {
     expect(report.kinds.first.count, 2);
     expect(report.ownCount, 1);
     expect(report.authors.map((a) => a.id), containsAll(['me', 'you']));
-    expect(report.objectBytes, report.kinds.fold<int>(0, (s, k) => s + k.bytes));
+    expect(
+      report.objectBytes,
+      report.kinds.fold<int>(0, (s, k) => s + k.bytes),
+    );
     expect(report.months, isNotEmpty);
     expect(report.oldest!.isBefore(report.newest!), isTrue);
   });

@@ -19,7 +19,10 @@ void main() {
     final name = dir.uri.pathSegments.where((s) => s.isNotEmpty).last;
     test('$name/ui.rfwtxt parses', () {
       final library = parseLibraryFile(
-        File('${dir.path}/ui.rfwtxt').readAsStringSync(),
+        // As the host reads it: RFW takes Unix line ends only.
+        File(
+          '${dir.path}/ui.rfwtxt',
+        ).readAsStringSync().replaceAll('\r\n', '\n'),
       );
       expect(library.widgets, isNotEmpty);
       expect(

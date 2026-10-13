@@ -32,14 +32,21 @@ Future<List<Node>> friends(int n) async {
   return nodes;
 }
 
-List<String> titles(Iterable<Occurrence> o) => [for (final x in o) x.event.title];
+List<String> titles(Iterable<Occurrence> o) => [
+  for (final x in o) x.event.title,
+];
 
 String day(DateTime t) => Calendar.formatDay(t);
 
 void main() {
   group('recurrence', () {
     final monday = DateTime(2026, 10, 5, 9);
-    List<String> days(Repeat r, {DateTime? first, int take = 5, DateTime? from}) => [
+    List<String> days(
+      Repeat r, {
+      DateTime? first,
+      int take = 5,
+      DateTime? from,
+    }) => [
       for (final d in r.occurrences(first ?? monday, from: from).take(take))
         '${d.year}-${d.month}-${d.day} ${d.hour}:${d.minute}',
     ];
@@ -54,16 +61,22 @@ void main() {
 
     test('weekly on chosen days, from the first occurrence on', () {
       expect(
-        days(const Repeat('weekly', days: [1, 3, 5]), first: DateTime(2026, 10, 7, 9), take: 4),
+        days(
+          const Repeat('weekly', days: [1, 3, 5]),
+          first: DateTime(2026, 10, 7, 9),
+          take: 4,
+        ),
         ['2026-10-7 9:0', '2026-10-9 9:0', '2026-10-12 9:0', '2026-10-14 9:0'],
       );
     });
 
     test('every other week uses weeks counted from the first', () {
-      expect(
-        days(const Repeat('weekly', interval: 2, days: [1, 2]), take: 4),
-        ['2026-10-5 9:0', '2026-10-6 9:0', '2026-10-19 9:0', '2026-10-20 9:0'],
-      );
+      expect(days(const Repeat('weekly', interval: 2, days: [1, 2]), take: 4), [
+        '2026-10-5 9:0',
+        '2026-10-6 9:0',
+        '2026-10-19 9:0',
+        '2026-10-20 9:0',
+      ]);
     });
 
     test('monthly by date skips months without it', () {
@@ -141,7 +154,13 @@ void main() {
       expect(Repeat.fromJson(rule.toJson())!.toJson(), rule.toJson());
       expect(Repeat.fromJson({'freq': 'hourly'}), isNull);
       expect(Repeat.fromJson({'freq': 'daily', 'interval': 0}), isNull);
-      expect(Repeat.fromJson({'freq': 'weekly', 'days': [9]}), isNull);
+      expect(
+        Repeat.fromJson({
+          'freq': 'weekly',
+          'days': [9],
+        }),
+        isNull,
+      );
     });
   });
 
@@ -153,7 +172,10 @@ void main() {
       final made = await cal.create(Calendar.personal, draft('Dentist', start));
       var found = cal.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13));
       expect(titles(found), ['Dentist']);
-      expect(cal.between(DateTime(2026, 10, 13), DateTime(2026, 10, 14)), isEmpty);
+      expect(
+        cal.between(DateTime(2026, 10, 13), DateTime(2026, 10, 14)),
+        isEmpty,
+      );
 
       final edited = EventDraft.of(found.single)..title = 'Dentist (moved)';
       final change = await cal.update(found.single, edited);
@@ -162,18 +184,23 @@ void main() {
       expect(titles(found), ['Dentist (moved)']);
 
       await cal.undo(change);
-      expect(titles(cal.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13))), [
-        'Dentist',
-      ]);
+      expect(
+        titles(cal.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13))),
+        ['Dentist'],
+      );
 
       final gone = await cal.delete(
         cal.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13)).single,
       );
-      expect(cal.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13)), isEmpty);
+      expect(
+        cal.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13)),
+        isEmpty,
+      );
       await cal.undo(gone);
-      expect(titles(cal.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13))), [
-        'Dentist',
-      ]);
+      expect(
+        titles(cal.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13))),
+        ['Dentist'],
+      );
     });
 
     test('all-day and multi-day events show on every day they cover', () async {
@@ -195,10 +222,20 @@ void main() {
           reason: 'day $d',
         );
       }
-      expect(cal.between(DateTime(2026, 10, 17), DateTime(2026, 10, 18)), isEmpty);
-      expect(cal.between(DateTime(2026, 10, 13), DateTime(2026, 10, 14)), isEmpty);
       expect(
-        cal.between(DateTime(2026, 10, 14), DateTime(2026, 10, 17)).single.days.length,
+        cal.between(DateTime(2026, 10, 17), DateTime(2026, 10, 18)),
+        isEmpty,
+      );
+      expect(
+        cal.between(DateTime(2026, 10, 13), DateTime(2026, 10, 14)),
+        isEmpty,
+      );
+      expect(
+        cal
+            .between(DateTime(2026, 10, 14), DateTime(2026, 10, 17))
+            .single
+            .days
+            .length,
         3,
       );
     });
@@ -208,60 +245,80 @@ void main() {
       final cal = calendarOf(n);
       await cal.create(
         Calendar.personal,
-        draft('Night shift', DateTime(2026, 10, 12, 22), length: const Duration(hours: 8)),
+        draft(
+          'Night shift',
+          DateTime(2026, 10, 12, 22),
+          length: const Duration(hours: 8),
+        ),
       );
-      expect(titles(cal.between(DateTime(2026, 10, 13), DateTime(2026, 10, 14))), [
-        'Night shift',
-      ]);
+      expect(
+        titles(cal.between(DateTime(2026, 10, 13), DateTime(2026, 10, 14))),
+        ['Night shift'],
+      );
       // Ending exactly at midnight does not spill into the next day.
       await cal.create(
         Calendar.personal,
-        draft('Evening', DateTime(2026, 10, 20, 20), length: const Duration(hours: 4)),
+        draft(
+          'Evening',
+          DateTime(2026, 10, 20, 20),
+          length: const Duration(hours: 4),
+        ),
       );
-      expect(cal.between(DateTime(2026, 10, 21), DateTime(2026, 10, 22)), isEmpty);
-    });
-
-    test('is private to this person, and shared with their other devices', () async {
-      final owner = await LocalIdentity.create();
-      final fresh = await LocalIdentity.create();
-      final paired = await fresh.enrol(await owner.authorise(fresh.certificate));
-      final a = Node(owner, Store()),
-          b = Node(paired, Store()),
-          friend = Node(await LocalIdentity.create(), Store());
-      addTearDown(() async {
-        await a.close();
-        await b.close();
-        await friend.close();
-      });
-      await a.addContact(paired.certificate);
-      await b.addContact(owner.certificate);
-      await a.addContact(friend.identity.certificate);
-      await friend.addContact(owner.certificate);
-      final ca = calendarOf(a), cb = calendarOf(b), cf = calendarOf(friend);
-      await ca.create(Calendar.personal, draft('Secret', DateTime(2026, 10, 12, 9)));
-      await syncPair(a, b);
-      await syncPair(a, friend);
-      await cb.refresh();
-      await cf.refresh();
-      final range = [DateTime(2026, 10, 12), DateTime(2026, 10, 13)];
-      expect(titles(cb.between(range[0], range[1])), ['Secret']);
-      expect(cf.between(range[0], range[1]), isEmpty);
-      expect(friend.store.count, 0);
-
-      // Concurrent edits on two devices settle on one version.
-      final oa = ca.between(range[0], range[1]).single;
-      final ob = cb.between(range[0], range[1]).single;
-      await ca.update(oa, EventDraft.of(oa)..title = 'From a');
-      await cb.update(ob, EventDraft.of(ob)..title = 'From b');
-      await syncPair(a, b);
-      await ca.refresh();
-      await cb.refresh();
-      expect(titles(ca.between(range[0], range[1])), hasLength(1));
       expect(
-        titles(ca.between(range[0], range[1])),
-        titles(cb.between(range[0], range[1])),
+        cal.between(DateTime(2026, 10, 21), DateTime(2026, 10, 22)),
+        isEmpty,
       );
     });
+
+    test(
+      'is private to this person, and shared with their other devices',
+      () async {
+        final owner = await LocalIdentity.create();
+        final fresh = await LocalIdentity.create();
+        final paired = await fresh.enrol(
+          await owner.authorise(fresh.certificate),
+        );
+        final a = Node(owner, Store()),
+            b = Node(paired, Store()),
+            friend = Node(await LocalIdentity.create(), Store());
+        addTearDown(() async {
+          await a.close();
+          await b.close();
+          await friend.close();
+        });
+        await a.addContact(paired.certificate);
+        await b.addContact(owner.certificate);
+        await a.addContact(friend.identity.certificate);
+        await friend.addContact(owner.certificate);
+        final ca = calendarOf(a), cb = calendarOf(b), cf = calendarOf(friend);
+        await ca.create(
+          Calendar.personal,
+          draft('Secret', DateTime(2026, 10, 12, 9)),
+        );
+        await syncPair(a, b);
+        await syncPair(a, friend);
+        await cb.refresh();
+        await cf.refresh();
+        final range = [DateTime(2026, 10, 12), DateTime(2026, 10, 13)];
+        expect(titles(cb.between(range[0], range[1])), ['Secret']);
+        expect(cf.between(range[0], range[1]), isEmpty);
+        expect(friend.store.count, 0);
+
+        // Concurrent edits on two devices settle on one version.
+        final oa = ca.between(range[0], range[1]).single;
+        final ob = cb.between(range[0], range[1]).single;
+        await ca.update(oa, EventDraft.of(oa)..title = 'From a');
+        await cb.update(ob, EventDraft.of(ob)..title = 'From b');
+        await syncPair(a, b);
+        await ca.refresh();
+        await cb.refresh();
+        expect(titles(ca.between(range[0], range[1])), hasLength(1));
+        expect(
+          titles(ca.between(range[0], range[1])),
+          titles(cb.between(range[0], range[1])),
+        );
+      },
+    );
 
     test('a forged personal event from someone else is ignored', () async {
       final [a, b] = await friends(2);
@@ -281,19 +338,45 @@ void main() {
       await syncPair(a, b);
       final cal = calendarOf(a);
       await cal.refresh();
-      expect(cal.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13)), isEmpty);
+      expect(
+        cal.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13)),
+        isEmpty,
+      );
     });
 
     test('invalid events are refused', () async {
       final n = (await friends(1)).single;
       Future<void> bad(Map<String, dynamic> p) => expectLater(
-        n.publish(Calendar.eventKind, p, space: Calendar.personal, audience: [n.person]),
+        n.publish(
+          Calendar.eventKind,
+          p,
+          space: Calendar.personal,
+          audience: [n.person],
+        ),
         throwsA(isA<StateError>()),
       );
       await bad({'event': 'a', 'clock': 1, 'start': 10, 'end': 5});
-      await bad({'event': 'a', 'clock': 1, 'allDay': true, 'day': 'tomorrow', 'days': 1});
-      await bad({'event': 'a', 'clock': 1, 'start': 1, 'end': 2, 'repeat': {'freq': 'x'}});
-      await bad({'event': 'a', 'clock': 1, 'start': 1, 'end': 2, 'series': 'a'});
+      await bad({
+        'event': 'a',
+        'clock': 1,
+        'allDay': true,
+        'day': 'tomorrow',
+        'days': 1,
+      });
+      await bad({
+        'event': 'a',
+        'clock': 1,
+        'start': 1,
+        'end': 2,
+        'repeat': {'freq': 'x'},
+      });
+      await bad({
+        'event': 'a',
+        'clock': 1,
+        'start': 1,
+        'end': 2,
+        'series': 'a',
+      });
       await bad({'clock': 1, 'start': 1, 'end': 2});
     });
   });
@@ -337,8 +420,14 @@ void main() {
       final now = all();
       expect(now, hasLength(10));
       expect(titles(now).where((t) => t == 'Standup (long)'), hasLength(1));
-      expect(now.firstWhere((o) => o.event.title == 'Standup (long)').start, DateTime(2026, 10, 7, 11));
-      expect(now.firstWhere((o) => o.event.title == 'Standup (long)').key, third.key);
+      expect(
+        now.firstWhere((o) => o.event.title == 'Standup (long)').start,
+        DateTime(2026, 10, 7, 11),
+      );
+      expect(
+        now.firstWhere((o) => o.event.title == 'Standup (long)').key,
+        third.key,
+      );
     });
 
     test('deleting one occurrence hides only it', () async {
@@ -385,16 +474,27 @@ void main() {
 
     test('deleting the series deletes its overrides too', () async {
       final third = all()[2];
-      await cal.update(third, EventDraft.of(third)..title = 'Odd', scope: Scope.one);
+      await cal.update(
+        third,
+        EventDraft.of(third)..title = 'Odd',
+        scope: Scope.one,
+      );
       await cal.delete(all().first);
       expect(all(), isEmpty);
     });
 
     test('an occurrence found by key', () async {
       final fourth = all()[3];
-      final found = cal.occurrence(Calendar.personal, fourth.entry, key: fourth.key);
+      final found = cal.occurrence(
+        Calendar.personal,
+        fourth.entry,
+        key: fourth.key,
+      );
       expect(found!.start, fourth.start);
-      expect(cal.occurrence(Calendar.personal, fourth.entry, key: 'nope'), isNull);
+      expect(
+        cal.occurrence(Calendar.personal, fourth.entry, key: 'nope'),
+        isNull,
+      );
       final next = cal.occurrence(
         Calendar.personal,
         fourth.entry,
@@ -406,7 +506,11 @@ void main() {
     test('an open-ended series is only walked as far as it is shown', () async {
       await cal.create(
         Calendar.personal,
-        draft('Forever', DateTime(2000, 1, 3, 9), repeat: const Repeat('weekly')),
+        draft(
+          'Forever',
+          DateTime(2000, 1, 3, 9),
+          repeat: const Repeat('weekly'),
+        ),
       );
       final found = cal.between(DateTime(2031, 5, 1), DateTime(2031, 5, 31));
       expect(titles(found).where((t) => t == 'Forever'), hasLength(4));
@@ -417,51 +521,79 @@ void main() {
       final ea = Everyday(a);
       final room = await ea.createRoom('Team', [b.person]);
       final ca = calendarOf(a);
-      await ca.create(Calendar.personal, draft('Run', DateTime(2026, 10, 5, 7), repeat: const Repeat('daily', count: 3)));
+      await ca.create(
+        Calendar.personal,
+        draft(
+          'Run',
+          DateTime(2026, 10, 5, 7),
+          repeat: const Repeat('daily', count: 3),
+        ),
+      );
       var occ = ca.between(week[0], week[1]);
-      await ca.update(occ[1], EventDraft.from(occ[1].event)..title = 'Run (slow)', scope: Scope.one);
-      await ca.move(ca.between(week[0], week[1]).first.master, room.object.space);
-      expect(ca.between(week[0], week[1], calendars: {Calendar.personal}), isEmpty);
+      await ca.update(
+        occ[1],
+        EventDraft.from(occ[1].event)..title = 'Run (slow)',
+        scope: Scope.one,
+      );
+      await ca.move(
+        ca.between(week[0], week[1]).first.master,
+        room.object.space,
+      );
+      expect(
+        ca.between(week[0], week[1], calendars: {Calendar.personal}),
+        isEmpty,
+      );
       occ = ca.between(week[0], week[1], calendars: {room.object.space});
       expect(titles(occ), ['Run', 'Run (slow)', 'Run']);
     });
   });
 
   group('group calendars', () {
-    test('are shared with members only, and show in the personal view', () async {
-      final [a, b, outsider] = await friends(3);
-      final room = await Everyday(a).createRoom('Climbing', [b.person]);
-      final space = room.object.space;
-      final ca = calendarOf(a), cb = calendarOf(b), co = calendarOf(outsider);
-      await ca.create(space, draft('Wall night', DateTime(2026, 10, 12, 19)));
-      await ca.create(Calendar.personal, draft('Mine', DateTime(2026, 10, 12, 8)));
-      await syncPair(a, b);
-      await syncPair(a, outsider);
-      for (final c in [cb, co]) {
-        await c.refresh();
-      }
-      final range = [DateTime(2026, 10, 12), DateTime(2026, 10, 13)];
-      expect(titles(cb.between(range[0], range[1])), ['Wall night']);
-      expect(co.between(range[0], range[1]), isEmpty);
-      expect(titles(ca.between(range[0], range[1])), ['Mine', 'Wall night']);
+    test(
+      'are shared with members only, and show in the personal view',
+      () async {
+        final [a, b, outsider] = await friends(3);
+        final room = await Everyday(a).createRoom('Climbing', [b.person]);
+        final space = room.object.space;
+        final ca = calendarOf(a), cb = calendarOf(b), co = calendarOf(outsider);
+        await ca.create(space, draft('Wall night', DateTime(2026, 10, 12, 19)));
+        await ca.create(
+          Calendar.personal,
+          draft('Mine', DateTime(2026, 10, 12, 8)),
+        );
+        await syncPair(a, b);
+        await syncPair(a, outsider);
+        for (final c in [cb, co]) {
+          await c.refresh();
+        }
+        final range = [DateTime(2026, 10, 12), DateTime(2026, 10, 13)];
+        expect(titles(cb.between(range[0], range[1])), ['Wall night']);
+        expect(co.between(range[0], range[1]), isEmpty);
+        expect(titles(ca.between(range[0], range[1])), ['Mine', 'Wall night']);
 
-      // Switching a group off hides it from the personal view only.
-      await ca.setShown(space, false);
-      expect(titles(ca.between(range[0], range[1])), ['Mine']);
-      expect(titles(ca.between(range[0], range[1], calendars: {space})), ['Wall night']);
-      expect(ca.shown(space), isFalse);
-      await ca.setShown(space, true);
-      expect(ca.shown(space), isTrue);
+        // Switching a group off hides it from the personal view only.
+        await ca.setShown(space, false);
+        expect(titles(ca.between(range[0], range[1])), ['Mine']);
+        expect(titles(ca.between(range[0], range[1], calendars: {space})), [
+          'Wall night',
+        ]);
+        expect(ca.shown(space), isFalse);
+        await ca.setShown(space, true);
+        expect(ca.shown(space), isTrue);
 
-      // A member's edit reaches the owner.
-      final theirs = cb.between(range[0], range[1]).single;
-      await cb.update(theirs, EventDraft.of(theirs)..title = 'Wall night (bring chalk)');
-      await syncPair(a, b);
-      await ca.refresh();
-      expect(titles(ca.between(range[0], range[1], calendars: {space})), [
-        'Wall night (bring chalk)',
-      ]);
-    });
+        // A member's edit reaches the owner.
+        final theirs = cb.between(range[0], range[1]).single;
+        await cb.update(
+          theirs,
+          EventDraft.of(theirs)..title = 'Wall night (bring chalk)',
+        );
+        await syncPair(a, b);
+        await ca.refresh();
+        expect(titles(ca.between(range[0], range[1], calendars: {space})), [
+          'Wall night (bring chalk)',
+        ]);
+      },
+    );
 
     test('answers to an event are counted per person and occurrence', () async {
       final [a, b] = await friends(2);
@@ -470,55 +602,88 @@ void main() {
       final ca = calendarOf(a), cb = calendarOf(b);
       final made = await ca.create(
         space,
-        draft('Wall night', DateTime(2026, 10, 12, 19), repeat: const Repeat('weekly', count: 3)),
+        draft(
+          'Wall night',
+          DateTime(2026, 10, 12, 19),
+          repeat: const Repeat('weekly', count: 3),
+        ),
       );
       await syncPair(a, b);
       await cb.refresh();
       await ca.respond(space, made.entry!, Rsvp.yes);
       await cb.respond(space, made.entry!, Rsvp.maybe);
-      await cb.respond(space, made.entry!, Rsvp.no, key: '${DateTime(2026, 10, 19, 19).millisecondsSinceEpoch}');
+      await cb.respond(
+        space,
+        made.entry!,
+        Rsvp.no,
+        key: '${DateTime(2026, 10, 19, 19).millisecondsSinceEpoch}',
+      );
       await syncPair(a, b);
       await ca.refresh();
       final first = '${DateTime(2026, 10, 12, 19).millisecondsSinceEpoch}';
       final second = '${DateTime(2026, 10, 19, 19).millisecondsSinceEpoch}';
-      expect(ca.rsvps(space, made.entry!, first), {a.person: Rsvp.yes, b.person: Rsvp.maybe});
-      expect(ca.rsvps(space, made.entry!, second), {a.person: Rsvp.yes, b.person: Rsvp.no});
+      expect(ca.rsvps(space, made.entry!, first), {
+        a.person: Rsvp.yes,
+        b.person: Rsvp.maybe,
+      });
+      expect(ca.rsvps(space, made.entry!, second), {
+        a.person: Rsvp.yes,
+        b.person: Rsvp.no,
+      });
       await cb.respond(space, made.entry!, null);
       await syncPair(a, b);
       await ca.refresh();
       expect(ca.rsvps(space, made.entry!, first), {a.person: Rsvp.yes});
     });
 
-    test('people who join later get the calendar when history is shared', () async {
-      final [a, b, c] = await friends(3);
-      final ea = Everyday(a);
-      var room = await ea.createRoom('Trip', [b.person]);
-      final space = room.object.space;
-      final ca = calendarOf(a), cc = calendarOf(c);
-      await ca.create(space, draft('Flights', DateTime(2026, 10, 12, 6)));
-      await syncPair(a, b);
-      room = await ea.changeMembers(room, [b.person, c.person], shareHistory: true);
-      await syncPair(a, b);
-      await syncPair(a, c);
-      await cc.refresh();
-      final range = [DateTime(2026, 10, 12), DateTime(2026, 10, 13)];
-      expect(titles(cc.between(range[0], range[1])), ['Flights']);
-      expect(cc.event(space, cc.between(range[0], range[1]).single.entry)!.author, a.person);
-    });
+    test(
+      'people who join later get the calendar when history is shared',
+      () async {
+        final [a, b, c] = await friends(3);
+        final ea = Everyday(a);
+        var room = await ea.createRoom('Trip', [b.person]);
+        final space = room.object.space;
+        final ca = calendarOf(a), cc = calendarOf(c);
+        await ca.create(space, draft('Flights', DateTime(2026, 10, 12, 6)));
+        await syncPair(a, b);
+        room = await ea.changeMembers(room, [
+          b.person,
+          c.person,
+        ], shareHistory: true);
+        await syncPair(a, b);
+        await syncPair(a, c);
+        await cc.refresh();
+        final range = [DateTime(2026, 10, 12), DateTime(2026, 10, 13)];
+        expect(titles(cc.between(range[0], range[1])), ['Flights']);
+        expect(
+          cc.event(space, cc.between(range[0], range[1]).single.entry)!.author,
+          a.person,
+        );
+      },
+    );
 
-    test('without shared history a newcomer sees only what comes next', () async {
-      final [a, b, c] = await friends(3);
-      final ea = Everyday(a);
-      var room = await ea.createRoom('Trip', [b.person]);
-      final space = room.object.space;
-      final ca = calendarOf(a), cc = calendarOf(c);
-      await ca.create(space, draft('Old', DateTime(2026, 10, 12, 6)));
-      room = await ea.changeMembers(room, [b.person, c.person], shareHistory: false);
-      await ca.create(space, draft('New', DateTime(2026, 10, 12, 7)));
-      await syncPair(a, c);
-      await cc.refresh();
-      expect(titles(cc.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13))), ['New']);
-    });
+    test(
+      'without shared history a newcomer sees only what comes next',
+      () async {
+        final [a, b, c] = await friends(3);
+        final ea = Everyday(a);
+        var room = await ea.createRoom('Trip', [b.person]);
+        final space = room.object.space;
+        final ca = calendarOf(a), cc = calendarOf(c);
+        await ca.create(space, draft('Old', DateTime(2026, 10, 12, 6)));
+        room = await ea.changeMembers(room, [
+          b.person,
+          c.person,
+        ], shareHistory: false);
+        await ca.create(space, draft('New', DateTime(2026, 10, 12, 7)));
+        await syncPair(a, c);
+        await cc.refresh();
+        expect(
+          titles(cc.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13))),
+          ['New'],
+        );
+      },
+    );
 
     test('a removed member leaves their events behind', () async {
       final [a, b] = await friends(2);
@@ -531,10 +696,16 @@ void main() {
       await cb.create(space, draft('Bob\'s quiz', DateTime(2026, 10, 12, 19)));
       await syncPair(a, b);
       await ca.refresh();
-      expect(titles(ca.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13))), ['Bob\'s quiz']);
+      expect(
+        titles(ca.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13))),
+        ['Bob\'s quiz'],
+      );
       room = await ea.changeMembers(room, const [], shareHistory: false);
       await ca.refresh();
-      expect(titles(ca.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13))), ['Bob\'s quiz']);
+      expect(
+        titles(ca.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13))),
+        ['Bob\'s quiz'],
+      );
     });
 
     test('a non-member cannot write into a group calendar', () async {
@@ -556,7 +727,10 @@ void main() {
       await syncPair(a, outsider);
       final ca = calendarOf(a);
       await ca.refresh();
-      expect(ca.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13)), isEmpty);
+      expect(
+        ca.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13)),
+        isEmpty,
+      );
     });
 
     test('a public event in a group calendar is ignored', () async {
@@ -564,20 +738,19 @@ void main() {
       final room = await Everyday(a).createRoom('Club', [b.person]);
       expect(ScopedSection.calendar.allows(ScopeKind.public), isFalse);
       // Written by a member, but to no audience: anyone could read it.
-      await a.publish(
-        Calendar.eventKind,
-        {
-          'event': 'open',
-          'clock': 5,
-          'title': 'Open day',
-          'start': DateTime(2026, 10, 12, 9).millisecondsSinceEpoch,
-          'end': DateTime(2026, 10, 12, 10).millisecondsSinceEpoch,
-        },
-        space: room.object.space,
-      );
+      await a.publish(Calendar.eventKind, {
+        'event': 'open',
+        'clock': 5,
+        'title': 'Open day',
+        'start': DateTime(2026, 10, 12, 9).millisecondsSinceEpoch,
+        'end': DateTime(2026, 10, 12, 10).millisecondsSinceEpoch,
+      }, space: room.object.space);
       final ca = calendarOf(a);
       await ca.refresh();
-      expect(ca.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13)), isEmpty);
+      expect(
+        ca.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13)),
+        isEmpty,
+      );
     });
   });
 
@@ -596,8 +769,13 @@ void main() {
       final n = (await friends(1)).single;
       final cal = calendarOf(n);
       final start = DateTime(2026, 10, 12, 9);
-      await cal.create(Calendar.personal, draft('Cake', start)..carry.addAll(audio));
-      var o = cal.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13)).single;
+      await cal.create(
+        Calendar.personal,
+        draft('Cake', start)..carry.addAll(audio),
+      );
+      var o = cal
+          .between(DateTime(2026, 10, 12), DateTime(2026, 10, 13))
+          .single;
       expect(o.event.hasAudio, isTrue);
       expect(o.event.transcript, 'Pick up the cake');
       // Editing the title keeps it.
@@ -623,7 +801,10 @@ void main() {
       expect(parsed.key, '1700000000000');
       expect(Calendar.parseLink('https://example.com'), isNull);
       expect(Calendar.parseLink('ournet://event/only-one'), isNull);
-      expect(Calendar.parseLink(Calendar.link(Calendar.personal, 'x'))!.key, isNull);
+      expect(
+        Calendar.parseLink(Calendar.link(Calendar.personal, 'x'))!.key,
+        isNull,
+      );
       final text = 'see $link, thanks';
       expect(Calendar.linkPattern.firstMatch(text)!.group(0), link);
     });
@@ -650,10 +831,10 @@ void main() {
       await cal.create(
         Calendar.personal,
         draft(
-          'Standup, daily; "quick"',
-          DateTime(2026, 10, 5, 9),
-          repeat: const Repeat('daily', count: 4),
-        )
+            'Standup, daily; "quick"',
+            DateTime(2026, 10, 5, 9),
+            repeat: const Repeat('daily', count: 4),
+          )
           ..description = 'Line one\nLine two'
           ..location = 'Room 4'
           ..reminders = [10, 60],
@@ -737,59 +918,102 @@ void main() {
     });
   });
 
-  test('a device added later is handed the personal calendar and group events', () async {
-    final owner = await LocalIdentity.create();
-    final fresh = await LocalIdentity.create();
-    final friend = Node(await LocalIdentity.create(), Store());
-    final a = Node(owner, Store());
-    addTearDown(() async {
-      await a.close();
-      await friend.close();
-    });
-    await a.addContact(friend.identity.certificate);
-    await friend.addContact(owner.certificate);
-    final room = await Everyday(a).createRoom('Club', [friend.person]);
-    final ca = calendarOf(a);
-    await ca.create(Calendar.personal, draft('Mine', DateTime(2026, 10, 12, 9)));
-    await ca.create(room.object.space, draft('Club night', DateTime(2026, 10, 12, 19)));
-    final paired = await fresh.enrol(await owner.authorise(fresh.certificate));
-    final b = Node(paired, Store());
-    addTearDown(b.close);
-    await a.addContact(paired.certificate);
-    await b.addContact(owner.certificate);
-    await b.addContact(friend.identity.certificate);
-    await friend.addContact(paired.certificate);
-    // Nothing before the device existed can be read until it is handed over.
-    await syncPair(a, b);
-    final cb = calendarOf(b);
-    await cb.refresh();
-    final range = [DateTime(2026, 10, 12), DateTime(2026, 10, 13)];
-    expect(cb.between(range[0], range[1], calendars: {Calendar.personal, room.object.space}), isEmpty);
-    await shareAllHistory(a);
-    await syncPair(a, b);
-    await cb.refresh();
-    expect(
-      titles(cb.between(range[0], range[1], calendars: {Calendar.personal, room.object.space})),
-      ['Mine', 'Club night'],
-    );
-  });
+  test(
+    'a device added later is handed the personal calendar and group events',
+    () async {
+      final owner = await LocalIdentity.create();
+      final fresh = await LocalIdentity.create();
+      final friend = Node(await LocalIdentity.create(), Store());
+      final a = Node(owner, Store());
+      addTearDown(() async {
+        await a.close();
+        await friend.close();
+      });
+      await a.addContact(friend.identity.certificate);
+      await friend.addContact(owner.certificate);
+      final room = await Everyday(a).createRoom('Club', [friend.person]);
+      final ca = calendarOf(a);
+      await ca.create(
+        Calendar.personal,
+        draft('Mine', DateTime(2026, 10, 12, 9)),
+      );
+      await ca.create(
+        room.object.space,
+        draft('Club night', DateTime(2026, 10, 12, 19)),
+      );
+      final paired = await fresh.enrol(
+        await owner.authorise(fresh.certificate),
+      );
+      final b = Node(paired, Store());
+      addTearDown(b.close);
+      await a.addContact(paired.certificate);
+      await b.addContact(owner.certificate);
+      await b.addContact(friend.identity.certificate);
+      await friend.addContact(paired.certificate);
+      // Nothing before the device existed can be read until it is handed over.
+      await syncPair(a, b);
+      final cb = calendarOf(b);
+      await cb.refresh();
+      final range = [DateTime(2026, 10, 12), DateTime(2026, 10, 13)];
+      expect(
+        cb.between(
+          range[0],
+          range[1],
+          calendars: {Calendar.personal, room.object.space},
+        ),
+        isEmpty,
+      );
+      await shareAllHistory(a);
+      await syncPair(a, b);
+      await cb.refresh();
+      expect(
+        titles(
+          cb.between(
+            range[0],
+            range[1],
+            calendars: {Calendar.personal, room.object.space},
+          ),
+        ),
+        ['Mine', 'Club night'],
+      );
+    },
+  );
 
   test('deleted events can be listed and put back', () async {
     final n = (await friends(1)).single;
     final cal = calendarOf(n);
-    await cal.create(Calendar.personal, draft('Keep me', DateTime(2026, 10, 12, 9), repeat: const Repeat('daily', count: 3)));
-    await cal.create(Calendar.personal, draft('Other', DateTime(2026, 10, 12, 11)));
+    await cal.create(
+      Calendar.personal,
+      draft(
+        'Keep me',
+        DateTime(2026, 10, 12, 9),
+        repeat: const Repeat('daily', count: 3),
+      ),
+    );
+    await cal.create(
+      Calendar.personal,
+      draft('Other', DateTime(2026, 10, 12, 11)),
+    );
     final range = [DateTime(2026, 10, 12), DateTime(2026, 10, 16)];
-    final first = cal.between(range[0], range[1]).firstWhere((o) => o.event.title == 'Keep me');
+    final first = cal
+        .between(range[0], range[1])
+        .firstWhere((o) => o.event.title == 'Keep me');
     await cal.delete(first);
-    expect(cal.between(range[0], range[1]).map((o) => o.event.title), ['Other']);
+    expect(cal.between(range[0], range[1]).map((o) => o.event.title), [
+      'Other',
+    ]);
     final gone = cal.deleted();
     expect(gone.map((e) => e.title), ['Keep me']);
     await cal.restoreEvent(gone.single);
     expect(cal.deleted(), isEmpty);
-    expect(titles(cal.between(range[0], range[1])).where((t) => t == 'Keep me'), hasLength(3));
+    expect(
+      titles(cal.between(range[0], range[1])).where((t) => t == 'Keep me'),
+      hasLength(3),
+    );
     // Only recent deletions are listed.
-    final other = cal.between(range[0], range[1]).firstWhere((o) => o.event.title == 'Other');
+    final other = cal
+        .between(range[0], range[1])
+        .firstWhere((o) => o.event.title == 'Other');
     await cal.delete(other);
     expect(cal.deleted(within: Duration.zero), isEmpty);
     expect(cal.deleted(), hasLength(1));
@@ -799,12 +1023,18 @@ void main() {
     final n = (await friends(1)).single;
     final cal = calendarOf(n);
     for (var i = 0; i < 40; i++) {
-      await cal.create(Calendar.personal, draft('E$i', DateTime(2026, 10, 1 + i % 28, 9)));
+      await cal.create(
+        Calendar.personal,
+        draft('E$i', DateTime(2026, 10, 1 + i % 28, 9)),
+      );
     }
     final version = cal.version;
     expect(await cal.refresh(), isFalse);
     expect(cal.version, version);
-    await cal.create(Calendar.personal, draft('One more', DateTime(2026, 10, 2, 9)));
+    await cal.create(
+      Calendar.personal,
+      draft('One more', DateTime(2026, 10, 2, 9)),
+    );
     expect(cal.version, greaterThan(version));
   });
 }

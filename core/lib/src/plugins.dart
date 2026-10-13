@@ -142,8 +142,16 @@ class Plugins {
   /// Closes what [openTun] opened for [plugin].
   void Function(String plugin)? closeTun;
 
-  Plugins(this.node, {required this.directory, PluginHost? host})
-    : host = host ?? PluginHost.instance {
+  /// Where compiled code is kept; [directory]'s `.cache` unless given.
+  final String cache;
+
+  Plugins(
+    this.node, {
+    required this.directory,
+    String? cache,
+    PluginHost? host,
+  }) : cache = cache ?? '$directory/.cache',
+       host = host ?? PluginHost.instance {
     node.registry.handle(
       liveRequest,
       _answerRequest,
@@ -441,7 +449,7 @@ class Plugins {
       {
         'id': plugin.id,
         'dir': dir,
-        'cache': '$directory/.cache',
+        'cache': cache,
         'grants': plugin.granted.toList(),
       },
       wasm,
@@ -600,8 +608,7 @@ class Plugins {
 
   Future<void> _ready(_Running running, {required bool reloaded}) async {
     final plugin = running.plugin;
-    plugin.status = PluginStatus.running;
-    _changed(plugin.id);
+    // Running once it has set itself up: what it shows needs that.
     if (!reloaded) {
       try {
         await _call(running, {'call': 'init'});
@@ -609,6 +616,8 @@ class Plugins {
         return;
       }
     }
+    plugin.status = PluginStatus.running;
+    _changed(plugin.id);
     if (plugin.granted.contains('live')) {
       node.registry.advertise(plugin.id, 'p:${plugin.id}');
       node.registry.handleDatagrams('p:${plugin.id}', (device, data) {

@@ -48,8 +48,8 @@ void main() {
     final b = Node(await LocalIdentity.create(), Store());
     await a.addContact(b.identity.certificate);
     await b.addContact(a.identity.certificate);
-    final pa = Plugins(a, directory: '${temp.path}/a');
-    final pb = Plugins(b, directory: '${temp.path}/b');
+    final pa = Plugins(a, directory: '${temp.path}/a', cache: sharedCache);
+    final pb = Plugins(b, directory: '${temp.path}/b', cache: sharedCache);
     addTearDown(() async {
       await pa.close();
       await pb.close();
@@ -67,6 +67,7 @@ void main() {
         Future<void>.delayed(const Duration(milliseconds: 300));
     for (final p in [pa, pb]) {
       while (p['vpn']?.status != PluginStatus.running) {
+        if (p['vpn']?.status == PluginStatus.failed) fail('${p['vpn']!.error}');
         await Future<void>.delayed(const Duration(milliseconds: 10));
       }
       p.event('vpn', 'Vpn', 'toggle', {});
@@ -99,7 +100,10 @@ void main() {
     expect(atB, hasLength(1));
     pb.open('vpn', 'Vpn', {'scope': 'personal'});
     await settle();
-    expect(pb.surface('vpn', 'Vpn')['traffic'], contains('1 received · 2 refused'));
+    expect(
+      pb.surface('vpn', 'Vpn')['traffic'],
+      contains('1 received · 2 refused'),
+    );
   });
 }
 
@@ -120,3 +124,6 @@ class _Wire implements PluginLink {
     return true;
   }
 }
+
+/// Compiled plugins, kept between tests: compiling each time is slow.
+final sharedCache = '${Directory.systemTemp.path}/ournet-plugin-cache';

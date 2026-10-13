@@ -38,7 +38,7 @@ class Rig {
         final other = await LocalIdentity.create(label: 'Sam');
         await node.addContact(other.certificate);
       }
-      final plugins = Plugins(node, directory: temp.path);
+      final plugins = Plugins(node, directory: temp.path, cache: sharedCache);
       for (final id in ids) {
         final p = bundled(id);
         await plugins.install(p, grants: p.manifest.grants);
@@ -265,3 +265,6 @@ void main() {
     await rig.shot('vpn');
   });
 }
+
+/// Compiled plugins, kept between tests: compiling each time is slow.
+final sharedCache = '${Directory.systemTemp.path}/ournet-plugin-cache';

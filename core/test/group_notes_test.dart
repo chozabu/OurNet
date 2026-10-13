@@ -68,7 +68,10 @@ void main() {
 
       // The All view asks for a person's own notes with their groups' added.
       final all = await alice.summaries(groups: [group.object.space]);
-      expect(all.map((s) => s.data['title']), unorderedEquals(['Mine', 'Packing']));
+      expect(
+        all.map((s) => s.data['title']),
+        unorderedEquals(['Mine', 'Packing']),
+      );
     },
   );
 

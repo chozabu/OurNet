@@ -297,32 +297,36 @@ void main() {
     });
   });
 
-  test('a path too long for the receiver is not offered', () async {
-    // Each hop adds a handoff and a receipt: 64 devices after the author make
-    // a path of 128 records, the most one item may carry.
-    final chain = [for (var i = 0; i < 66; i++) await node()];
-    addTearDown(() async {
-      for (final n in chain) {
-        await n.close();
+  test(
+    'a path too long for the receiver is not offered',
+    () async {
+      // Each hop adds a handoff and a receipt: 64 devices after the author make
+      // a path of 128 records, the most one item may carry.
+      final chain = [for (var i = 0; i < 66; i++) await node()];
+      addTearDown(() async {
+        for (final n in chain) {
+          await n.close();
+        }
+      });
+      for (var i = 0; i + 1 < chain.length; i++) {
+        await friend(chain[i], chain[i + 1]);
       }
-    });
-    for (var i = 0; i + 1 < chain.length; i++) {
-      await friend(chain[i], chain[i + 1]);
-    }
-    final post = await chain.first.publish('post', {'text': 'a long way'});
-    for (var i = 0; i + 2 < chain.length; i++) {
-      await syncPair(chain[i], chain[i + 1]);
-    }
-    final last = chain[chain.length - 2], next = chain.last;
-    expect(last.store.evidence(post.id), hasLength(Node.maxEvidence));
-    expect(
-      await last.offer(
-        next.identity.device,
-        next.inventoryAfter(peerDevice: last.identity.device),
-      ),
-      isEmpty,
-    );
-    expect(await syncPair(last, next), 0);
-    // 66 nodes and about 64 syncs: near 30 s alone, longer beside other suites.
-  }, timeout: const Timeout(Duration(seconds: 90)));
+      final post = await chain.first.publish('post', {'text': 'a long way'});
+      for (var i = 0; i + 2 < chain.length; i++) {
+        await syncPair(chain[i], chain[i + 1]);
+      }
+      final last = chain[chain.length - 2], next = chain.last;
+      expect(last.store.evidence(post.id), hasLength(Node.maxEvidence));
+      expect(
+        await last.offer(
+          next.identity.device,
+          next.inventoryAfter(peerDevice: last.identity.device),
+        ),
+        isEmpty,
+      );
+      expect(await syncPair(last, next), 0);
+      // 66 nodes and about 64 syncs: near 30 s alone, longer beside other suites.
+    },
+    timeout: const Timeout(Duration(seconds: 90)),
+  );
 }

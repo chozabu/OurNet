@@ -9,17 +9,20 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:typed_data';
 
-@Native<Uint32 Function(Pointer<NativeFunction<_PostFunction>>)>(
-  symbol: 'ournet_plugins_init',
-  isLeaf: true,
-)
-external int _init(Pointer<NativeFunction<_PostFunction>> post);
+@Native<Uint32 Function()>(symbol: 'ournet_plugins_init', isLeaf: true)
+external int _init();
 
-@Native<Uint64 Function(Pointer<Uint8>, Size, Pointer<Uint8>, Size)>(
-  symbol: 'ournet_plugin_load',
-  isLeaf: true,
-)
+@Native<
+  Uint64 Function(
+    Pointer<NativeFunction<_PostFunction>>,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+  )
+>(symbol: 'ournet_plugin_load', isLeaf: true)
 external int _load(
+  Pointer<NativeFunction<_PostFunction>> post,
   Pointer<Uint8> config,
   int configLength,
   Pointer<Uint8> wasm,
@@ -75,8 +78,9 @@ class PluginMessage {
   }
 }
 
-/// The process's plugin host, on the isolate that first asked for it.
-/// Messages arrive on that isolate's event loop, never synchronously.
+/// The plugin host, as this isolate sees it: messages for the plugins it
+/// loaded arrive on its event loop, never synchronously. Other isolates have
+/// their own.
 final class PluginHost {
   /// Null where the native library or a code generator for this CPU is
   /// missing: plugins do not run there.
@@ -105,7 +109,7 @@ final class PluginHost {
       }
     });
     try {
-      if (_init(callback.nativeFunction) == 0) {
+      if (_init() == 0) {
         callback.close();
         return null;
       }
@@ -126,7 +130,13 @@ final class PluginHost {
     void Function(PluginMessage) onMessage,
   ) {
     final c = Uint8List.fromList(utf8.encode(jsonEncode(config)));
-    final handle = _load(c.address, c.length, wasm.address, wasm.length);
+    final handle = _load(
+      _callback.nativeFunction,
+      c.address,
+      c.length,
+      wasm.address,
+      wasm.length,
+    );
     if (handle == 0) return null;
     _listeners[handle] = onMessage;
     return handle;
