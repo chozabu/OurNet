@@ -24,9 +24,11 @@ if (!$SkipUpload) { $Key = (Resolve-Path -LiteralPath $Key).Path }
 # always grows and needs no file edits.
 $taskVersionCode = [int][Math]::Floor(([DateTime]::UtcNow - [DateTime]::new(2026, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)).TotalMinutes) + 1000
 $taskBuild = Get-Date -Format 'yyyyMMdd-HHmmss'
+# Plugin interfaces (RFW) may name any Material icon, so the icon font is
+# kept whole rather than shaken to the icons the app's own code uses.
 Push-Location (Join-Path $taskRoot 'app')
 try {
-  Invoke-Native { flutter build appbundle --release --build-number $taskVersionCode "--dart-define=OURNET_BUILD=$taskBuild" }
+  Invoke-Native { flutter build appbundle --release --no-tree-shake-icons --build-number $taskVersionCode "--dart-define=OURNET_BUILD=$taskBuild" }
   if ($LASTEXITCODE -ne 0) { throw 'Android release build failed.' }
 } finally { Pop-Location }
 $taskBundle = Join-Path $taskRoot 'app/build/app/outputs/bundle/release/app-release.aab'

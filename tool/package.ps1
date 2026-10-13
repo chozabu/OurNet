@@ -53,7 +53,7 @@ foreach($taskComponent in @('app','core','transport','native','vendor/iroh_mobil
 }
 Push-Location (Join-Path $taskStage 'app')
 try {
-  flutter build windows --release "--dart-define=OURNET_BUILD=$taskBuild"
+  flutter build windows --release --no-tree-shake-icons "--dart-define=OURNET_BUILD=$taskBuild"
   if($LASTEXITCODE -ne 0){throw 'Windows build failed; close running release-build windows first'}
   New-Item -ItemType Directory -Force -Path $taskOutput | Out-Null
   Copy-Item -Path 'build/windows/x64/runner/Release/*' -Destination $taskOutput -Recurse

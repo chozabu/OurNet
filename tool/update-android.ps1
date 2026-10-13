@@ -52,7 +52,7 @@ if (!$SkipBuild) {
   $taskVersionCode = [int][Math]::Floor(([DateTime]::UtcNow - [DateTime]::new(2026, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)).TotalMinutes) + 1000
   Push-Location (Join-Path $taskRoot 'app')
   try {
-    Invoke-Native { flutter build apk "--$taskMode" --target-platform $taskPlatform --build-number $taskVersionCode "--dart-define=OURNET_BUILD=$(Get-Date -Format 'yyyyMMdd-HHmmss')" }
+    Invoke-Native { flutter build apk "--$taskMode" --no-tree-shake-icons --target-platform $taskPlatform --build-number $taskVersionCode "--dart-define=OURNET_BUILD=$(Get-Date -Format 'yyyyMMdd-HHmmss')" }
     if ($LASTEXITCODE -ne 0) { throw 'Android build failed. The installed app has not been changed.' }
   } finally { Pop-Location }
 }
