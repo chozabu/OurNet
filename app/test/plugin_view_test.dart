@@ -264,6 +264,42 @@ void main() {
     expect(find.textContaining('This device: 10.77.'), findsOneWidget);
     await rig.shot('vpn');
   });
+
+  testWidgets('a friend network device opens a page with checks', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final rig = await Rig.start(tester, ['vpn'], friend: true);
+    rig.plugins.link = _Unreachable();
+    await rig.show('vpn', 'Vpn');
+    await rig.untilText('Friend');
+    await tester.tap(find.text('Friend'));
+    await rig.untilText('Run checks');
+    expect(find.text('Connection'), findsOneWidget);
+    expect(find.textContaining('Not allowed'), findsOneWidget);
+    await tester.tap(find.text('Ping'));
+    await rig.until(
+      () => find.textContaining('failed: Unreachable').evaluate().isNotEmpty,
+    );
+    expect(find.textContaining('could not be reached'), findsOneWidget);
+    await rig.shot('vpn-device');
+    await tester.tap(find.text('‹ Friend network'));
+    await rig.untilText('Turn on');
+  });
+}
+
+/// Says every device runs every plugin, and reaches none of them.
+class _Unreachable implements PluginLink {
+  @override
+  Future<Json> request(String device, Json request) async =>
+      throw StateError('Unreachable');
+  @override
+  bool runs(String device, String plugin) => true;
+  @override
+  Future<bool> datagram(String device, String channel, List<int> data) async =>
+      false;
 }
 
 /// Compiled plugins, kept between tests: compiling each time is slow.

@@ -1,6 +1,6 @@
 [package]
 name = "vpn"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 publish.workspace = true
 description = "A private network between your devices and the friends you allow, over OurNet."

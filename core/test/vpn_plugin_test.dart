@@ -105,6 +105,87 @@ void main() {
       contains('1 received · 2 refused'),
     );
   });
+
+  test('a device page pings and checks the path to a friend', () async {
+    final temp = Directory.systemTemp.createTempSync('ournet-vpn');
+    final a = Node(await LocalIdentity.create(), Store());
+    final b = Node(await LocalIdentity.create(), Store());
+    await a.addContact(b.identity.certificate);
+    await b.addContact(a.identity.certificate);
+    final pa = Plugins(a, directory: '${temp.path}/a', cache: sharedCache);
+    final pb = Plugins(b, directory: '${temp.path}/b', cache: sharedCache);
+    addTearDown(() async {
+      await pa.close();
+      await pb.close();
+      await a.close();
+      await b.close();
+      temp.deleteSync(recursive: true);
+    });
+    pa.link = _Wire(a, b);
+    pb.link = _Wire(b, a);
+    for (final p in [pa, pb]) {
+      p.openTun = (_, settings) async => {'memory': true};
+      await p.install(package, grants: package.manifest.grants);
+    }
+    for (final p in [pa, pb]) {
+      while (p['vpn']?.status != PluginStatus.running) {
+        if (p['vpn']?.status == PluginStatus.failed) fail('${p['vpn']!.error}');
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    }
+    Json page() => (pa.surface('vpn', 'Vpn')['page'] as Map).cast();
+    String row(String section, String label) => [
+      for (final r in page()[section] as List)
+        if (r['label'] == label) '${r['value']}',
+    ].join();
+    Future<void> until(bool Function() done) async {
+      for (var i = 0; i < 1000 && !done(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(done(), isTrue);
+    }
+
+    pa.open('vpn', 'Vpn', {'scope': 'personal'});
+    pa.event('vpn', 'Vpn', 'open', {'device': b.identity.device});
+    await until(() => pa.surface('vpn', 'Vpn')['view'] == 'device');
+    expect(row('link', 'Access'), startsWith('Not allowed'));
+
+    // b's network is off and it has not allowed a: a ping says so.
+    pa.event('vpn', 'Vpn', 'allow', {'person': b.person});
+    pa.event('vpn', 'Vpn', 'ping', {'device': b.identity.device});
+    await until(() => row('checks', 'Ping').endsWith('just now'));
+    expect(row('link', 'Their side'), contains('off · does not allow you'));
+    expect(page()['diagnosis'], contains('not allowed you'));
+
+    // Both on and allowed: datagrams of both sizes come back, and b's
+    // system answers the echo through its interface.
+    pb.event('vpn', 'Vpn', 'allow', {'person': a.person});
+    for (final p in [pa, pb]) {
+      p.event('vpn', 'Vpn', 'toggle', {});
+    }
+    final ipA = address(a.identity.device), ipB = address(b.identity.device);
+    final answering = pb.tunPackets.listen((p) {
+      final echo = p.packet;
+      if (echo[9] != 1 || echo[20] != 8) return;
+      // What b's system would send back: type 0, addresses swapped.
+      final reply = Uint8List.fromList(echo)
+        ..setRange(12, 16, ipB)
+        ..setRange(16, 20, ipA)
+        ..[20] = 0;
+      pb.tunReceive('vpn', reply);
+    });
+    addTearDown(answering.cancel);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    pa.event('vpn', 'Vpn', 'check', {'device': b.identity.device});
+    await until(() => page()['diagnosis'] == 'Everything checks out.');
+    expect(row('checks', 'Datagrams'), startsWith('small 5/5, full size 5/5'));
+    expect(row('checks', 'System ping'), startsWith('4/4 answered'));
+    expect(row('link', 'Their side'), contains('on · allows you'));
+    expect(row('traffic', 'Received'), startsWith('4 packets'));
+
+    pa.event('vpn', 'Vpn', 'back', {});
+    await until(() => pa.surface('vpn', 'Vpn')['view'] == 'list');
+  });
 }
 
 class _Wire implements PluginLink {

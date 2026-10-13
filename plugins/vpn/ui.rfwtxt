@@ -1,9 +1,18 @@
-// Switching the network on, and who is on it. Events: src/lib.rs.
+// Switching the network on, who is on it, and a page for each device, as
+// `data.view` says. Events: src/lib.rs.
+//
+// ListView builds its children lazily, during layout: they use library
+// widgets directly, not ones declared here.
 import core.widgets;
 import core.material;
 import ournet;
 
-widget Vpn = Column(
+widget Vpn = switch data.view {
+  "device": VpnDevice(),
+  default: VpnList(),
+};
+
+widget VpnList = Column(
   crossAxisAlignment: "stretch",
   children: [
     Padding(
@@ -27,6 +36,7 @@ widget Vpn = Column(
               leading: Avatar(person: peer.person, size: 36.0),
               title: Row(children: [PersonName(person: peer.person), Text(text: [" · ", peer.device])]),
               subtitle: Text(text: [peer.ip, "  ", peer.state]),
+              onTap: event "open" { device: peer.id },
               trailing: switch peer.own {
                 true: Text(text: "Yours"),
                 default: TextButton(onPressed: event "allow" { person: peer.person }, child: Text(text: peer.allow)),
@@ -39,6 +49,123 @@ widget Vpn = Column(
             ),
             default: SizedBoxShrink(),
           },
+        ],
+      ),
+    ),
+  ],
+);
+
+widget VpnDevice = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    Padding(
+      padding: [8.0, 8.0, 16.0, 0.0],
+      child: Row(
+        children: [
+          TextButton(onPressed: event "back" { }, child: Text(text: "‹ Friend network")),
+          Spacer(),
+          switch data.page.own {
+            true: SizedBoxShrink(),
+            default: TextButton(onPressed: event "allow" { person: data.page.person }, child: Text(text: data.page.allow)),
+          },
+        ],
+      ),
+    ),
+    Padding(
+      padding: [16.0, 4.0, 16.0, 8.0],
+      child: Row(
+        children: [
+          Avatar(person: data.page.person, size: 48.0),
+          SizedBox(width: 12.0),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: "start",
+              children: [
+                Row(children: [PersonName(person: data.page.person), Text(text: [" · ", data.page.name])]),
+                Text(text: data.page.state, style: { fontSize: 12.0 }),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+    Padding(
+      padding: [16.0, 0.0, 16.0, 8.0],
+      child: Row(
+        children: [
+          switch data.page.busy {
+            true: ElevatedButton(child: Text(text: "Checking…")),
+            default: ElevatedButton(onPressed: event "check" { device: data.page.id }, child: Text(text: "Run checks")),
+          },
+          SizedBox(width: 8.0),
+          OutlinedButton(onPressed: event "ping" { device: data.page.id }, child: Text(text: "Ping")),
+        ],
+      ),
+    ),
+    Padding(
+      padding: [16.0, 0.0, 16.0, 8.0],
+      child: Text(text: data.page.diagnosis, style: { fontWeight: "w500" }),
+    ),
+    Divider(),
+    Expanded(
+      child: ListView(
+        children: [
+          Padding(
+            padding: [16.0, 8.0, 16.0, 4.0],
+            child: Text(text: "Connection", style: { fontWeight: "w600" }),
+          ),
+          ...for row in data.page.link:
+            Padding(
+              padding: [16.0, 2.0, 16.0, 2.0],
+              child: Row(
+                crossAxisAlignment: "start",
+                children: [
+                  SizedBox(width: 120.0, child: Text(text: row.label, style: { color: 0xFF757575 })),
+                  Expanded(child: Text(text: row.value)),
+                ],
+              ),
+            ),
+          Padding(
+            padding: [16.0, 12.0, 16.0, 4.0],
+            child: Text(text: "Traffic this session", style: { fontWeight: "w600" }),
+          ),
+          ...for row in data.page.traffic:
+            Padding(
+              padding: [16.0, 2.0, 16.0, 2.0],
+              child: Row(
+                crossAxisAlignment: "start",
+                children: [
+                  SizedBox(width: 120.0, child: Text(text: row.label, style: { color: 0xFF757575 })),
+                  Expanded(child: Text(text: row.value)),
+                ],
+              ),
+            ),
+          Padding(
+            padding: [16.0, 12.0, 16.0, 4.0],
+            child: Text(text: "Checks", style: { fontWeight: "w600" }),
+          ),
+          ...for row in data.page.checks:
+            Padding(
+              padding: [16.0, 2.0, 16.0, 2.0],
+              child: Row(
+                crossAxisAlignment: "start",
+                children: [
+                  SizedBox(width: 120.0, child: Text(text: row.label, style: { color: 0xFF757575 })),
+                  Expanded(child: Text(text: row.value)),
+                ],
+              ),
+            ),
+          switch data.page.nochecks {
+            true: Padding(
+              padding: [16.0, 2.0, 16.0, 2.0],
+              child: Text(
+                text: "Ping asks its Friend network how it sees you. Run checks also sends small and full-size datagrams, then a system ping through its interface.",
+                style: { fontSize: 12.0 },
+              ),
+            ),
+            default: SizedBoxShrink(),
+          },
+          SizedBox(height: 16.0),
         ],
       ),
     ),

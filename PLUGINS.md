@@ -342,7 +342,7 @@ Phase 1 of [plugins/STORE-PLAN.md](plugins/STORE-PLAN.md):
 | `microblog` | Public posts in each person's own space, followed friend to friend; group posts; likes and replies | objects, identity |
 | `tictactoe` | Turn-based play as signed moves between two people; both reach the same board | objects, identity |
 | `pong` | Real-time play over datagrams; practice against the computer | live, Canvas, timers |
-| `vpn` (Friend network) | 10.77.0.0/16 between your devices and friends you allow; addresses from device IDs; senders' addresses checked | identity, live, tun |
+| `vpn` (Friend network) | 10.77.0.0/16 between your devices and friends you allow; addresses from device IDs; senders' addresses checked. Each device has a page: traffic, refusals, and checks (a ping that asks the other side how it sees you, small and full-size datagram probes, an ICMP ping through its interface) with a diagnosis | identity, live, tun |
 
 Tests: `core/test/plugins_test.dart` and `vpn_plugin_test.dart` run the real
 host; `app/test/plugin_view_test.dart` draws each plugin with RFW (set
