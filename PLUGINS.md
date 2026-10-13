@@ -1,8 +1,14 @@
 # Plugin system design
 
-Status: proposal. Answers open decision 11 in [CORE_IDEA.md](CORE_IDEA.md)
-("What may plugins access, execute and publish?") and the open questions in its
-*Plugins* section.
+Status: implemented on Windows and Android (October 2026): the registry, the
+WebAssembly host, the app's plugin pages, live messages, datagrams, virtual
+interfaces and five first-party plugins. Distribution over F2F, scripting and
+the media interface are still to do; see Status below. Answers open decision 11
+in [CORE_IDEA.md](CORE_IDEA.md) ("What may plugins access, execute and
+publish?").
+
+Where building it showed a better way than first proposed, the design below
+was changed, and each change is marked **Revised**.
 
 ## Goals
 
@@ -118,254 +124,208 @@ WASM only if there is a reason to.
 ## Architecture
 
 ```
-Flutter UI isolate ── renders RFW trees, host surfaces, slots
-       │  (ports, async only)
-Dart node (core/transport) ── PluginRegistry: kinds, validators, sections,
-       │                       request handlers, from both tiers
-       │  FFI + NativePort
-native (Rust) ── PluginHost: wasmtime engine, one instance per plugin,
-                 worker threads, fuel/epoch, memory limits, hot reload
-       └── native data planes: media, TUN, datagram pipes (phase 4)
+Flutter UI isolate ── PluginView: RFW library + data per surface; events back
+       │  (streams; never waits on a plugin)
+core Plugins ─────── manifests, grants, imports answered from the Node,
+       │             insertion-cursor feed, live/datagram routing
+       │  Registry ─ kinds + checks, request and datagram handlers, sections,
+       │             capabilities: built-in features and plugins alike
+       │  FFI (leaf calls) + NativeCallable.listener
+native PluginHost ── wasmtime (Cranelift; component model; no WASI), one thread
+       │             per plugin, CPU budget, memory cap, compile cache, timers,
+       │             storage, rate limits
+       └── tun ──── system interface ⇄ plugin thread, without Dart
 ```
 
-- **Off the UI thread by construction.** Plugin instances run on Rust worker
-  threads. Every host→plugin call is async; results return over a Dart
-  `NativePort`. A plugin can never block a frame.
-- **Incremental by construction.** Plugins get cursors (`changes since c`) and
-  subscriptions, never "scan all objects". Query APIs are indexed and paged,
-  matching AGENTS.md's no-rescan rule.
-- **Hot reload.** On a new component: call old instance's optional
-  `save-state() -> list<u8>`, instantiate new, call `restore(bytes)`, swap.
-  UI trees re-render. Dev mode watches a path (`ournet plugin dev ./target/…`)
-  on desktop, or pushes over the device link to a phone.
+- **Registry** (`core/lib/src/registry.dart`). A `Module` declares the kinds a
+  feature owns and how their content is checked. Built-in features declare
+  constant modules (`builtin_modules.dart`; public chats own theirs in
+  `public_chats.dart`), so every isolate that verifies objects has the same
+  table. A per-node `Registry` adds what runs: plugin kind checks, live request
+  handlers (typing, position, calls and plugins all answer through it),
+  datagram handlers, navigation sections and advertised capabilities.
+- **Native host** (`native/rust/src/plugin.rs`, WIT in `native/rust/wit/`).
+  Each plugin gets a thread and a job queue. Dart sends calls as a JSON line
+  optionally followed by raw bytes; results, imports and notices come back the
+  same way through a `NativeCallable.listener`, so they arrive on the event
+  loop and never block a frame. Every FFI function is a leaf call that only
+  queues.
+- **Imports block the plugin's thread, not Dart's** (**Revised**: no WIT
+  `future`s). An import Dart must answer (publish, query, contacts) posts a
+  question and waits on that plugin's answer queue; Dart answers when it can.
+  What needs no Dart is answered in Rust: clock, timers, storage, rate limits,
+  logging caps. Calls whose answer comes later are split instead:
+  `live.send` returns an ID and its reply arrives as `on-reply`.
+- **Limits.** A call may use 5 s of CPU, counted by an epoch callback that
+  excludes time spent waiting on the host; over it, the instance traps and is
+  dropped, and the app offers a restart. Linear memory is capped at 64 MiB,
+  storage at 16 MiB, `live.send` at 60/s and datagrams at 4000/s.
+- **Incremental by construction.** A plugin is sent every object of its kinds
+  once, in storage order, by `Store.objectsAfter` cursors kept per plugin and
+  kind. A cursor moves when the plugin has taken the page, so a page it
+  crashed on comes again. History is read with `objects.query`, through the
+  indexes, 500 at most. Nothing scans.
+- **Hot reload.** Installing over a running plugin swaps the instance:
+  `save-state`, new instance, `restore`, `init`. Storage, timers and cursors
+  stay with the host. On desktop, Settings › Plugins › Developer folder
+  watches `plugins/dist`, which `cargo run -p pack --release -- --watch`
+  rewrites as sources change.
+- **Compile cache.** Compiled code is saved per package hash and engine, so
+  every start after the first deserialises instead of compiling.
 
-## API surface (WIT sketch)
+## API (`ournet:plugin@0.1.0`)
 
-Package `ournet:plugin@0.1.0`. Names illustrative.
+The full world is `native/rust/wit/plugin.wit`; the Rust SDK is
+`plugins/sdk`. In brief:
 
-```wit
-interface types {
-  type person-id = string;     // Ed25519 root public key
-  type device-id = string;
-  type object-id = string;
-  record object {
-    id: object-id, author: person-id, device: device-id,
-    kind: string, space: string, audience: list<person-id>,
-    created: u64, payload: list<u8>,        // canonical JSON, decrypted
-    via: list<person-id>,                   // provenance chain
-  }
-  enum audience-kind { personal, people, group, public }
-}
+| Interface | Grant | Calls |
+|---|---|---|
+| `log`, `clock`, `storage`, `ui` | always | log; now, set/cancel timer; get/set/remove/keys; update a surface's data, notify |
+| `objects` | `objects` | publish (own kinds; personal, people, group or public audience), get, query, follow a public space |
+| `identity` | `identity` | me, this device, contacts (devices: name, online, runs this plugin), groups (space, name, members) |
+| `live` | `live` | send (reply via `on-reply`), datagram |
+| `tun` | `tun` | open (address, prefix, routes, MTU), write, close |
 
-// Signed, synced, durable data. The host signs, encrypts, validates envelope
-// rules and applies audience/relay policy. Plugins never see keys.
-interface objects {
-  publish: func(kind: string, space: string, audience: list<person-id>,
-                payload: list<u8>, expires: option<u64>) -> result<object-id, error>;
-  get: func(id: object-id) -> option<object>;
-  query: func(q: query, cursor: option<cursor>) -> page;   // indexed, paged
-  subscribe: func(filter: query) -> subscription;          // pushes `on-objects`
-  hide: func(id: object-id) -> result<_, error>;
-}
+Exports: `init`, `on-objects`, `on-open(surface, context)`, `on-event`,
+`on-request`, `on-reply`, `on-timer`, `on-datagram`, `on-packet`,
+`save-state`, `restore`. The SDK gives each a default that does nothing.
 
-// Ephemeral F2F messaging to admitted devices only.
-interface live {
-  request: func(device: device-id, payload: list<u8>) -> future<result<list<u8>, error>>;
-  open-stream: func(device: device-id) -> result<stream, error>;     // reliable, ordered
-  send-datagram: func(device: device-id, data: list<u8>) -> result<_, error>;
-}
-
-interface identity {          // read-only views, gated per field
-  me: func() -> person-id;
-  contacts: func() -> list<contact>;   // names, avatars, devices, online
-  groups: func() -> list<group>;
-}
-
-interface storage {           // private, per plugin, per device; not synced
-  get: func(key: string) -> option<list<u8>>;
-  set: func(key: string, value: list<u8>);
-}
-
-interface ui {
-  render: func(surface: surface-id, tree: list<u8>);        // RFW binary
-  notify: func(n: notification);
-  open: func(route: string);
-}
-
-world plugin {
-  import objects; import live; import identity; import storage; import ui;
-  // optional, granted per manifest: media, tun, canvas, http, files, clock, random
-  export init: func(ctx: context);
-  export validate: func(kind: string, payload: list<u8>) -> bool;
-  export on-objects: func(sub: subscription, objects: list<object>);
-  export on-request: func(device: device-id, payload: list<u8>) -> list<u8>;
-  export on-stream: func(device: device-id, s: stream);
-  export on-datagram: func(device: device-id, data: list<u8>);
-  export on-event: func(surface: surface-id, event: string, args: list<u8>);
-  export save-state: func() -> list<u8>;
-  export restore: func(state: list<u8>);
-}
-```
+- **Ungranted means refused** (**Revised**). A component imports only what
+  its code uses, so the host compares its imports with its grants when
+  loading and refuses one that reaches further. Dart checks the grant again
+  on every import it answers.
+- **`validate` became declarative** (**Revised**). Content checks run
+  synchronously on every store, read and receive, on whichever isolate does
+  it; calling a plugin there would block. The manifest declares each kind's
+  fields instead (type, `max`, `min`, `required`, `values`, list `items`), and
+  the host compiles them into a `ContentCheck`. Plugins still check what they
+  read.
+- **`ui.update` merges** (**Revised**): it sets top-level keys of a surface's
+  data, so a plugin can update a counter without resending a page.
 
 ### Data on the wire
 
-- **Kinds are namespaced** by plugin: `x.<plugin-id>.<kind>` (spaces likewise
-  when a plugin needs its own). Core kinds stay unprefixed. Builds without the
-  plugin already store and relay these (`_ => true`), so a group member without
-  the plugin is still a relay.
-- **Validation** keeps two layers: the host enforces envelope, signature,
-  audience, size caps and the existing generic payload checks; the plugin's
-  `validate` export decides content for its kinds. Objects failing either are
-  dropped as today. Add a hard per-kind payload cap for plugin kinds.
-- **Provenance**: add an optional signed field `app: "<plugin-id>@<version>"`
-  to objects published by a plugin. Additive; older builds ignore it. Readers
-  can see which plugin wrote something and with which version, which fits
-  the accountability goal.
-- **Live traffic**: one new request type, `plugin`, carrying
-  `{plugin, payload}`. Older peers answer `Unknown request`; peers without the
-  plugin refuse individually. Streams open a bi-stream whose first line is
-  `{type: "plugin_stream", plugin}` then raw bytes. Datagrams get a framing
-  prefix (varint channel → plugin) since none are used today. All on
-  `ournet/2`; no ALPN change. Only admitted, non-revoked devices, as now.
-- Peers advertise installed plugin IDs+API versions in `caps`, so a plugin
-  can tell which friends can play/call/route.
+As proposed, all on `ournet/2` and additive:
+
+- Kinds are `x.<plugin>.<name>`. Every build checks them against a 64 KiB
+  payload cap and the generic field rules, and stores and relays them; the
+  plugin's schema applies where it is installed (`Registry.accepts`).
+- Objects a plugin publishes carry an optional signed envelope field
+  `app: "<id>@<version>"` (`SignedObject.app`).
+- Live request type `plugin`: `{plugin, payload (base64)}`, reply
+  `{payload}`; poolable. Refused individually where the plugin is not running.
+- **Datagrams** (**Revised**): a device opens a `datagrams` request on a
+  connection of its own and holds it while datagrams flow (30 s idle), so the
+  served side keeps the connection open; both sides read QUIC datagrams on it.
+  Each is `[1][channel length][channel][data]` with channel `p:<plugin>`, and
+  goes to `Registry.handleDatagrams`. Older builds refuse the request, and the
+  datagram reports not sent.
+- Each running plugin granted `live` is advertised as capability
+  `p:<plugin>`, after the built-in ones and within the 32 a peer reads;
+  `identity.contacts` reports it per device.
 
 ### Permissions
 
-Manifest declares; the user grants at install; widening on update re-prompts.
-Grants are imports: an ungranted interface is simply not linked.
+The install prompt lists the grants in plain words; an update asking for more
+says which are new. `objects`, `identity`, `live` and `tun` are grantable;
+`log`, `clock`, `storage` and `ui` are always there. Not yet: publishing or
+reading core kinds (open question 1), `media`, `http`, `files`. A plugin never
+gets keys, raw store access, other plugins' data or synchronous calls into the
+UI.
 
-| Capability | Default | Notes |
+### UI
+
+A package's `ui.rfwtxt` is an RFW library; each section names the widget
+(`surface`) its page shows. `PluginView` renders it over the surface's data and
+sends events back with the widget's arguments plus what the widget adds
+(`value`, `target`, `x`/`y`, `key`/`down`). The libraries are `core.widgets`,
+`core.material` and **`ournet`**: `TextInput`, `Markup` (headings, lists,
+bold, italic, `[[links]]`), `Canvas` (rect, circle, line and text commands in
+a scaled space, with tap and drag), `Keys`, `Avatar`, `PersonName`, `TimeAgo`.
+
+Learned building it:
+
+- RFW's `ListView` builds children lazily during layout, where a child's first
+  data read cannot subscribe. `PluginView` replaces it with one that resolves
+  its children while building. Plugin lists are short; a long one should page.
+- RFW's parser rejects carriage returns, so package interfaces are read with
+  Unix line ends.
+- Numbers for sizes and canvas commands may be whole or not.
+- A section's page gets `on-open` with the scope: personal, public, all, or a
+  group's space and name. Plugins decide from it where their data lives.
+
+### Performance-critical paths
+
+- **Packets** never cross into Dart on the interface side: the `tun`
+  backend's reader thread queues them to the plugin's thread (dropping beyond
+  1024 waiting), and `tun.write` goes straight to the system. The hop to a
+  friend still passes through Dart's iroh, one datagram each, until phase 4's
+  single library. Android opens the interface through `FriendVpn` (a
+  VpnService, with the system's consent) and hands its descriptor to Rust;
+  Windows opens a Wintun adapter, which needs `wintun.dll` beside the app and
+  administrator rights; tests use a memory interface.
+- **Real-time** play is datagrams plus Rust timers: Pong's host steps at 30 Hz
+  and sends the whole state each tick, so a lost datagram costs one frame.
+- **Size**: wasmtime with Cranelift takes the native library to 13 MB on
+  Windows x64, 8.4 MB on Android arm64 and 5.4 MB on armv7 (32-bit hosts run
+  Pulley, the interpreter). Not yet trimmed.
+
+### Packaging
+
+A `.ournet-plugin` is a zip of `manifest.json` (**Revised**: JSON, like
+everything else OurNet signs, so the app needs no TOML parser), `plugin.wasm`
+(a component), `ui.rfwtxt` and `assets/`. `plugins/` is a Cargo workspace:
+
+- `sdk`: bindings and a friendlier surface over them
+  (`ournet_plugin::plugin!(Type)`).
+- `pack`: builds each plugin for `wasm32-unknown-unknown`, wraps it as a
+  component with `wit-component`, and zips it into `plugins/dist`.
+- `echo`, the test plugin, and the first-party plugins.
+
+Packages ship in `app/assets/plugins` and install from Settings › Plugins, as
+do files.
+
+## First-party plugins
+
+| Plugin | Shows | Uses |
 |---|---|---|
-| Own kinds: publish/query/subscribe | granted | Only `x.<self>.*` |
-| Core kinds read (e.g. `chat_msg` in a scope) | ask | Scoped: a group, a conversation, or "where I'm opened" |
-| Core kinds publish (post into a chat/forum) | ask, per scope | Rare; shows the `app` field |
-| `identity.contacts` / groups | ask | Names and online state; no keys ever |
-| `live` (request/stream/datagram) | ask | Rate- and bandwidth-limited per plugin, counted in `traffic` |
-| `storage` | granted | Quota |
-| `media` (camera/mic/WebRTC session) | ask, per use | OS prompt still applies |
-| `tun` (VPN) | ask, privileged | Android VpnService, wintun on Windows |
-| `http` (outside network) | ask, per host | Off by default: F2F first |
-| `canvas`, `notifications`, `files` (picker) | ask | |
+| `wiki` | Linked pages per scope (your own, a group's, a public commons), history, a notice when two people edit at once | objects, identity |
+| `microblog` | Public posts in each person's own space, followed friend to friend; group posts; likes and replies | objects, identity |
+| `tictactoe` | Turn-based play as signed moves between two people; both reach the same board | objects, identity |
+| `pong` | Real-time play over datagrams; practice against the computer | live, Canvas, timers |
+| `vpn` (Friend network) | 10.77.0.0/16 between your devices and friends you allow; addresses from device IDs; senders' addresses checked | identity, live, tun |
 
-A plugin never gets: keys, raw store access, other plugins' data, the ability
-to admit/revoke devices, or synchronous calls into the UI.
+Tests: `core/test/plugins_test.dart` and `vpn_plugin_test.dart` run the real
+host; `app/test/plugin_view_test.dart` draws each plugin with RFW (set
+`PLUGIN_SHOTS` for screenshots); `plugin_ui_test.dart` parses every interface.
 
-### UI integration
+## Status
 
-Plugins contribute to fixed **slots** rather than arbitrary screens, so the app
-stays coherent (CORE_IDEA §9) and scopes keep working:
+| Phase | State |
+|---|---|
+| 0. Registry | Done: kinds, requests, datagrams, sections, capabilities |
+| 1. WASM host, v0.1 API, app pages, manifest and grants, hot reload | Done. Polls and a public-chat port were not written; the wiki and microblog prove the objects API instead |
+| 2. Scripting, F2F distribution, per-plugin traffic and storage in Settings | Not started |
+| 3. Streams, datagrams, canvas | Datagrams and canvas done; nothing needs streams yet |
+| 4. Single library with iroh, `media`, `tun` and a VPN | `tun` and the VPN plugin done; iroh is still separate; `media` not started |
 
-- **Section**: an entry in navigation, declaring which scopes it allows
-  (extends `ScopedSection`'s table with plugin rows).
-- **Object renderer**: how `x.<id>.<kind>` appears in Activity, chat
-  timelines and search.
-- **Composer actions**: "Start a poll / game / call" in a conversation or group.
-- **Settings page** and **notification** handlers.
-
-Rendering:
-
-1. **RFW trees** (`package:rfw`, maintained by the Flutter team): the plugin
-   sends a widget tree plus data; events come back via `on-event`. Host
-   supplies an OurNet widget library (lists, avatars, `ThumbnailImage`,
-   composer, buttons) so plugins look native and inherit the performance
-   rules.
-2. **Canvas**: a draw-command list per frame, or an RGBA buffer shared into a
-   Flutter `Texture`, for games.
-3. **Host surfaces**: video renderers, map view, file picker; the plugin
-   lays them out and drives them, the host owns the pixels.
-4. Later, optionally, **webview panels** for plugins that want HTML; same
-   permission model, behind its own capability.
-
-### Performance-critical plugins
-
-The rule: **plugins control data planes; they do not carry bulk bytes through
-WASM unless they must.**
-
-- **Video calls**: host keeps WebRTC (`flutter_webrtc`, already shipped). The
-  `media` interface exposes sessions, tracks and devices; the plugin does
-  signalling (over `live`), policy and layout. The existing calls and group
-  calls can become a plugin this way. Codecs in WASM are not viable.
-- **VPN over F2F**: host provides `tun` and a native pipe TUN ↔ iroh
-  datagrams/streams; the plugin chooses peers, routes, ACLs, and may install
-  a per-packet filter (a WASM call per packet is fine to hundreds of Mbps;
-  measure). This needs the plugin host and iroh endpoint in **the same Rust
-  library**. Today iroh comes from `vendor/iroh_dart` (and a signed
-  precompiled DLL on Windows) while `native` is separate, so packets would
-  otherwise round-trip through Dart. Phase 4 builds one cdylib containing
-  iroh, the plugin host and the data planes. Multi-hop routing to friends of
-  friends is a separate protocol question (CORE_IDEA open decision 1).
-- **Games**: datagrams/streams + canvas cover real-time; turn-based games are
-  just objects + RFW.
-
-### Scripting as a plugin
-
-A `script-host` plugin embeds an interpreter compiled to WASM (QuickJS via
-`javy`/`rquickjs`, or Lua) and exposes the same WIT API to scripts. A script
-plugin is a manifest naming `script-host` as its runtime plus source files.
-It gets the same permissions, sandbox and hot reload, at interpreter speed.
-No second runtime in the core, and it can be replaced (Python via
-`componentize-py`, etc.) without touching the app.
-
-### Packaging, distribution, versioning
-
-- **Package**: zip with `manifest.toml` (id, name, version, `api = "0.1"`,
-  capabilities, slots, kinds), `plugin.wasm` (or scripts + runtime), RFW
-  libraries, assets.
-- **Signed by the author's OurNet identity.** Signature proves authorship,
-  not safety (CORE_IDEA §8); the sandbox and grants carry the safety story.
-- **Distributed over F2F**: a `plugin_release` object in a plugin's space,
-  with the package as a chunked attachment. Friends see who published it and
-  which friends run it, using existing provenance. Updates arrive like any
-  object; install/upgrade stays a user action, re-prompting on new
-  capabilities.
-- **API versioning**: WIT packages are semver'd. The host links every API
-  major it supports side by side (`ournet:plugin@0.x`, `@1.x`), so old plugins
-  keep working. Additive within a major. Same discipline as the protocol.
-- **Data versioning**: plugins own their kinds and follow AGENTS.md's
-  additive rule; a payload `v` field is recommended. Mixed versions across
-  friends are normal.
-- **Precompiled cache**: compile `.wasm` to native once per device
-  (`Module::serialize`), keyed by hash + engine version, so startup is a
-  mmap, not a recompile.
-
-## Migration path
-
-**Phase 0: registry, no runtime.** Introduce `PluginRegistry` in core: kinds +
-validators, section/slot descriptors, request handlers, object renderers.
-Turn the `validContent` switch and the `PeerNetwork` request switch into
-lookups. Move one feature onto it (public chats: `chat`, `chat_msg`,
-`chat_hide`, self-contained). No protocol change. This is where most of the
-"move features into plugins" work actually happens.
-
-**Phase 1: WASM host, v0.1 API.** wasmtime in `native`; `objects`, `storage`,
-`identity`, `ui` (RFW); `plugin` request type; `app` field; manifest +
-permission prompt; dev hot reload. Proving plugins: polls (objects only) and
-a re-implementation of public chat as a WASM plugin for parity and benchmarks
-against the Dart version (extend `PERFORMANCE.md`).
-
-**Phase 2: scripting + distribution.** `script-host` plugin; `plugin_release`
-objects and install/update UI; per-plugin traffic and storage in Settings.
-
-**Phase 3: real-time.** Streams, datagrams with framing, canvas surface.
-Proving plugin: a small real-time game.
-
-**Phase 4: native data planes.** Single Rust library with iroh + plugin host;
-`media` interface, then move calls/group calls onto it; `tun` + VPN plugin.
-
-Candidates to move, in order of ease: public chats, polls/votes, listings,
-location sharing, forums, calls. Staying core: identity, devices, keys,
-contacts, sync/relay policy, drive, notes, calendar (performance-tuned and
-foundational; revisit later).
+Not yet verified: the Windows Wintun path (needs `wintun.dll` and an elevated
+app), and anything on an Android device (the APK builds for arm64 and armv7).
+Next, in order of use: per-plugin traffic in Settings; `plugin_release` objects
+so friends can share plugins; a foreground service keeping the VPN up when
+Android backgrounds the app; measured budgets in `PERFORMANCE.md`; then the
+single iroh library.
 
 ## Open questions
 
 1. Can a plugin publish core kinds at all, or only reference them? (Proposed:
    only with a per-scope grant and the `app` field.)
 2. Should peers relay public plugin objects in spaces they follow without the
-   plugin? (Today: yes. Fine unless abuse shows otherwise; size caps help.)
+   plugin? (They do, under the size cap.)
 3. Background execution on Android: which plugins may run while the app is
-   backgrounded (VPN must; games must not)?
+   backgrounded (the VPN must; games must not)?
 4. iOS: interpreter speed acceptable for which plugin classes?
 5. Review/curation: is "friends who run it" enough, or do communities want
    allow-lists?
+6. Microblog likes count only from people this person follows, since a like
+   lives in the liker's space. Enough, or should likes travel with the post?

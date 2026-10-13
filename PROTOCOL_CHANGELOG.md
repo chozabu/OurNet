@@ -7,6 +7,23 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: plugins
+
+See PLUGINS.md. All additive; no change to `requiredCaps` or the ALPN.
+
+- Plugin kinds `x.<plugin>.<name>`: every build checks them only against a
+  64 KiB payload cap and the generic field rules, then stores and relays them
+  like any unknown kind. Older builds already did the same.
+- Optional signed envelope field `app` (`<plugin>@<version>`, at most 64
+  characters) on objects a plugin publishes. Older builds ignore it; this
+  build refuses an object whose `app` is not such a string.
+- Live request `plugin` (`{plugin, payload}`), refused by builds or devices
+  without that plugin running.
+- Live request `datagrams`, held open while QUIC datagrams framed
+  `[1][channel length][channel][data]` flow on its connection. Older builds
+  refuse it.
+- Capabilities `p:<plugin>` for running plugins that take live messages.
+
 ## Unreleased: public names, friend listings, forum and message links
 
 - Public forums and chats are called by name (`PublicNames`): a forum's space

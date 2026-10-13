@@ -11,6 +11,18 @@ byte-identical to the Dart implementations (`native/test`,
 `core/test/native_crypto_test.dart`), and let the Dart code decide anything
 the native code rejects.
 
+## Plugins
+
+Features declare their kinds in a `Module` (`core/lib/src/builtin_modules.dart`)
+and answer live requests through `Node.registry`; add to those rather than to
+a switch. Plugins (PLUGINS.md) are WebAssembly components run by the native
+host (`native/rust/src/plugin.rs`, API in `native/rust/wit/plugin.wit`),
+managed by `core/lib/src/plugins.dart` and drawn by
+`app/lib/ui/plugin_view.dart`. Their sources are in `plugins/`: after
+changing one, run `cargo run -p pack --release` there and copy the package
+from `plugins/dist` to `app/assets/plugins` (and `core/test/fixtures` for
+echo and vpn). Change the WIT world additively, like the protocol.
+
 ## Responsiveness
 
 - Treat responsiveness separately from operation completion time. Keep typing,
