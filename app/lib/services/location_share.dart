@@ -150,7 +150,7 @@ class LocationShare extends ChangeNotifier {
     this.state,
     bool? phone,
   }) : phone = phone ?? (!kIsWeb && Platform.isAndroid) {
-    network.position = _received;
+    network.handle('position', _onRequest, poolable: true);
     network.peerSeen = _seen;
     if (state != null) {
       _updates = network.updates.stream.listen((_) {
@@ -495,6 +495,11 @@ class LocationShare extends ChangeNotifier {
     _send(device, fix, force: true);
   }
 
+  Future<Json> _onRequest(String device, Json request) async {
+    _received(device, request['fix']);
+    return const {};
+  }
+
   void _received(String device, Object? raw) {
     final contact = node.contacts[device];
     if (contact == null) return;
@@ -521,7 +526,7 @@ class LocationShare extends ChangeNotifier {
     for (final timer in [..._later.values, ..._retry.values]) {
       timer.cancel();
     }
-    if (network.position == _received) network.position = null;
+    network.unhandle('position', _onRequest);
     if (network.peerSeen == _seen) network.peerSeen = null;
     super.dispose();
   }

@@ -142,10 +142,9 @@ void main() {
       await expectLater(outsider.calls.join(space), throwsA(isA<StateError>()));
       // And what they send is refused.
       await expectLater(
-        a.groupCall!(outsider.node.identity.device, {
-          'op': 'join',
-          'space': space,
-          'call': 'x',
+        a.node.registry.handler('groupcall')!(outsider.node.identity.device, {
+          'type': 'groupcall',
+          'payload': {'op': 'join', 'space': space, 'call': 'x'},
         }),
         throwsA(isA<StateError>()),
       );

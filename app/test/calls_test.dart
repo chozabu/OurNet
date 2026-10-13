@@ -160,7 +160,7 @@ void main() {
   });
 
   Future<void> offer(String device, {bool video = true}) async {
-    await network.signal!(device, {
+    await signal(network, device, {
       'type': 'offer',
       'session': 'session',
       'sdp': 'offer-sdp',
@@ -319,7 +319,7 @@ void main() {
   test(
     'friend cannot request auto-answer; revoked own device is rejected',
     () async {
-      await network.signal!(friend.device, {
+      await signal(network, friend.device, {
         'type': 'offer',
         'session': 'session',
         'sdp': 'offer',
@@ -400,7 +400,7 @@ void main() {
   test('first device to answer takes the call; others stop ringing', () async {
     await calls.callPerson(friend.person);
     final session = network.sent.first['session'];
-    await network.signal!(friendPhone.device, {
+    await signal(network, friendPhone.device, {
       'type': 'answer',
       'session': session,
       'sdp': 'answer-sdp',
@@ -408,14 +408,14 @@ void main() {
     expect(calls.peer, friendPhone.device);
     expect(sentTo('hangup'), [friend.device]);
     await expectLater(
-      network.signal!(friend.device, {
+      signal(network, friend.device, {
         'type': 'answer',
         'session': session,
         'sdp': 'answer-sdp',
       }),
       completion({'ignored': true}),
     );
-    await network.signal!(friend.device, {
+    await signal(network, friend.device, {
       'type': 'hangup',
       'session': session,
     });
@@ -427,7 +427,7 @@ void main() {
   test('declining on one device ends the call on the others', () async {
     await calls.callPerson(friend.person);
     final session = network.sent.first['session'];
-    await network.signal!(friend.device, {
+    await signal(network, friend.device, {
       'type': 'hangup',
       'session': session,
     });
@@ -500,7 +500,7 @@ void main() {
 
     test('an answered call records how long it lasted', () async {
       await calls.call(friend.device, video: true);
-      await network.signal!(friend.device, {
+      await signal(network, friend.device, {
         'type': 'answer',
         'session': network.sent.first['session'],
         'sdp': 'answer-sdp',
@@ -520,7 +520,7 @@ void main() {
 
     test('a call turned down is declined', () async {
       await calls.callPerson(friend.person);
-      await network.signal!(friendPhone.device, {
+      await signal(network, friendPhone.device, {
         'type': 'hangup',
         'session': network.sent.first['session'],
       });
@@ -541,7 +541,7 @@ void main() {
     () async {
       await calls.call(friend.device, video: true);
       final session = network.sent.first['session'];
-      await network.signal!(friend.device, {
+      await signal(network, friend.device, {
         'type': 'answer',
         'session': session,
         'sdp': 'answer-sdp',
@@ -553,7 +553,7 @@ void main() {
       expect(states.last, containsPair('muted', true));
       expect(states.last, containsPair('camera', false));
 
-      await network.signal!(friend.device, {
+      await signal(network, friend.device, {
         'type': 'state',
         'session': session,
         'muted': true,
@@ -562,7 +562,7 @@ void main() {
       expect(calls.remoteMuted, isTrue);
       expect(calls.remoteCameraOff, isTrue);
       // Another device cannot speak for the peer.
-      await network.signal!(friendPhone.device, {
+      await signal(network, friendPhone.device, {
         'type': 'state',
         'session': session,
         'muted': false,
@@ -648,3 +648,9 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 }
+
+/// Delivers a call message to [network] as a peer's `signal` request would.
+Future<Json> signal(Network network, String device, Json payload) => network
+    .node
+    .registry
+    .handler('signal')!(device, {'type': 'signal', 'payload': payload});

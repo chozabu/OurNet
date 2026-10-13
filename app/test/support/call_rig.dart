@@ -28,9 +28,9 @@ class Dev extends Network {
     }
     final payload = message['payload'] as Json;
     wire.log.add('$name>${target.name} ${payload['op']}');
-    final handler = target.groupCall;
+    final handler = target.node.registry.handler('groupcall');
     if (handler == null) throw StateError('Unknown request');
-    return await handler(node.identity.device, payload);
+    return await handler(node.identity.device, message);
   }
 }
 

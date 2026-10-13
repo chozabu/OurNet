@@ -1,4 +1,5 @@
 import 'model.dart';
+import 'registry.dart';
 import 'node.dart';
 
 /// What a person last said about who they are connected to.

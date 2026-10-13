@@ -45,16 +45,14 @@ void main() {
     peer.onIceCandidate = (candidate) {
       if (candidate.candidate == null) return;
       unawaited(
-        network
-            .signal!(other.device, {
-              'type': 'ice',
-              'session': session,
-              'candidate': candidate.toMap(),
-            })
-            .catchError((Object e) {
-              signalErrors.add(e);
-              return <String, dynamic>{};
-            }),
+        signal(network, other.device, {
+          'type': 'ice',
+          'session': session,
+          'candidate': candidate.toMap(),
+        }).catchError((Object e) {
+          signalErrors.add(e);
+          return <String, dynamic>{};
+        }),
       );
     };
     network.exchange = (message) async {
@@ -131,7 +129,7 @@ void main() {
       // runnable on Android. Rename the offered track IDs to emulate separate
       // processes: otherwise native lookup can return the original capture
       // instead of the decoded receiver track, giving a false-positive render.
-      await network.signal!(other.device, {
+      await signal(network, other.device, {
         'type': 'offer',
         'session': session,
         'sdp': receivedSdp,
@@ -202,3 +200,9 @@ void main() {
     }
   });
 }
+
+/// Delivers a call message to [network] as a peer's `signal` request would.
+Future<Json> signal(Network network, String device, Json payload) => network
+    .node
+    .registry
+    .handler('signal')!(device, {'type': 'signal', 'payload': payload});

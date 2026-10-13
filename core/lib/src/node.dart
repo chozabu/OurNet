@@ -11,6 +11,7 @@ import 'avatars.dart';
 import 'connections.dart';
 import 'listings.dart';
 import 'group_access.dart';
+import 'registry.dart';
 
 /// What a person chose about someone else, kept alike on all their devices.
 /// Blocking and disconnecting are independent: each choice settles one of
@@ -44,6 +45,10 @@ class Node {
 
   /// Group keys this device holds and whom each group's objects may reach.
   late final groups = GroupAccess(this);
+
+  /// What features and plugins contribute at run time: plugin kinds and their
+  /// checks, live request handlers, navigation sections.
+  final registry = Registry();
 
   /// Last known positions; set up when first asked for.
   Locations get locations =>
@@ -310,7 +315,9 @@ class Node {
     List<DeviceCertificate> extra = const [],
     GroupKey? seal,
   }) async {
-    if (!validContent(kind, content)) throw StateError('Invalid $kind content');
+    if (!registry.accepts(kind, content)) {
+      throw StateError('Invalid $kind content');
+    }
     if (revoked.contains(identity.device))
       throw StateError('This device has been revoked');
     final recipients = audience.toSet()..add(person);
@@ -393,7 +400,7 @@ class Node {
     if (!visible(object)) return null;
     if (object.isPublic) {
       final payload = object.data['payload'] as Json;
-      return validContent(object.kind, payload) ? payload : null;
+      return registry.accepts(object.kind, payload) ? payload : null;
     }
     final id = object.id;
     final cached = _contents.remove(id);
@@ -429,7 +436,7 @@ class Node {
                     : await decryptWith(encrypted, granted),
               )
               as Json;
-      payload = validContent(object.kind, plain) ? plain : null;
+      payload = registry.accepts(object.kind, plain) ? plain : null;
     } catch (_) {
       payload = null;
     }

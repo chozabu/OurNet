@@ -86,6 +86,7 @@ class PeerNetwork {
   final Set<String> _busy = {};
   final Set<iroh.Connection> _connections = {};
   final Set<Future<void>> _jobs = {};
+
   /// Sessions mostly wait on the network, and a device that is switched off
   /// holds its slot for the whole connection timeout: the devices most
   /// recently heard from go first, and the ones failing last.
@@ -277,17 +278,6 @@ class PeerNetwork {
   bool get running => _endpoint != null;
   String? error;
   int _activeInbound = 0;
-  Future<Json> Function(String, Json)? signal;
-
-  /// Called when a friend's device says its person is typing to this one.
-  /// Only ever sent live; nothing is stored. Builds without it refuse the
-  /// request, which the sender ignores.
-  void Function(String device)? typing;
-
-  /// Called when a friend's device (or one of this person's own) reports a
-  /// position: the device and the fix as sent. Live only, never stored as an
-  /// object or forwarded; builds without it refuse the request.
-  void Function(String device, Object? fix)? position;
 
   /// Called when a device has just been heard from after being quiet, so
   /// whatever should reach it on reconnecting (a last position) can be sent.
@@ -296,10 +286,34 @@ class PeerNetwork {
   /// More [peerSeen] listeners, for features that share the one hook.
   final List<void Function(String device)> peerSeenListeners = [];
 
-  /// Called with a friend's group-call message (presence, join, signalling):
-  /// the device and the payload, returning the reply. Live only, never stored;
-  /// builds without it refuse the request.
-  Future<Json> Function(String device, Json payload)? groupCall;
+  /// Answers live requests of [type] from admitted devices: typing, a
+  /// position, call signalling, a plugin's messages. Live only, never stored;
+  /// a build without a handler refuses the request, which senders expect.
+  /// See [Registry.handle].
+  void handle(
+    String type,
+    RequestHandler handler, {
+    String owner = 'app',
+    bool poolable = false,
+  }) {
+    if (_ownTypes.contains(type)) throw ArgumentError('$type is part of sync');
+    node.registry.handle(type, handler, owner: owner, poolable: poolable);
+  }
+
+  /// Stops answering [type], if [handler] is still the one answering it.
+  void unhandle(String type, RequestHandler handler) =>
+      node.registry.unhandle(type, handler);
+
+  /// Request types the network answers itself.
+  static const _ownTypes = {
+    'pull',
+    'push',
+    'delta',
+    'blob',
+    'blobs',
+    'friend',
+    'pair',
+  };
   static final _alpn = utf8.encode('ournet/2');
 
   void log(String message) {
@@ -553,15 +567,7 @@ class PeerNetwork {
 
   /// Requests that may share a connection. Each is safe to send again, which
   /// a pooled connection closed by its peer just as it was reused needs.
-  static const _poolable = {
-    'pull',
-    'push',
-    'delta',
-    'blob',
-    'blobs',
-    'position',
-    'typing',
-  };
+  static const _poolable = {'pull', 'push', 'delta', 'blob', 'blobs'};
   final Map<String, _Pooled> _pool = {};
   final Set<String> _dialing = {};
 
@@ -609,7 +615,8 @@ class PeerNetwork {
 
   /// Sends [request] and returns the reply's bytes.
   Future<Uint8List> _send(String device, Json request) async {
-    if (_poolable.contains(request['type'])) {
+    if (_poolable.contains(request['type']) ||
+        node.registry.poolable('${request['type']}')) {
       final pooled = await _pooledFor(device);
       if (pooled != null) {
         final reused = pooled.uses++ > 0;
@@ -1341,21 +1348,10 @@ class PeerNetwork {
               for (final b in blobs)
                 if (b != null) Uint8List.fromList(b),
             ];
-          case 'typing':
-            typing?.call(peer);
-            reply = {};
-          case 'position':
-            if (position == null) throw StateError('Unknown request');
-            position!(peer, j['fix']);
-            reply = {};
-          case 'groupcall':
-            if (groupCall == null) throw StateError('Unknown request');
-            reply = await groupCall!(peer, j['payload']);
-          case 'signal':
-            if (signal == null) throw StateError('Calling unavailable');
-            reply = await signal!(peer, j['payload']);
           default:
-            throw StateError('Unknown request');
+            final handler = node.registry.handler('${j['type']}');
+            if (handler == null) throw StateError('Unknown request');
+            reply = await handler(peer, j);
         }
       }
       var sent = 0;

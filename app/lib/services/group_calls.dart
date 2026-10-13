@@ -149,7 +149,7 @@ class GroupCalls extends ChangeNotifier {
                  network.node.store.setting('callAudioInput') as String?,
            )),
        _now = now ?? DateTime.now {
-    network.groupCall = _handle;
+    network.handle('groupcall', _onRequest);
     network.peerSeenListeners.add(_seen);
   }
 
@@ -901,6 +901,9 @@ class GroupCalls extends ChangeNotifier {
   bool _inCall(String space, Object? call) =>
       this.space == space && _call == call && call != null && active;
 
+  Future<Json> _onRequest(String device, Json request) =>
+      _handle(device, request['payload']);
+
   Future<Json> _handle(String device, Json m) async {
     final contact = node.contacts[device];
     if (contact == null || !node.allowedPeer(device)) {
@@ -1211,7 +1214,7 @@ class GroupCalls extends ChangeNotifier {
 
   Future<void> close() async {
     _closed = true;
-    if (network.groupCall == _handle) network.groupCall = null;
+    network.unhandle('groupcall', _onRequest);
     network.peerSeenListeners.remove(_seen);
     await _teardown(announce: true);
     dispose();

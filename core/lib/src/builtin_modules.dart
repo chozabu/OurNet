@@ -1,0 +1,495 @@
+/// The kinds compiled into this build and how their content is checked,
+/// grouped by the feature that owns them. Plugins declare theirs the same way
+/// at run time: see [Registry] and PLUGINS.md.
+library;
+
+import 'model.dart';
+import 'recurrence.dart' show Repeat;
+import 'registry.dart';
+
+/// Shared and personal notes: see `Notes`.
+const notesModule = Module(
+  'notes',
+  kinds: {'note_op': _noteOp, 'note_self': _noteSelf},
+);
+
+bool _noteOp(Json p) =>
+    p['epoch'] is String &&
+    _register(p) &&
+    _noteValue(p['field'] as String, p['value'], p) &&
+    (p['checkpoint'] == null || p['checkpoint'] is bool);
+
+bool _noteSelf(Json p) =>
+    p['target'] is String &&
+    (p['target'] as String).length <= 200 &&
+    _register(p) &&
+    _selfValue(p['field'] as String, p['value']);
+
+/// Public forums and private group forums: see `RoomForum`.
+const forumsModule = Module(
+  'forums',
+  kinds: {
+    'forum': _forum,
+    'forum_hide': _forumHide,
+    'post': _post,
+    'room_post': _roomPost,
+  },
+);
+
+bool _forum(Json p) =>
+    p['name'] is String &&
+    (p['name'] as String).trim().isNotEmpty &&
+    (p['name'] as String).length <= 100 &&
+    p['description'] is String &&
+    (p['description'] as String).length <= 4000;
+
+bool _forumHide(Json p) => p['object'] is String;
+
+bool _post(Json p) =>
+    p['text'] is String &&
+    (p['title'] == null ||
+        (p['title'] is String && (p['title'] as String).length <= 200));
+
+/// A discussion post in a private group's forum: like `post`, but private
+/// to the group, so it is its own kind and builds without it ignore it.
+bool _roomPost(Json p) =>
+    (p['text'] is String || p['chunks'] is List) &&
+    (p['title'] == null ||
+        (p['title'] is String && (p['title'] as String).length <= 200)) &&
+    (p['parent'] == null || p['parent'] is String) &&
+    (p['history'] == null || p['history'] is bool) &&
+    (p['originalAuthor'] == null || p['originalAuthor'] is String) &&
+    (p['copyOf'] == null || p['copyOf'] is String) &&
+    (p['sent'] == null || p['sent'] is int);
+
+/// Votes and delegations on posts: see `Voting`.
+const votingModule = Module(
+  'voting',
+  kinds: {'vote': _vote, 'delegate': _delegate},
+);
+
+bool _vote(Json p) => p['object'] is String && [-1, 0, 1].contains(p['value']);
+
+bool _delegate(Json p) => p['person'] is String;
+
+/// Friends' adverts for public forums and chats: see `Listings`.
+const listingsModule = Module('listings', kinds: {'listing': _listing});
+
+/// A friend's advert for a public forum or chat they follow: see
+/// `Listings`. `off` takes an earlier one down.
+bool _listing(Json p) =>
+    p['space'] is String &&
+    (p['space'] as String).isNotEmpty &&
+    (p['space'] as String).length <= 200 &&
+    (p['off'] == null || p['off'] is bool) &&
+    (p['off'] == true ||
+        ['forum', 'chat'].contains(p['type']) &&
+            p['name'] is String &&
+            (p['name'] as String).trim().isNotEmpty &&
+            (p['name'] as String).length <= 100 &&
+            (p['description'] == null ||
+                p['description'] is String &&
+                    (p['description'] as String).length <= 500));
+
+/// Private groups: membership, keys and their shared items. See `Everyday` and `GroupAccess`.
+const groupsModule = Module(
+  'groups',
+  kinds: {
+    'keys': _keys,
+    'room': _room,
+    'room_invite': _roomInvite,
+    'room_add': _roomAdd,
+    'room_leave': _roomLeave,
+    'room_read': _roomRead,
+    'inbox': _inbox,
+    'room_item': _inbox,
+  },
+);
+
+/// Content keys for objects written before one of this person's devices
+/// existed, re-wrapped for their devices: see [Node.shareKeys].
+bool _keys(Json p) =>
+    p['keys'] is List &&
+    (p['keys'] as List).length <= maxGrantKeys &&
+    (p['keys'] as List).every(
+      (k) =>
+          k is Map &&
+          k['object'] is String &&
+          (k['object'] as String).length <= 128 &&
+          k['key'] is String &&
+          (k['key'] as String).length <= 64,
+    );
+
+bool _room(Json p) =>
+    p['room'] is String &&
+    p['owner'] is String &&
+    p['name'] is String &&
+    (p['name'] as String).trim().isNotEmpty &&
+    (p['name'] as String).length <= 100 &&
+    p['members'] is List &&
+    (p['members'] as List).length <= 64 &&
+    (p['members'] as List).every((v) => v is String) &&
+    (p['generation'] == null ||
+        p['generation'] is int &&
+            p['generation'] >= 0 &&
+            p['generation'] < 9007199254740991) &&
+    (p['epoch'] == null || p['epoch'] is String) &&
+    (p['archived'] == null || p['archived'] is bool) &&
+    (p['certificates'] == null ||
+        p['certificates'] is List &&
+            (p['certificates'] as List).length <= 256 &&
+            (p['certificates'] as List).every((c) => c is Map)) &&
+    // Optional: who may add people (`members`, or absent for the owner
+    // alone), and the key everything addressed to the group also opens
+    // with. Builds without them ignore both.
+    (p['invite'] == null || p['invite'] == 'members') &&
+    (p['groupKey'] == null || validGroupKey(p['groupKey']));
+
+/// A member adding people to a group whose owner lets members do so: see
+/// `Everyday.invite`. Carries their devices and the group's key.
+bool _roomInvite(Json p) =>
+    p['epoch'] is String &&
+    _ids(p['people'], 16) &&
+    (p['people'] as List).isNotEmpty &&
+    p['certificates'] is List &&
+    (p['certificates'] as List).length <= 128 &&
+    (p['certificates'] as List).every((c) => c is Map) &&
+    validGroupKey(p['groupKey']);
+
+/// A member asking a group's owner to add people: see `Everyday.askToAdd`.
+bool _roomAdd(Json p) =>
+    p['epoch'] is String &&
+    _ids(p['people'], 16) &&
+    (p['people'] as List).isNotEmpty &&
+    p['certificates'] is List &&
+    (p['certificates'] as List).length <= 128 &&
+    (p['certificates'] as List).every((c) => c is Map);
+
+bool _roomLeave(Json p) => p['epoch'] is String;
+
+/// This person's other devices learn which of a group's messages are read.
+bool _roomRead(Json p) => p['space'] is String && p['upTo'] is int;
+
+bool _inbox(Json p) =>
+    p['entry'] is String &&
+    p['clock'] is int &&
+    p['clock'] >= 0 &&
+    p['clock'] < 9007199254740991 &&
+    ['note', 'file', 'check', 'pin'].contains(p['type']) &&
+    (!['note', 'check'].contains(p['type']) || p['text'] is String) &&
+    (p['deleted'] == null || p['deleted'] is bool) &&
+    // Optional, for group chat: the entry replied to, and when the
+    // entry was first written (an edit is a newer object).
+    (p['reply'] == null || p['reply'] is String) &&
+    (p['sent'] == null || p['sent'] is int) &&
+    (p['type'] != 'file' || p['chunks'] is List) &&
+    (p['type'] != 'check' || (p['done'] is bool && p['list'] is String)) &&
+    (p['type'] != 'pin' || (p['target'] is String && p['pinned'] is bool));
+
+/// Direct messages and what is said about them.
+const messagesModule = Module(
+  'messages',
+  kinds: {
+    'message': _message,
+    'file': _file,
+    'delivery': _delivery,
+    'read': _read,
+    'reaction': _reaction,
+    'message_edit': _messageEdit,
+    'message_delete': _messageDelete,
+  },
+);
+
+bool _message(Json p) =>
+    (p['text'] is String || p['chunks'] is List) &&
+    (p['reply'] == null || p['reply'] is String) &&
+    (p['forwarded'] == null || p['forwarded'] is bool);
+
+bool _file(Json p) => p['chunks'] is List;
+
+bool _delivery(Json p) => p['object'] is String;
+
+/// `objects` (optional) marks several messages read at once; builds that
+/// predate it mark only `object`, the newest of them.
+bool _read(Json p) =>
+    p['object'] is String &&
+    (p['objects'] == null ||
+        p['objects'] is List &&
+            (p['objects'] as List).length <= 200 &&
+            (p['objects'] as List).every((v) => v is String));
+
+/// An empty emoji withdraws the author's reaction.
+bool _reaction(Json p) =>
+    p['object'] is String &&
+    p['emoji'] is String &&
+    (p['emoji'] as String).length <= 32;
+
+bool _messageEdit(Json p) => p['object'] is String && p['text'] is String;
+
+bool _messageDelete(Json p) => p['object'] is String;
+
+/// Private drive entries: see `Drive`.
+const driveModule = Module('drive', kinds: {'drive': _drive});
+
+bool _drive(Json p) =>
+    p['entry'] is String &&
+    p['revision'] is String &&
+    p['parents'] is List &&
+    (p['parents'] as List).length <= 128 &&
+    (p['parents'] as List).every((v) => v is String) &&
+    p['name'] is String &&
+    (p['name'] as String).trim().isNotEmpty &&
+    (p['name'] as String).length <= 255 &&
+    !RegExp(r'[/\\\x00-\x1f]').hasMatch(p['name']) &&
+    (p['folder'] == null || p['folder'] is String) &&
+    p['deleted'] is bool &&
+    ['file', 'folder'].contains(p['type']) &&
+    (p['type'] == 'folder' || p['chunks'] is List);
+
+/// Who people are, their devices and who they know.
+const peopleModule = Module(
+  'people',
+  kinds: {
+    'profile': _profile,
+    'avatar': _avatar,
+    'device_name': _deviceName,
+    'contact_state': _contactState,
+    'friends': _friends,
+    'connect': _connect,
+  },
+);
+
+bool _profile(Json p) =>
+    p['name'] is String &&
+    (p['name'] as String).isNotEmpty &&
+    (p['name'] as String).length <= 100;
+
+/// A profile picture: see `Avatars`. One without an image removes it.
+bool _avatar(Json p) =>
+    p['image'] == null ||
+    (p['image'] is String &&
+        (p['image'] as String).length <= 64 * 1024 &&
+        ['image/jpeg', 'image/png'].contains(p['type']));
+
+/// A newer name for one of the author's devices: see `Node.renameDevice`.
+bool _deviceName(Json p) =>
+    p['device'] is String &&
+    (p['device'] as String).length <= 64 &&
+    p['label'] is String &&
+    (p['label'] as String).trim().isNotEmpty &&
+    (p['label'] as String).length <= 100;
+
+/// Blocking or disconnecting, shared among the author's own devices.
+bool _contactState(Json p) =>
+    p['person'] is String &&
+    (p['person'] as String).length <= 64 &&
+    ['friend', 'blocked', 'unblocked', 'forgotten'].contains(p['state']);
+
+/// Who the author is connected to, and their devices: see `Connections`.
+bool _friends(Json p) =>
+    _ids(p['friends'], 1000) &&
+    p['devices'] is List &&
+    (p['devices'] as List).length <= 32 &&
+    (p['devices'] as List).every((c) => c is Map);
+
+/// Asking someone to connect, or saying yes: see `Connections`.
+bool _connect(Json p) =>
+    ['request', 'accept'].contains(p['type']) &&
+    p['devices'] is List &&
+    (p['devices'] as List).length <= 32 &&
+    (p['devices'] as List).every((c) => c is Map) &&
+    (p['type'] != 'accept' || p['request'] is String) &&
+    (p['via'] == null || _ids(p['via'], 8));
+
+/// Calendar events and replies: see `Calendar`.
+const calendarModule = Module(
+  'calendar',
+  kinds: {'cal_event': _calEvent, 'cal_rsvp': _calRsvp},
+);
+
+bool _calRsvp(Json p) =>
+    p['event'] is String &&
+    (p['event'] as String).length <= 160 &&
+    ['yes', 'no', 'maybe', 'none'].contains(p['response']) &&
+    (p['instance'] == null ||
+        p['instance'] is String && (p['instance'] as String).length <= 40);
+
+/// Shared positions: see `Locations`.
+const locationsModule = Module('locations', kinds: {'location': _location});
+
+bool _location(Json p) =>
+    p['lat'] is String &&
+    p['lng'] is String &&
+    (double.tryParse(p['lat'])?.abs() ?? double.infinity) <= 90 &&
+    (double.tryParse(p['lng'])?.abs() ?? double.infinity) <= 180;
+
+/// A list of at most [limit] person IDs.
+bool _ids(Object? v, int limit) =>
+    v is List &&
+    v.length <= limit &&
+    v.every((p) => p is String && p.length <= 64);
+
+final _calDay = RegExp(r'^\d{4}-\d{2}-\d{2}$');
+
+/// A calendar event, or a new version of one: see `Calendar`. Anything an
+/// older build does not know is kept and passed on without being read.
+bool _calEvent(Json p) {
+  bool within(String key, int limit) =>
+      p[key] == null || p[key] is String && (p[key] as String).length <= limit;
+  if (p['event'] is! String ||
+      (p['event'] as String).isEmpty ||
+      (p['event'] as String).length > 160 ||
+      p['clock'] is! int ||
+      p['clock'] < 0 ||
+      p['clock'] >= 9007199254740991 ||
+      (p['deleted'] != null && p['deleted'] is! bool) ||
+      !within('title', 300) ||
+      !within('desc', 8000) ||
+      !within('loc', 300) ||
+      !within('url', 500) ||
+      !within('tz', 64) ||
+      !within('transcript', 65536) ||
+      (p['color'] != null &&
+          !(p['color'] is String && _colorName.hasMatch(p['color']))) ||
+      (p['busy'] != null && p['busy'] is! bool) ||
+      (p['sent'] != null && p['sent'] is! int) ||
+      (p['history'] != null && p['history'] is! bool) ||
+      (p['originalAuthor'] != null && p['originalAuthor'] is! String) ||
+      (p['series'] == null) != (p['instance'] == null) ||
+      !within('series', 160) ||
+      !within('instance', 40) ||
+      (p['repeat'] != null &&
+          !(p['repeat'] is Map && Repeat.valid(p['repeat']))) ||
+      (p['reminders'] != null &&
+          !(p['reminders'] is List &&
+              (p['reminders'] as List).length <= 5 &&
+              (p['reminders'] as List).every(
+                (m) => m is int && m >= 0 && m <= 40320 * 4,
+              ))) ||
+      (p['audio'] != null && p['audio'] is! Map) ||
+      (p['audio'] != null && p['chunks'] is! List)) {
+    return false;
+  }
+  if (p['deleted'] == true) return true;
+  if (p['allDay'] == true) {
+    final day = p['day'];
+    if (day is! String || !_calDay.hasMatch(day)) return false;
+    final parsed = DateTime.tryParse(day);
+    return parsed != null &&
+        p['days'] is int &&
+        p['days'] >= 1 &&
+        p['days'] <= 3660;
+  }
+  return p['start'] is int &&
+      p['end'] is int &&
+      p['start'] >= 0 &&
+      p['end'] >= p['start'] &&
+      p['end'] < 253402300799999 &&
+      p['end'] - p['start'] <= 3660 * 86400000;
+}
+
+/// Register fields: a name, or `name:<id>:name` for per-item values. Names
+/// this build does not know are accepted with a bounded value, so newer builds
+/// can add fields that older ones keep, replicate and simply do not display.
+final _fieldName = RegExp(
+  r'^[a-z][a-zA-Z0-9]{0,31}(:[a-zA-Z0-9_-]{1,80}:[a-z][a-zA-Z0-9]{0,31})?$',
+);
+// Order keys never end in '0', so a later key can always be placed before
+// one: see `orderBetween`. Keys that do are rejected rather than stored.
+final _orderKey = RegExp(r'^[0-9A-Za-z]{0,63}[1-9A-Za-z]$');
+final _colorName = RegExp(r'^[a-z]{1,16}$');
+
+bool _register(Json p) =>
+    p['field'] is String &&
+    _fieldName.hasMatch(p['field']) &&
+    p['clock'] is int &&
+    p['clock'] >= 0 &&
+    p['clock'] < 9007199254740991 &&
+    p['parents'] is List &&
+    (p['parents'] as List).length <= 128 &&
+    (p['parents'] as List).every((v) => v is String && v.length <= 128) &&
+    (p['request'] == null ||
+        p['request'] is String && (p['request'] as String).length <= 100);
+
+bool _text(Object? v, [int limit = 16384]) => v is String && v.length <= limit;
+bool _bounded(Object? v) {
+  if (v is String) return v.length <= 16384;
+  if (v is bool || v is int) return true;
+  if (v is! Map && v is! List) return false;
+  try {
+    return bytes(v).length <= 8192;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Known shared-note registers keep strict types; see `Notes` for meaning.
+bool _noteValue(String field, Object? v, Json p) {
+  final parts = field.split(':');
+  final name = parts.last;
+  if (parts.length == 1) {
+    return switch (field) {
+      'title' || 'text' => _text(v),
+      'deleted' => v is bool,
+      'color' ||
+      'background' ||
+      'format' => v is String && _colorName.hasMatch(v),
+      'created' || 'edited' => v is int && v >= 0 && v < 253402300799999,
+      _ => _bounded(v),
+    };
+  }
+  if (parts.first == 'check') {
+    return switch (name) {
+      'text' => _text(v),
+      'done' || 'deleted' => v is bool,
+      'order' => v is String && _orderKey.hasMatch(v),
+      'indent' => v is int && v >= 0 && v <= 1,
+      _ => _bounded(v),
+    };
+  }
+  if (parts.first == 'file') {
+    return switch (name) {
+      // The attachment itself: encrypted chunks travel in this same payload.
+      'meta' =>
+        v is Map &&
+            _bounded(v) &&
+            ['audio', 'image', 'drawing'].contains(v['kind']) &&
+            p['chunks'] is List,
+      'strokes' => v is Map && _bounded(v) && p['chunks'] is List,
+      'transcript' => _text(v),
+      'deleted' => v is bool,
+      'order' => v is String && _orderKey.hasMatch(v),
+      _ => _bounded(v),
+    };
+  }
+  return _bounded(v);
+}
+
+/// Personal note state, readable only by this person's own devices.
+bool _selfValue(String field, Object? v) => switch (field) {
+  'pin' || 'archive' || 'labelDeleted' || 'noAdvert' => v is bool,
+  // The removal (operation ID) this person emptied from Removed.
+  'purged' => v is String && v.length <= 128,
+  // The device that shares this person's position with friends ('' for none).
+  'locationPrimary' => v is String && v.length <= 128,
+  'order' || 'rank' => v is String && _orderKey.hasMatch(v),
+  'labelName' => v is String && v.trim().isNotEmpty && v.length <= 50,
+  'labels' =>
+    v is List &&
+        v.length <= 64 &&
+        v.every((l) => l is String && l.length <= 64),
+  'reminder' =>
+    v is Map &&
+        _bounded(v) &&
+        (v.isEmpty ||
+            (v['at'] is int &&
+                v['at'] >= 0 &&
+                [
+                  'none',
+                  'daily',
+                  'weekly',
+                  'monthly',
+                  'yearly',
+                ].contains(v['repeat'] ?? 'none'))),
+  _ => _bounded(v),
+};

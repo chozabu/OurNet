@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
 
 /// "Typing…" between friends: a live request to devices seen recently, never
@@ -9,7 +10,7 @@ import 'package:ournet_transport/ournet_transport.dart';
 class Typing extends ChangeNotifier {
   final PeerNetwork network;
   Typing(this.network) {
-    network.typing = _received;
+    network.handle('typing', _onRequest, poolable: true);
   }
 
   static const _repeat = Duration(seconds: 4);
@@ -31,6 +32,11 @@ class Typing extends ChangeNotifier {
   bool isTyping(String person) {
     final until = _until[person];
     return enabled && until != null && until.isAfter(DateTime.now());
+  }
+
+  Future<Json> _onRequest(String device, Json request) async {
+    _received(device);
+    return const {};
   }
 
   void _received(String device) {
@@ -97,7 +103,7 @@ class Typing extends ChangeNotifier {
   @override
   void dispose() {
     _expiry?.cancel();
-    if (network.typing == _received) network.typing = null;
+    network.unhandle('typing', _onRequest);
     super.dispose();
   }
 }

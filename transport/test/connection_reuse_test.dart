@@ -35,7 +35,7 @@ void main() {
           expect(b.store.get(o.id), isNotNull);
         }
         expect(na.dialed, 1);
-      // Closed shortly after the last request; the next session redials.
+        // Closed shortly after the last request; the next session redials.
         await Future<void>.delayed(
           PeerNetwork.pooledIdle + const Duration(seconds: 1),
         );
@@ -106,10 +106,10 @@ void main() {
       ];
       final networks = [for (final c in clients) PeerNetwork(c)];
       final gate = Completer<void>();
-      ns.signal = (_, _) async {
+      ns.handle('signal', (_, _) async {
         await gate.future;
         return {};
-      };
+      });
       try {
         await ns.start(local: true, automatic: false);
         for (final n in networks) {

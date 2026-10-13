@@ -2,6 +2,7 @@ import 'model.dart';
 import 'node.dart';
 import 'note_state.dart';
 import 'public_names.dart';
+import 'registry.dart';
 
 /// One message in a public chat, as a list shows it.
 typedef ChatMessage = ({
@@ -34,6 +35,34 @@ class PublicChats {
   static const hideKind = 'chat_hide';
   static const prefix = 'chat:';
 
+  /// The kinds public chats own, and how their content is checked.
+  static const module = Module(
+    'public_chats',
+    kinds: {
+      recordKind: _validChat,
+      messageKind: _validChatMsg,
+      hideKind: _validChatHide,
+    },
+  );
+
+  // A public chat's name, and one message in it: see `PublicChats`.
+  static bool _validChat(Json p) =>
+      p['name'] is String &&
+      (p['name'] as String).trim().isNotEmpty &&
+      (p['name'] as String).length <= 100 &&
+      (p['description'] == null ||
+          p['description'] is String &&
+              (p['description'] as String).length <= 4000);
+
+  static bool _validChatMsg(Json p) =>
+      p['text'] is String &&
+      (p['reply'] == null || p['reply'] is String) &&
+      (p['sent'] == null || p['sent'] is int) &&
+      (p['name'] == null ||
+          p['name'] is String && (p['name'] as String).length <= 100);
+
+  static bool _validChatHide(Json p) => p['object'] is String;
+
   final Node node;
   final NoteState state;
   PublicChats(this.node, this.state);
@@ -48,7 +77,9 @@ class PublicChats {
   static String? slugOf(String space) {
     if (!space.startsWith(prefix)) return null;
     final name = space.substring(prefix.length);
-    return name.isNotEmpty && !name.contains(':') && PublicNames.slug(name) == name
+    return name.isNotEmpty &&
+            !name.contains(':') &&
+            PublicNames.slug(name) == name
         ? name
         : null;
   }
@@ -143,7 +174,8 @@ class PublicChats {
   /// now on.
   Future<String> join(String address) async {
     final text = address.trim();
-    final space = parseLink(text)?.space ??
+    final space =
+        parseLink(text)?.space ??
         (isChat(text) ? text : PublicNames.chatSpace(text) ?? text);
     if (!isChat(space)) {
       throw ArgumentError('That is not a public chat address');

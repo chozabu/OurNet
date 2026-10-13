@@ -60,7 +60,7 @@ const _refusals = {
 class Calls extends ChangeNotifier {
   final Network network;
   Calls(this.network) {
-    network.signal = _signal;
+    network.handle('signal', _onSignal);
   }
   RTCPeerConnection? _pc;
   MediaStream? _media;
@@ -640,6 +640,9 @@ class Calls extends ChangeNotifier {
     );
   }
 
+  Future<Json> _onSignal(String device, Json request) =>
+      _signal(device, request['payload']);
+
   Future<Json> _signal(String device, Json message) async {
     if (!network.node.allowedPeer(device)) {
       throw StateError('Device not admitted');
@@ -969,7 +972,7 @@ class Calls extends ChangeNotifier {
   }
 
   Future<void> close() async {
-    network.signal = null;
+    network.unhandle('signal', _onSignal);
     await hangup(notifyPeer: false);
     await _initialising;
     if (_initialised) {

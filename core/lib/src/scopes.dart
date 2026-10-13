@@ -13,11 +13,23 @@ enum ScopeKind {
   public,
 }
 
+/// A place in navigation that holds content, and the scopes it may hold:
+/// one of [ScopedSection], or a plugin's (`PluginSection`).
+abstract interface class Section {
+  /// Stable: saved as the last place visited.
+  String get id;
+  Set<ScopeKind> get scopes;
+
+  /// Whether this section has anything in [scope]; null is All, which every
+  /// section has.
+  bool allows(ScopeKind? scope);
+}
+
 /// The sections that hold content, and the scopes each may hold. The app
 /// reads this for navigation and empty states; code that writes or checks
 /// content reads it too, so allowing a scope is a change here, not across
 /// screens.
-enum ScopedSection {
+enum ScopedSection implements Section {
   notes({ScopeKind.personal, ScopeKind.group}),
   calendar({ScopeKind.personal, ScopeKind.group}),
   chat({ScopeKind.personal, ScopeKind.group, ScopeKind.public}),
@@ -28,10 +40,13 @@ enum ScopedSection {
   /// What happened lately, across the other sections (ACTIVITY.md).
   activity({ScopeKind.personal, ScopeKind.group, ScopeKind.public});
 
+  @override
   final Set<ScopeKind> scopes;
   const ScopedSection(this.scopes);
 
-  /// Whether this section has anything in [scope]; null is All, which every
-  /// section has.
+  @override
+  String get id => name;
+
+  @override
   bool allows(ScopeKind? scope) => scope == null || scopes.contains(scope);
 }
