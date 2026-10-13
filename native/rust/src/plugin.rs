@@ -564,7 +564,12 @@ impl tun::Host for Host {
         let handle = self.handle;
         let memory = Box::new(move |packet: &[u8]| post(handle, &json!({"type": "tun.write"}), Some(packet)));
         let config = interface::Config { address: ip, prefix, routes: &routes, mtu };
-        self.tun = Some(interface::Tun::open(kind, &config, deliver, memory)?);
+        // Waiting on the system (Windows' helper configures the adapter) is
+        // not the plugin's time, like waiting on Dart.
+        let began = Instant::now();
+        let opened = interface::Tun::open(kind, &config, deliver, memory);
+        self.waited += began.elapsed();
+        self.tun = Some(opened?);
         Ok(())
     }
     fn write(&mut self, packet: Vec<u8>) {
