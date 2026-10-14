@@ -1,4 +1,4 @@
-const appVersion = '0.2.35';
+const appVersion = '0.2.36';
 const buildId = String.fromEnvironment(
   'OURNET_BUILD',
   defaultValue: 'development',
