@@ -567,146 +567,56 @@ extension _Scopes on _OurNetAppState {
     ),
   );
 
-  /// A content destination under its scope header. Other places show alone.
-  Widget scopedPage(BuildContext context) {
-    final body = page(context);
-    if (tab.section == null) return body;
-    // The notes screen brings its own search and capture bar, which need the
-    // room once the keyboard is up.
-    final typing = MediaQuery.viewInsetsOf(context).bottom > 0;
-    if (typing && tab == Destination.notes) return body;
-    // A direct conversation or a public discussion opened over its list (on
-    // a phone) has its own header and back arrow; a group keeps its header.
-    final drilledIn =
-        activeRoom == null &&
-        ((tab == Destination.messages && showConversation) ||
-            (tab == Destination.forums && showForum));
-    Widget header = scopeHeader(context);
-    if (tab == Destination.maps) {
-      header = Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-        child: header,
-      );
-    }
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        // Matches where [browsePane] stacks the detail over the list.
-        if (drilledIn && constraints.maxWidth < 760) return body;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            header,
-            const SizedBox(height: 8),
-            Expanded(child: body),
-          ],
-        );
-      },
-    );
-  }
+  /// Whether the place open filters by scope: a content destination or a
+  /// plugin's section. Its app bar shows the scope picker ([scopeTitle]).
+  bool get scopedTab =>
+      tab.section != null ||
+      (tab == Destination.plugin && pluginSection != null);
 
-  /// Always on screen above the content, so a filter is never forgotten:
-  /// which scope this is, and tapping it picks another. A group's adds who
-  /// is in it, its calls and requests, and buttons for its settings.
-  Widget scopeHeader(BuildContext context) => _roomsBuilder((context, rooms) {
-    final room = activeRoom;
-    final colors = Theme.of(context).colorScheme;
-    if (room == null) {
-      final label = scopeLabel(viewScope);
-      return Material(
-        color: colors.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(16),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          key: const ValueKey('scope-header'),
-          onTap: () => unawaited(pickScope(context)),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 9, 8, 9),
-            child: Row(
-              children: [
-                Icon(label.icon, size: 22),
-                const SizedBox(width: 10),
-                Text(
-                  label.title,
-                  style: const TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                scopeArrow(),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    label.detail,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: colors.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-    return groupBar(
-      context,
-      room,
-      onTitle: () => unawaited(pickScope(context)),
-    );
-  });
-
-  /// A group's bar: its name and who is in it, its calls and requests, and
-  /// buttons for its settings. Tapping the name runs [onTitle] (the scope
-  /// picker, in the scope header); [back] adds a back arrow, [extra] a last
-  /// button.
-  Widget groupBar(
-    BuildContext context,
-    EverydayItem room, {
-    VoidCallback? onTitle,
-    VoidCallback? back,
-    Widget? extra,
-  }) {
-    final colors = Theme.of(context).colorScheme;
-    final members = (room.data['members'] as List).cast<String>();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Material(
-          color: inboxDragging
+  /// The app bar's title on a scoped place, so a filter is never forgotten:
+  /// the place's name, small, over the scope; tapping it picks another.
+  /// Wide screens add what the scope is, or a group's members.
+  Widget scopeTitle(BuildContext context, String place, {required bool wide}) =>
+      _roomsBuilder((context, rooms) {
+        final room = activeRoom;
+        final label = scopeLabel(scope);
+        final colors = Theme.of(context).colorScheme;
+        final small = TextStyle(fontSize: 12, color: colors.onSurfaceVariant);
+        return Material(
+          color: room == null
+              ? colors.surfaceContainerHigh
+              : inboxDragging
               ? colors.tertiaryContainer
               : colors.primaryContainer,
           borderRadius: BorderRadius.circular(16),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
-            key: onTitle == null ? null : const ValueKey('scope-header'),
-            onTap: onTitle,
+            key: const ValueKey('scope-header'),
+            onTap: () => unawaited(pickScope(context)),
             child: Padding(
-              padding: EdgeInsets.fromLTRB(back == null ? 12 : 0, 4, 4, 4),
+              padding: const EdgeInsets.fromLTRB(10, 3, 8, 3),
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (back != null)
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      tooltip: 'Back to list',
-                      onPressed: back,
-                      icon: const Icon(Icons.arrow_back),
-                    )
-                  else ...[
-                    const Icon(Icons.people_outline, size: 22),
-                    const SizedBox(width: 10),
-                  ],
-                  Expanded(
+                  Icon(label.icon, size: 22),
+                  const SizedBox(width: 10),
+                  Flexible(
                     child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        Text(
+                          place,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: small,
+                        ),
                         Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             Flexible(
                               child: Text(
-                                room.data['name'],
+                                label.title,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
@@ -715,80 +625,204 @@ extension _Scopes on _OurNetAppState {
                                 ),
                               ),
                             ),
-                            if (onTitle != null) scopeArrow(),
+                            scopeArrow(),
                           ],
                         ),
-                        if (inboxDragging)
-                          const Text(
-                            'Drop to save here',
-                            style: TextStyle(fontSize: 12),
-                          )
-                        else
-                          SyncStatus(
-                            network: network,
-                            people: members,
-                            prefix: '${members.length} members · ',
-                            offline: '${members.length} members · offline',
-                            maxLines: 1,
-                            style: const TextStyle(fontSize: 12),
-                          ),
                       ],
                     ),
                   ),
-                  if (tab == Destination.messages &&
-                      groupCalls.infoFor(room.object.space) == null) ...[
-                    // A call is the group's to start, from its chat; once
-                    // one is going the banner below offers Join instead.
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      tooltip: 'Start a video call',
-                      onPressed: groupCalls.active
-                          ? null
-                          : () => joinGroupCall(
-                              context,
-                              room.object.space,
-                              video: true,
-                            ),
-                      icon: const Icon(Icons.videocam_outlined),
-                    ),
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      tooltip: 'Start a voice call',
-                      onPressed: groupCalls.active
-                          ? null
-                          : () => joinGroupCall(context, room.object.space),
-                      icon: const Icon(Icons.call_outlined),
+                  if (wide) ...[
+                    const SizedBox(width: 12),
+                    Flexible(
+                      child: room == null
+                          ? Text(
+                              label.detail,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: small,
+                            )
+                          : groupStatus(room, small),
                     ),
                   ],
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    tooltip: chatMuted(node, room.object.space)
-                        ? 'Unmute notifications'
-                        : 'Mute notifications',
-                    onPressed: () => toggleGroupMute(room.object.space),
-                    icon: Icon(
-                      chatMuted(node, room.object.space)
-                          ? Icons.volume_off_outlined
-                          : Icons.volume_up_outlined,
-                    ),
-                  ),
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    tooltip: 'Group members',
-                    onPressed: busy
-                        ? null
-                        : () => act(() => manageGroup(context, room)),
-                    icon: const Icon(Icons.manage_accounts_outlined),
-                  ),
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    tooltip: 'Group info',
-                    onPressed: () => unawaited(groupInfo(context, room)),
-                    icon: const Icon(Icons.info_outline),
-                  ),
-                  ?extra,
                 ],
               ),
+            ),
+          ),
+        );
+      });
+
+  /// A scoped place under what its group adds: on a phone a strip with the
+  /// group's members and buttons (the app bar holds its name, and on a wide
+  /// screen its buttons too), then its call and add requests.
+  Widget scopedPage(BuildContext context, {required bool wide}) {
+    final body = page(context);
+    final room = activeRoom;
+    if (!scopedTab || room == null) return body;
+    // The notes screen brings its own search and capture bar, which need the
+    // room once the keyboard is up.
+    final typing = MediaQuery.viewInsetsOf(context).bottom > 0;
+    if (typing && tab == Destination.notes) return body;
+    Widget top = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (!wide) groupStrip(context, room),
+        groupCallBanner(context, room.object.space),
+        groupAddRequestsBanner(context, room),
+      ],
+    );
+    if (tab == Destination.maps) {
+      top = Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        child: top,
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        top,
+        if (!wide) const SizedBox(height: 8),
+        Expanded(child: body),
+      ],
+    );
+  }
+
+  /// A phone's strip under the app bar while a group is the scope: who is
+  /// in it, and its buttons.
+  Widget groupStrip(BuildContext context, EverydayItem room) {
+    final colors = Theme.of(context).colorScheme;
+    return Material(
+      color: inboxDragging ? colors.tertiaryContainer : colors.primaryContainer,
+      borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 4, 0),
+        child: Row(
+          children: [
+            Expanded(child: groupStatus(room, const TextStyle(fontSize: 12))),
+            ...groupButtons(context, room),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Who is in [room] and who is online; while something is dragged over the
+  /// inbox, where it goes.
+  Widget groupStatus(EverydayItem room, TextStyle style) {
+    if (inboxDragging) return Text('Drop to save here', style: style);
+    final members = (room.data['members'] as List).cast<String>();
+    return SyncStatus(
+      network: network,
+      people: members,
+      prefix: '${members.length} members · ',
+      offline: '${members.length} members · offline',
+      maxLines: 1,
+      style: style,
+    );
+  }
+
+  /// [room]'s buttons: calls (from its chat, until one is going), muting,
+  /// members and info.
+  List<Widget> groupButtons(BuildContext context, EverydayItem room) => [
+    if (tab == Destination.messages &&
+        groupCalls.infoFor(room.object.space) == null) ...[
+      // A call is the group's to start, from its chat; once one is going the
+      // banner below offers Join instead.
+      IconButton(
+        visualDensity: VisualDensity.compact,
+        tooltip: 'Start a video call',
+        onPressed: groupCalls.active
+            ? null
+            : () => joinGroupCall(context, room.object.space, video: true),
+        icon: const Icon(Icons.videocam_outlined),
+      ),
+      IconButton(
+        visualDensity: VisualDensity.compact,
+        tooltip: 'Start a voice call',
+        onPressed: groupCalls.active
+            ? null
+            : () => joinGroupCall(context, room.object.space),
+        icon: const Icon(Icons.call_outlined),
+      ),
+    ],
+    IconButton(
+      visualDensity: VisualDensity.compact,
+      tooltip: chatMuted(node, room.object.space)
+          ? 'Unmute notifications'
+          : 'Mute notifications',
+      onPressed: () => toggleGroupMute(room.object.space),
+      icon: Icon(
+        chatMuted(node, room.object.space)
+            ? Icons.volume_off_outlined
+            : Icons.volume_up_outlined,
+      ),
+    ),
+    IconButton(
+      visualDensity: VisualDensity.compact,
+      tooltip: 'Group members',
+      onPressed: busy ? null : () => act(() => manageGroup(context, room)),
+      icon: const Icon(Icons.manage_accounts_outlined),
+    ),
+    IconButton(
+      visualDensity: VisualDensity.compact,
+      tooltip: 'Group info',
+      onPressed: () => unawaited(groupInfo(context, room)),
+      icon: const Icon(Icons.info_outline),
+    ),
+  ];
+
+  /// A group opened beside a list ([groupListDetail]): its name and who is
+  /// in it, its buttons, then its call and requests. [back] adds a back
+  /// arrow, [extra] a last button.
+  Widget groupBar(
+    BuildContext context,
+    EverydayItem room, {
+    VoidCallback? back,
+    Widget? extra,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Material(
+          color: inboxDragging
+              ? colors.tertiaryContainer
+              : colors.primaryContainer,
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(back == null ? 12 : 0, 4, 4, 4),
+            child: Row(
+              children: [
+                if (back != null)
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Back to list',
+                    onPressed: back,
+                    icon: const Icon(Icons.arrow_back),
+                  )
+                else ...[
+                  const Icon(Icons.people_outline, size: 22),
+                  const SizedBox(width: 10),
+                ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        room.data['name'],
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      groupStatus(room, const TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                ),
+                ...groupButtons(context, room),
+                ?extra,
+              ],
             ),
           ),
         ),

@@ -1541,6 +1541,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
             ],
           );
           final back = backDestination();
+          final title = tab == Destination.plugin
+              ? pluginSection?.title ?? tab.title
+              : tab.title;
+          final place = activeProfile == 'main'
+              ? title
+              : '$title · $activeProfile';
           final syncLabel = network.running ? 'Sync now' : 'Connect';
           final syncIcon = Icon(
             network.running ? Icons.sync : Icons.power_settings_new,
@@ -1560,12 +1566,15 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                     : BackButton(
                         onPressed: () => update(() => tab = tab.parent!),
                       ),
-                title: Text(
-                  activeProfile == 'main'
-                      ? tab.title
-                      : '${tab.title} · $activeProfile',
-                ),
+                title: scopedTab
+                    ? scopeTitle(context, place, wide: wide)
+                    : Text(place),
                 actions: [
+                  // A group's buttons; a phone has them under the bar.
+                  if (activeRoom case final room? when wide && scopedTab) ...[
+                    ...groupButtons(context, room),
+                    const SizedBox(width: 8),
+                  ],
                   if (busy)
                     const Padding(
                       padding: EdgeInsets.all(16),
@@ -1675,7 +1684,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                             padding: tab == Destination.maps
                                 ? EdgeInsets.zero
                                 : EdgeInsets.all(wide ? 24 : 12),
-                            child: scopedPage(context),
+                            child: scopedPage(context, wide: wide),
                           ),
                         ),
                         Padding(
@@ -1892,11 +1901,31 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         Icons.extension_outlined,
       );
     }
+    // The scope stays on screen in the app bar, so another is a tap away.
     if (!section.allows(scope)) {
-      return empty(
-        section.title,
-        '${section.title} has nothing in this scope.',
-        pluginIcon(section.icon),
+      return Center(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(pluginIcon(section.icon), size: 48, color: Colors.teal),
+              const SizedBox(height: 16),
+              Text(
+                '${section.title} has nothing in ${_Scopes(this).scopeLabel(scope).title}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 16),
+              FilledButton.tonal(
+                onPressed: () => update(() => setScope(null)),
+                child: const Text('Show all'),
+              ),
+            ],
+          ),
+        ),
       );
     }
     final room = activeRoom;

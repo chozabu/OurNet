@@ -58,20 +58,23 @@ builds never create such events, so nothing changes on the wire.
 
 ## The scope header
 
-The scoped sections (Notes, Calendar, Chat, Forums, Files, Maps) show a slim
-header above their content. It is always visible, so a filter can't be
-forgotten. It is hidden only while typing in Notes, as the group header was
-before.
+The scoped sections (Notes, Calendar, Chat, Forums, Files, Maps) and every
+plugin section show the scope in the app bar's title: the section's name,
+small, over the scope. It is always visible, so a filter can't be forgotten.
 
-- Tapping the scope name opens the picker: All, Personal, Public, each group
-  with its unread count and any call in progress, and Create group.
+- Tapping it opens the picker: All, Personal, Public, each group with its
+  unread count and any call in progress, and Create group.
 - In a group, it also shows members and sync status, plus buttons for mute,
   members and **group info** (ⓘ: who is in it, who can add people, sync,
   leaving). In Chat it adds voice and video call buttons, as a direct
-  conversation's header does. Calls are not started from the app bar or
-  from the group's other sections.
+  conversation's header does; the group's other sections do not start
+  calls. A wide screen puts all of this in the app bar. A phone keeps the
+  group's name there and puts the rest in a slim strip under it, hidden
+  while typing in Notes.
 - Group call banners and member add-requests show under it, in every section
   of that group.
+- A plugin is told the scope through `on-open` (PLUGINS.md). One whose
+  manifest leaves a scope out says it has nothing there and offers All.
 
 - Outside All, a count on the header's arrow says how much is unread in
   other scopes: direct messages, the groups' chats and forums, and joined
