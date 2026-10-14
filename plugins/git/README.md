@@ -47,7 +47,12 @@ commits with their changes, and the pushes: who moved which branch, when.
   of its pushes' packs. Each pack is self-contained (no thin packs), so it
   can be read alone. One push carries 16 MB at most.
 - The refs are what the pushes, in order of when they were signed, left
-  them. In public only the space's own person's pushes count; elsewhere the
+  them. Pushes made apart (offline, say) can each build on a tip the other
+  replaced: the first signed keeps the branch, and a later one that was not
+  built on it and not forced goes to `<branch>@<first 8 of its author's ID>`
+  (`main@3fa9c2d1`). The page says so; its author fetches, merges, pushes
+  again and deletes the side branch (`git push ournet :main@3fa9c2d1`).
+  Nothing is lost, and every device reaches the same refs. In public only the space's own person's pushes count; elsewhere the
   audience is who may push.
 - A fetch asks for the packs whose new commits this clone lacks, oldest
   first, and hands each to `git index-pack`. A push that has not fully

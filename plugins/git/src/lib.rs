@@ -428,19 +428,9 @@ impl Git {
         Some(key)
     }
 
-    /// The refs as the pushes left them, oldest first.
+    /// The refs as the pushes left them (see [ref_state]).
     fn refs(&mut self, key: &str) -> BTreeMap<String, String> {
-        let mut refs = BTreeMap::new();
-        for p in self.load_pushes(key).iter() {
-            for (r, sha) in &p.refs {
-                if sha.is_empty() {
-                    refs.remove(r);
-                } else {
-                    refs.insert(r.clone(), sha.clone());
-                }
-            }
-        }
-        refs
+        ref_state(self.load_pushes(key)).0
     }
 
     fn head(&mut self, key: &str, refs: &BTreeMap<String, String>) -> Option<String> {
@@ -741,6 +731,14 @@ impl Git {
         let unread = pushes.iter().filter(|p| p.complete() && p.indexed == 0).count();
         let failed = pushes.iter().filter(|p| p.indexed == 2).count();
         let mut notice = Vec::new();
+        for (base, side, _) in ref_state(&pushes).1 {
+            let short = |r: &str| r.trim_start_matches("refs/heads/").replace("refs/tags/", "tag ");
+            notice.push(format!(
+                "{} was pushed from two places at once: the later push is kept as {}. Fetch, merge it and push again.",
+                short(&base),
+                short(&side)
+            ));
+        }
         if waiting > 0 {
             notice.push(format!("Waiting for {waiting} parts from friends."));
         }
@@ -1102,6 +1100,44 @@ impl Git {
     }
 }
 
+/// The refs as [pushes] (oldest first, by when they were signed) leave
+/// them, and the refs that diverged: `(ref, side branch, author)`.
+///
+/// Pushes made apart (offline, or before the other arrived) can each be
+/// built on a tip the other replaced. The first signed keeps the ref; a
+/// later push that was not built on the tip it found, and was not forced,
+/// goes to `<ref>@<first 8 of its author>` instead, so no commits are
+/// lost and its author can fetch, merge and push again (and delete the
+/// side branch with `git push ournet :main@…`).
+fn ref_state(pushes: &[Push]) -> (BTreeMap<String, String>, Vec<(String, String, String)>) {
+    let mut refs: BTreeMap<String, String> = BTreeMap::new();
+    for p in pushes {
+        for (r, sha) in &p.refs {
+            let current = refs.get(r).map(String::as_str).unwrap_or("");
+            let was = p.old.get(r).map(String::as_str).unwrap_or("");
+            if p.force || current == was || r.contains('@') {
+                if sha.is_empty() {
+                    refs.remove(r);
+                } else {
+                    refs.insert(r.clone(), sha.clone());
+                }
+            } else if !sha.is_empty() {
+                let side = format!("{r}@{}", &p.author[..8.min(p.author.len())]);
+                refs.insert(side, sha.clone());
+            }
+        }
+    }
+    let conflicts = refs
+        .keys()
+        .filter_map(|side| {
+            let (base, who) = side.rsplit_once('@')?;
+            let author = pushes.iter().rev().find(|p| p.refs.contains_key(base) && p.author.starts_with(who))?;
+            Some((base.to_string(), side.clone(), author.author.clone()))
+        })
+        .collect();
+    (refs, conflicts)
+}
+
 /// Changed files between two trees: path, A/M/D, old and new blob.
 fn diff_trees(
     objects: &mut Objects,
@@ -1356,6 +1392,47 @@ mod tests {
             assert_eq!(unb64(&b64(&bytes)).unwrap(), bytes);
         }
         assert_eq!(b64(b"hi!"), "aGkh");
+    }
+
+    fn push(author: &str, created: u64, r: &str, old: &str, new: &str) -> Push {
+        Push {
+            id: format!("{author}{created}"),
+            author: author.into(),
+            created,
+            refs: [(r.to_string(), new.to_string())].into(),
+            old: [(r.to_string(), old.to_string())].into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn pushes_made_apart_keep_both_sides() {
+        let main = "refs/heads/main";
+        // Both built on a1 while apart; Ada's was signed first.
+        let pushes = [
+            push("ada00000aaaa", 1, main, "", "a1"),
+            push("ada00000aaaa", 2, main, "a1", "a2"),
+            push("bob11111bbbb", 3, main, "a1", "b2"),
+        ];
+        let (refs, conflicts) = ref_state(&pushes);
+        assert_eq!(refs[main], "a2");
+        assert_eq!(refs["refs/heads/main@bob11111"], "b2");
+        assert_eq!(conflicts, [(main.to_string(), "refs/heads/main@bob11111".to_string(), "bob11111bbbb".to_string())]);
+
+        // Bob merges and pushes onto Ada's tip, then drops his side branch.
+        let mut more = pushes.to_vec();
+        more.push(push("bob11111bbbb", 4, main, "a2", "m"));
+        more.push(push("bob11111bbbb", 5, "refs/heads/main@bob11111", "b2", ""));
+        let (refs, conflicts) = ref_state(&more);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[main], "m");
+        assert!(conflicts.is_empty());
+
+        // A forced push replaces whatever was there.
+        let mut forced = push("bob11111bbbb", 3, main, "a1", "b2");
+        forced.force = true;
+        let (refs, _) = ref_state(&[pushes[0].clone(), pushes[1].clone(), forced]);
+        assert_eq!(refs[main], "b2");
     }
 
     #[test]
