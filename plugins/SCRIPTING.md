@@ -21,30 +21,51 @@ parsing packs): the script engine is slower and the bulk paths stay native.
 
 ## Shapes considered
 
-1. **One script-host plugin that runs everyone's scripts.** Simple to ship,
-   but every script would share one manifest: one set of grants, kinds and
-   storage, and one publisher. That breaks the permission model. No.
-2. **The engine as a shared component; each script plugin its own package.**
-   A script plugin's package is a normal `.ournet-plugin`: its own manifest
-   (id, grants, kinds, sections), `ui.rfwtxt`, `scripts/main.js`, and
-   `plugin.wasm` = the standard engine, byte for byte the same in every
-   script plugin. The host already caches compiled code by package hash
-   per engine; keying that cache by the wasm's own hash would compile the
-   engine once for all of them. Grants, signing, releases, sharing,
-   storage and cursors all work unchanged. **Recommended.**
-3. **A script engine inside the native host, beside wasmtime.** Fastest to
-   call, but a second sandbox to secure and a second runtime to keep on
-   every platform, which PLUGINS.md set out to avoid. No.
+| | Isolation per script | Engine stored | Engine updates | Host work |
+|---|---|---|---|---|
+| A. Engine copied into each script's package | Yes: own instance, grants, storage, publisher | Once per package (MBs each) | Every script re-released | Small: read own files |
+| B. One plugin per language runs many scripts | No: one instance, one set of grants and storage; one script's crash stops all | Once | Once | None, but the plugin must re-implement permissions |
+| C. The core runs scripts itself | Yes, if built so | Once, in the app | Only with app releases | Large: a second sandbox, per platform; languages fixed by the app |
+| **D. Runtime plugins** | Yes, as A | Once | Once | Medium |
 
-What shape 2 needs from the host, all additive:
+**D (recommended, October 2026).** A language runtime is a plugin package
+of its own, marked as a runtime (`"provides": "runtime:js@1"`), carrying
+only the engine. A script plugin's manifest names the runtime it needs
+(`"runtime": "js@1"`) and ships only its manifest, UI and scripts. The host
+starts *one instance of the runtime per script plugin*, with that plugin's
+grants, kinds, storage, cursors and publisher, exactly as if the engine were
+in its package; the runtime reads the scripts through an always-granted
+interface that sees only that package's files. So:
 
-- A way for the engine to read its own package's files: a new WIT interface
-  (`package.read(name) -> option<list<u8>>`, always granted, package files
-  only). New interfaces keep older plugins linking.
-- Packaging: `plugins/pack` (and later the app) zips a script plugin without
-  compiling, adding the engine from a pinned, signed release. The release
-  records the engine's digest, so friends can see which engine a script runs
-  on.
+- Each script is sandboxed and accountable on its own, as with A.
+- The engine is downloaded, stored and compiled once (the compile cache is
+  keyed by the component), and an engine fix reaches every script at once.
+- New languages are plugins: anyone can publish a `runtime:lua@1`, and
+  nothing in the app changes.
+
+What it costs:
+
+- Host: the manifest fields, resolving a script plugin's runtime (installed,
+  or fetched like any offered plugin), and starting the runtime's component
+  for it. The WIT additions are additive.
+- Trust: a runtime's code runs with each script's grants, so the install
+  prompt names it ("runs on JavaScript by <publisher>"). Bundled runtimes
+  come from us; a third-party runtime is a choice the person makes once.
+- Versions: a script pins a runtime's major version; minor updates must stay
+  compatible, as the WIT world does.
+
+B stays possible later as a "playground" for trying snippets with no grants
+at all. A is how D degrades if a friend cannot get the runtime (rare, since
+runtimes travel like plugins).
+
+What D needs from the host, all additive:
+
+- A way for the engine to read its script plugin's files: a new WIT
+  interface (`package.read(name) -> option<list<u8>>`, always granted).
+- Manifest fields `provides` and `runtime`, refused by older builds (which
+  cannot run them anyway).
+- Packaging: `plugins/pack` (and later the app) zips a script plugin with no
+  compile step.
 
 ## The engine
 
@@ -77,7 +98,7 @@ export function onEvent(surface, name, args) {
 }
 ```
 
-- The engine is a normal Rust plugin (shape 2) whose `Plugin` methods call
+- The runtime is a normal Rust plugin whose `Plugin` methods call
   the script's exported handlers and expose the imports as `ournet.*`.
 - Imports block as they do now; scripts see them as ordinary calls, so no
   promises are needed for the first version.
@@ -88,17 +109,14 @@ export function onEvent(surface, name, args) {
 
 ## Open questions
 
-- Does a script plugin show its source to whoever runs it? (Easy with
-  shape 2: the script is in the package. Seems right for accountability.)
-- One engine version for all, or each package pins one? (Pinning is safer
-  for compatibility; the cache still shares identical engines.)
+- Does a script plugin show its source to whoever runs it? (Easy: the
+  script is in the package. Seems right for accountability.)
 - TypeScript: run through a transpile step in `pack`, or keep plain JS?
-- How small can the engine get before phones care (each package carries a
-  copy unless the host learns to share it)?
+- How small can the engine get before phones care?
 
 ## A first step
 
-A spike: the engine plugin with Boa, and `tictactoe` rewritten as a script,
+A spike: a JavaScript runtime with Boa (first as shape A, which needs no host change), and `tictactoe` rewritten as a script,
 measured against the Rust version (size, start time, a move's round trip).
 That says whether JavaScript via Boa is good enough, or QuickJS shims are
 worth it.
