@@ -33,6 +33,8 @@ void main() {
       ).publish({'title': 'Private topic', 'text': 'Members only'}),
     ))!;
     node.subscribe('Public club', true);
+    // Following a friend's microblog follows a plugin space, not a forum.
+    node.subscribe('x.microblog.u.${friend.person}', true);
     await tester.runAsync(
       () => node.publish('post', {
         'title': 'Public topic',
@@ -47,6 +49,7 @@ void main() {
       ),
     );
     await settled(tester);
+    expect(find.textContaining('x.microblog'), findsNothing);
     await tester.tap(find.widgetWithText(ListTile, 'All forums'));
     await settled(tester);
     expect(find.text('Private topic'), findsOneWidget);

@@ -53,8 +53,13 @@ extension _SocialPages on _OurNetAppState {
 
   /// A subscribed space that is a public forum: not personal state, the
   /// public files or a public chat.
+  /// Followed spaces that are forums: not a public chat, the shared files,
+  /// a plugin's space (such as a friend's microblog) or an internal one.
   bool isForumSpace(String s) =>
-      !s.startsWith('_') && s != 'files' && !PublicChats.isChat(s);
+      !s.startsWith('_') &&
+      s != 'files' &&
+      !PublicChats.isChat(s) &&
+      !PublicNames.isPluginSpace(s);
 
   Widget communities(BuildContext context) {
     final forums = node.subscriptions.where(isForumSpace).toList()..sort();
@@ -534,9 +539,7 @@ extension _SocialPages on _OurNetAppState {
         .where(
           (o) =>
               (all
-                  ? !o.space.startsWith('_') &&
-                        o.space != 'files' &&
-                        joined.contains(o.space)
+                  ? isForumSpace(o.space) && joined.contains(o.space)
                   : o.space == space) &&
               o.isPublic &&
               contentVisible(o),

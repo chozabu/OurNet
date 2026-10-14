@@ -40,10 +40,15 @@ class PublicNames {
 
   /// Whether [space] is the address of a public forum, whichever way it was
   /// named: a name, or an owner-bound `forum2:` address from before names.
+  /// Whether [space] belongs to a plugin (`x.<plugin>…`, see PLUGINS.md):
+  /// followed like a forum, but holding the plugin's own kinds.
+  static bool isPluginSpace(String space) => space.startsWith('x.');
+
   static bool isForumSpace(String space) =>
       space.isNotEmpty &&
       space.length <= 200 &&
       !space.startsWith('_') &&
+      !isPluginSpace(space) &&
       !space.startsWith('chat:') &&
       !reserved.contains(space) &&
       !RegExp(r'[\x00-\x1f]').hasMatch(space);

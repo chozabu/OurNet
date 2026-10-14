@@ -47,6 +47,7 @@ void main() {
     expect(PublicNames.slug('chat:x'), 'chatx');
     expect(PublicNames.isForumSpace('chat:cooking'), isFalse);
     expect(PublicNames.isForumSpace('_listing'), isFalse);
+    expect(PublicNames.isForumSpace('x.microblog.u.someone'), isFalse);
     expect(PublicNames.forumFrom('forum2:abc:def'), 'forum2:abc:def');
     expect(PublicNames.forumFrom('Cooking'), 'cooking');
   });
