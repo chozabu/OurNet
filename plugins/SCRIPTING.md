@@ -107,10 +107,27 @@ export function onEvent(surface, name, args) {
 - State across hot reloads: the engine keeps `saveState`/`restore` and can
   reload just the script.
 
+## Decided (Alex, 14 October 2026)
+
+- **JavaScript first.** Other languages come later, as runtimes anyone can
+  publish.
+- **Engine: Boa first** (pure Rust, builds for our target as is). Move to
+  QuickJS only if the spike shows Boa is too big or slow.
+- **Runtimes are regular plugins:** packaged, signed, released, shared and
+  updated like any other, marked by `provides`, with no grants or pages of
+  their own. Anyone can publish one; installing a script plugin names the
+  runtime and its publisher.
+- **Async is optional.** Plain calls block, as the host's imports do today;
+  calls whose answer comes later (`live.send`, timers) can also be awaited as
+  promises, which the runtime resolves from the matching `on-reply` or
+  `on-timer`. A script that never uses `await` never needs to.
+- **Source is visible:** the app shows a script plugin's scripts to the
+  people running it.
+- **Spike:** tictactoe and pong as scripts, measured against their Rust
+  versions (package size, start time, a move's or a frame's round trip).
+
 ## Open questions
 
-- Does a script plugin show its source to whoever runs it? (Easy: the
-  script is in the package. Seems right for accountability.)
 - TypeScript: run through a transpile step in `pack`, or keep plain JS?
 - How small can the engine get before phones care?
 
