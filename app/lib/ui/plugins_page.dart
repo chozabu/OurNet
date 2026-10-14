@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,6 +16,21 @@ const grantMeanings = {
       'friends; the system asks too',
 };
 
+/// The packages shipped in `assets/plugins/`, read off the UI isolate.
+Future<List<PluginPackage>> bundledPlugins() async {
+  final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
+  final found = <PluginPackage>[];
+  for (final asset in manifest.listAssets()) {
+    if (!asset.startsWith('assets/plugins/') ||
+        !asset.endsWith('.ournet-plugin')) {
+      continue;
+    }
+    final data = (await rootBundle.load(asset)).buffer.asUint8List();
+    found.add(await Isolate.run(() => PluginPackage.read(data)..digest));
+  }
+  return found;
+}
+
 /// Settings › Plugins: what is installed, what friends offer (shared
 /// plugins and updates from publishers), what ships with the app, and
 /// installing from a file. On desktop, publishing and a developer folder
@@ -24,6 +40,7 @@ class PluginsPage extends StatefulWidget {
 
   /// Picks a `.ournet-plugin` file and returns its bytes.
   final Future<Uint8List?> Function() pickPackage;
+
   /// Saves a signed package the person just published.
   final Future<void> Function(String name, Uint8List bytes) savePackage;
 
@@ -79,19 +96,9 @@ class _PluginsPageState extends State<PluginsPage> {
     super.dispose();
   }
 
-  /// Packages shipped in `assets/plugins/`.
   Future<void> _loadBundled() async {
     try {
-      final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
-      final found = <PluginPackage>[];
-      for (final asset in manifest.listAssets()) {
-        if (!asset.startsWith('assets/plugins/') ||
-            !asset.endsWith('.ournet-plugin')) {
-          continue;
-        }
-        final data = await rootBundle.load(asset);
-        found.add(PluginPackage.read(data.buffer.asUint8List()));
-      }
+      final found = await bundledPlugins();
       if (mounted) setState(() => bundled = found);
     } catch (e) {
       widget.notice('Could not list bundled plugins: $e');

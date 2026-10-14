@@ -212,6 +212,41 @@ void main() {
     },
   );
 
+  test('a newer bundled version updates without asking', () async {
+    final (_, plugins) = await device();
+    PluginPackage version(String v) {
+      final out = Archive();
+      for (final f in ZipDecoder().decodeBytes(package).files) {
+        final bytes = f.readBytes()!;
+        if (f.name == 'manifest.json') {
+          final m = jsonDecode(utf8.decode(bytes)) as Json..['version'] = v;
+          out.addFile(ArchiveFile.bytes(f.name, utf8.encode(jsonEncode(m))));
+        } else {
+          out.addFile(ArchiveFile.bytes(f.name, bytes));
+        }
+      }
+      return PluginPackage.read(
+        Uint8List.fromList(ZipEncoder().encodeBytes(out)),
+      );
+    }
+
+    await plugins.install(version('0.1.0'), grants: grants);
+    await running(plugins);
+    // The same or an older version waits.
+    expect(await plugins.updateBundled([version('0.1.0')]), isEmpty);
+    expect(await plugins.updateBundled([version('0.0.9')]), isEmpty);
+    expect(await plugins.updateBundled([version('0.2.0')]), ['echo']);
+    expect(plugins['echo']!.manifest.version, '0.2.0');
+    await running(plugins);
+    // Switched off, or granted less than it asks for: left alone.
+    await plugins.setEnabled('echo', false);
+    expect(await plugins.updateBundled([version('0.3.0')]), isEmpty);
+    await plugins.uninstall('echo');
+    await plugins.install(version('0.1.0'), grants: grants);
+    plugins['echo']!.granted.remove('tun');
+    expect(await plugins.updateBundled([version('0.3.0')]), isEmpty);
+  });
+
   test('live messages reach the plugin on a friend\'s device', () async {
     final (a, pa) = await device('a');
     final (b, pb) = await device('b');

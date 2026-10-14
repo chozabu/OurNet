@@ -1854,8 +1854,24 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         final folder = node.store.setting('pluginDevFolder');
         if (folder is String && !Platform.isAndroid) plugins.watch(folder);
         redraw();
+        return _updateBundledPlugins(plugins);
       }, onError: (Object e) => notice('Plugins: $e')),
     );
+  }
+
+  /// A new build ships newer versions of its own plugins: installed ones
+  /// take them without asking when they need no new grant.
+  Future<void> _updateBundledPlugins(Plugins plugins) async {
+    if (plugins.installed.isEmpty) return;
+    try {
+      final updated = await plugins.updateBundled(await bundledPlugins());
+      for (final id in updated) {
+        final p = plugins[id]!.manifest;
+        notice('${p.name} updated to ${p.version}');
+      }
+    } catch (e) {
+      notice('Plugins: $e');
+    }
   }
 
   static const _vpn = MethodChannel('ournet/vpn');

@@ -792,6 +792,33 @@ class Plugins {
     _changed(id);
   }
 
+  /// Updates installed plugins to the newer versions among [packages] (the
+  /// ones the app ships) without asking: only unsigned, enabled ones that
+  /// were installed unsigned and need no new grant. Others wait for the
+  /// person, in Settings. Returns the IDs updated.
+  Future<List<String>> updateBundled(Iterable<PluginPackage> packages) async {
+    final updated = <String>[];
+    for (final package in packages) {
+      final m = package.manifest;
+      final installed = _installed[m.id];
+      if (installed == null ||
+          !installed.enabled ||
+          installed.publisher != null ||
+          package.signature != null ||
+          compareVersions(m.version, installed.manifest.version) <= 0 ||
+          !installed.granted.containsAll(m.grants)) {
+        continue;
+      }
+      try {
+        await install(package, grants: installed.granted.toSet());
+        updated.add(m.id);
+      } catch (e) {
+        _notice(m.id, 'error', 'Could not update ${m.name}', '$e');
+      }
+    }
+    return updated;
+  }
+
   /// Starts a stopped or failed plugin again.
   Future<void> restart(String id) async {
     final plugin = _installed[id];
