@@ -183,7 +183,7 @@ The full world is `native/rust/wit/plugin.wit`; the Rust SDK is
 
 | Interface | Grant | Calls |
 |---|---|---|
-| `log`, `clock`, `storage`, `ui`, `package-files` | always | log; now, set/cancel timer; get/set/remove/keys; update a surface's data, notify; read its own package's files |
+| `log`, `clock`, `storage`, `ui`, `package-files`, `plugin-offers` | always | log; now, set/cancel timer; get/set/remove/keys; update a surface's data, notify; read its own package's files; offer a script plugin to install (only just after the person acted; the app asks them) |
 | `objects` | `objects` | publish (own kinds; personal, people, group or public audience), get, query, follow a public space |
 | `identity` | `identity` | me, this device, contacts (devices: name, online, runs this plugin), groups (space, name, members) |
 | `live` | `live` | send (reply via `on-reply`), datagram |
@@ -238,7 +238,7 @@ As proposed, all on `ournet/2` and additive:
 
 The install prompt lists the grants in plain words; an update asking for more
 says which are new. `objects`, `identity`, `live`, `tun` and `local` are grantable;
-`log`, `clock`, `storage`, `ui` and `package-files` are always there. Each
+`log`, `clock`, `storage`, `ui`, `package-files` and `plugin-offers` are always there. Each
 import checks its grant when called too, since a language runtime imports
 them all and runs with each script plugin's grants. Not yet: publishing or
 reading core kinds (open question 1), `media`, `http`, `files`. A plugin never

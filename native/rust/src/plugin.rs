@@ -31,7 +31,9 @@ use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDea
 wasmtime::component::bindgen!({ path: "wit", world: "plugin" });
 
 use crate::tun as interface;
-use ournet::plugin::{clock, identity, live, log, objects, package_files, storage, tun, types, ui};
+use ournet::plugin::{
+    clock, identity, live, log, objects, package_files, plugin_offers, storage, tun, types, ui,
+};
 
 /// Posts one message to Dart: the plugin's handle and a buffer Dart frees
 /// with `ournet_free`.
@@ -185,7 +187,10 @@ struct LoadConfig {
 }
 
 /// Interfaces every plugin has.
-const ALWAYS: [&str; 6] = ["types", "log", "clock", "storage", "ui", "package-files"];
+const ALWAYS: [&str; 7] = ["types", "log", "clock", "storage", "ui", "package-files", "plugin-offers"];
+
+/// The most a plugin may offer to install at once.
+const OFFER_LIMIT: usize = 4 << 20;
 
 /// Interfaces a plugin may be granted.
 const GRANTABLE: [&str; 4] = ["objects", "identity", "live", "tun"];
@@ -687,6 +692,37 @@ impl package_files::Host for Host {
         }
         fs::read(path).ok()
     }
+}
+
+impl plugin_offers::Host for Host {
+    fn offer(&mut self, files: Vec<(String, Vec<u8>)>, source: String) -> Result<(), String> {
+        if files.iter().map(|(n, b)| n.len() + b.len()).sum::<usize>() > OFFER_LIMIT {
+            return Err("too large to offer".into());
+        }
+        let files: serde_json::Map<String, Value> = files
+            .into_iter()
+            .map(|(name, bytes)| (name, Value::String(base64(&bytes))))
+            .collect();
+        self.ask("plugins.offer", json!({"files": files, "source": source}))
+            .map(|_| ())
+    }
+}
+
+/// Standard base64, for bytes in an import's JSON.
+fn base64(bytes: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (i, b)| n | (*b as u32) << (16 - 8 * i));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ABC[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 impl ui::Host for Host {

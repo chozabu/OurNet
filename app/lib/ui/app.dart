@@ -335,6 +335,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// The plugin section open, for [Destination.plugin].
   PluginSection? pluginSection;
   StreamSubscription<PluginNotice>? _pluginNotices;
+  StreamSubscription<PluginOffered>? _pluginOffers;
   StreamSubscription<void>? _pluginSections;
 
   /// Programs on this computer reaching plugins granted `local` (git).
@@ -1283,6 +1284,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   void dispose() {
     unawaited(draftStore.flush().catchError((Object _) {}));
     _pluginNotices?.cancel();
+    _pluginOffers?.cancel();
     _pluginSections?.cancel();
     _localBridgeSync?.cancel();
     unawaited(_localBridge?.close());
@@ -1852,6 +1854,19 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       if (n.kind == 'log') return;
       notice(
         n.kind == 'notify' ? '${n.title}: ${n.body}' : '${n.title}. ${n.body}',
+      );
+    });
+    // A plugin (Git) offers a script plugin: the person decides.
+    _pluginOffers = plugins.offered.listen((offered) {
+      if (!mounted) return;
+      unawaited(
+        installOffered(
+          context,
+          offered,
+          plugins: plugins,
+          nameOf: name,
+          notice: notice,
+        ),
       );
     });
     _pluginSections = node.registry.changes.listen((_) => redraw());

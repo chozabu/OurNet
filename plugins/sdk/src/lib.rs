@@ -240,6 +240,13 @@ pub fn read(name: &str) -> Option<Vec<u8>> {
     host::package_files::read(name)
 }
 
+/// Offers a script plugin made of [files] (package entries by name) for this
+/// person to install; the app asks them, showing [source] (JSON: where the
+/// files came from). Only while handling one of their events.
+pub fn offer_plugin(files: &[(String, Vec<u8>)], source: &Value) -> Result<(), String> {
+    host::plugin_offers::offer(files, &source.to_string())
+}
+
 /// What the app shows.
 pub mod ui {
     use super::{host, Value};

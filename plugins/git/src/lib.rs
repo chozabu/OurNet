@@ -810,6 +810,78 @@ impl Git {
         Some(objects.tree(&tree))
     }
 
+    /// Offers the script plugin at the top of the selected branch or tag
+    /// for this person to install: the app asks them, saying where it
+    /// came from.
+    fn install(&mut self) {
+        let Some(key) = self.repo.clone() else { return };
+        let refs = self.refs(&key);
+        let Some(branch) = self.branch.clone() else { return };
+        let Some(tip) = refs.get(&branch).and_then(|s| pack::unhex(s)) else { return };
+        let mut files = Vec::new();
+        let result = self.package_files(tip, &[], &mut files);
+        let commit = {
+            let objects = self.open_objects(&key);
+            pack::hex(&objects.peel(tip))
+        };
+        let pushes = self.load_pushes(&key).clone();
+        // Who moved the ref there: the person answerable for this code.
+        let pusher = pushes
+            .iter()
+            .rev()
+            .find(|p| p.refs.get(&branch) == refs.get(&branch))
+            .map(|p| p.author.clone())
+            .unwrap_or_default();
+        let Some(repo) = self.repos.get(&key) else { return };
+        let source = json!({"git": {
+            "repo": repo.name,
+            "url": format!("ournet://{}/{}", repo.key, repo.name),
+            "ref": branch,
+            "commit": commit,
+            "pusher": pusher,
+        }});
+        let offered = result.and_then(|()| ournet_plugin::offer_plugin(&files, &source));
+        if let Err(e) = offered {
+            ui::notify("Not offered", &e);
+        }
+    }
+
+    /// The package entries under [path] at [commit]: the manifest and UI at
+    /// the top, and everything under `scripts/` and `assets/`.
+    fn package_files(
+        &mut self,
+        commit: Sha,
+        path: &[String],
+        files: &mut Vec<(String, Vec<u8>)>,
+    ) -> Result<(), String> {
+        let key = self.repo.clone().ok_or("no repository")?;
+        let entries = self
+            .tree_at(commit, path)
+            .ok_or("Its files have not all arrived here yet")?;
+        for e in entries {
+            let mut name = path.to_vec();
+            name.push(e.name.clone());
+            let wanted = match path.first().map(String::as_str) {
+                None => matches!(e.name.as_str(), "manifest.json" | "ui.rfwtxt" | "scripts" | "assets"),
+                Some(_) => true,
+            };
+            if !wanted || e.is_submodule() {
+                continue;
+            }
+            if e.is_dir() {
+                if name.len() > 6 {
+                    return Err("Its folders go too deep".into());
+                }
+                self.package_files(commit, &name, files)?;
+            } else {
+                let objects = self.open_objects(&key);
+                let (_, bytes) = objects.read(&e.sha).ok_or("Its files have not all arrived here yet")?;
+                files.push((name.join("/"), bytes));
+            }
+        }
+        Ok(())
+    }
+
     fn crumbs(&self, data: &mut Value) {
         let mut crumbs = vec![json!({"name": data["repo"]["name"].clone(), "depth": 0})];
         for (i, part) in self.path.iter().enumerate() {
@@ -821,6 +893,7 @@ impl Git {
     fn show_code(&mut self, data: &mut Value, tip: Option<Sha>) {
         self.crumbs(data);
         data["hasLast"] = false.into();
+        data["plugin"] = "".into();
         let Some(tip) = tip else {
             data["entries"] = json!([]);
             data["readme"] = "".into();
@@ -847,6 +920,7 @@ impl Git {
             .collect::<Vec<_>>()
             .into();
         let key = self.repo.clone().unwrap();
+        let at_top = self.path.is_empty();
         let objects = self.open_objects(&key);
         let readme = entries
             .iter()
@@ -855,6 +929,22 @@ impl Git {
             .map(|(_, d)| text_of(&d, 100_000).0)
             .unwrap_or_default();
         data["readme"] = readme.into();
+        // A script plugin at the top of the tree can be installed from here.
+        if at_top {
+            let manifest = entries
+                .iter()
+                .find(|e| e.name == "manifest.json" && !e.is_dir())
+                .and_then(|e| objects.read(&e.sha))
+                .and_then(|(_, d)| ournet_plugin::serde_json::from_slice::<Value>(&d).ok());
+            if let Some(m) = manifest.filter(|m| m["runtime"].is_string()) {
+                data["plugin"] = format!(
+                    "{} {}, a script plugin",
+                    m["name"].as_str().unwrap_or("This"),
+                    m["version"].as_str().unwrap_or("")
+                )
+                .into();
+            }
+        }
         let commit = objects.peel(tip);
         if let Some(c) = objects.commit(&commit) {
             data["hasLast"] = true.into();
@@ -1325,6 +1415,7 @@ impl Plugin for Git {
                 self.commits_shown += 30;
                 self.show();
             }
+            "install" => self.install(),
             "back" => {
                 self.mode = match self.mode {
                     Mode::File | Mode::Commit => Mode::Repo,

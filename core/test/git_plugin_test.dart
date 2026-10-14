@@ -148,6 +148,68 @@ void main() {
     expect(body, startsWith('{"repos":[]}'));
   });
 
+  test('a repository holding a script plugin installs as one', () async {
+    final (node, plugins, _) = await device();
+    await createRepo(plugins, 'game');
+    final offered = <PluginOffered>[];
+    final watch = plugins.offered.listen(offered.add);
+    addTearDown(watch.cancel);
+
+    final work = '${temp.path}/game';
+    await ok(['init', work]);
+    final archive = PluginPackage.read(
+      File('test/fixtures/js-tictactoe.ournet-plugin').readAsBytesSync(),
+    );
+    for (final MapEntry(:key, :value) in archive.files.entries) {
+      File('$work/$key')
+        ..parent.createSync(recursive: true)
+        ..writeAsBytesSync(value);
+    }
+    File('$work/README.md').writeAsStringSync('# Noughts and crosses\n');
+    await ok(['add', '.'], dir: work);
+    await ok(['commit', '-m', 'A game'], dir: work);
+    await ok(['tag', 'v0.1.0'], dir: work);
+    await ok(['push', 'ournet://game', 'main', 'v0.1.0'], dir: work);
+
+    final code = await until(plugins, (d) => '${d['plugin']}'.isNotEmpty);
+    expect(code['plugin'], 'Noughts and crosses (JS) 0.1.0, a script plugin');
+    plugins.event('git', 'Git', 'branch', {'ref': 'refs/tags/v0.1.0'});
+    await until(plugins, (d) => d['branch'] == 'refs/tags/v0.1.0');
+    plugins.event('git', 'Git', 'install', {});
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    while (offered.isEmpty) {
+      expect(DateTime.now().isBefore(deadline), isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    final o = offered.single;
+    expect(o.from, 'git');
+    expect(o.package.manifest.id, 'js-tictactoe');
+    expect(o.package.digest, archive.digest);
+    final git = o.source['git'] as Map;
+    expect(git['repo'], 'game');
+    expect(git['ref'], 'refs/tags/v0.1.0');
+    expect(git['pusher'], node.person);
+    expect(git['commit'], hasLength(40));
+
+    await plugins.install(
+      PluginPackage.read(
+        File('../app/assets/plugins/js.ournet-plugin').readAsBytesSync(),
+      ),
+      grants: {},
+    );
+    await plugins.install(
+      o.package,
+      grants: o.package.manifest.grants,
+      source: o.source,
+    );
+    expect(plugins['js-tictactoe']!.source, o.source);
+    final started = DateTime.now().add(const Duration(seconds: 60));
+    while (plugins['js-tictactoe']!.status != PluginStatus.running) {
+      expect(DateTime.now().isBefore(started), isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  });
+
   test('git pushes to and clones from a repository', () async {
     final (node, plugins, _) = await device();
     final url = await createRepo(plugins, 'demo');

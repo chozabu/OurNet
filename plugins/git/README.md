@@ -118,8 +118,16 @@ step, cheapest first:
 3. **Testers follow a branch.** Install a plugin from a repository and a
    branch (`dev`); each push carrying a package updates those who opted in,
    like the developer folder but across friends.
-4. **No build step.** With script plugins (plugins/SCRIPTING.md) a
-   repository is the plugin, and the app installs from a repository and tag
-   with no toolchain, Android included.
+4. **No build step** (done, October 2026). With script plugins
+   (plugins/SCRIPTING.md) a repository is the plugin: when the top of the
+   branch or tag on show has a `manifest.json` naming a `runtime`, the page
+   offers "Install as plugin". The plugin hands the files (manifest, UI,
+   `scripts/`, `assets/`) to the app through `plugin-offers`, with the
+   repository, ref, commit and who pushed it; the app's install prompt says
+   so, installs the bundled runtime if needed, and keeps that source with
+   the plugin (Settings › Plugins shows it). The install is unsigned: the
+   pusher, not a release, is who answers for it. Android included.
 
-Suggested order: 1 and 2, then 3; 4 follows scripting.
+Suggested order: 1 and 2, then 3. Next for 4: offer a newer tag of the same
+repository as an update, and let a publisher sign a release naming the
+commit, so friends get it through the release space as well.

@@ -34,6 +34,207 @@ Future<List<PluginPackage>> bundledPlugins() async {
   return found;
 }
 
+/// Asks before installing: what it is, who signed it or where it came from,
+/// and what it may do.
+Future<bool> confirmPluginInstall(
+  BuildContext context, {
+  required Plugins plugins,
+  required String Function(String person) nameOf,
+  required String id,
+  required String name,
+  required String version,
+  required String description,
+  required Set<String> grants,
+  required String? publisher,
+  String changes = '',
+  String? runsOn,
+  bool isRuntime = false,
+  PluginPackage? runtime,
+  Json? source,
+}) async {
+  final existing = plugins[id];
+  final replaces =
+      existing?.publisher != null && existing!.publisher != publisher;
+  final update = existing != null && !replaces;
+  final added = grants.difference(update ? existing.granted : const {});
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(update ? 'Update $name?' : 'Install $name?'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (source != null) ...[
+              Text(sourceText(source, nameOf)),
+              const SizedBox(height: 8),
+            ],
+            Text(
+              publisher == null
+                  ? 'Version $version, unsigned'
+                  : 'Version $version, published by '
+                        '${publisher == plugins.node.person ? 'you' : nameOf(publisher)}',
+            ),
+            if (replaces)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'It replaces ${existing.manifest.name} from '
+                  '${nameOf(existing.publisher!)}, and what that '
+                  'kept here goes. Both read data of the same kinds.',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+            if (description.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(description),
+            ],
+            if (runsOn != null) ...[
+              const SizedBox(height: 8),
+              Text(runsOnText(plugins, nameOf, runsOn, runtime)),
+            ],
+            if (isRuntime) ...[
+              const SizedBox(height: 8),
+              const Text(
+                'A language runtime: it runs script plugins, each on its '
+                'own and only with what that plugin was granted. Their '
+                'code passes through it, so install runtimes only from '
+                'publishers you trust.',
+              ),
+            ],
+            if (changes.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text('What changed: $changes'),
+            ],
+            const SizedBox(height: 16),
+            Text(
+              grants.isEmpty
+                  ? 'It runs sandboxed and asks for nothing more.'
+                  : 'It runs sandboxed. It may:',
+            ),
+            for (final g in grants)
+              ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  added.contains(g) ? Icons.new_releases_outlined : Icons.check,
+                ),
+                title: Text(grantMeanings[g] ?? g),
+                subtitle: added.contains(g) && update
+                    ? const Text('New in this version')
+                    : null,
+              ),
+            const SizedBox(height: 8),
+            const Text(
+              'It never holds your keys, and reaches nothing else of yours.',
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: Text(update ? 'Update' : 'Install'),
+        ),
+      ],
+    ),
+  );
+  return ok == true;
+}
+
+/// "Runs on JavaScript 0.1.0, by …": the runtime a script plugin's code
+/// passes through, installed or [toInstall] with it.
+String runsOnText(
+  Plugins plugins,
+  String Function(String person) nameOf,
+  String language,
+  PluginPackage? toInstall,
+) {
+  final installed = plugins.runtimeFor(language);
+  if (installed != null) {
+    final by = installed.publisher;
+    return 'It is a script, run by ${installed.manifest.name} '
+        '${installed.manifest.version} '
+        '(${by == null ? 'comes with OurNet' : 'by ${by == plugins.node.person ? 'you' : nameOf(by)}'}). '
+        'You can read its scripts in Settings › Plugins.';
+  }
+  if (toInstall != null) {
+    return 'It is a script, run by ${toInstall.manifest.name} '
+        '${toInstall.manifest.version}, which comes with OurNet and is '
+        'installed with it. You can read its scripts in Settings › Plugins.';
+  }
+  return 'It is a script for the $language runtime, which is not '
+      'installed: it will not run until it is.';
+}
+
+/// Where an offered plugin's files came from, in words.
+String sourceText(Json source, String Function(String person) nameOf) {
+  final git = source['git'];
+  if (git is Map) {
+    final ref = '${git['ref']}'
+        .replaceFirst('refs/heads/', 'branch ')
+        .replaceFirst('refs/tags/', 'tag ');
+    final commit = '${git['commit']}';
+    final pusher = git['pusher'] is String && '${git['pusher']}'.isNotEmpty
+        ? ', pushed by ${nameOf('${git['pusher']}')}'
+        : '';
+    return 'From the Git repository ${git['repo']}, $ref '
+        '(commit ${commit.length > 7 ? commit.substring(0, 7) : commit})'
+        '$pusher. Read its scripts there before you install it.';
+  }
+  return 'Offered by another plugin.';
+}
+
+/// Asks the person about a script plugin another plugin offered (a Git
+/// repository's), and installs it with the bundled runtime it needs.
+Future<void> installOffered(
+  BuildContext context,
+  PluginOffered offered, {
+  required Plugins plugins,
+  required String Function(String person) nameOf,
+  required void Function(String message) notice,
+}) async {
+  final m = offered.package.manifest;
+  PluginPackage? runtime;
+  if (plugins.runtimeOf(m) == null) {
+    for (final p in await bundledPlugins()) {
+      if (p.manifest.provides == 'runtime:${m.runtime}') runtime = p;
+    }
+  }
+  if (!context.mounted) return;
+  final ok = await confirmPluginInstall(
+    context,
+    plugins: plugins,
+    nameOf: nameOf,
+    id: m.id,
+    name: m.name,
+    version: m.version,
+    description: m.description,
+    grants: m.grants,
+    publisher: null,
+    runsOn: m.runtime,
+    runtime: runtime,
+    source: offered.source,
+  );
+  if (!ok) return;
+  try {
+    if (runtime != null) await plugins.install(runtime, grants: const {});
+    await plugins.install(
+      offered.package,
+      grants: m.grants,
+      source: offered.source,
+    );
+    notice('${m.name} installed');
+  } catch (e) {
+    notice('Could not install ${m.name}: $e');
+  }
+}
+
 /// Settings › Plugins: what is installed, what friends offer (shared
 /// plugins and updates from publishers), what ships with the app, and
 /// installing from a file. On desktop, publishing and a developer folder
@@ -117,7 +318,6 @@ class _PluginsPageState extends State<PluginsPage> {
     });
   }
 
-  /// Asks before installing: what it is, who signed it, what it may do.
   Future<bool> _confirm({
     required String id,
     required String name,
@@ -129,121 +329,21 @@ class _PluginsPageState extends State<PluginsPage> {
     String? runsOn,
     bool isRuntime = false,
     PluginPackage? runtime,
-  }) async {
-    final existing = plugins[id];
-    final replaces =
-        existing?.publisher != null && existing!.publisher != publisher;
-    final update = existing != null && !replaces;
-    final added = grants.difference(update ? existing.granted : const {});
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(update ? 'Update $name?' : 'Install $name?'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                publisher == null
-                    ? 'Version $version, unsigned'
-                    : 'Version $version, published by '
-                          '${publisher == plugins.node.person ? 'you' : widget.nameOf(publisher)}',
-              ),
-              if (replaces)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    'It replaces ${existing.manifest.name} from '
-                    '${widget.nameOf(existing.publisher!)}, and what that '
-                    'kept here goes. Both read data of the same kinds.',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ),
-                ),
-              if (description.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(description),
-              ],
-              if (runsOn != null) ...[
-                const SizedBox(height: 8),
-                Text(_runsOn(runsOn, runtime)),
-              ],
-              if (isRuntime) ...[
-                const SizedBox(height: 8),
-                const Text(
-                  'A language runtime: it runs script plugins, each on its '
-                  'own and only with what that plugin was granted. Their '
-                  'code passes through it, so install runtimes only from '
-                  'publishers you trust.',
-                ),
-              ],
-              if (changes.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text('What changed: $changes'),
-              ],
-              const SizedBox(height: 16),
-              Text(
-                grants.isEmpty
-                    ? 'It runs sandboxed and asks for nothing more.'
-                    : 'It runs sandboxed. It may:',
-              ),
-              for (final g in grants)
-                ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    added.contains(g)
-                        ? Icons.new_releases_outlined
-                        : Icons.check,
-                  ),
-                  title: Text(grantMeanings[g] ?? g),
-                  subtitle: added.contains(g) && update
-                      ? const Text('New in this version')
-                      : null,
-                ),
-              const SizedBox(height: 8),
-              const Text(
-                'It never holds your keys, and reaches nothing else of yours.',
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(update ? 'Update' : 'Install'),
-          ),
-        ],
-      ),
-    );
-    return ok == true;
-  }
-
-  /// "Runs on JavaScript 0.1.0, by …": the runtime a script plugin's code
-  /// passes through, installed or [toInstall] with it.
-  String _runsOn(String language, PluginPackage? toInstall) {
-    final installed = plugins.runtimeFor(language);
-    if (installed != null) {
-      final by = installed.publisher;
-      return 'It is a script, run by ${installed.manifest.name} '
-          '${installed.manifest.version} '
-          '(${by == null ? 'comes with OurNet' : 'by ${by == plugins.node.person ? 'you' : widget.nameOf(by)}'}). '
-          'You can read its scripts in Settings › Plugins.';
-    }
-    if (toInstall != null) {
-      return 'It is a script, run by ${toInstall.manifest.name} '
-          '${toInstall.manifest.version}, which comes with OurNet and is '
-          'installed with it. You can read its scripts in Settings › Plugins.';
-    }
-    return 'It is a script for the $language runtime, which is not '
-        'installed: it will not run until it is.';
-  }
+  }) => confirmPluginInstall(
+    context,
+    plugins: plugins,
+    nameOf: widget.nameOf,
+    id: id,
+    name: name,
+    version: version,
+    description: description,
+    grants: grants,
+    publisher: publisher,
+    changes: changes,
+    runsOn: runsOn,
+    isRuntime: isRuntime,
+    runtime: runtime,
+  );
 
   /// The runtime that comes with the app for [language], when none is
   /// installed.
@@ -585,6 +685,8 @@ class _PluginsPageState extends State<PluginsPage> {
                 _status(p),
                 if (p.publisher != null)
                   'by ${p.publisher == plugins.node.person ? 'you' : widget.nameOf(p.publisher!)}',
+                if (p.source?['git'] case final Map git)
+                  'from Git: ${git['repo']}, ${'${git['ref']}'.split('/').last}',
               ].join(' · '),
               maxLines: 3,
               overflow: TextOverflow.ellipsis,

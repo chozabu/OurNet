@@ -223,6 +223,10 @@ class _Capped extends OutputMemoryStream {
   }
 }
 
+/// A script plugin another plugin ([from]) offered to install, and where its
+/// files came from.
+typedef PluginOffered = ({PluginPackage package, String from, Json source});
+
 /// A plugin offered to this person: shared by a friend, or a newer release
 /// from the publisher of one installed here.
 typedef PluginOffer = ({
@@ -246,6 +250,10 @@ class InstalledPlugin {
 
   /// What it was installed from; null for an unsigned package.
   PluginRelease? release;
+
+  /// Where its files came from when another plugin offered them (see
+  /// [Plugins.offered]), such as `{"git": {repo, ref, commit, pusher}}`.
+  Json? source;
   InstalledPlugin._(this.manifest, this.granted, this.enabled, this.ui);
   String get id => manifest.id;
 
@@ -325,7 +333,12 @@ class Plugins {
   final _tunPackets =
       StreamController<({String plugin, Uint8List packet})>.broadcast();
   final _notices = StreamController<PluginNotice>.broadcast();
+  final _offered = StreamController<PluginOffered>.broadcast();
   bool _closed = false;
+
+  /// When each plugin last had an event from the person: offering a plugin
+  /// to install is allowed only just after one.
+  final _lastEvent = <String, DateTime>{};
 
   /// Whether plugins can run on this device at all.
   bool get available => host != null;
@@ -333,6 +346,11 @@ class Plugins {
   /// Fires with a plugin's ID when its status or what it shows changes.
   Stream<String> get changes => _changes.stream;
   Stream<PluginNotice> get notices => _notices.stream;
+
+  /// Script plugins other plugins offer for the person to install (a Git
+  /// repository's, say): the app asks them, then calls [install] with the
+  /// [PluginOffered.source].
+  Stream<PluginOffered> get offered => _offered.stream;
 
   /// Packets plugins write to memory interfaces (see [openTun]).
   Stream<({String plugin, Uint8List packet})> get tunPackets =>
@@ -388,7 +406,8 @@ class Plugins {
               )
               ..release = s['release'] is Map
                   ? PluginRelease.of(SignedObject.fromJson(s['release']))
-                  : null;
+                  : null
+              ..source = (s['source'] as Map?)?.cast();
         _installed[id] = plugin;
         _register(plugin);
       } catch (e) {
@@ -474,6 +493,7 @@ class Plugins {
     PluginPackage package, {
     required Set<String> grants,
     PluginRelease? release,
+    Json? source,
   }) async {
     final manifest = package.manifest;
     if (!grants.containsAll(manifest.grants)) {
@@ -504,6 +524,7 @@ class Plugins {
       'enabled': true,
       'active': package.digest,
       'release': ?release?.toJson(),
+      'source': ?source,
       'skipped': ?old['skipped'],
       if (update) ...{
         'trial': true,
@@ -526,6 +547,7 @@ class Plugins {
       ..manifest = manifest
       ..ui = package.ui
       ..release = release
+      ..source = source
       ..enabled = true;
     plugin.granted
       ..clear()
@@ -921,12 +943,15 @@ class Plugins {
   });
 
   /// A widget in [surface] fired [name] with [args].
-  void event(String id, String surface, String name, Json args) => _fire(id, {
-    'call': 'event',
-    'surface': surface,
-    'name': name,
-    'args': jsonEncode(args),
-  });
+  void event(String id, String surface, String name, Json args) {
+    _lastEvent[id] = DateTime.now();
+    _fire(id, {
+      'call': 'event',
+      'surface': surface,
+      'name': name,
+      'args': jsonEncode(args),
+    });
+  }
 
   /// Development: hot reloads an installed plugin, keeping its state,
   /// whenever its package in [folder] (`<id>.ournet-plugin`, as
@@ -1023,6 +1048,7 @@ class Plugins {
     await _changes.close();
     await _tunPackets.close();
     await _notices.close();
+    await _offered.close();
   }
 
   void _register(InstalledPlugin plugin) {
@@ -1399,6 +1425,36 @@ class Plugins {
     }
 
     switch (fn) {
+      case 'plugins.offer':
+        final last = _lastEvent[plugin.id];
+        if (last == null ||
+            DateTime.now().difference(last) > const Duration(seconds: 30)) {
+          throw StateError('Only when the person asks for it');
+        }
+        final files = <String, Uint8List>{
+          for (final MapEntry(:key, :value)
+              in (args['files'] as Map? ?? const {}).entries)
+            '$key': base64Decode('$value'),
+        };
+        final PluginPackage package;
+        try {
+          package = PluginPackage.of(files);
+        } on FormatException catch (e) {
+          throw StateError(e.message);
+        }
+        if (!package.manifest.isScript ||
+            files.keys.any((k) => !PluginPackage._entry.hasMatch(k))) {
+          throw StateError('Only script plugins can be offered');
+        }
+        final source = jsonDecode('${args['source']}');
+        if (!_offered.isClosed) {
+          _offered.add((
+            package: package,
+            from: plugin.id,
+            source: source is Map ? source.cast() : const {},
+          ));
+        }
+        return null;
       case 'objects.publish':
         final kind = own(args['kind']);
         final space = args['space'];

@@ -147,6 +147,19 @@ interface package-files {
   read: func(name: string) -> option<list<u8>>;
 }
 
+/// Plugins offered to this person to install: a script plugin's files, from
+/// a repository say. The app asks them first, naming where the files came
+/// from, and only while the plugin is handling something they did (an event
+/// from one of its surfaces), so no plugin can ask unprompted.
+interface plugin-offers {
+  /// `files` are package entries by name (`manifest.json`, `ui.rfwtxt`,
+  /// `scripts/…`, `assets/…`) of a script plugin: nothing here builds code.
+  /// `source` is JSON saying where they came from; the app shows it and
+  /// keeps it with the plugin. Fails at once for files that are not a
+  /// script plugin, or when the person did nothing just now.
+  offer: func(files: list<tuple<string, list<u8>>>, source: string) -> result<_, string>;
+}
+
 /// What the app shows. Widgets come from the package's RFW library; a
 /// plugin updates the data they read.
 interface ui {
@@ -168,6 +181,7 @@ world plugin {
   import tun;
   import ui;
   import package-files;
+  import plugin-offers;
 
   /// Called once after loading, and after a hot reload's `restore`.
   export init: func();

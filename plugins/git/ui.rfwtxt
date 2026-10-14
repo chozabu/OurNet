@@ -224,6 +224,16 @@ widget GitCode = ListView(
       true: Padding(padding: [16.0, 8.0, 16.0, 8.0], child: Text(text: "These files have not arrived here yet.")),
       default: SizedBoxShrink(),
     },
+    switch data.plugin {
+      "": SizedBoxShrink(),
+      default: ListTile(
+        dense: true,
+        leading: Text(text: "🧩"),
+        title: Text(text: data.plugin),
+        subtitle: Text(text: "Install it from this branch or tag; the app asks you first."),
+        trailing: ElevatedButton(onPressed: event "install" { }, child: Text(text: "Install as plugin")),
+      ),
+    },
     ...for entry in data.entries:
       ListTile(
         dense: true,
