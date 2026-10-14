@@ -3,8 +3,10 @@
 Status: implemented on Windows and Android (October 2026): the registry, the
 WebAssembly host, the app's plugin pages, live messages, datagrams, virtual
 interfaces, five first-party plugins, and signed releases shared between
-friends (phase 1 of [plugins/STORE-PLAN.md](plugins/STORE-PLAN.md)). Scripting,
-the store plugin and the media interface are still to do; see Status below. Answers open decision 11
+friends (phase 1 of [plugins/STORE-PLAN.md](plugins/STORE-PLAN.md)), and
+JavaScript plugins run by a runtime plugin
+([plugins/SCRIPTING.md](plugins/SCRIPTING.md)). The store plugin and the
+media interface are still to do; see Status below. Answers open decision 11
 in [CORE_IDEA.md](CORE_IDEA.md) ("What may plugins access, execute and
 publish?").
 
@@ -181,7 +183,7 @@ The full world is `native/rust/wit/plugin.wit`; the Rust SDK is
 
 | Interface | Grant | Calls |
 |---|---|---|
-| `log`, `clock`, `storage`, `ui` | always | log; now, set/cancel timer; get/set/remove/keys; update a surface's data, notify |
+| `log`, `clock`, `storage`, `ui`, `package-files` | always | log; now, set/cancel timer; get/set/remove/keys; update a surface's data, notify; read its own package's files |
 | `objects` | `objects` | publish (own kinds; personal, people, group or public audience), get, query, follow a public space |
 | `identity` | `identity` | me, this device, contacts (devices: name, online, runs this plugin), groups (space, name, members) |
 | `live` | `live` | send (reply via `on-reply`), datagram |
@@ -236,7 +238,9 @@ As proposed, all on `ournet/2` and additive:
 
 The install prompt lists the grants in plain words; an update asking for more
 says which are new. `objects`, `identity`, `live`, `tun` and `local` are grantable;
-`log`, `clock`, `storage` and `ui` are always there. Not yet: publishing or
+`log`, `clock`, `storage`, `ui` and `package-files` are always there. Each
+import checks its grant when called too, since a language runtime imports
+them all and runs with each script plugin's grants. Not yet: publishing or
 reading core kinds (open question 1), `media`, `http`, `files`. A plugin never
 gets keys, raw store access, other plugins' data or synchronous calls into the
 UI.
@@ -365,7 +369,7 @@ host; `app/test/plugin_view_test.dart` draws each plugin with RFW (set
 |---|---|
 | 0. Registry | Done: kinds, requests, datagrams, sections, capabilities |
 | 1. WASM host, v0.1 API, app pages, manifest and grants, hot reload | Done. Polls and a public-chat port were not written; the wiki and microblog prove the objects API instead |
-| 2. Scripting, F2F distribution, per-plugin traffic and storage in Settings | Signed releases, sharing and manual updates done (STORE-PLAN.md phase 1); the rest not started |
+| 2. Scripting, F2F distribution, per-plugin traffic and storage in Settings | Signed releases, sharing and manual updates done (STORE-PLAN.md phase 1); JavaScript runtime plugins done (SCRIPTING.md); the rest not started |
 | 3. Streams, datagrams, canvas | Datagrams and canvas done; nothing needs streams yet |
 | 4. Single library with iroh, `media`, `tun` and a VPN | `tun` and the VPN plugin done; iroh is still separate; `media` not started |
 

@@ -43,7 +43,8 @@ typedef PluginNotice = ({
 
 /// A package: `manifest.json`, `plugin.wasm`, optionally `ui.rfwtxt` and
 /// files under `assets/`, and `signature.json`, its [PluginRelease] when it
-/// was published. The [digest] names the contents, not the zip, so the same
+/// was published. A script plugin ([PluginManifest.isScript]) carries files
+/// under `scripts/` instead of `plugin.wasm`, run by its runtime. The [digest] names the contents, not the zip, so the same
 /// package zipped again is the same package.
 class PluginPackage {
   final PluginManifest manifest;
@@ -66,7 +67,15 @@ class PluginPackage {
 
   PluginPackage._(this.manifest, this.files, this.signature);
 
-  Uint8List get wasm => files['plugin.wasm']!;
+  /// The component; null for a script plugin.
+  Uint8List? get wasm => files['plugin.wasm'];
+
+  /// A script plugin's scripts, by name (`scripts/main.js`), as text.
+  Map<String, String> get scripts => {
+    for (final MapEntry(:key, :value) in files.entries)
+      if (key.startsWith('scripts/'))
+        key: utf8.decode(value, allowMalformed: true),
+  };
 
   /// RFW's parser takes Unix line ends only; Windows checkouts and editors
   /// write others.
@@ -138,17 +147,22 @@ class PluginPackage {
 
   /// A package from its entries, as [read] gives them.
   factory PluginPackage.of(Map<String, Uint8List> files, {Json? signature}) {
-    final manifest = files['manifest.json'];
-    if (manifest == null || files['plugin.wasm'] == null) {
-      throw const FormatException(
-        'A package needs manifest.json and plugin.wasm',
-      );
+    final json = files['manifest.json'];
+    if (json == null) {
+      throw const FormatException('A package needs manifest.json');
     }
-    return PluginPackage._(
-      PluginManifest.parse(_json(manifest)),
-      Map.unmodifiable(files),
-      signature,
-    );
+    final manifest = PluginManifest.parse(_json(json));
+    final hasScripts = files.keys.any((k) => k.startsWith('scripts/'));
+    if (manifest.isScript) {
+      if (files['plugin.wasm'] != null || !hasScripts) {
+        throw const FormatException(
+          'A script plugin carries scripts and no plugin.wasm',
+        );
+      }
+    } else if (files['plugin.wasm'] == null || hasScripts) {
+      throw const FormatException('A package needs plugin.wasm');
+    }
+    return PluginPackage._(manifest, Map.unmodifiable(files), signature);
   }
 
   /// This package as a zip, carrying [release] in `signature.json`.
@@ -176,7 +190,9 @@ class PluginPackage {
 
   static final _entry = RegExp(
     r'^(manifest\.json|plugin\.wasm|ui\.rfwtxt|signature\.json|'
-    r'assets/[A-Za-z0-9_][A-Za-z0-9_.-]{0,99})$',
+    r'assets/[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}|'
+    r'scripts/([A-Za-z0-9_][A-Za-z0-9_.-]{0,99}/){0,4}'
+    r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,99})$',
   );
 }
 
@@ -375,11 +391,63 @@ class Plugins {
                   : null;
         _installed[id] = plugin;
         _register(plugin);
-        if (plugin.enabled) await _start(plugin);
       } catch (e) {
         _notice(id, 'error', 'Could not load plugin', '$e');
       }
     }
+    // Once all are known, so a script plugin finds its runtime.
+    for (final plugin in _installed.values.toList()) {
+      if (plugin.enabled) await _start(plugin);
+    }
+  }
+
+  /// The installed, enabled runtime that runs [plugin]'s scripts.
+  InstalledPlugin? runtimeOf(PluginManifest plugin) =>
+      runtimeFor(plugin.runtime);
+
+  /// The installed, enabled runtime for [language] (`js@1`), if any.
+  InstalledPlugin? runtimeFor(String? language) {
+    if (language == null) return null;
+    for (final p in _installed.values) {
+      if (p.enabled && p.manifest.provides == 'runtime:$language') return p;
+    }
+    return null;
+  }
+
+  /// The installed plugins [runtime] runs.
+  Iterable<InstalledPlugin> _scriptsOf(InstalledPlugin runtime) =>
+      _installed.values.where(
+        (p) =>
+            p.manifest.isScript &&
+            'runtime:${p.manifest.runtime}' == runtime.manifest.provides,
+      );
+
+  /// Starts again the enabled script plugins on [runtime] (installed,
+  /// updated or switched on), or stops them (removed or switched off).
+  Future<void> _restartScripts(InstalledPlugin runtime) async {
+    for (final script in _scriptsOf(runtime).toList()) {
+      _stop(script.id);
+      if (script.enabled) await _start(script);
+    }
+  }
+
+  /// A script plugin's scripts as installed, by name, to show the people
+  /// running it (plugins/SCRIPTING.md: the source is visible).
+  Future<Map<String, String>> scriptsOf(String id) async {
+    final code = Directory('${_code(id, _of(id)['active'])}/scripts');
+    final found = <String, String>{};
+    if (!await code.exists()) return found;
+    await for (final f in code.list(recursive: true)) {
+      if (f is File) {
+        final name = f.path
+            .substring(code.parent.path.length + 1)
+            .replaceAll(r'\', '/');
+        found[name] = utf8.decode(await f.readAsBytes(), allowMalformed: true);
+      }
+    }
+    return Map.fromEntries(
+      found.entries.toList()..sort((a, b) => a.key.compareTo(b.key)),
+    );
   }
 
   /// The release [package] carries, verified and checked against it; null
@@ -466,6 +534,7 @@ class Plugins {
     _register(plugin);
     if (release != null) await _followPublisher(release.publisher, true);
     await _start(plugin, storage: update ? 'snapshot' : null);
+    if (manifest.isRuntime) await _restartScripts(plugin);
     _changed(id);
     return plugin;
   }
@@ -768,7 +837,11 @@ class Plugins {
   Future<void> uninstall(String id) async {
     _stop(id);
     node.registry.removeOwner(id);
-    final publisher = _installed.remove(id)?.publisher;
+    final removed = _installed.remove(id);
+    final publisher = removed?.publisher;
+    if (removed != null && removed.manifest.isRuntime) {
+      await _restartScripts(removed);
+    }
     _surfaces.remove(id);
     _set(id, null);
     node.store.set('pluginCursor/$id', null);
@@ -789,6 +862,7 @@ class Plugins {
     } else {
       _stop(id);
     }
+    if (plugin.manifest.isRuntime) await _restartScripts(plugin);
     _changed(id);
   }
 
@@ -825,6 +899,18 @@ class Plugins {
     if (plugin == null) return;
     _stop(id);
     await _start(plugin);
+  }
+
+  /// The CPU time [id]'s calls have used since it started (time waiting on
+  /// the app excluded), and how many calls there were.
+  Future<({Duration busy, int calls})> usage(String id) async {
+    final running = _running[id];
+    if (running == null) throw StateError('Not running');
+    final usage = (await _call(running, {'call': 'usage'})).header['usage'];
+    return (
+      busy: Duration(microseconds: (usage as Map)['busy'] as int),
+      calls: usage['calls'] as int,
+    );
   }
 
   /// [surface] of [id] is being shown; [context] says in which scope.
@@ -894,12 +980,27 @@ class Plugins {
     node.registry.removeOwner(id);
     _register(plugin);
     final running = _running[id];
-    if (running?.handle != null) {
-      plugin.status = PluginStatus.starting;
-      host!.reload(running!.handle!, package.wasm);
+    final Uint8List? wasm;
+    if (package.manifest.isScript) {
+      final runtime = runtimeOf(package.manifest);
+      wasm = runtime == null ? null : await _wasmOf(runtime);
     } else {
+      wasm = package.wasm;
+    }
+    if (running?.handle != null && wasm != null) {
+      plugin.status = PluginStatus.starting;
+      // Its files unpacked to a new directory; then the code is swapped.
+      host!.call(running!.handle!, {
+        'call': 'package',
+        'id': 0,
+        'dir': _code(id, package.digest),
+      });
+      host!.reload(running.handle!, wasm);
+    } else {
+      _stop(id);
       await _start(plugin);
     }
+    if (package.manifest.isRuntime) await _restartScripts(plugin);
     _notice(id, 'log', 'info', 'Reloaded ${package.manifest.version}');
     _changed(id);
   }
@@ -945,12 +1046,23 @@ class Plugins {
       _changed(plugin.id);
       return;
     }
+    // A runtime runs only for the script plugins that name it.
+    if (plugin.manifest.isRuntime) return;
     final dir = '$directory/${plugin.id}';
+    final code = _code(plugin.id, _of(plugin.id)['active']);
+    final runtime = runtimeOf(plugin.manifest);
+    if (plugin.manifest.isScript && runtime == null) {
+      plugin
+        ..status = PluginStatus.failed
+        ..error = 'It needs the ${plugin.manifest.runtime} runtime: install it';
+      _changed(plugin.id);
+      return;
+    }
     final Uint8List wasm;
     try {
-      wasm = await File(
-        '${_code(plugin.id, _of(plugin.id)['active'])}/plugin.wasm',
-      ).readAsBytes();
+      wasm = runtime == null
+          ? await File('$code/plugin.wasm').readAsBytes()
+          : (await _wasmOf(runtime))!;
     } catch (e) {
       plugin
         ..status = PluginStatus.failed
@@ -970,6 +1082,8 @@ class Plugins {
         'cache': cache,
         'grants': plugin.granted.toList(),
         'storage': ?storage,
+        'package': code,
+        if (runtime != null) 'runtime': true,
       },
       wasm,
       (message) => _received(running, message),
@@ -981,6 +1095,17 @@ class Plugins {
         ..error = 'The plugin host refused it';
     }
     _changed(plugin.id);
+  }
+
+  /// [plugin]'s component, as installed.
+  Future<Uint8List?> _wasmOf(InstalledPlugin plugin) async {
+    try {
+      return await File(
+        '${_code(plugin.id, _of(plugin.id)['active'])}/plugin.wasm',
+      ).readAsBytes();
+    } catch (_) {
+      return null;
+    }
   }
 
   void _stop(String id) {

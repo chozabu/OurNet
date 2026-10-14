@@ -25,6 +25,16 @@ class PluginManifest {
   final String description;
   final Set<String> grants;
 
+  /// For a language runtime (plugins/SCRIPTING.md): what it runs, as
+  /// `runtime:<language>@<major>`, such as `runtime:js@1`. A runtime has no
+  /// grants, kinds or sections of its own; it runs only for script plugins,
+  /// each time with theirs.
+  final String? provides;
+
+  /// For a script plugin: the runtime it needs, as `<language>@<major>`.
+  /// Its package then carries scripts instead of `plugin.wasm`.
+  final String? runtime;
+
   /// Checks for each kind the plugin owns, by full kind (`x.<id>.<name>`).
   final Map<String, ContentCheck> kinds;
   final List<PluginSection> sections;
@@ -40,7 +50,12 @@ class PluginManifest {
     required this.grants,
     required this.kinds,
     required this.sections,
+    this.provides,
+    this.runtime,
   });
+
+  bool get isRuntime => provides != null;
+  bool get isScript => runtime != null;
 
   /// Reads a manifest, throwing [FormatException] for anything this build
   /// would not run.
@@ -114,8 +129,35 @@ class PluginManifest {
         ),
       );
     }
+    final provides = j['provides'];
+    final runtime = j['runtime'];
+    if (provides != null &&
+        (provides is! String || !_runtime.hasMatch(provides))) {
+      throw const FormatException(
+        'manifest: provides must be like runtime:js@1',
+      );
+    }
+    if (runtime != null &&
+        (runtime is! String || !_language.hasMatch(runtime))) {
+      throw const FormatException('manifest: runtime must be like js@1');
+    }
+    if (provides != null &&
+        (runtime != null ||
+            grants.isNotEmpty ||
+            kinds.isNotEmpty ||
+            sections.isNotEmpty)) {
+      throw const FormatException(
+        'manifest: a runtime has no grants, kinds, sections or runtime',
+      );
+    }
+    final main = j['main'];
+    if (main != null && (main is! String || !main.startsWith('scripts/'))) {
+      throw const FormatException('manifest: main must be in scripts/');
+    }
     return PluginManifest._(
       j,
+      provides: provides as String?,
+      runtime: runtime as String?,
       id: id,
       name: text('name', 50),
       version: text('version', 32),
@@ -164,6 +206,8 @@ class PluginManifest {
   }
 
   static final _name = RegExp(r'^[a-z][a-z0-9_]{0,31}$');
+  static final _language = RegExp(r'^[a-z][a-z0-9-]{0,23}@[0-9]{1,4}$');
+  static final _runtime = RegExp(r'^runtime:[a-z][a-z0-9-]{0,23}@[0-9]{1,4}$');
 }
 
 /// A kind's payload rules, declared in the manifest so the host checks them

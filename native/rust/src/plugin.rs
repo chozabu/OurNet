@@ -31,7 +31,7 @@ use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDea
 wasmtime::component::bindgen!({ path: "wit", world: "plugin" });
 
 use crate::tun as interface;
-use ournet::plugin::{clock, identity, live, log, objects, storage, tun, types, ui};
+use ournet::plugin::{clock, identity, live, log, objects, package_files, storage, tun, types, ui};
 
 /// Posts one message to Dart: the plugin's handle and a buffer Dart frees
 /// with `ournet_free`.
@@ -173,10 +173,25 @@ struct LoadConfig {
     /// code is about to use it), `restore` puts that copy back (a rollback).
     #[serde(default)]
     storage: Option<String>,
+    /// The unpacked package `package-files` reads: the plugin's own, or for a
+    /// runtime, the script plugin's it runs.
+    #[serde(default)]
+    package: Option<PathBuf>,
+    /// The component is a language runtime running a script plugin
+    /// (plugins/SCRIPTING.md). A runtime imports every interface a script
+    /// might use, so its imports are not held to [grants]; each call is.
+    #[serde(default)]
+    runtime: bool,
 }
 
 /// Interfaces every plugin has.
-const ALWAYS: [&str; 5] = ["types", "log", "clock", "storage", "ui"];
+const ALWAYS: [&str; 6] = ["types", "log", "clock", "storage", "ui", "package-files"];
+
+/// Interfaces a plugin may be granted.
+const GRANTABLE: [&str; 4] = ["objects", "identity", "live", "tun"];
+
+/// The largest package entry `package-files.read` returns.
+const FILE_LIMIT: u64 = 16 << 20;
 
 /// The plugin's private key-value store, kept in one file and written after
 /// each call that changed it.
@@ -270,6 +285,9 @@ struct Host {
     /// the host: the difference is what counts against [CALL_BUDGET].
     call_began: Instant,
     waited: Duration,
+    /// CPU time of every call so far (waits excluded), and how many calls.
+    busy: Duration,
+    calls: u64,
     send_tokens: f64,
     send_refill: Instant,
     datagram_tokens: f64,
@@ -278,6 +296,8 @@ struct Host {
     jobs: Sender<Job>,
     packets: Arc<AtomicUsize>,
     tun: Option<interface::Tun>,
+    grants: Vec<String>,
+    package: Option<PathBuf>,
 }
 
 /// A token bucket: whether one more may go now.
@@ -293,6 +313,16 @@ fn take(tokens: &mut f64, refill: &mut Instant, rate: f64, burst: f64) -> bool {
 }
 
 impl Host {
+    /// Whether [interface] was granted. Checked on each call as well as
+    /// when loading, since a runtime's imports are not held to the grants.
+    fn granted(&self, interface: &str) -> Result<(), String> {
+        if self.grants.iter().any(|g| g == interface) {
+            Ok(())
+        } else {
+            Err(format!("{interface} was not granted"))
+        }
+    }
+
     /// Asks Dart to run import [function] and waits for its answer.
     fn ask(&mut self, function: &str, args: Value) -> Result<Value, String> {
         self.next_question += 1;
@@ -420,6 +450,7 @@ impl objects::Host for Host {
         to: types::Audience,
         payload: String,
     ) -> Result<String, String> {
+        self.granted("objects")?;
         let to = match to {
             types::Audience::Personal => json!({"personal": true}),
             types::Audience::People(people) => json!({"people": people}),
@@ -435,11 +466,15 @@ impl objects::Host for Host {
             .ok_or_else(|| "no object ID".into())
     }
     fn get(&mut self, id: String) -> Option<types::Object> {
+        self.granted("objects").ok()?;
         self.ask("objects.get", json!({"id": id}))
             .ok()
             .and_then(|v| object_from(&v))
     }
     fn query(&mut self, q: types::Filter) -> Vec<types::Object> {
+        if self.granted("objects").is_err() {
+            return Vec::new();
+        }
         let args = json!({
             "kind": q.kind,
             "space": q.space,
@@ -453,6 +488,7 @@ impl objects::Host for Host {
         }
     }
     fn follow(&mut self, space: String, on: bool) -> Result<(), String> {
+        self.granted("objects")?;
         self.ask("objects.follow", json!({"space": space, "on": on}))
             .map(|_| ())
     }
@@ -460,18 +496,27 @@ impl objects::Host for Host {
 
 impl identity::Host for Host {
     fn me(&mut self) -> String {
+        if self.granted("identity").is_err() {
+            return String::new();
+        }
         self.ask("identity.me", Value::Null)
             .ok()
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_default()
     }
     fn this_device(&mut self) -> String {
+        if self.granted("identity").is_err() {
+            return String::new();
+        }
         self.ask("identity.device", Value::Null)
             .ok()
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_default()
     }
     fn contacts(&mut self) -> Vec<identity::Contact> {
+        if self.granted("identity").is_err() {
+            return Vec::new();
+        }
         let Ok(Value::Array(list)) = self.ask("identity.contacts", Value::Null) else {
             return Vec::new();
         };
@@ -501,6 +546,9 @@ impl identity::Host for Host {
             .collect()
     }
     fn groups(&mut self) -> Vec<identity::Group> {
+        if self.granted("identity").is_err() {
+            return Vec::new();
+        }
         let Ok(Value::Array(list)) = self.ask("identity.groups", Value::Null) else {
             return Vec::new();
         };
@@ -526,12 +574,20 @@ impl live::Host for Host {
     fn send(&mut self, device: String, payload: Vec<u8>) -> u64 {
         self.next_send += 1;
         let id = self.next_send;
-        let allowed = take(&mut self.send_tokens, &mut self.send_refill, SEND_RATE, SEND_BURST);
-        if !allowed || payload.len() > 256 << 10 {
+        let refused = if let Err(e) = self.granted("live") {
+            Some(e)
+        } else if !take(&mut self.send_tokens, &mut self.send_refill, SEND_RATE, SEND_BURST)
+            || payload.len() > 256 << 10
+        {
+            Some("rate limited".to_string())
+        } else {
+            None
+        };
+        if let Some(error) = refused {
             // Answered at once, as a reply the plugin handles like any other.
             post(
                 self.handle,
-                &json!({"type": "refuse", "request": id, "error": "rate limited"}),
+                &json!({"type": "refuse", "request": id, "error": error}),
                 None,
             );
             return id;
@@ -544,6 +600,7 @@ impl live::Host for Host {
         id
     }
     fn datagram(&mut self, device: String, data: Vec<u8>) -> Result<(), String> {
+        self.granted("live")?;
         if data.len() > DATAGRAM_BYTES {
             return Err("datagram too large".into());
         }
@@ -557,6 +614,7 @@ impl live::Host for Host {
 
 impl tun::Host for Host {
     fn open(&mut self, address: String, prefix: u8, routes: Vec<String>, mtu: u16) -> Result<(), String> {
+        self.granted("tun")?;
         let ip: std::net::Ipv4Addr = address.parse().map_err(|_| "not an IPv4 address")?;
         if prefix > 32 || !(576..=9000).contains(&mtu) || routes.len() > 32 {
             return Err("bad interface settings".into());
@@ -607,6 +665,30 @@ impl tun::Host for Host {
     }
 }
 
+impl package_files::Host for Host {
+    fn read(&mut self, name: String) -> Option<Vec<u8>> {
+        // Entries as packages name them: no way out of the directory.
+        let safe = !name.is_empty()
+            && name.len() <= 200
+            && name.split('/').all(|part| {
+                !part.is_empty()
+                    && part != "."
+                    && part != ".."
+                    && part
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+            });
+        if !safe {
+            return None;
+        }
+        let path = self.package.as_ref()?.join(&name);
+        if fs::metadata(&path).ok()?.len() > FILE_LIMIT {
+            return None;
+        }
+        fs::read(path).ok()
+    }
+}
+
 impl ui::Host for Host {
     fn update(&mut self, surface: String, data: String) {
         self.notice("ui.update", json!({"surface": surface, "data": data}));
@@ -653,13 +735,23 @@ fn compile(engine: &Engine, wasm: &[u8], cache: Option<&Path>) -> Result<Compone
 }
 
 /// Refuses a component that imports an interface it was not granted.
-fn check_imports(engine: &Engine, component: &Component, grants: &[String]) -> Result<(), String> {
+/// A runtime may import every grantable interface; [Host::granted] holds
+/// each call to the grants.
+fn check_imports(
+    engine: &Engine,
+    component: &Component,
+    grants: &[String],
+    runtime: bool,
+) -> Result<(), String> {
     for (name, _) in component.component_type().imports(engine) {
         let interface = name
             .strip_prefix("ournet:plugin/")
             .and_then(|rest| rest.split('@').next())
             .ok_or_else(|| format!("imports {name}, which OurNet does not provide"))?;
-        if !ALWAYS.contains(&interface) && !grants.iter().any(|g| g == interface) {
+        let allowed = ALWAYS.contains(&interface)
+            || grants.iter().any(|g| g == interface)
+            || (runtime && GRANTABLE.contains(&interface));
+        if !allowed {
             return Err(format!("uses {interface}, which it was not granted"));
         }
     }
@@ -673,6 +765,7 @@ struct Running {
     linker: Linker<Host>,
     grants: Vec<String>,
     cache: Option<PathBuf>,
+    runtime: bool,
 }
 
 impl Running {
@@ -689,7 +782,7 @@ impl Running {
         }
         let engine = engine()?;
         let component = compile(engine, wasm, config.cache.as_deref())?;
-        check_imports(engine, &component, &config.grants)?;
+        check_imports(engine, &component, &config.grants, config.runtime)?;
         let mut linker = Linker::new(engine);
         Plugin::add_to_linker::<Host, HasSelf<Host>>(&mut linker, |h| h)
             .map_err(|e| e.to_string())?;
@@ -708,6 +801,8 @@ impl Running {
             timers: BTreeMap::new(),
             call_began: Instant::now(),
             waited: Duration::ZERO,
+            busy: Duration::ZERO,
+            calls: 0,
             send_tokens: SEND_BURST,
             send_refill: Instant::now(),
             datagram_tokens: DATAGRAM_BURST,
@@ -715,6 +810,8 @@ impl Running {
             jobs,
             packets,
             tun: None,
+            grants: config.grants.clone(),
+            package: config.package,
         };
         let mut store = Store::new(engine, host);
         Self::configure(&mut store);
@@ -726,6 +823,7 @@ impl Running {
             linker,
             grants: config.grants,
             cache: config.cache,
+            runtime: config.runtime,
         })
     }
 
@@ -757,7 +855,10 @@ impl Running {
         host.waited = Duration::ZERO;
         self.store.set_epoch_deadline(10);
         let result = f(plugin, &mut self.store);
-        self.store.data_mut().storage.flush();
+        let host = self.store.data_mut();
+        host.busy += host.call_began.elapsed().saturating_sub(host.waited);
+        host.calls += 1;
+        host.storage.flush();
         result.map_err(|e| {
             let error = format!("{e:#}");
             self.plugin = None;
@@ -784,6 +885,7 @@ impl Running {
                 .to_string()
         };
         let mut reply_body = None;
+        let mut usage = None;
         let result: Result<(), String> = match call.get("call").and_then(Value::as_str) {
             Some("init") => self.run(|p, s| p.call_init(s)),
             Some("objects") => {
@@ -830,15 +932,29 @@ impl Running {
                 let device = text("device");
                 self.run(|p, s| p.call_on_datagram(s, &device, body))
             }
+            // How much CPU its calls have used, for Settings and measuring.
+            Some("usage") => {
+                let host = self.store.data();
+                usage = Some(json!({"busy": host.busy.as_micros() as u64, "calls": host.calls}));
+                Ok(())
+            }
+            // Where `package-files` reads from now: sent before a reload whose
+            // package unpacked somewhere new.
+            Some("package") => {
+                self.store.data_mut().package =
+                    call.get("dir").and_then(Value::as_str).map(PathBuf::from);
+                Ok(())
+            }
             _ => Err("unknown call".into()),
         };
         // High-rate calls (datagrams) ask for no result unless they fail.
         if call.get("quiet").and_then(Value::as_bool) == Some(true) && result.is_ok() {
             return;
         }
-        let header = match &result {
-            Ok(()) => json!({"type": "result", "id": id}),
-            Err(e) => json!({"type": "result", "id": id, "error": e}),
+        let header = match (&result, usage) {
+            (Ok(()), Some(usage)) => json!({"type": "result", "id": id, "usage": usage}),
+            (Ok(()), None) => json!({"type": "result", "id": id}),
+            (Err(e), _) => json!({"type": "result", "id": id, "error": e}),
         };
         post(self.store.data().handle, &header, reply_body.as_deref());
     }
@@ -872,7 +988,7 @@ impl Running {
     fn reload(&mut self, wasm: &[u8]) -> Result<(), String> {
         let engine = engine()?;
         let component = compile(engine, wasm, self.cache.as_deref())?;
-        check_imports(engine, &component, &self.grants)?;
+        check_imports(engine, &component, &self.grants, self.runtime)?;
         let state = self.run(|p, s| p.call_save_state(s)).unwrap_or_default();
         let plugin = Plugin::instantiate(&mut self.store, &component, &self.linker)
             .map_err(|e| format!("{e:#}"))?;

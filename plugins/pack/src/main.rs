@@ -5,8 +5,10 @@
 //! For each plugin directory here (one holding `manifest.json`), builds its
 //! crate for `wasm32-unknown-unknown`, wraps the module as a component and
 //! zips it with the manifest, `ui.rfwtxt` and anything in `assets/` into
-//! `dist/<id>.ournet-plugin`. With `--watch`, does so again whenever a
-//! plugin's sources change, for the app's hot reload (PLUGINS.md).
+//! `dist/<id>.ournet-plugin`. A script plugin (its manifest names a
+//! `runtime`) has no crate: its `scripts/` go in instead, as they are. With
+//! `--watch`, does so again whenever a plugin's sources change, for the
+//! app's hot reload (PLUGINS.md).
 
 use std::fs;
 use std::io::Write;
@@ -75,24 +77,10 @@ fn pack(root: &Path, dir: &Path) -> Result<PathBuf, String> {
     let manifest_text = fs::read_to_string(dir.join("manifest.json")).map_err(|e| e.to_string())?;
     let manifest: Value = serde_json::from_str(&manifest_text).map_err(|e| format!("manifest.json: {e}"))?;
     let id = manifest["id"].as_str().ok_or("manifest.json: no id")?;
-    let krate = dir.file_name().unwrap().to_string_lossy().to_string();
-    let status = Command::new("cargo")
-        .args(["build", "--release", "--target", "wasm32-unknown-unknown", "-p", &krate])
-        .current_dir(root)
-        .status()
-        .map_err(|e| e.to_string())?;
-    if !status.success() {
-        return Err("cargo build failed".into());
-    }
-    let module_path = root
-        .join("target/wasm32-unknown-unknown/release")
-        .join(format!("{}.wasm", krate.replace('-', "_")));
-    let module = fs::read(&module_path).map_err(|e| format!("{}: {e}", module_path.display()))?;
-    let component = wit_component::ComponentEncoder::default()
-        .validate(true)
-        .module(&module)
-        .and_then(|e| e.encode())
-        .map_err(|e| format!("componentizing: {e:#}"))?;
+    let component = match manifest.get("runtime") {
+        Some(_) => None,
+        None => Some(build(root, dir)?),
+    };
 
     let dist = root.join("dist");
     fs::create_dir_all(&dist).map_err(|e| e.to_string())?;
@@ -108,19 +96,58 @@ fn pack(root: &Path, dir: &Path) -> Result<PathBuf, String> {
         zip.write_all(bytes).map_err(|e| e.to_string())
     };
     add("manifest.json", manifest_text.as_bytes())?;
-    add("plugin.wasm", &component)?;
+    if let Some(component) = &component {
+        add("plugin.wasm", component)?;
+    }
     if let Ok(ui) = fs::read(dir.join("ui.rfwtxt")) {
         add("ui.rfwtxt", &ui)?;
     }
-    if let Ok(entries) = fs::read_dir(dir.join("assets")) {
-        for entry in entries.flatten() {
-            if let Ok(bytes) = fs::read(entry.path()) {
-                add(&format!("assets/{}", entry.file_name().to_string_lossy()), &bytes)?;
-            }
+    for folder in ["assets", "scripts"] {
+        for (name, bytes) in files(&dir.join(folder), folder)? {
+            add(&name, &bytes)?;
         }
     }
     zip.finish().map_err(|e| e.to_string())?;
     // Replaced whole, so a watching app never reads half a package.
     fs::rename(&next, &out).map_err(|e| e.to_string())?;
     Ok(out)
+}
+
+/// Every file under [dir], named `<prefix>/<path>` with forward slashes,
+/// sorted so packages come out the same each time.
+fn files(dir: &Path, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut found = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else { return Ok(found) };
+    for entry in entries.flatten() {
+        let name = format!("{prefix}/{}", entry.file_name().to_string_lossy());
+        if entry.path().is_dir() {
+            found.extend(files(&entry.path(), &name)?);
+        } else {
+            found.push((name, fs::read(entry.path()).map_err(|e| e.to_string())?));
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// Builds [dir]'s crate and wraps it as a component.
+fn build(root: &Path, dir: &Path) -> Result<Vec<u8>, String> {
+    let krate = dir.file_name().unwrap().to_string_lossy().to_string();
+    let status = Command::new("cargo")
+        .args(["build", "--release", "--target", "wasm32-unknown-unknown", "-p", &krate])
+        .current_dir(root)
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err("cargo build failed".into());
+    }
+    let module_path = root
+        .join("target/wasm32-unknown-unknown/release")
+        .join(format!("{}.wasm", krate.replace('-', "_")));
+    let module = fs::read(&module_path).map_err(|e| format!("{}: {e}", module_path.display()))?;
+    wit_component::ComponentEncoder::default()
+        .validate(true)
+        .module(&module)
+        .and_then(|e| e.encode())
+        .map_err(|e| format!("componentizing: {e:#}"))
 }

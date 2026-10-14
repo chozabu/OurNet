@@ -37,6 +37,11 @@ class PluginRelease {
   String get digest => _payload['digest'] as String;
   Set<String> get grants => {...(_payload['grants'] as List).cast<String>()};
 
+  /// For a script plugin, the runtime it needs (`js@1`); for a runtime,
+  /// what it provides (`runtime:js@1`). Absent from releases before scripts.
+  String? get runtime => _payload['runtime'] as String?;
+  String? get provides => _payload['provides'] as String?;
+
   /// As it travels in `signature.json` and in distributions.
   Json toJson() => object.toJson();
 
@@ -53,6 +58,8 @@ class PluginRelease {
       'kinds': [
         for (final kind in m.kinds.keys) kind.substring('x.${m.id}.'.length),
       ]..sort(),
+      'runtime': ?m.runtime,
+      'provides': ?m.provides,
       'manifest': package.manifestHash,
       'digest': package.digest,
       if (changes.trim().isNotEmpty) 'changes': changes.trim(),

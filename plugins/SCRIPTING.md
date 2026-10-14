@@ -1,8 +1,123 @@
 # Script plugins: design notes
 
-Status: thinking, October 2026. Nothing built. PLUGINS.md has said since the
-start that scripting should be "a WASM plugin that hosts a script engine";
-this works out what that could mean here.
+Status: shape D built with a JavaScript runtime on Boa (14 October 2026):
+the `js` runtime plugin (`plugins/js`), the host's side (`package-files`,
+runtimes, grants held per call), the app's (installing, starting, the
+install prompt, reading scripts) and two script plugins, `js-tictactoe` and
+`js-pong`, measured against their Rust versions. "Built" and "Measured" say
+what exists; the design notes that led there follow them.
+
+## Built
+
+- **Runtime** (`plugins/js`): a Rust plugin whose manifest says
+  `"provides": "runtime:js@1"`. It reads the script plugin's `manifest.json`
+  and `main` (default `scripts/main.js`) through `package-files`, runs it as
+  an ES module on Boa 0.22 (modules import each other within `scripts/`),
+  and calls the handlers it exports. `ournet` is written mostly in JavaScript
+  (`js/src/prelude.js`) over a few native functions. Boa builds for our
+  target with two shims: its clock comes from the host (`clock.now`), and the
+  random bytes it asks `getrandom` for (Math.random) come from splitmix64
+  seeded by the clock (`plugins/.cargo/config.toml` picks the custom
+  backend). Not for keys; plugins never hold any.
+- **Script plugin**: `manifest.json` with `"runtime": "js@1"` (and optionally
+  `"main"`), `ui.rfwtxt`, `scripts/**` and `assets/`, and no `plugin.wasm`.
+  `cargo run -p pack --release` zips one without building anything.
+- **Host** (`native/rust/src/plugin.rs`): a `package-files` interface (always
+  granted; reads the unpacked package Dart names as `package`, with no way
+  out of it). `runtime: true` in the load config lets a component import
+  every grantable interface, and every import now checks its grant when
+  called (`Host::granted`), for all plugins. A `package` call moves
+  `package-files` before a hot reload; a `usage` call returns the CPU time a
+  plugin's calls have used (`Plugins.usage`).
+- **App** (`core/lib/src/plugins.dart`, `plugin_manifest.dart`,
+  `app/lib/ui/plugins_page.dart`): manifests take `provides`, `runtime` and
+  `main`. A runtime takes no grants, kinds or sections and never starts by
+  itself. A script plugin starts the runtime's component with its own
+  grants, storage, cursors and package, and fails with "It needs the js@1
+  runtime" while none is installed. Installing, updating, switching off or
+  removing a runtime restarts or stops its scripts. Releases carry `runtime`
+  and `provides`, so the install prompt names the runtime and its publisher,
+  or says it comes with OurNet and installs it alongside. Settings ›
+  Plugins › Read its scripts shows the source. Older builds refuse a script
+  package (no `plugin.wasm`) and fail a runtime (it imports `package-files`).
+- **Bundled**: the runtime only (`app/assets/plugins/js.ournet-plugin`). The
+  two script plugins are examples in `plugins/` and test fixtures, not
+  shipped, since they duplicate the Rust games.
+- **Tests**: `core/test/script_plugin_test.dart` (runtime missing then
+  installed, grants refused per call, errors logged, promises from timers,
+  imports between scripts, package files, a syntax error, a real game).
+
+### The script API
+
+```js
+// scripts/main.js
+let me;
+export function init() { me = ournet.me(); }
+export function onOpen(surface, context) {          // context: {scope, space, name}
+  const notes = ournet.query({ kind: "x.notes.note", limit: 50 });
+  ournet.ui.update(surface, { notes: notes.map((n) => n.data) });
+}
+export function onEvent(surface, name, args) {
+  if (name === "add") ournet.publish("x.notes.note", "x.notes", "personal", { text: args.value });
+}
+export function onObjects(objects) {}  // {id, author, device, kind, name, space, audience, created, payload, data}
+export function onRequest(device, bytes) { return { ok: true }; }  // Uint8Array, text or JSON back
+export function onDatagram(device, bytes) {}
+export function onTimer(token) {}
+export function saveState() { return {}; }  // hot reload, as JSON
+export function restore(state) {}
+```
+
+- Plain calls block, as in Rust: `publish` (audience `"personal"`,
+  `"group"`, `"public"` or a list of people), `get`, `query`, `follow`, `me`,
+  `thisDevice`, `contacts`, `groups`, `datagram`, `storage.*` (text,
+  `getBytes`, `getJSON`/`setJSON`), `ui.update`, `ui.notify`, `read` (a
+  package file), `tun.*`, `log`/`warn`/`error` and `console`.
+- Async is optional: `ournet.send(device, data)` returns a promise of the
+  reply's bytes (`ournet.text` and `ournet.json` read them) carrying its
+  `id`, and `onReply(id, bytes, error)` is called as well; `ournet.sleep(ms)`
+  and `setTimeout` resolve from host timers. `ournet.timer.set(token, ms)`
+  is the plain form (tokens below 2^32). Async handlers work, and their
+  errors are logged.
+- A handler that throws is logged and the plugin keeps running; a script
+  that does not load (a syntax error) stops it, with the error in the log.
+  `onRequest` must answer without waiting for later events.
+
+## Measured (Windows x64 desktop, 14 October 2026)
+
+`OURNET_SCRIPT_BENCH=1 dart test test/script_plugin_test.dart -n "compared
+with Rust"` in `core`, through the real host (release native library, Dart
+JIT). Wall times wait on the plugin's changes rather than polling (Windows
+sleeps in 15.6 ms steps); CPU is the host's count for each plugin's calls,
+time waiting on the app excluded. Other builds may have been running.
+
+| | Rust | JavaScript |
+|---|---|---|
+| Package, zipped | tictactoe 58 KB, pong 42 KB | 3.8 KB, 4.7 KB, plus the runtime once: 1.2 MB (4.1 MB of wasm) |
+| First start, compiling | 281 ms, 163 ms | 5.1 s, once per runtime version per device; later scripts start compiled |
+| Start, compiled | 2.4 ms (init 0.06 ms CPU) | 18 ms (init 7.5 ms CPU: Boa's realm, the prelude, parsing) |
+| A move, event to board shown | 2.9 ms (plugin CPU 0.22 ms) | 3.7 ms (2.0 ms) |
+| A pong frame | 0.13 ms CPU | 0.31 ms CPU (0.7% of a core) |
+
+The engine is fast enough: a move costs 2 ms of CPU and a frame a third of a
+millisecond, and a script package is a fifteenth the size of a Rust one.
+What is slow is compiling the 4 MB runtime the first time, and again when an
+app update changes the compiler; a phone will take longer still. So Boa
+stays, and QuickJS is not needed for speed. Next, in order:
+
+1. **Compile the runtime ahead of need**, on a background thread when it is
+   installed or the app updates, so nobody waits on a script's first start.
+   Measure on an Android device.
+2. Trim the engine (Boa features, `opt-level`), which also shortens that
+   compile. QuickJS (about a quarter the size) only if a phone shows that is
+   not enough.
+3. Fetch a non-bundled runtime with the script plugin that needs it. Offers
+   name the runtime now, but only the bundled one installs alongside.
+4. Memory per script instance is not measured (the host has no counter).
+
+Found on the way: Pong runs at about 21 frames a second on Windows rather
+than 30, Rust and JavaScript alike, because the host's 33 ms timer wait is
+rounded up to Windows' 15.6 ms steps (47 ms).
 
 ## Why
 
@@ -61,7 +176,8 @@ runtimes travel like plugins).
 What D needs from the host, all additive:
 
 - A way for the engine to read its script plugin's files: a new WIT
-  interface (`package.read(name) -> option<list<u8>>`, always granted).
+  interface (built as `package-files.read(name) -> option<list<u8>>`, always
+  granted, since `package` is a WIT keyword).
 - Manifest fields `provides` and `runtime`, refused by older builds (which
   cannot run them anyway).
 - Packaging: `plugins/pack` (and later the app) zips a script plugin with no
@@ -133,7 +249,5 @@ export function onEvent(surface, name, args) {
 
 ## A first step
 
-A spike: a JavaScript runtime with Boa (first as shape A, which needs no host change), and `tictactoe` rewritten as a script,
-measured against the Rust version (size, start time, a move's round trip).
-That says whether JavaScript via Boa is good enough, or QuickJS shims are
-worth it.
+Done (see "Built" and "Measured"). It went straight to shape D, since the
+host change was small, with both tictactoe and pong rewritten.

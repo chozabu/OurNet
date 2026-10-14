@@ -1,0 +1,23 @@
+{
+  "id": "js-pong",
+  "name": "Pong (JS)",
+  "version": "0.1.0",
+  "api": "0.1",
+  "runtime": "js@1",
+  "description": "Real-time pong with a friend whose device is online and runs it, straight between your devices. Or practise against the computer. Written in JavaScript, to compare with the Rust version.",
+  "grants": [
+    "identity",
+    "live"
+  ],
+  "sections": [
+    {
+      "name": "pong",
+      "title": "Pong (JS)",
+      "icon": "sports",
+      "surface": "Pong",
+      "scopes": [
+        "personal"
+      ]
+    }
+  ]
+}

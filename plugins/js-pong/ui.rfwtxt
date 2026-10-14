@@ -1,0 +1,83 @@
+// A lobby (practice, friends to challenge, invitations) and the court.
+// Events are handled in scripts/main.js.
+import core.widgets;
+import core.material;
+import ournet;
+
+widget Pong = switch data.mode {
+  "game": Court(),
+  default: Lobby(),
+};
+
+widget Lobby = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    Padding(
+      padding: [16.0, 12.0, 16.0, 8.0],
+      child: Row(
+        children: [
+          Expanded(child: Text(text: "Pong", style: { fontSize: 22.0, fontWeight: "w600" })),
+          TextButton(onPressed: event "refresh" { }, child: Text(text: "Refresh")),
+          ElevatedButton(onPressed: event "practice" { }, child: Text(text: "Practise")),
+        ],
+      ),
+    ),
+    Padding(padding: [16.0, 0.0, 16.0, 8.0], child: Text(text: data.note)),
+    Expanded(
+      child: ListView(
+        children: [
+          ...for invite in data.invites:
+            ListTile(
+              leading: Avatar(person: invite.person, size: 36.0),
+              title: Row(children: [PersonName(person: invite.person, bold: true), Text(text: " wants to play")]),
+              trailing: ElevatedButton(onPressed: event "accept" { device: invite.device }, child: Text(text: "Play")),
+            ),
+          ...for friend in data.friends:
+            ListTile(
+              leading: Avatar(person: friend.person, size: 36.0),
+              title: PersonName(person: friend.person),
+              subtitle: Text(text: friend.label),
+              trailing: OutlinedButton(onPressed: event "challenge" { device: friend.device }, child: Text(text: friend.action)),
+            ),
+          switch data.nobody {
+            true: Padding(
+              padding: [16.0, 16.0, 16.0, 16.0],
+              child: Text(text: "No friend with Pong is online. Practise, or ask a friend to install it."),
+            ),
+            default: SizedBoxShrink(),
+          },
+        ],
+      ),
+    ),
+  ],
+);
+
+widget Court = Keys(
+  onKey: event "key" { },
+  child: Column(
+    children: [
+      Padding(
+        padding: [8.0, 8.0, 16.0, 8.0],
+        child: Row(
+          children: [
+            TextButton(onPressed: event "leave" { }, child: Text(text: "‹ Leave")),
+            Expanded(child: Text(text: data.score, textAlign: "center", style: { fontSize: 22.0, fontWeight: "w700" })),
+            Text(text: data.status),
+          ],
+        ),
+      ),
+      Padding(
+        padding: [16.0, 0.0, 16.0, 16.0],
+        child: Canvas(
+          width: 160.0,
+          height: 100.0,
+          background: 0xFF101820,
+          commands: data.frame,
+          onDrag: event "drag" { },
+          onTap: event "drag" { },
+        ),
+      ),
+      Text(text: "Drag on the court, or use the arrow keys or W and S."),
+    ],
+  ),
+);

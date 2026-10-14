@@ -22,6 +22,9 @@ managed by `core/lib/src/plugins.dart` and drawn by
 changing one, run `cargo run -p pack --release` there and copy the package
 from `plugins/dist` to `app/assets/plugins` (and `core/test/fixtures` for
 echo and vpn). Change the WIT world additively, like the protocol.
+JavaScript plugins (`plugins/js-*`, plugins/SCRIPTING.md) are scripts run by
+the `js` runtime plugin (`plugins/js`, shipped in `app/assets/plugins`);
+their packages (test fixtures in `core/test/fixtures`) need no build.
 
 ## Responsiveness
 

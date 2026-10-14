@@ -234,6 +234,12 @@ pub mod tun {
     }
 }
 
+/// Reads entry [name] (such as `assets/words.txt`) of the package this
+/// plugin runs from; for a script runtime, the script plugin's package.
+pub fn read(name: &str) -> Option<Vec<u8>> {
+    host::package_files::read(name)
+}
+
 /// What the app shows.
 pub mod ui {
     use super::{host, Value};

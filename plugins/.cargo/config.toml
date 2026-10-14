@@ -1,0 +1,5 @@
+# Plugins get no random source from the host; crates that ask getrandom for
+# one (the JavaScript engine's Math.random) use the plugin's own: see
+# js/src/lib.rs.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="custom"']

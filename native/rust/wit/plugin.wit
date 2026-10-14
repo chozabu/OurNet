@@ -139,6 +139,14 @@ interface tun {
   close: func();
 }
 
+/// The files of the package this plugin runs from, as installed: its
+/// manifest, UI, assets and, for a script plugin, its scripts. A runtime
+/// running a script plugin reads that plugin's package, never its own.
+interface package-files {
+  /// Entry `name` (such as `scripts/main.js`), or none.
+  read: func(name: string) -> option<list<u8>>;
+}
+
 /// What the app shows. Widgets come from the package's RFW library; a
 /// plugin updates the data they read.
 interface ui {
@@ -159,6 +167,7 @@ world plugin {
   import live;
   import tun;
   import ui;
+  import package-files;
 
   /// Called once after loading, and after a hot reload's `restore`.
   export init: func();

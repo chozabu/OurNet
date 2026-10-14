@@ -126,6 +126,9 @@ class _PluginsPageState extends State<PluginsPage> {
     required Set<String> grants,
     required String? publisher,
     String changes = '',
+    String? runsOn,
+    bool isRuntime = false,
+    PluginPackage? runtime,
   }) async {
     final existing = plugins[id];
     final replaces =
@@ -162,6 +165,19 @@ class _PluginsPageState extends State<PluginsPage> {
               if (description.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Text(description),
+              ],
+              if (runsOn != null) ...[
+                const SizedBox(height: 8),
+                Text(_runsOn(runsOn, runtime)),
+              ],
+              if (isRuntime) ...[
+                const SizedBox(height: 8),
+                const Text(
+                  'A language runtime: it runs script plugins, each on its '
+                  'own and only with what that plugin was granted. Their '
+                  'code passes through it, so install runtimes only from '
+                  'publishers you trust.',
+                ),
               ],
               if (changes.isNotEmpty) ...[
                 const SizedBox(height: 8),
@@ -209,6 +225,87 @@ class _PluginsPageState extends State<PluginsPage> {
     return ok == true;
   }
 
+  /// "Runs on JavaScript 0.1.0, by …": the runtime a script plugin's code
+  /// passes through, installed or [toInstall] with it.
+  String _runsOn(String language, PluginPackage? toInstall) {
+    final installed = plugins.runtimeFor(language);
+    if (installed != null) {
+      final by = installed.publisher;
+      return 'It is a script, run by ${installed.manifest.name} '
+          '${installed.manifest.version} '
+          '(${by == null ? 'comes with OurNet' : 'by ${by == plugins.node.person ? 'you' : widget.nameOf(by)}'}). '
+          'You can read its scripts in Settings › Plugins.';
+    }
+    if (toInstall != null) {
+      return 'It is a script, run by ${toInstall.manifest.name} '
+          '${toInstall.manifest.version}, which comes with OurNet and is '
+          'installed with it. You can read its scripts in Settings › Plugins.';
+    }
+    return 'It is a script for the $language runtime, which is not '
+        'installed: it will not run until it is.';
+  }
+
+  /// The runtime that comes with the app for [language], when none is
+  /// installed.
+  PluginPackage? _bundledRuntime(String? language) {
+    if (language == null || plugins.runtimeFor(language) != null) return null;
+    for (final p in bundled) {
+      if (p.manifest.provides == 'runtime:$language') return p;
+    }
+    return null;
+  }
+
+  Future<void> _installRuntime(PluginPackage? runtime) async {
+    if (runtime == null) return;
+    await plugins.install(runtime, grants: const {});
+  }
+
+  /// A script plugin's scripts, as installed: what it runs.
+  Future<void> _showScripts(InstalledPlugin plugin) async {
+    final scripts = await plugins.scriptsOf(plugin.id);
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('${plugin.manifest.name} ${plugin.manifest.version}'),
+        content: SizedBox(
+          width: 720,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final MapEntry(key: name, value: text) in scripts.entries)
+                ExpansionTile(
+                  title: Text(name),
+                  initiallyExpanded: scripts.length == 1,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: SelectableText(
+                          text,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _install(PluginPackage package) async {
     final m = package.manifest;
     final PluginRelease? release;
@@ -218,6 +315,7 @@ class _PluginsPageState extends State<PluginsPage> {
       widget.notice('Not installed: ${e.message}');
       return;
     }
+    final runtime = _bundledRuntime(m.runtime);
     if (!await _confirm(
       id: m.id,
       name: m.name,
@@ -226,10 +324,14 @@ class _PluginsPageState extends State<PluginsPage> {
       grants: m.grants,
       publisher: release?.publisher,
       changes: release?.changes ?? '',
+      runsOn: m.runtime,
+      isRuntime: m.isRuntime,
+      runtime: runtime,
     )) {
       return;
     }
     try {
+      await _installRuntime(runtime);
       await plugins.install(package, grants: m.grants, release: release);
       widget.notice('${m.name} installed');
     } catch (e) {
@@ -240,6 +342,7 @@ class _PluginsPageState extends State<PluginsPage> {
 
   Future<void> _installOffer(PluginOffer offer) async {
     final r = offer.release;
+    final runtime = _bundledRuntime(r.runtime);
     if (!await _confirm(
       id: r.plugin,
       name: r.name,
@@ -248,11 +351,15 @@ class _PluginsPageState extends State<PluginsPage> {
       grants: r.grants,
       publisher: r.publisher,
       changes: r.changes,
+      runsOn: r.runtime,
+      isRuntime: r.provides != null,
+      runtime: runtime,
     )) {
       return;
     }
     widget.notice('Fetching ${r.name} ${r.version}…');
     try {
+      await _installRuntime(runtime);
       await plugins.installOffer(offer, grants: r.grants);
       widget.notice('${r.name} ${r.version} installed');
     } catch (e) {
@@ -420,12 +527,25 @@ class _PluginsPageState extends State<PluginsPage> {
     setState(() => watching = ok);
   }
 
-  String _status(InstalledPlugin p) => switch (p.status) {
-    PluginStatus.running => 'Running',
-    PluginStatus.starting => 'Starting…',
-    PluginStatus.stopped => 'Off',
-    PluginStatus.failed => 'Stopped: ${p.error ?? 'unknown error'}',
-  };
+  String _status(InstalledPlugin p) {
+    if (p.manifest.isRuntime) {
+      final runs = plugins.installed
+          .where((s) => plugins.runtimeOf(s.manifest) == p)
+          .map((s) => s.manifest.name)
+          .toList();
+      return p.enabled
+          ? 'Runtime: ${runs.isEmpty ? 'runs no plugins yet' : 'runs ${runs.join(', ')}'}'
+          : 'Runtime, off: its plugins do not run';
+    }
+    final status = switch (p.status) {
+      PluginStatus.running => 'Running',
+      PluginStatus.starting => 'Starting…',
+      PluginStatus.stopped => 'Off',
+      PluginStatus.failed => 'Stopped: ${p.error ?? 'unknown error'}',
+    };
+    final runtime = plugins.runtimeOf(p.manifest);
+    return runtime == null ? status : '$status on ${runtime.manifest.name}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -456,7 +576,9 @@ class _PluginsPageState extends State<PluginsPage> {
           ),
         for (final p in installed)
           ListTile(
-            leading: const Icon(Icons.extension),
+            leading: Icon(
+              p.manifest.isRuntime ? Icons.terminal : Icons.extension,
+            ),
             title: Text('${p.manifest.name} ${p.manifest.version}'),
             subtitle: Text(
               [
@@ -478,13 +600,20 @@ class _PluginsPageState extends State<PluginsPage> {
                   onSelected: (choice) => switch (choice) {
                     'restart' => plugins.restart(p.id),
                     'share' => _share(p),
+                    'scripts' => _showScripts(p),
                     _ => _uninstall(p),
                   },
                   itemBuilder: (_) => [
-                    const PopupMenuItem(
-                      value: 'restart',
-                      child: Text('Restart'),
-                    ),
+                    if (!p.manifest.isRuntime)
+                      const PopupMenuItem(
+                        value: 'restart',
+                        child: Text('Restart'),
+                      ),
+                    if (p.manifest.isScript)
+                      const PopupMenuItem(
+                        value: 'scripts',
+                        child: Text('Read its scripts'),
+                      ),
                     if (p.publisher != null)
                       const PopupMenuItem(
                         value: 'share',
