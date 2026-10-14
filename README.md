@@ -42,21 +42,21 @@ The focus is on **identity, accountability and trust**:
 </table>
 
 - **Notes and checklists**, Keep-style, including drawings, photos and voice
-  notes with on-device transcription ([NOTES_KEEP.md](NOTES_KEEP.md)).
+  notes with on-device transcription ([NOTES.md](docs/NOTES.md)).
 - **Chat**: one-to-one and group conversations, with replies, reactions,
-  files, and voice and video calls ([MESSAGING.md](MESSAGING.md)).
+  files, and voice and video calls ([MESSAGING.md](docs/MESSAGING.md)).
 - **Forums**: public forums and private group forums, with threaded replies
   and voting.
 - **Groups** with their own chat, forum, notes, lists and calendar
-  ([SCOPES.md](SCOPES.md)).
+  ([SCOPES.md](docs/SCOPES.md)).
 - **Calendar**: your own plus a private calendar for each group
-  ([CALENDAR.md](CALENDAR.md)).
-- **Maps** with live location sharing among friends ([MAPS.md](MAPS.md)).
-- **Activity**: a feed of what friends did ([ACTIVITY.md](ACTIVITY.md)).
+  ([CALENDAR.md](docs/CALENDAR.md)).
+- **Maps** with live location sharing among friends ([MAPS.md](docs/MAPS.md)).
+- **Activity**: a feed of what friends did ([ACTIVITY.md](docs/ACTIVITY.md)).
 - **Files and private drive sync** across your own devices
-  ([PRIVATE_DRIVE.md](PRIVATE_DRIVE.md)).
+  ([PRIVATE_DRIVE.md](docs/PRIVATE_DRIVE.md)).
 
-It runs on Windows and Android. To try it, see [TRY_IT.md](TRY_IT.md).
+It runs on Windows and Android. To try it, see [TRY_IT.md](docs/TRY_IT.md).
 
 ## Plugins
 
@@ -74,8 +74,8 @@ Plugins are signed and can be shared between friends.
 
 The first-party plugins are a wiki, a microblog, noughts and crosses, Pong,
 Blast Garden and a friend-network VPN. Their sources are in `plugins/`; the
-design and API are in [PLUGINS.md](PLUGINS.md) and sharing in
-[plugins/SHARING.md](plugins/SHARING.md).
+design and API are in [PLUGINS.md](docs/PLUGINS.md) and sharing in
+[SHARING.md](docs/SHARING.md).
 
 ## Structure
 
@@ -107,7 +107,7 @@ flutter run -d windows
 
 The core tests load neither iroh nor Flutter. Transport tests run real local
 QUIC endpoints. Contributor guidance, including compatibility and performance
-rules, is in [AGENTS.md](AGENTS.md) and [PERFORMANCE.md](PERFORMANCE.md).
+rules, is in [AGENTS.md](AGENTS.md) and [PERFORMANCE.md](docs/PERFORMANCE.md).
 `tool/run.ps1 -Profile alice` opens a release build with its own identity, so
 two profiles can talk to each other on one PC.
 
@@ -122,15 +122,17 @@ in `app`, which draws the app with made-up content.
 
 ## Product and protocol
 
-[CORE_IDEA.md](CORE_IDEA.md) has the longer-term vision.
-[PROTOCOL.md](PROTOCOL.md) and [PROTOCOL_CHANGELOG.md](PROTOCOL_CHANGELOG.md)
-describe the wire format, [CONNECTIVITY.md](CONNECTIVITY.md) covers NAT,
+[CORE_IDEA.md](docs/CORE_IDEA.md) has the longer-term vision.
+[PROTOCOL.md](docs/PROTOCOL.md) and [PROTOCOL_CHANGELOG.md](docs/PROTOCOL_CHANGELOG.md)
+describe the wire format, [CONNECTIVITY.md](docs/CONNECTIVITY.md) covers NAT,
 offline delivery and friend carriers, and
-[RETROSHARE_COMPARISON.md](RETROSHARE_COMPARISON.md) records what we take from
+[RETROSHARE_COMPARISON.md](docs/RETROSHARE_COMPARISON.md) records what we take from
 RetroShare. Provenance proves signed statements about recorded actions, not
 truth, real-world identity or off-protocol copying. Forward secrecy, identity
 recovery and encrypted history migration are still to do.
 [PRIVACY.md](PRIVACY.md) is the privacy declaration for the store apps.
+Everything else (feature notes, plugin design, testing guides, reviews) is in
+[docs/](docs/).
 
 ## License
 

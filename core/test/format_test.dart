@@ -8,7 +8,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
 
 /// Format versions and rollout switches: what new builds write, and what they
-/// still read from older ones. See PROTOCOL_CHANGELOG.md.
+/// still read from older ones. See docs/PROTOCOL_CHANGELOG.md.
 void main() {
   late Directory temp;
   setUp(() => temp = Directory.systemTemp.createTempSync('ournet-format'));

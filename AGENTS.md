@@ -15,14 +15,14 @@ the native code rejects.
 
 Features declare their kinds in a `Module` (`core/lib/src/builtin_modules.dart`)
 and answer live requests through `Node.registry`; add to those rather than to
-a switch. Plugins (PLUGINS.md) are WebAssembly components run by the native
+a switch. Plugins (`docs/PLUGINS.md`) are WebAssembly components run by the native
 host (`native/rust/src/plugin.rs`, API in `native/rust/wit/plugin.wit`),
 managed by `core/lib/src/plugins.dart` and drawn by
 `app/lib/ui/plugin_view.dart`. Their sources are in `plugins/`: after
 changing one, run `cargo run -p pack --release` there and copy the package
 from `plugins/dist` to `app/assets/plugins` (and `core/test/fixtures` for
 echo and vpn). Change the WIT world additively, like the protocol.
-JavaScript plugins (`plugins/js-*`, plugins/SCRIPTING.md) are scripts run by
+JavaScript plugins (`plugins/js-*`, `docs/SCRIPTING.md`) are scripts run by
 the `js` runtime plugin (`plugins/js`, shipped in `app/assets/plugins`);
 their packages (test fixtures in `core/test/fixtures`) need no build.
 
@@ -54,7 +54,7 @@ their packages (test fixtures in `core/test/fixtures`) need no build.
   frame by `Calendar.warm`); never scan history for it. Extend
   `core/test/calendar_test.dart` and
   `integration_test/calendar_history_test.dart` for calendar changes (see
-  `CALENDAR.md`).
+  `docs/CALENDAR.md`).
 - Android profile runs install as `org.chozabu.ournet.profile`; never run
   measurement builds under the everyday application ID. Extend
   `integration_test/photo_scroll_test.dart` for list/image changes.
@@ -63,7 +63,7 @@ their packages (test fixtures in `core/test/fixtures`) need no build.
   releases to Play and the Microsoft Store together (checks both stores'
   credentials before building). The upload keystore and Play service
   account key live in `%USERPROFILE%\.ournet-signing`, never in the repo.
-- Follow `PERFORMANCE.md` for measurement boundaries, profile-mode runs and
+- Follow `docs/PERFORMANCE.md` for measurement boundaries, profile-mode runs and
   baselines. Do not compare debug timings to profile/release timings or collect
   benchmark results while other builds or test suites are running.
 
@@ -76,7 +76,7 @@ existing field or kind. A breaking change needs a new ALPN that the next release
 accepts alongside `ournet/2`. The oldest peer a build syncs with is set by
 `PeerNetwork.requiredCaps` (currently 0.2.27); raising it cuts off older
 builds, so release to both stores together and record it in
-`PROTOCOL_CHANGELOG.md`. Peers exchange `version` (keep `appVersion` in
+`docs/PROTOCOL_CHANGELOG.md`. Peers exchange `version` (keep `appVersion` in
 `app/lib/build_info.dart` equal to `pubspec.yaml`, which a test checks).
 When releasing a new version, run `dart run tool/upgrade_fixture.dart <version>`
 in `core` and commit the saved profile; `test/upgrade_test.dart` opens every

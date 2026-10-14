@@ -1,4 +1,4 @@
-//! The plugin host: WebAssembly components on wasmtime (see PLUGINS.md and
+//! The plugin host: WebAssembly components on wasmtime (see docs/PLUGINS.md and
 //! `wit/plugin.wit`).
 //!
 //! Each plugin runs on a thread of its own, so a slow or looping plugin
@@ -178,7 +178,7 @@ struct LoadConfig {
     #[serde(default)]
     package: Option<PathBuf>,
     /// The component is a language runtime running a script plugin
-    /// (plugins/SCRIPTING.md). A runtime imports every interface a script
+    /// (docs/SCRIPTING.md). A runtime imports every interface a script
     /// might use, so its imports are not held to [grants]; each call is.
     #[serde(default)]
     runtime: bool,

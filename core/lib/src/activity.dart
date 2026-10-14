@@ -92,7 +92,7 @@ class ActivityEntry {
 }
 
 /// What happened while you were away: forum posts, note edits, events,
-/// files and new friends, newest arrival first (see ACTIVITY.md).
+/// files and new friends, newest arrival first (see docs/ACTIVITY.md).
 ///
 /// Read from the store's arrival index, never by scanning history: a first
 /// load reads back a bounded number of pages, [more] reads further, and

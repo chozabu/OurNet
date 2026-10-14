@@ -253,14 +253,14 @@ class InstalledPlugin {
   String? get publisher => release?.publisher;
 }
 
-/// Installs, runs and answers plugins (PLUGINS.md). Each runs in the native
+/// Installs, runs and answers plugins (docs/PLUGINS.md). Each runs in the native
 /// host on a thread of its own; this side answers its imports from the node,
 /// feeds it new objects of its kinds through insertion cursors (never a
 /// history scan), carries its live messages and keeps what its surfaces
 /// show. Its kinds, sections and live requests go into [Node.registry], next
 /// to the built-in ones.
 ///
-/// Signed releases (plugins/STORE-PLAN.md): an installed plugin is pinned to
+/// Signed releases (docs/STORE-PLAN.md): an installed plugin is pinned to
 /// its publisher, and each version is unpacked into a directory of its own
 /// (`<id>/v/<digest>`) before it replaces the last, which stays with a copy
 /// of the storage it had. A new version that fails to start goes back to it.
@@ -432,7 +432,7 @@ class Plugins {
   }
 
   /// A script plugin's scripts as installed, by name, to show the people
-  /// running it (plugins/SCRIPTING.md: the source is visible).
+  /// running it (docs/SCRIPTING.md: the source is visible).
   Future<Map<String, String>> scriptsOf(String id) async {
     final code = Directory('${_code(id, _of(id)['active'])}/scripts');
     final found = <String, String>{};

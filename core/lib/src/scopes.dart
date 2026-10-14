@@ -1,4 +1,4 @@
-/// Who content is for, as the app's scope switcher sees it (see SCOPES.md).
+/// Who content is for, as the app's scope switcher sees it (see docs/SCOPES.md).
 ///
 /// "All" is not a kind: it is every kind a section allows at once.
 enum ScopeKind {
@@ -37,7 +37,7 @@ enum ScopedSection implements Section {
   files({ScopeKind.personal, ScopeKind.group, ScopeKind.public}),
   maps({ScopeKind.personal}),
 
-  /// What happened lately, across the other sections (ACTIVITY.md).
+  /// What happened lately, across the other sections (docs/ACTIVITY.md).
   activity({ScopeKind.personal, ScopeKind.group, ScopeKind.public});
 
   @override

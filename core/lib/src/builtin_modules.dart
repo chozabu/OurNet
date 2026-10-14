@@ -1,6 +1,6 @@
 /// The kinds compiled into this build and how their content is checked,
 /// grouped by the feature that owns them. Plugins declare theirs the same way
-/// at run time: see [Registry] and PLUGINS.md.
+/// at run time: see [Registry] and docs/PLUGINS.md.
 library;
 
 import 'model.dart';
@@ -92,7 +92,7 @@ bool _listing(Json p) =>
                     (p['description'] as String).length <= 500));
 
 /// Signed plugin releases and the packages that carry them: see
-/// `PluginRelease` and plugins/STORE-PLAN.md.
+/// `PluginRelease` and docs/STORE-PLAN.md.
 const pluginReleasesModule = Module(
   'plugin_releases',
   kinds: {'plugin_release': _pluginRelease, 'plugin_package': _pluginPackage},

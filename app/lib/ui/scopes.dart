@@ -1,7 +1,7 @@
 part of 'app.dart';
 
 /// The scope the content destinations show: All, Personal, Public or one
-/// group. See SCOPES.md.
+/// group. See docs/SCOPES.md.
 extension _Scopes on _OurNetAppState {
   /// The scope on screen: null is All.
   ScopeKind? get scope => activeRoom != null ? ScopeKind.group : viewScope;

@@ -7,7 +7,7 @@ import 'notes.dart';
 final _nbsp = String.fromCharCode(0xa0);
 
 /// One note from a Google Takeout Keep export (`Takeout/Keep/<name>.json`).
-/// See NOTES_KEEP.md for how each field maps to a note.
+/// See docs/NOTES.md for how each field maps to a note.
 class KeepNote {
   final String name, title, text;
 

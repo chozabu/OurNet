@@ -887,7 +887,7 @@ class Store {
       (row['rowid'] as int, _parse(row['id'] as String, row['wire'] as String)),
   ];
 
-  /// The kinds the activity feed shows (see ACTIVITY.md). Their arrivals are
+  /// The kinds the activity feed shows (see docs/ACTIVITY.md). Their arrivals are
   /// recorded as they are stored; renaming the trigger in [_arrivals] is what
   /// makes a changed list take effect.
   static const activityKinds = [

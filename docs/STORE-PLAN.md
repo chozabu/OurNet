@@ -1,9 +1,9 @@
 # Plugin store plan
 
 Status: revision 2 (13 October 2026), after
-[STORE-PLAN-REVIEW.md](STORE-PLAN-REVIEW.md). Phase 1 is built (see "Releases"
+a review of revision 1 (its points and our responses are under "Review response"). Phase 1 is built (see "Releases"
 in PLUGINS.md); the rest is plan. Covers "F2F
-distribution" from phase 2 of [PLUGINS.md](../PLUGINS.md), and the next step it
+distribution" from phase 2 of [PLUGINS.md](PLUGINS.md), and the next step it
 lists: "`plugin_release` objects so friends can share plugins".
 
 Items marked **Decision** are product choices still open. They are collected at
@@ -451,7 +451,7 @@ compliance.
 
 ## Review response
 
-Where this revision stands on each point of STORE-PLAN-REVIEW.md:
+Where this revision stands on each point of the review of revision 1:
 
 | # | Review point | Response |
 |---|---|---|

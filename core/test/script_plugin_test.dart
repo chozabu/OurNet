@@ -6,7 +6,7 @@ import 'dart:typed_data';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:test/test.dart';
 
-/// Script plugins (plugins/SCRIPTING.md): JavaScript run by the `js` runtime
+/// Script plugins (docs/SCRIPTING.md): JavaScript run by the `js` runtime
 /// plugin (plugins/js, shipped in app/assets/plugins), through the real
 /// native host. Set OURNET_SCRIPT_BENCH=1 to also compare start time, a
 /// noughts-and-crosses move and a pong frame against the Rust versions.

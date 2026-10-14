@@ -4,7 +4,7 @@ import 'scopes.dart';
 
 /// What a plugin package declares in `manifest.json`: who it is, what it may
 /// reach, the kinds it owns and how their payloads are checked, and where it
-/// appears. See PLUGINS.md.
+/// appears. See docs/PLUGINS.md.
 class PluginManifest {
   /// Interfaces every plugin may use.
   static const always = {'log', 'clock', 'storage', 'ui'};
@@ -25,7 +25,7 @@ class PluginManifest {
   final String description;
   final Set<String> grants;
 
-  /// For a language runtime (plugins/SCRIPTING.md): what it runs, as
+  /// For a language runtime (docs/SCRIPTING.md): what it runs, as
   /// `runtime:<language>@<major>`, such as `runtime:js@1`. A runtime has no
   /// grants, kinds or sections of its own; it runs only for script plugins,
   /// each time with theirs.

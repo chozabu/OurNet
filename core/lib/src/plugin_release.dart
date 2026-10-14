@@ -3,7 +3,7 @@ import 'node.dart';
 import 'plugins.dart';
 import 'registry.dart';
 
-/// What a publisher signed about one version of a plugin (plugins/STORE-PLAN.md):
+/// What a publisher signed about one version of a plugin (docs/STORE-PLAN.md):
 /// its identity, grants and kinds, and the digest of its package's contents.
 ///
 /// An ordinary [SignedObject], public-shaped, so verifying it is

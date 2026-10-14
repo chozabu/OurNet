@@ -1,6 +1,6 @@
 //! OurNet's Windows network helper.
 //!
-//! VPN plugins need a virtual network interface (PLUGINS.md, `tun`). On
+//! VPN plugins need a virtual network interface (docs/PLUGINS.md, `tun`). On
 //! Windows that is a Wintun adapter, which only an administrator can make.
 //! Rather than run the app elevated, this small service runs as SYSTEM and
 //! owns the adapter; the app talks to it over two named pipes that only the

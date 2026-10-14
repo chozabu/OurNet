@@ -1,7 +1,7 @@
 part of 'app.dart';
 
 /// Public chats in the Chat section: open conversations anyone can start and
-/// anyone with the address can join. See [PublicChats] and SCOPES.md.
+/// anyone with the address can join. See [PublicChats] and docs/SCOPES.md.
 extension _PublicChatPages on _OurNetAppState {
   /// The chat's name, once its record has arrived.
   String publicChatName(String space) => memo(

@@ -7,7 +7,7 @@ Update 22 September: OurNet is in everyday use on Windows and a physical Pixel 8
 Pro, and ships to Google Play internal testing and the Microsoft Store. Recorded
 physical-device checks: the Android document-provider acceptance test and the
 history/editor profile journey ([PRIVATE_DRIVE.md](PRIVATE_DRIVE.md)), and
-voice-note recording/transcription timing ([NOTES_KEEP.md](NOTES_KEEP.md)).
+voice-note recording/transcription timing ([NOTES.md](NOTES.md)).
 Android background sync, the stay-connected foreground service and the Windows
 notification area are implemented ([CONNECTIVITY.md](CONNECTIVITY.md)). Rows
 below are otherwise as of 9 September.

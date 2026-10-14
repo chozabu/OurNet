@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Opens a destination from the navigation: the side list when wide, the
-/// drawer on a phone. The scope stays (SCOPES.md). The navigation lists
+/// drawer on a phone. The scope stays (docs/SCOPES.md). The navigation lists
 /// only sections; scopes are picked from the header ([pickScope]).
 Future<void> openSection(WidgetTester tester, String title) async {
   final menu = find.byTooltip('Open navigation menu');

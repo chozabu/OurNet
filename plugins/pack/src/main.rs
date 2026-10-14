@@ -8,7 +8,7 @@
 //! `dist/<id>.ournet-plugin`. A script plugin (its manifest names a
 //! `runtime`) has no crate: its `scripts/` go in instead, as they are. With
 //! `--watch`, does so again whenever a plugin's sources change, for the
-//! app's hot reload (PLUGINS.md).
+//! app's hot reload (docs/PLUGINS.md).
 
 use std::fs;
 use std::io::Write;

@@ -1,7 +1,7 @@
 # OurNet plugins: the guest SDK, the packer that turns a crate into an
 # installable package, and first-party plugins. Build every package with
 #   cargo run -p pack --release
-# which writes `dist/<id>.ournet-plugin`. See PLUGINS.md.
+# which writes `dist/<id>.ournet-plugin`. See docs/PLUGINS.md.
 [workspace]
 resolver = "2"
 members = ["sdk", "pack", "echo", "wiki", "microblog", "tictactoe", "pong", "vpn", "git", "git-remote-ournet", "js"]

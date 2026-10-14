@@ -82,7 +82,7 @@ endif()
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../native/irohdart_ffi.dll"
   DESTINATION "${CMAKE_INSTALL_PREFIX}" COMPONENT Runtime)
 
-# The network helper VPN plugins use (native/tun-helper, PLUGINS.md): a
+# The network helper VPN plugins use (native/tun-helper, docs/PLUGINS.md): a
 # service the app installs once, with the person's consent, so that it never
 # runs as administrator. Shipped beside the app with Wintun, which it loads.
 set(OURNET_TUN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../native/tun-helper")

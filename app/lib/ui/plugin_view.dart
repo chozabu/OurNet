@@ -10,7 +10,7 @@ import 'package:rfw/rfw.dart';
 /// One surface of a plugin: its RFW widget (from the package's `ui.rfwtxt`)
 /// over the data the plugin last sent for it. Events go back to the plugin;
 /// nothing here waits on it, so a slow plugin shows stale data, never a
-/// stuck frame. See PLUGINS.md.
+/// stuck frame. See docs/PLUGINS.md.
 class PluginView extends StatefulWidget {
   final Plugins plugins;
   final String plugin;

@@ -146,7 +146,7 @@ enum Destination {
   const Destination(this.id, this.title, this.icon);
 
   /// The main navigation list, in order. Groups are not a place of their
-  /// own: picking one as the scope shows its content in these (SCOPES.md).
+  /// own: picking one as the scope shows its content in these (docs/SCOPES.md).
   static const navigation = [
     activity,
     notes,
@@ -260,7 +260,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// Publishes who this person is connected to when that changes.
   CoalescedTask? _friendList;
 
-  /// What happened lately (ACTIVITY.md), kept current as things arrive.
+  /// What happened lately (docs/ACTIVITY.md), kept current as things arrive.
   late final Activity activity = Activity(node, notes: notes);
   late final CoalescedTask _activityRefresh;
   StreamSubscription<Set<String>>? _activityChanges;
@@ -315,7 +315,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   Future<List<_SearchHit>>? searchIndex;
 
   /// The group picked as the scope: the scoped destinations show its
-  /// content. See SCOPES.md.
+  /// content. See docs/SCOPES.md.
   EverydayItem? activeRoom;
 
   /// The scope when no group is picked: null is All.
@@ -329,7 +329,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   late final Listings listings;
 
   /// Installed plugins; null where they cannot run (tests, in-memory
-  /// profiles). See PLUGINS.md.
+  /// profiles). See docs/PLUGINS.md.
   Plugins? plugins;
 
   /// The plugin section open, for [Destination.plugin].

@@ -9,7 +9,7 @@ import 'package:test/test.dart';
 import 'plugins_test.dart' show sharedCache;
 
 /// Signed releases, distribution between friends, pinning and rollback
-/// (plugins/STORE-PLAN.md), with the echo plugin in the real native host.
+/// (docs/STORE-PLAN.md), with the echo plugin in the real native host.
 void main() {
   final echo = File('test/fixtures/echo.ournet-plugin').readAsBytesSync();
   const grants = {'objects', 'identity', 'live', 'tun'};

@@ -2,7 +2,7 @@
 
 Phase 1 of [STORE-PLAN.md](STORE-PLAN.md) (signed releases between friends).
 The format and rules are in the "Releases" section of
-[PLUGINS.md](../PLUGINS.md); this file is the working notes.
+[PLUGINS.md](PLUGINS.md); this file is the working notes.
 
 ## Status
 

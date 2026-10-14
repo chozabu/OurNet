@@ -2,7 +2,7 @@ part of 'app.dart';
 
 /// The activity feed: what happened lately across forums, notes, calendars,
 /// files and friends, one row per thing per day, newest arrival first. Each
-/// row opens the thing where it lives. See ACTIVITY.md.
+/// row opens the thing where it lives. See docs/ACTIVITY.md.
 extension _ActivityPage on _OurNetAppState {
   static const _sectionLabels = {
     ActivitySection.posts: 'Posts',

@@ -18,7 +18,7 @@ typedef ChatMessage = ({
 
 /// Public chats: named, open conversations that anyone can start and anyone
 /// with the address can join, like public forums but read as a chat
-/// (RetroShare's chat lobbies are the model). See SCOPES.md.
+/// (RetroShare's chat lobbies are the model). See docs/SCOPES.md.
 ///
 /// A chat's address is `chat:<creator>:<random>`. Two kinds live in it, both
 /// public: `chat` names it (only the creator's counts, as the address names

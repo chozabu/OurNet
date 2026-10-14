@@ -59,7 +59,7 @@ try {
   Copy-Item -Path 'build/windows/x64/runner/Release/*' -Destination $taskOutput -Recurse
   Get-VcRuntime | Copy-Item -Destination $taskOutput
   foreach($taskGuide in @('TRY_IT.md','PRIVATE_DRIVE.md','PERFORMANCE.md','PARITY.md')) {
-    Copy-Item -LiteralPath (Join-Path $taskRoot $taskGuide) -Destination $taskOutput
+    Copy-Item -LiteralPath (Join-Path $taskRoot "docs/$taskGuide") -Destination $taskOutput
   }
   @'
 param([ValidatePattern('^[a-zA-Z0-9_-]{1,40}$')][string]$Profile='main')

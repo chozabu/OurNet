@@ -7,7 +7,7 @@ import io.flutter.plugin.common.MethodChannel
 
 /**
  * The virtual network interface a VPN plugin sends packets through (see
- * PLUGINS.md). Android asks the person once; the interface's descriptor
+ * docs/PLUGINS.md). Android asks the person once; the interface's descriptor
  * then goes to the native plugin host, which reads and writes packets
  * itself. Dart only asks for it ("open") and lets it go ("close").
  */

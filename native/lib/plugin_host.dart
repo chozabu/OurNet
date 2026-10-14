@@ -1,7 +1,7 @@
 /// The native plugin host (`rust/src/plugin.rs`): WebAssembly components on
 /// wasmtime, one thread each. This is the transport only; what calls mean,
 /// and the answers to a plugin's imports, are decided by `ournet_core`'s
-/// `Plugins`. See PLUGINS.md.
+/// `Plugins`. See docs/PLUGINS.md.
 @DefaultAsset('package:ournet_native/ournet_native.dart')
 library;
 

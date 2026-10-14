@@ -1,7 +1,7 @@
 /// The OurNet plugin API. A plugin is a WebAssembly component targeting the
 /// `plugin` world. The host signs, encrypts, stores and syncs on its behalf;
 /// a plugin never holds keys. Every call into a plugin runs on that plugin's
-/// own thread, never the app's UI thread. See PLUGINS.md.
+/// own thread, never the app's UI thread. See docs/PLUGINS.md.
 ///
 /// Additive within 0.x: new functions go in new interfaces, so an older
 /// plugin keeps linking.

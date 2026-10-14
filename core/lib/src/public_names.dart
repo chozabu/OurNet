@@ -3,7 +3,7 @@
 /// decides who owns a name, so two groups of friends who start "cooking"
 /// without knowing of each other end up in one forum, and where that is not
 /// wanted a more specific name or a private group does the job. See
-/// SCOPES.md.
+/// docs/SCOPES.md.
 ///
 /// A forum's address is its name in lower case (the same shape as the old
 /// named forums, so older builds read it as they do those). A chat's is
@@ -40,7 +40,7 @@ class PublicNames {
 
   /// Whether [space] is the address of a public forum, whichever way it was
   /// named: a name, or an owner-bound `forum2:` address from before names.
-  /// Whether [space] belongs to a plugin (`x.<plugin>…`, see PLUGINS.md):
+  /// Whether [space] belongs to a plugin (`x.<plugin>…`, see docs/PLUGINS.md):
   /// followed like a forum, but holding the plugin's own kinds.
   static bool isPluginSpace(String space) => space.startsWith('x.');
 

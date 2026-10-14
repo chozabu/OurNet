@@ -64,7 +64,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/maps/
-    # First-party plugins, built by plugins/pack (see PLUGINS.md).
+    # First-party plugins, built by plugins/pack (see docs/PLUGINS.md).
     - assets/plugins/
 
 # The Windows MSIX package, built by tool/package.ps1 -Msix. The identity is

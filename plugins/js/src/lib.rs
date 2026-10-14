@@ -1,4 +1,4 @@
-//! The JavaScript runtime for script plugins (plugins/SCRIPTING.md).
+//! The JavaScript runtime for script plugins (docs/SCRIPTING.md).
 //!
 //! A runtime is a plugin package marked `"provides": "runtime:js@1"`. The
 //! host starts one instance of it for each script plugin, with that plugin's

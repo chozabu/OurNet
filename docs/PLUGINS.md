@@ -3,9 +3,9 @@
 Status: implemented on Windows and Android (October 2026): the registry, the
 WebAssembly host, the app's plugin pages, live messages, datagrams, virtual
 interfaces, five first-party plugins, and signed releases shared between
-friends (phase 1 of [plugins/STORE-PLAN.md](plugins/STORE-PLAN.md)), and
+friends (phase 1 of [STORE-PLAN.md](STORE-PLAN.md)), and
 JavaScript plugins run by a runtime plugin
-([plugins/SCRIPTING.md](plugins/SCRIPTING.md)). The store plugin and the
+([SCRIPTING.md](SCRIPTING.md)). The store plugin and the
 media interface are still to do; see Status below. Answers open decision 11
 in [CORE_IDEA.md](CORE_IDEA.md) ("What may plugins access, execute and
 publish?").
@@ -312,7 +312,7 @@ do files.
 
 ### Releases (`core/lib/src/plugin_release.dart`)
 
-Phase 1 of [plugins/STORE-PLAN.md](plugins/STORE-PLAN.md):
+Phase 1 of [STORE-PLAN.md](STORE-PLAN.md):
 
 - **Digest.** A package's `digest` is SHA-256 over the canonical list of
   `[name, sha256]` of its entries, so it names the contents, not the zip.
