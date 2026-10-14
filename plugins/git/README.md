@@ -100,3 +100,26 @@ Decided for later: keep the current rule for personal and group
 repositories, then add pull-request objects and an optional maintainer list
 per group repository, and perhaps a "Sam's version" view of each person's
 branches without changing what syncs.
+
+## Plugin development over git: ideas for later
+
+Today a plugin is built with `cargo run -p pack`, hot reloaded from a
+developer folder, then signed in Settings › Plugins. Git could shorten each
+step, cheapest first:
+
+1. **Releases name their source.** An optional release field records the
+   repository and commit a package was built from; the plugin's page links
+   to it here. Friends read what they run, fork it, send changes. `pack`
+   already writes zips with fixed times, so rebuilding a commit to check a
+   digest may work (unverified for Rust's wasm output).
+2. **Push a tag, get a release.** `pack --publish` builds and hands the
+   package to the app over the local bridge; the app asks, then signs. With
+   git: `git tag v0.3.0 && git push ournet --tags`. The key stays in the app.
+3. **Testers follow a branch.** Install a plugin from a repository and a
+   branch (`dev`); each push carrying a package updates those who opted in,
+   like the developer folder but across friends.
+4. **No build step.** With script plugins (plugins/SCRIPTING.md) a
+   repository is the plugin, and the app installs from a repository and tag
+   with no toolchain, Android included.
+
+Suggested order: 1 and 2, then 3; 4 follows scripting.
