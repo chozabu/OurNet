@@ -421,6 +421,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
 
   late final ConversationController conversations;
   late final MessageUpdates messageUpdates;
+  late final ForumVotes forumVotes;
   late final Typing typing;
   late final LocationShare locationShare;
   late final MapTiles mapTiles;
@@ -466,6 +467,13 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
 
   /// Posts whose replies are folded away in the open discussion.
   final collapsedPosts = <String>{};
+
+  /// How forum discussions are ordered: 'hot', 'new' or 'top'.
+  String get forumSort => switch (node.store.setting('forumSort')) {
+    'new' => 'new',
+    'top' => 'top',
+    _ => 'hot',
+  };
   final groupDraftBeforeEdit = <String, TextEditingValue>{};
 
   /// Messages chosen in selection mode, in the open conversation.
@@ -509,6 +517,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     if (widget.enablePlatform) performance.start();
     conversations = ConversationController(node);
     messageUpdates = MessageUpdates(node);
+    forumVotes = ForumVotes(node);
     draftStore = DraftStore(node);
     notes = Notes(node);
     personalNotesController = NotesHomeController(notes);
@@ -660,6 +669,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _activityRefresh.schedule();
     _dataRefresh = CoalescedTask(() async {
       await messageUpdates.catchUp();
+      await forumVotes.catchUp();
       for (final person in await conversations.refreshConversations()) {
         typing.clear(person);
       }

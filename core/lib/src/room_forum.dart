@@ -167,8 +167,13 @@ class RoomForum {
   List<ForumPost> get topics => _t.topics;
 
   /// A discussion and its replies, depth first and oldest first within each
-  /// level; the root comes first.
-  List<ForumPost> thread(String rootId) => _t.thread(rootId);
+  /// level; the root comes first. With [score], replies with the higher score
+  /// come first, and those with the same score oldest first.
+  List<ForumPost> thread(String rootId, {int Function(ForumPost)? score}) =>
+      _t.thread(rootId, score: score);
+
+  /// The post this device holds as [id], shared copies included.
+  ForumPost? post(String id) => _posts[id];
 
   /// Direct replies to a post.
   int replies(String id) => _t.children[id]?.length ?? 0;
@@ -237,7 +242,9 @@ class _Tree {
     return order != 0 ? order : a.object.id.compareTo(b.object.id);
   }
 
-  List<ForumPost> thread(String rootId) {
+  List<ForumPost> thread(String rootId, {int Function(ForumPost)? score}) {
+    final scores = <String, int>{};
+    int rank(ForumPost p) => scores[p.object.id] ??= score!(p);
     final ordered = <ForumPost>[];
     final visited = <String>{};
     final pending = [rootId];
@@ -246,9 +253,15 @@ class _Tree {
       if (!visited.add(id)) continue;
       final found = byId[id];
       if (found != null) ordered.add(found);
-      pending.addAll(
-        (children[id] ?? const []).reversed.map((r) => r.object.id),
-      );
+      var replies = children[id] ?? const <ForumPost>[];
+      if (score != null && replies.length > 1) {
+        replies = replies.toList()
+          ..sort((a, b) {
+            final order = rank(b).compareTo(rank(a));
+            return order != 0 ? order : _oldest(a, b);
+          });
+      }
+      pending.addAll(replies.reversed.map((r) => r.object.id));
     }
     return ordered;
   }

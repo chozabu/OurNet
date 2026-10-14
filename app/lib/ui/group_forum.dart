@@ -8,15 +8,11 @@ extension _GroupForum on _OurNetAppState {
         future: allGroupTopics ??= loadAllGroupTopics(),
         builder: (context, snapshot) {
           final objects = memo('allForumTopics/${snapshot.data.hashCode}', () {
-            final topics = [
+            return rankTopics([
               ...discussionObjects(),
               for (final post in snapshot.data ?? const <SignedObject>[])
                 if (allGroupForums.containsKey(post.space)) post,
-            ];
-            int written(SignedObject post) =>
-                allGroupTopicTimes[post.id] ?? post.created;
-            topics.sort((a, b) => written(b).compareTo(written(a)));
-            return topics;
+            ], (post) => allGroupTopicTimes[post.id] ?? post.created);
           });
           return Column(
             children: [
@@ -144,11 +140,16 @@ extension _GroupForum on _OurNetAppState {
     final space = room.object.space;
     final thread = groupThreads[space];
     final replying = groupReplies[space];
-    final posts = thread == null ? forum.topics : forum.thread(thread);
-    final objects = [
+    final posts = thread == null
+        ? forum.topics
+        : forum.thread(thread, score: (p) => postVotes(p.object, p.data).score);
+    final visible = [
       for (final p in posts)
         if (contentVisible(p.object)) p.object,
     ];
+    final objects = thread == null
+        ? rankTopics(visible, (o) => forum.post(o.id)?.sent ?? o.created)
+        : visible;
     // Open is read, as for a chat: everything in the forum, including what
     // it does not show, or the badge could never clear.
     if (groupForumUnreadOf(room) > 0 || groupForumUnread() > 0) {
@@ -183,6 +184,7 @@ extension _GroupForum on _OurNetAppState {
         Row(
           children: [
             Expanded(child: Text(heading)),
+            if (thread == null) forumSortMenu(),
             if (thread != null)
               IconButton(
                 tooltip: 'All discussions',

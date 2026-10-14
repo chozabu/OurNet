@@ -7,6 +7,18 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: forum votes
+
+Additive; no change to `requiredCaps` or the ALPN.
+
+- Forums show up and down votes using the existing `vote` kind (`object`,
+  `value` 1, -1, or 0 to withdraw); each person's latest vote counts. Public
+  forum posts get public votes in the forum's space, which travel to its
+  subscribers. Group forum posts get votes sealed to the group like
+  `room_post`, pointing at the post's `copyOf` for shared history copies.
+  Older builds store and relay them; their Voting page counts only the public
+  ones.
+
 ## Unreleased: plugins
 
 See PLUGINS.md. All additive; no change to `requiredCaps` or the ALPN.

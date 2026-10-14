@@ -425,6 +425,7 @@ extension _SocialPages on _OurNetAppState {
                         'Discussion'),
             ),
           ),
+          if (selectedThread == null) forumSortMenu(),
           if (selectedThread != null)
             IconButton(
               tooltip: 'All discussions',
@@ -546,8 +547,7 @@ extension _SocialPages on _OurNetAppState {
       final roots = posts
           .where((o) => !ids.contains(o.data['payload']['parent']))
           .toList();
-      if (all) roots.sort((a, b) => b.created.compareTo(a.created));
-      return roots;
+      return rankTopics(roots, (o) => o.created);
     }
     final children = <String, List<SignedObject>>{};
     for (final o in posts) {
@@ -563,8 +563,12 @@ extension _SocialPages on _OurNetAppState {
       if (!visited.add(id)) continue;
       final found = byId[id];
       if (found != null) ordered.add(found);
+      // The best replies first, as on Reddit; equal scores oldest first.
       final replies = (children[id] ?? []).toList()
-        ..sort((a, b) => a.created.compareTo(b.created));
+        ..sort((a, b) {
+          final score = postVotes(b).score.compareTo(postVotes(a).score);
+          return score != 0 ? score : a.created.compareTo(b.created);
+        });
       pending.addAll(replies.reversed.map((r) => r.id));
     }
 

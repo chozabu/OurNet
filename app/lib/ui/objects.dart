@@ -96,6 +96,7 @@ extension _ObjectsPages on _OurNetAppState {
                 replying: answering == o.id,
                 reply: answering == o.id ? inline!.box(context) : null,
                 onReply: () => answerPost(forum, o.id),
+                votes: voteBar(context, o, p),
                 menu: postMenu(
                   o,
                   author,
@@ -253,11 +254,19 @@ extension _ObjectsPages on _OurNetAppState {
                           child: Text('📎 ${p['name']} · ${p['size']} bytes'),
                         ),
                       if (listed)
-                        Text(
-                          '$replies ${replies == 1 ? 'reply' : 'replies'} · ${scopeLabel(o)}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: small,
+                        Row(
+                          children: [
+                            voteBar(context, o, p),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '$replies ${replies == 1 ? 'reply' : 'replies'} · ${scopeLabel(o)}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: small,
+                              ),
+                            ),
+                          ],
                         ),
                       if (!listed)
                         Wrap(

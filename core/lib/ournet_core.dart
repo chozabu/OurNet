@@ -12,6 +12,7 @@ export 'src/node.dart';
 export 'src/store.dart';
 export 'src/blob_worker.dart' show BlobWorker;
 export 'src/voting.dart';
+export 'src/forum_votes.dart';
 export 'src/messages.dart';
 export 'src/drive.dart';
 export 'src/everyday.dart';

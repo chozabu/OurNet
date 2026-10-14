@@ -128,6 +128,9 @@ class ForumComment extends StatelessWidget {
   final VoidCallback? onReply;
   final Widget? menu;
 
+  /// The up and down arrows and score, first in the footer.
+  final Widget? votes;
+
   /// The reply box, when this comment is the one being answered.
   final Widget? reply;
   const ForumComment({
@@ -152,6 +155,7 @@ class ForumComment extends StatelessWidget {
     this.body = const [],
     this.onReply,
     this.menu,
+    this.votes,
     this.reply,
   });
 
@@ -339,6 +343,7 @@ class ForumComment extends StatelessWidget {
                     height: 30,
                     child: Row(
                       children: [
+                        ?votes,
                         if (onReply != null)
                           TextButton.icon(
                             onPressed: onReply,

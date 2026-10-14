@@ -202,4 +202,154 @@ extension _ForumFeatures on _OurNetAppState {
       replyTo = null;
     });
   }
+
+  /// The group forum [o] belongs to, when it is a group post.
+  RoomForum? groupForumOf(SignedObject o) => o.kind != 'room_post'
+      ? null
+      : allGroupForums[o.space] ??
+            (roomForum?.space == o.space ? roomForum : null);
+
+  /// The content a vote on [o] is worked out from.
+  Json postPayload(SignedObject o) => o.kind == 'room_post'
+      ? groupForumOf(o)?.post(o.id)?.data ?? const {}
+      : o.data['payload'] as Json;
+
+  /// How [o] has been voted on, once per build; a group post counts its
+  /// members' votes only.
+  VoteTally postVotes(SignedObject o, [Json? payload]) =>
+      memo('votes/${o.id}', () {
+        final members = groupForumOf(o)?.room.data['members'];
+        return forumVotes.tally(
+          o,
+          payload ?? postPayload(o),
+          voters: o.kind != 'room_post'
+              ? null
+              : {...?(members as List?)?.cast<String>()},
+        );
+      });
+
+  /// Votes [value] on [o], or takes the vote back when it is already that.
+  /// Saved in the background, so the list stays usable.
+  void votePost(SignedObject o, Json payload, int value) {
+    final next = postVotes(o, payload).mine == value ? 0 : value;
+    unawaited(() async {
+      try {
+        final group = groupForumOf(o);
+        if (!o.isPublic && group == null) {
+          throw StateError('the group is not open');
+        }
+        await forumVotes.vote(
+          o,
+          payload,
+          next,
+          audience: o.isPublic ? const [] : await group!.audience(),
+        );
+        redraw();
+      } catch (e) {
+        notice('Could not vote: $e');
+      }
+    }());
+  }
+
+  static const _upvoted = Color(0xFFFF4500), _downvoted = Color(0xFF7193FF);
+
+  /// Reddit's up arrow, score and down arrow for a forum post.
+  Widget voteBar(BuildContext context, SignedObject o, Json payload) {
+    final tally = postVotes(o, payload);
+    final theme = Theme.of(context);
+    final muted = theme.colorScheme.onSurfaceVariant;
+    final color = tally.mine > 0
+        ? _upvoted
+        : tally.mine < 0
+        ? _downvoted
+        : muted;
+    Widget arrow(int value, IconData icon, String tip) => SizedBox(
+      width: 28,
+      height: 28,
+      child: IconButton(
+        tooltip: tally.mine == value ? 'Remove vote' : tip,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+        iconSize: 18,
+        color: tally.mine == value ? color : muted,
+        onPressed: () => votePost(o, payload, value),
+        icon: Icon(icon),
+      ),
+    );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        arrow(1, Icons.arrow_upward_rounded, 'Upvote'),
+        Tooltip(
+          message: '${tally.up} up · ${tally.down} down',
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 18),
+            child: Text(
+              '${tally.score}',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: color,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ),
+        arrow(-1, Icons.arrow_downward_rounded, 'Downvote'),
+      ],
+    );
+  }
+
+  /// [topics] in the order chosen with [forumSortMenu]; [written] is when
+  /// each was first written.
+  List<SignedObject> rankTopics(
+    Iterable<SignedObject> topics,
+    int Function(SignedObject) written,
+  ) {
+    final sort = forumSort;
+    final ranked = [
+      for (final o in topics)
+        (o, written(o), sort == 'new' ? 0 : postVotes(o).score),
+    ];
+    double hot((SignedObject, int, int) t) => VoteTally.hot(t.$3, t.$2);
+    ranked.sort((a, b) {
+      final order = switch (sort) {
+        'new' => 0,
+        'top' => b.$3.compareTo(a.$3),
+        _ => hot(b).compareTo(hot(a)),
+      };
+      if (order != 0) return order;
+      final time = b.$2.compareTo(a.$2);
+      return time != 0 ? time : b.$1.id.compareTo(a.$1.id);
+    });
+    return [for (final t in ranked) t.$1];
+  }
+
+  /// Chooses how discussions are ordered: Hot, New or Top, as on Reddit.
+  Widget forumSortMenu() {
+    const labels = {'hot': 'Hot', 'new': 'New', 'top': 'Top'};
+    return PopupMenuButton<String>(
+      tooltip: 'Sort discussions',
+      initialValue: forumSort,
+      onSelected: (sort) => update(() => node.store.set('forumSort', sort)),
+      itemBuilder: (_) => [
+        for (final MapEntry(:key, :value) in labels.entries)
+          CheckedPopupMenuItem(
+            value: key,
+            checked: forumSort == key,
+            child: Text(value),
+          ),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.sort, size: 18),
+            const SizedBox(width: 4),
+            Text(labels[forumSort]!),
+          ],
+        ),
+      ),
+    );
+  }
 }

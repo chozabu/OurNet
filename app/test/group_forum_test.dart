@@ -78,6 +78,69 @@ void main() {
     await friend.close();
   });
 
+  testWidgets('forum posts can be voted up and down', (tester) async {
+    wide(tester);
+    final (node, [friend]) = await friends(1);
+    final room = (await tester.runAsync(
+      () => Everyday(node).createRoom('Private club', [friend.person]),
+    ))!;
+    await tester.runAsync(
+      () => RoomForum(
+        node,
+        room,
+      ).publish({'title': 'Private topic', 'text': 'Members only'}),
+    );
+    node.subscribe('Public club', true);
+    await tester.runAsync(
+      () => node.publish('post', {
+        'title': 'Public topic',
+        'text': 'For everyone',
+      }, space: 'Public club'),
+    );
+    await tester.pumpWidget(
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.forums,
+      ),
+    );
+    await settled(tester);
+    await tester.tap(find.widgetWithText(ListTile, 'All forums'));
+    await settled(tester);
+    expect(find.byTooltip('Upvote'), findsNWidgets(2));
+
+    // An upvote on each: public for the public forum, sealed for the group.
+    await tester.tap(find.byTooltip('Upvote').first);
+    await steady(tester);
+    await tester.tap(find.byTooltip('Upvote').last);
+    await steady(tester);
+    final votes = node.store.objects(kind: 'vote');
+    expect(votes.length, 2);
+    expect(votes.where((o) => o.isPublic).length, 1);
+    expect(find.byTooltip('Remove vote'), findsNWidgets(2));
+    expect(find.byTooltip('1 up · 0 down'), findsNWidgets(2));
+
+    // Down from up, then taken back.
+    await tester.tap(find.byTooltip('Downvote').first);
+    await steady(tester);
+    expect(find.byTooltip('0 up · 1 down'), findsOneWidget);
+    await tester.tap(find.byTooltip('Remove vote').first);
+    await steady(tester);
+    expect(find.byTooltip('0 up · 1 down'), findsNothing);
+    expect(find.byTooltip('0 up · 0 down'), findsOneWidget);
+
+    // Top puts the voted topic first.
+    await tester.tap(find.byTooltip('Sort discussions'));
+    await settled(tester);
+    await tester.tap(find.text('Top').last);
+    await settled(tester);
+    expect(node.store.setting('forumSort'), 'top');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await node.close();
+    await friend.close();
+  });
+
   testWidgets('a group has its own private forum', (tester) async {
     wide(tester);
     tester.view.physicalSize = const Size(1200, 1500);
