@@ -18,6 +18,8 @@ Additive; no change to `requiredCaps` or the ALPN.
   `room_post`, pointing at the post's `copyOf` for shared history copies.
   Older builds store and relay them; their Voting page counts only the public
   ones.
+- A post's author counts as upvoting it until they vote on it themselves;
+  nothing is published for that.
 
 ## Unreleased: plugins
 

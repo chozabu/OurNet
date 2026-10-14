@@ -61,6 +61,31 @@ void main() {
     expect(votesA.score(post, payload), 1);
   });
 
+  test('a post starts upvoted by its author, who can take it back', () async {
+    final a = Node(await LocalIdentity.create(), Store());
+    addTearDown(a.close);
+    final b = await friend(a);
+    const space = 'forum2:test:own';
+    a.subscribe(space, true);
+    b.subscribe(space, true);
+    final post = await b.publish('post', {'text': 'Mine'}, space: space);
+    final payload = post.data['payload'] as Json;
+    final theirs = ForumVotes(b);
+    expect(theirs.tally(post, payload).mine, 1);
+    await syncPair(a, b);
+    final votes = ForumVotes(a);
+    await votes.catchUp();
+    var tally = votes.tally(post, payload);
+    expect((tally.up, tally.mine, tally.score), (1, 0, 1));
+    await theirs.vote(post, payload, 0);
+    expect(theirs.tally(post, payload).mine, 0);
+    await syncPair(a, b);
+    await votes.catchUp();
+    expect(votes.score(post, payload), 0);
+    a.blocked.add(b.person);
+    expect(votes.score(post, payload), 0);
+  });
+
   test('group forum votes are private and follow shared copies', () async {
     final a = Node(await LocalIdentity.create(), Store());
     addTearDown(a.close);
@@ -85,9 +110,10 @@ void main() {
     await votes.catchUp();
     final payload = (await a.content(topic))!;
     final members = (room.data['members'] as List).cast<String>().toSet();
-    expect(votes.score(topic, payload, voters: members), 1);
+    // The author's own upvote, and the other member's.
+    expect(votes.score(topic, payload, voters: members), 2);
     // Someone outside the group does not count.
-    expect(votes.score(topic, payload, voters: {a.person}), 0);
+    expect(votes.score(topic, payload, voters: {a.person}), 1);
 
     // A copy shared with a later member carries the original's votes.
     final copy = await a.publish(
@@ -104,7 +130,7 @@ void main() {
     expect(ForumVotes.target(copy, {...payload, 'copyOf': topic.id}), topic.id);
     expect(
       votes.score(copy, {...payload, 'copyOf': topic.id}, voters: members),
-      1,
+      2,
     );
   });
 
@@ -131,7 +157,7 @@ void main() {
     ];
     expect(order(null), [topic.id, first.id, second.id]);
     final votes = ForumVotes(a);
-    await votes.vote(second, {}, 1, audience: await forum.audience());
+    await votes.vote(first, {}, -1, audience: await forum.audience());
     expect(order((p) => votes.score(p.object, p.data)), [
       topic.id,
       second.id,

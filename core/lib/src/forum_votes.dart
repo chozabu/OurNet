@@ -111,7 +111,8 @@ class ForumVotes {
     node.store.set(key, all);
   }
 
-  /// Each person's current vote on [target], left out where withdrawn. Only
+  /// Each person's current vote on [target], left out where withdrawn unless
+  /// [withdrawn] keeps them as 0. Only
   /// votes in [space] count, public ones for a public post and sealed ones
   /// for a group's; [voters], when given, limits who counts (a group's
   /// members). Blocked people never count.
@@ -120,6 +121,7 @@ class ForumVotes {
     required String space,
     required bool public,
     Set<String>? voters,
+    bool withdrawn = false,
   }) {
     final all = node.store.setting('votes/$target');
     if (all is! Map) return const {};
@@ -127,7 +129,7 @@ class ForumVotes {
       for (final MapEntry(:key, :value) in all.entries)
         if (value is Map &&
             value['value'] is int &&
-            value['value'] != 0 &&
+            (withdrawn || value['value'] != 0) &&
             value['space'] == space &&
             value['public'] == public &&
             (voters == null || voters.contains(key)) &&
@@ -140,14 +142,29 @@ class ForumVotes {
   int score(SignedObject post, Json payload, {Set<String>? voters}) =>
       tally(post, payload, voters: voters).score;
 
-  /// Ups, downs and this person's own vote on [post].
+  /// Who wrote [post]: a shared group copy names its original author.
+  static String authorOf(SignedObject post, Json payload) =>
+      post.kind == 'room_post' && payload['history'] == true
+      ? payload['originalAuthor'] as String? ?? post.author
+      : post.author;
+
+  /// Ups, downs and this person's own vote on [post]. Its author upvotes it
+  /// until they vote otherwise, as on Reddit, without publishing anything.
   VoteTally tally(SignedObject post, Json payload, {Set<String>? voters}) {
-    final all = votes(
-      target(post, payload),
-      space: post.space,
-      public: post.isPublic,
-      voters: voters,
-    );
+    final all = {
+      ...votes(
+        target(post, payload),
+        space: post.space,
+        public: post.isPublic,
+        voters: voters,
+        withdrawn: true,
+      ),
+    };
+    final author = authorOf(post, payload);
+    if ((voters == null || voters.contains(author)) &&
+        !node.blocked.contains(author)) {
+      all.putIfAbsent(author, () => 1);
+    }
     var up = 0, down = 0;
     for (final v in all.values) {
       if (v > 0) up++;

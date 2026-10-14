@@ -107,27 +107,28 @@ void main() {
     await settled(tester);
     await tester.tap(find.widgetWithText(ListTile, 'All forums'));
     await settled(tester);
-    expect(find.byTooltip('Upvote'), findsNWidgets(2));
+    // Your own posts start upvoted, as on Reddit, without a vote object.
+    expect(find.byTooltip('Remove vote'), findsNWidgets(2));
+    expect(find.byTooltip('1 up · 0 down'), findsNWidgets(2));
+    expect(node.store.objects(kind: 'vote'), isEmpty);
 
-    // An upvote on each: public for the public forum, sealed for the group.
-    await tester.tap(find.byTooltip('Upvote').first);
+    // A downvote on each: public for the public forum, sealed for the group.
+    await tester.tap(find.byTooltip('Downvote').first);
     await steady(tester);
-    await tester.tap(find.byTooltip('Upvote').last);
+    await tester.tap(find.byTooltip('Downvote').last);
     await steady(tester);
     final votes = node.store.objects(kind: 'vote');
     expect(votes.length, 2);
     expect(votes.where((o) => o.isPublic).length, 1);
-    expect(find.byTooltip('Remove vote'), findsNWidgets(2));
-    expect(find.byTooltip('1 up · 0 down'), findsNWidgets(2));
+    expect(find.byTooltip('0 up · 1 down'), findsNWidgets(2));
 
-    // Down from up, then taken back.
-    await tester.tap(find.byTooltip('Downvote').first);
-    await steady(tester);
-    expect(find.byTooltip('0 up · 1 down'), findsOneWidget);
+    // Taken back, and up again.
     await tester.tap(find.byTooltip('Remove vote').first);
     await steady(tester);
-    expect(find.byTooltip('0 up · 1 down'), findsNothing);
     expect(find.byTooltip('0 up · 0 down'), findsOneWidget);
+    await tester.tap(find.byTooltip('Upvote').first);
+    await steady(tester);
+    expect(find.byTooltip('1 up · 0 down'), findsOneWidget);
 
     // Top puts the voted topic first.
     await tester.tap(find.byTooltip('Sort discussions'));
