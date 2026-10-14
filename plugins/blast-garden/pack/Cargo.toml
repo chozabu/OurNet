@@ -1,0 +1,9 @@
+[package]
+name = "pack"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+wit-component = "0.261"
+zip = { version = "2", default-features = false, features = ["deflate"] }

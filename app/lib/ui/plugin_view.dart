@@ -280,6 +280,17 @@ LocalWidgetLibrary ournetWidgets({
       height: _number(source, ['height']) ?? 100,
       background: source.v<int>(['background']),
       commands: commands,
+      label: source.v<String>(['label']),
+      onActivate: source.handler<VoidCallback>(
+        ['onActivate'],
+        (trigger) =>
+            () => trigger({}),
+      ),
+      onViewport: source.handler<void Function(Size)>(
+        ['onViewport'],
+        (trigger) =>
+            (size) => trigger({'width': size.width, 'height': size.height}),
+      ),
       onTap: source.handler<ValueChanged<Offset>>(
         ['onTap'],
         (trigger) =>
@@ -289,6 +300,16 @@ LocalWidgetLibrary ournetWidgets({
         ['onDrag'],
         (trigger) =>
             (p) => trigger({'x': p.dx, 'y': p.dy}),
+      ),
+      onPointer: source.handler<void Function(String, int, Offset)>(
+        ['onPointer'],
+        (trigger) =>
+            (phase, pointer, p) => trigger({
+              'phase': phase,
+              'pointer': pointer,
+              'x': p.dx,
+              'y': p.dy,
+            }),
       ),
     );
   },
@@ -481,11 +502,15 @@ class _Markup extends StatelessWidget {
   }
 }
 
-class _Canvas extends StatelessWidget {
+class _Canvas extends StatefulWidget {
   final double width, height;
   final int? background;
   final List<Map<String, Object?>> commands;
   final ValueChanged<Offset>? onTap, onDrag;
+  final void Function(String phase, int pointer, Offset position)? onPointer;
+  final String? label;
+  final VoidCallback? onActivate;
+  final void Function(Size)? onViewport;
   const _Canvas({
     required this.width,
     required this.height,
@@ -493,29 +518,111 @@ class _Canvas extends StatelessWidget {
     required this.commands,
     required this.onTap,
     required this.onDrag,
+    this.onPointer,
+    this.label,
+    this.onActivate,
+    this.onViewport,
   });
 
   @override
-  Widget build(BuildContext context) => AspectRatio(
-    aspectRatio: width / height,
+  State<_Canvas> createState() => _CanvasState();
+}
+
+class _CanvasState extends State<_Canvas> {
+  Size? _reportedViewport;
+  final _pendingMoves = <int, Offset>{};
+  bool _moveScheduled = false;
+
+  // Bound and coalesce high-rate touch input; release discards queued moves.
+  void _move(int pointer, Offset position) {
+    if (_pendingMoves.length >= 8 && !_pendingMoves.containsKey(pointer)) {
+      return;
+    }
+    _pendingMoves[pointer] = position;
+    if (_moveScheduled) return;
+    _moveScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _moveScheduled = false;
+      final moves = Map<int, Offset>.of(_pendingMoves);
+      _pendingMoves.clear();
+      if (!mounted) return;
+      for (final entry in moves.entries) {
+        widget.onPointer?.call('move', entry.key, entry.value);
+      }
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  void _end(String phase, int pointer, Offset position) {
+    _pendingMoves.remove(pointer);
+    widget.onPointer?.call(phase, pointer, position);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.onViewport != null) {
+      final viewport = MediaQuery.sizeOf(context);
+      if (viewport != _reportedViewport) {
+        _reportedViewport = viewport;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onViewport?.call(viewport);
+        });
+      }
+    }
+    return _buildCanvas(context);
+  }
+
+  Widget _buildCanvas(BuildContext context) => AspectRatio(
+    aspectRatio: widget.width / widget.height,
     child: LayoutBuilder(
       builder: (context, box) {
-        final scale = box.maxWidth / width;
+        final scale = box.maxWidth / widget.width;
         Offset local(Offset p) => p / scale;
-        return GestureDetector(
-          onTapDown: onTap == null
-              ? null
-              : (d) => onTap!(local(d.localPosition)),
-          onPanUpdate: onDrag == null
-              ? null
-              : (d) => onDrag!(local(d.localPosition)),
-          child: RepaintBoundary(
-            child: CustomPaint(
-              size: Size(box.maxWidth, box.maxWidth * height / width),
-              painter: _Painter(
-                commands,
-                scale,
-                background == null ? null : Color(background!),
+        return Semantics(
+          container: widget.label != null,
+          label: widget.label,
+          button: widget.onActivate != null,
+          onTap: widget.onActivate,
+          child: Listener(
+            behavior: HitTestBehavior.opaque,
+            onPointerDown: widget.onPointer == null
+                ? null
+                : (e) => widget.onPointer!(
+                    'down',
+                    e.pointer,
+                    local(e.localPosition),
+                  ),
+            onPointerMove: widget.onPointer == null
+                ? null
+                : (e) => _move(e.pointer, local(e.localPosition)),
+            onPointerUp: widget.onPointer == null
+                ? null
+                : (e) => _end('up', e.pointer, local(e.localPosition)),
+            onPointerCancel: widget.onPointer == null
+                ? null
+                : (e) => _end('cancel', e.pointer, local(e.localPosition)),
+            child: GestureDetector(
+              onTapDown: widget.onTap == null
+                  ? null
+                  : (d) => widget.onTap!(local(d.localPosition)),
+              onPanUpdate: widget.onDrag == null
+                  ? null
+                  : (d) => widget.onDrag!(local(d.localPosition)),
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: Size(
+                    box.maxWidth,
+                    box.maxWidth * widget.height / widget.width,
+                  ),
+                  painter: _Painter(
+                    widget.commands,
+                    scale,
+                    widget.background == null
+                        ? null
+                        : Color(widget.background!),
+                    Theme.of(context).textTheme.bodyMedium?.fontFamily,
+                  ),
+                ),
               ),
             ),
           ),
@@ -529,7 +636,8 @@ class _Painter extends CustomPainter {
   final List<Map<String, Object?>> commands;
   final double scale;
   final Color? background;
-  _Painter(this.commands, this.scale, this.background);
+  final String? fontFamily;
+  _Painter(this.commands, this.scale, this.background, this.fontFamily);
 
   double _d(Object? v) => (v as num?)?.toDouble() ?? 0;
 
@@ -567,6 +675,7 @@ class _Painter extends CustomPainter {
               style: TextStyle(
                 color: paint.color,
                 fontSize: c['size'] == null ? 14 : _d(c['size']),
+                fontFamily: fontFamily,
               ),
             ),
             textDirection: TextDirection.ltr,
@@ -582,6 +691,7 @@ class _Painter extends CustomPainter {
   @override
   bool shouldRepaint(_Painter old) =>
       old.commands != commands ||
+      old.fontFamily != fontFamily ||
       old.scale != scale ||
       old.background != background;
 }

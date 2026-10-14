@@ -1,0 +1,92 @@
+import core.widgets;
+import core.material;
+import ournet;
+
+widget BlastGarden = switch data.mode {
+  "game": Arena(),
+  default: Lobby(),
+};
+
+widget Lobby = ListView(children: [
+  Padding(padding: [20.0, 24.0, 20.0, 8.0], child: Text(text: "BLAST GARDEN", style: {fontSize: 28.0, fontWeight: "w700", color: 0xFF37BFA4})),
+  Padding(padding: [20.0, 0.0, 20.0, 16.0], child: Text(text: "Small gardens. Big chain reactions.\nFind an escape before you light the fuse.")),
+  Padding(padding: [20.0, 0.0, 20.0, 8.0], child: Row(children: [
+    OutlinedButton(onPressed: event "coop" {}, child: Text(text: "Co-op rescue")),
+    SizedBox(width: 8.0),
+    OutlinedButton(onPressed: event "versus" {}, child: Text(text: "Versus arena")),
+  ])),
+  Padding(padding: [20.0, 0.0, 20.0, 8.0], child: Text(text: data.selected, style: {fontWeight: "w700"})),
+  Padding(padding: [20.0, 0.0, 20.0, 16.0], child: Text(text: "RESCUE · Clear five gardens together. Walk beside a fallen teammate to revive them. Your bombs can hurt each other!\n\nVERSUS · Four gardeners, one survivor. Solo gives you three bots; friend play adds two bots. After two minutes, the arena starts closing.")),
+  Padding(padding: [20.0, 0.0, 20.0, 12.0], child: Row(children: [
+    ElevatedButton(onPressed: event "solo" {}, child: Text(text: "Play solo")),
+    SizedBox(width: 8.0),
+    TextButton(onPressed: event "refresh" {}, child: Text(text: "Refresh friends")),
+  ])),
+  Padding(padding: [20.0, 0.0, 20.0, 12.0], child: Text(text: data.note)),
+  ...for invite in data.invites: ListTile(
+    leading: Avatar(person: invite.person, size: 36.0),
+    title: PersonName(person: invite.person), subtitle: Text(text: invite.label),
+    trailing: ElevatedButton(onPressed: event "accept" {device: invite.device}, child: Text(text: "Join")),
+  ),
+  ...for friend in data.friends: ListTile(
+    leading: Avatar(person: friend.person, size: 36.0),
+    title: PersonName(person: friend.person), subtitle: Text(text: friend.label),
+    trailing: OutlinedButton(onPressed: event "invite" {device: friend.device}, child: Text(text: friend.action)),
+  ),
+  switch data.nobody {
+    true: Padding(padding: [20.0, 0.0, 20.0, 12.0], child: Text(text: "Invite a friend once their device is online and has Blast Garden installed. Solo play is always available.")),
+    default: SizedBoxShrink(),
+  },
+  Padding(padding: [20.0, 16.0, 20.0, 20.0], child: Text(text: "POWER-UPS · F extends your flame · + adds a bomb · > gives swift boots · S absorbs a blast · K kicks rolling bombs · H adds a second shield · M gives maximum flame.\n\nArrows or WASD to move. Space or Enter to plant a bomb. On a phone, hold and slide the left thumb pad; tap the right bomb button with your other thumb. Tap controls are available for older hosts.")),
+]);
+
+widget Arena = Keys(onKey: event "key" {}, child: Column(children: [
+  Padding(padding: [8.0, 4.0, 8.0, 0.0], child: Row(children: [
+    TextButton(onPressed: event "leave" {}, child: Text(text: "‹ Leave")),
+    Expanded(child: Text(text: data.title, textAlign: "center", style: {fontWeight: "w700"})),
+    Text(text: data.timer),
+  ])),
+  Padding(padding: [8.0, 0.0, 8.0, 4.0], child: Text(text: data.status, textAlign: "center")),
+  Padding(padding: [8.0, 4.0, 8.0, 0.0], child: Text(text: data.stats, textAlign: "center", style: {fontSize: 12.0})),
+  Expanded(child: switch data.wide {true: WideBattle(), default: VerticalBattle()}),
+  switch data.touchReady {
+    true: TextButton(onPressed: event "controls" {}, child: Text(text: switch data.tapControls {true: "Use thumb controls", default: "Use tap controls"}, style: {fontSize: 11.0})),
+    default: Padding(padding: [4.0, 4.0, 4.0, 8.0], child: Text(text: "Update OurNet to enable thumb controls", style: {fontSize: 11.0})),
+  },
+  switch data.over {
+    true: Row(mainAxisAlignment: "center", children: [
+      switch data.canNext {true: ElevatedButton(onPressed: event "next" {}, child: Text(text: "Next garden")), default: SizedBoxShrink()},
+      switch data.canRestart {true: TextButton(onPressed: event "restart" {}, child: Text(text: "Play again")), default: Text(text: "Waiting for the host to play again")},
+    ]),
+    default: SizedBoxShrink(),
+  },
+]));
+
+widget Field = Canvas(width: 208.0, height: 176.0, background: 0xFF102A32, commands: data.frame, onViewport: event "viewport" {});
+widget VerticalBattle = Column(children: [
+  Expanded(child: Center(child: Field())),
+  switch data.tapControls {true: TapControls(), default: ThumbControls()},
+]);
+widget WideBattle = Row(children: [
+  SizedBox(width: 112.0, child: Center(child: Stick())),
+  Expanded(child: Center(child: Field())),
+  SizedBox(width: 112.0, child: Center(child: Blast())),
+]);
+widget Stick = SizedBox(width: 104.0, height: 104.0, child: Canvas(width: 112.0, height: 112.0, commands: data.stick, label: "Movement thumb pad", onPointer: event "stick" {}));
+widget Blast = SizedBox(width: 104.0, height: 104.0, child: Canvas(width: 112.0, height: 112.0, commands: data.blast, label: "Plant bomb", onPointer: event "blast" {}, onActivate: event "bomb" {}));
+
+widget ThumbControls = Padding(padding: [12.0, 0.0, 12.0, 0.0], child: Row(children: [
+  Stick(),
+  Expanded(child: Text(text: "Hold & slide\n\nMove + bomb\nwith two thumbs", textAlign: "center", style: {fontSize: 11.0})),
+  Blast(),
+]));
+
+widget TapControls = Column(children: [
+  Row(mainAxisAlignment: "center", children: [TextButton(onPressed: event "move" {dir: 1}, child: Text(text: "UP"))]),
+  Row(mainAxisAlignment: "center", children: [
+    OutlinedButton(onPressed: event "move" {dir: 4}, child: Text(text: "LEFT", style: {fontSize: 12.0})),
+    ElevatedButton(onPressed: event "bomb" {}, child: Text(text: "BOMB")),
+    OutlinedButton(onPressed: event "move" {dir: 2}, child: Text(text: "RIGHT", style: {fontSize: 12.0})),
+    OutlinedButton(onPressed: event "move" {dir: 3}, child: Text(text: "DOWN", style: {fontSize: 12.0})),
+  ]),
+]);

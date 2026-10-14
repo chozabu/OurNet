@@ -1,0 +1,4 @@
+/target/
+/.dart_tool/
+!/dist/
+!/dist/blast-garden.ournet-plugin

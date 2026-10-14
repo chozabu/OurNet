@@ -1,0 +1,21 @@
+[package]
+name = "blast-garden"
+version = "0.2.0"
+edition = "2021"
+publish = false
+
+[workspace]
+members = ["pack"]
+resolver = "2"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ournet-plugin = { path = "../sdk" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"

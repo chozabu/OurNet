@@ -1,0 +1,9 @@
+{
+  "id": "blast-garden",
+  "name": "Blast Garden",
+  "version": "0.2.0",
+  "api": "0.1",
+  "description": "Smooth-motion arena battles and a cooperative garden rescue. Play with thumb controls, kick rolling bombs and collect seven upgrades. Solo bots or friend co-op and versus.",
+  "grants": ["identity", "live"],
+  "sections": [{"name": "arena", "title": "Blast Garden", "icon": "sports", "surface": "BlastGarden", "scopes": ["personal"]}]
+}
