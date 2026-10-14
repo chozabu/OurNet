@@ -81,3 +81,22 @@ pushes and clones with real git through the bridge.
   is not a grant yet).
 - Android has no local bridge: it browses repositories but nothing there
   runs git against it.
+
+## Who moves a branch: options considered (October 2026)
+
+Commits always sync; only branch pointers can conflict. Compared:
+
+| Option | Verdict |
+|---|---|
+| Never sync between people | Loses cloning from friends while the pusher is offline |
+| Fast-forward syncs, divergence needs a person (current) | Kept: nothing is lost, every device agrees |
+| Per-person branches only (Radicle) | No conflicts, but a group has no single main |
+| Maintainers move main, others send pull requests | Closest to GitHub; public repos already work so with one maintainer |
+| Devices merge automatically | Avoided: competing merges, signed by someone who did not write them, and clean merges can still break code |
+| Group vote to move main | Fits group governance later; heavy for everyday pushes |
+| Last push wins | The first version; silently drops work |
+
+Decided for later: keep the current rule for personal and group
+repositories, then add pull-request objects and an optional maintainer list
+per group repository, and perhaps a "Sam's version" view of each person's
+branches without changing what syncs.
