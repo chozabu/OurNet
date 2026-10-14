@@ -14,6 +14,9 @@ const grantMeanings = {
   'tun':
       'Run a network interface (a VPN) for traffic to your devices and '
       'friends; the system asks too',
+  'local':
+      'Take requests from programs you run on this computer, such as git '
+      '(desktop only)',
 };
 
 /// The packages shipped in `assets/plugins/`, read off the UI isolate.

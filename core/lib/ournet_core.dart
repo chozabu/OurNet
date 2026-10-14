@@ -4,6 +4,7 @@ library;
 export 'package:cryptography/cryptography.dart' show SimpleKeyPair;
 export 'src/model.dart';
 export 'src/registry.dart';
+export 'src/local_bridge.dart';
 export 'src/plugin_manifest.dart';
 export 'src/plugins.dart';
 export 'src/plugin_release.dart';

@@ -1,0 +1,359 @@
+// The Git page: repositories in the scope, one repository's code, commits
+// and pushes, a file, or a commit with its changes, as `data.mode` says.
+// Event names are handled in src/lib.rs.
+//
+// ListView builds its children lazily, during layout: they use library
+// widgets directly, not ones declared here, which would subscribe to data
+// mid-build.
+import core.widgets;
+import core.material;
+import ournet;
+
+widget Git = switch data.mode {
+  "new": GitNew(),
+  "repo": GitRepo(),
+  "file": GitFile(),
+  "commit": GitCommit(),
+  default: GitList(),
+};
+
+widget Mono = Text(
+  text: args.text,
+  softWrap: false,
+  style: { fontFamily: "Consolas", fontFamilyFallback: ["monospace", "Menlo", "Courier New"], fontSize: 13.0 },
+);
+
+widget GitList = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    Padding(
+      padding: [16.0, 12.0, 16.0, 0.0],
+      child: Row(
+        children: [
+          Expanded(child: Text(text: "Repositories", style: { fontSize: 22.0, fontWeight: "w600" })),
+          ElevatedButton(onPressed: event "new" { }, child: Text(text: "New repository")),
+        ],
+      ),
+    ),
+    Padding(padding: [16.0, 2.0, 16.0, 8.0], child: Text(text: data.where)),
+    Expanded(
+      child: ListView(
+        children: [
+          ...for repo in data.repos:
+            ListTile(
+              title: Text(text: repo.name, style: { fontWeight: "w600" }),
+              subtitle: Column(
+                crossAxisAlignment: "start",
+                children: [
+                  Text(text: repo.description),
+                  Row(
+                    children: [
+                      PersonName(person: repo.owner),
+                      Text(text: " · updated "),
+                      TimeAgo(at: repo.at),
+                    ],
+                  ),
+                ],
+              ),
+              onTap: event "open" { key: repo.key },
+            ),
+          switch data.empty {
+            true: Padding(padding: [16.0, 16.0, 16.0, 16.0], child: Text(text: data.emptyText)),
+            default: SizedBoxShrink(),
+          },
+        ],
+      ),
+    ),
+  ],
+);
+
+widget GitNew = SingleChildScrollView(
+  padding: [16.0, 12.0, 16.0, 16.0],
+  child: Column(
+    crossAxisAlignment: "stretch",
+    children: [
+      Row(
+        children: [
+          TextButton(onPressed: event "back" { }, child: Text(text: "‹ Repositories")),
+        ],
+      ),
+      Text(text: "New repository", style: { fontSize: 22.0, fontWeight: "w600" }),
+      Padding(padding: [0.0, 4.0, 0.0, 12.0], child: Text(text: data.where)),
+      TextInput(label: "Name", hint: "my-project", value: data.draftName, onChanged: event "draftName" { }),
+      SizedBox(height: 12.0),
+      TextInput(label: "Description (optional)", value: data.draftDescription, onChanged: event "draftDescription" { }),
+      switch data.error {
+        "": SizedBoxShrink(),
+        default: Padding(padding: [0.0, 8.0, 0.0, 0.0], child: Text(text: data.error, style: { color: 0xFFC62828 })),
+      },
+      SizedBox(height: 16.0),
+      Row(
+        children: [
+          ElevatedButton(onPressed: event "create" { }, child: Text(text: "Create")),
+        ],
+      ),
+    ],
+  ),
+);
+
+widget RepoHeader = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    Padding(
+      padding: [8.0, 8.0, 16.0, 0.0],
+      child: Row(
+        children: [
+          TextButton(onPressed: event "back" { }, child: Text(text: "‹")),
+          Expanded(child: Text(text: data.repo.name, style: { fontSize: 22.0, fontWeight: "w600" })),
+          PersonName(person: data.repo.owner),
+        ],
+      ),
+    ),
+    switch data.repo.description {
+      "": SizedBoxShrink(),
+      default: Padding(padding: [16.0, 0.0, 16.0, 4.0], child: Text(text: data.repo.description)),
+    },
+    Padding(
+      padding: [16.0, 4.0, 16.0, 0.0],
+      child: TextInput(label: "Clone", value: data.repo.clone),
+    ),
+    switch data.repo.notice {
+      "": SizedBoxShrink(),
+      default: Padding(
+        padding: [16.0, 6.0, 16.0, 0.0],
+        child: Text(text: data.repo.notice, style: { color: 0xFFB26A00 }),
+      ),
+    },
+    Padding(
+      padding: [8.0, 4.0, 8.0, 0.0],
+      child: Row(
+        children: [
+          TextButton(onPressed: event "tab" { tab: "code" }, child: Text(text: "Code")),
+          TextButton(onPressed: event "tab" { tab: "commits" }, child: Text(text: "Commits")),
+          TextButton(onPressed: event "tab" { tab: "pushes" }, child: Text(text: "Pushes")),
+          Expanded(child: SizedBoxShrink()),
+          Text(text: data.branch, style: { fontWeight: "w600" }),
+        ],
+      ),
+    ),
+    Divider(),
+  ],
+);
+
+widget GitRepo = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    RepoHeader(),
+    Expanded(
+      child: switch data.empty {
+        true: SingleChildScrollView(
+          padding: [16.0, 8.0, 16.0, 16.0],
+          child: Column(
+            crossAxisAlignment: "stretch",
+            children: [
+              Text(text: "Nothing pushed yet", style: { fontSize: 18.0, fontWeight: "w600" }),
+              Padding(
+                padding: [0.0, 8.0, 0.0, 8.0],
+                child: Text(text: "With git-remote-ournet on your PATH and OurNet running, push an existing repository:"),
+              ),
+              Mono(text: data.pushHelp),
+            ],
+          ),
+        ),
+        default: switch data.tab {
+          "commits": GitCommits(),
+          "pushes": GitPushes(),
+          default: GitCode(),
+        },
+      },
+    ),
+  ],
+);
+
+widget Crumbs = Padding(
+  padding: [8.0, 0.0, 8.0, 0.0],
+  child: Wrap(
+    crossAxisAlignment: "center",
+    children: [
+      ...for crumb in data.crumbs:
+        TextButton(onPressed: event "crumb" { depth: crumb.depth }, child: Text(text: crumb.name)),
+    ],
+  ),
+);
+
+widget GitCode = ListView(
+  children: [
+    Wrap(
+      spacing: 4.0,
+      children: [
+        ...for b in data.branches:
+          switch b.selected {
+            true: ElevatedButton(onPressed: event "branch" { ref: b.ref }, child: Text(text: b.name)),
+            default: OutlinedButton(onPressed: event "branch" { ref: b.ref }, child: Text(text: b.name)),
+          },
+      ],
+    ),
+    Padding(
+      padding: [8.0, 0.0, 8.0, 0.0],
+      child: Wrap(
+        crossAxisAlignment: "center",
+        children: [
+          ...for crumb in data.crumbs:
+            TextButton(onPressed: event "crumb" { depth: crumb.depth }, child: Text(text: crumb.name)),
+        ],
+      ),
+    ),
+    switch data.hasLast {
+      false: SizedBoxShrink(),
+      default: ListTile(
+        dense: true,
+        title: Text(text: data.last.title),
+        subtitle: Row(
+          children: [
+            Text(text: data.last.author),
+            Text(text: " · "),
+            TimeAgo(at: data.last.at),
+            Text(text: " · "),
+            Text(text: data.last.short),
+          ],
+        ),
+        onTap: event "commit" { sha: data.last.sha },
+      ),
+    },
+    switch data.missing {
+      true: Padding(padding: [16.0, 8.0, 16.0, 8.0], child: Text(text: "These files have not arrived here yet.")),
+      default: SizedBoxShrink(),
+    },
+    ...for entry in data.entries:
+      ListTile(
+        dense: true,
+        leading: Text(text: entry.icon),
+        title: Text(text: entry.name),
+        onTap: event "entry" { name: entry.name, dir: entry.dir },
+      ),
+    switch data.readme {
+      "": SizedBoxShrink(),
+      default: Padding(
+        padding: [16.0, 12.0, 16.0, 24.0],
+        child: Markup(text: data.readme),
+      ),
+    },
+  ],
+);
+
+widget GitCommits = ListView(
+  children: [
+    ...for c in data.commits:
+      ListTile(
+        title: Text(text: c.title),
+        subtitle: Row(
+          children: [
+            Text(text: c.author),
+            Text(text: " · "),
+            TimeAgo(at: c.at),
+            Text(text: " · "),
+            Text(text: c.short),
+          ],
+        ),
+        onTap: event "commit" { sha: c.sha },
+      ),
+    switch data.more {
+      true: Padding(
+        padding: [16.0, 8.0, 16.0, 16.0],
+        child: Row(children: [OutlinedButton(onPressed: event "more" { }, child: Text(text: "Older commits"))]),
+      ),
+      default: SizedBoxShrink(),
+    },
+  ],
+);
+
+widget GitPushes = ListView(
+  children: [
+    ...for p in data.pushes:
+      ListTile(
+        leading: Avatar(person: p.author),
+        title: Text(text: p.summary),
+        subtitle: Column(
+          crossAxisAlignment: "start",
+          children: [
+            Row(
+              children: [
+                PersonName(person: p.author),
+                Text(text: " · "),
+                TimeAgo(at: p.at),
+              ],
+            ),
+            Text(text: p.detail),
+          ],
+        ),
+      ),
+  ],
+);
+
+widget GitFile = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    RepoHeader(),
+    Crumbs(),
+    Padding(
+      padding: [16.0, 0.0, 16.0, 4.0],
+      child: Row(
+        children: [
+          Expanded(child: Text(text: data.file.name, style: { fontWeight: "w600" })),
+          Text(text: data.file.note),
+        ],
+      ),
+    ),
+    Expanded(
+      child: SingleChildScrollView(
+        padding: [16.0, 4.0, 16.0, 24.0],
+        child: SingleChildScrollView(
+          scrollDirection: "horizontal",
+          child: Mono(text: data.file.text),
+        ),
+      ),
+    ),
+  ],
+);
+
+widget GitCommit = Column(
+  crossAxisAlignment: "stretch",
+  children: [
+    RepoHeader(),
+    Expanded(
+      child: ListView(
+        children: [
+          Padding(
+            padding: [16.0, 4.0, 16.0, 0.0],
+            child: Text(text: data.commit.title, style: { fontSize: 18.0, fontWeight: "w600" }),
+          ),
+          switch data.commit.body {
+            "": SizedBoxShrink(),
+            default: Padding(padding: [16.0, 4.0, 16.0, 0.0], child: Text(text: data.commit.body)),
+          },
+          Padding(
+            padding: [16.0, 4.0, 16.0, 8.0],
+            child: Row(
+              children: [
+                Text(text: data.commit.author),
+                Text(text: " · "),
+                TimeAgo(at: data.commit.at),
+                Text(text: " · "),
+                Text(text: data.commit.short),
+              ],
+            ),
+          ),
+          ...for line in data.diff:
+            Container(
+              color: line.bg,
+              padding: [16.0, 0.0, 16.0, 0.0],
+              child: Text(
+                text: line.text,
+                style: { fontFamily: "Consolas", fontFamilyFallback: ["monospace", "Menlo", "Courier New"], fontSize: 12.0 },
+              ),
+            ),
+        ],
+      ),
+    ),
+  ],
+);

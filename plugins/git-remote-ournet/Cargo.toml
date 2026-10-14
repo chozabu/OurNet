@@ -1,0 +1,9 @@
+[package]
+name = "git-remote-ournet"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Lets git push to and clone from OurNet's Git plugin: git clone ournet://<repo>."
+
+[dependencies]
+serde_json.workspace = true

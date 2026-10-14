@@ -1,0 +1,15 @@
+[package]
+name = "git"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Git repositories shared over OurNet, with a page to browse them."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ournet-plugin.workspace = true
+serde.workspace = true
+miniz_oxide = "0.9"
+sha1_smol = "1"

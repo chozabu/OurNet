@@ -10,9 +10,10 @@ class PluginManifest {
   static const always = {'log', 'clock', 'storage', 'ui'};
 
   /// Interfaces a plugin uses only when the person grants them at install:
-  /// its own objects, names and groups, live messages to friends, and a
-  /// virtual network interface (a VPN).
-  static const grantable = {'objects', 'identity', 'live', 'tun'};
+  /// its own objects, names and groups, live messages to friends, a virtual
+  /// network interface (a VPN), and requests from programs on this computer
+  /// through the app's [LocalBridge] (git, for the Git plugin).
+  static const grantable = {'objects', 'identity', 'live', 'tun', 'local'};
 
   /// The plugin API versions this build hosts.
   static const apis = {'0.1'};

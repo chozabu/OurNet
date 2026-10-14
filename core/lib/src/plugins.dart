@@ -1420,6 +1420,30 @@ class Plugins {
     }
   }
 
+  /// Whether a running plugin takes requests from this computer
+  /// ([LocalBridge]).
+  bool get takesLocal => _running.values.any(
+    (r) => r.handle != null && r.plugin.granted.contains('local'),
+  );
+
+  /// Hands [plugin] (granted `local`) a request from a program on this
+  /// computer, as its `on-request` from device `local`, and returns its
+  /// answer. Throws [StateError] with the plugin's refusal.
+  Future<Uint8List> local(String plugin, Uint8List body) async {
+    final running = _running[plugin];
+    if (running == null || !running.plugin.granted.contains('local')) {
+      throw StateError('No plugin $plugin takes local requests here');
+    }
+    final result = await _call(running, {
+      'call': 'request',
+      'device': localDevice,
+    }, body).timeout(const Duration(minutes: 5));
+    return result.body;
+  }
+
+  /// The device a local request comes from, as plugins see it.
+  static const localDevice = 'local';
+
   /// A live message from [device] for one of the plugins here.
   Future<Json> _answerRequest(String device, Json request) async {
     final running = _running['${request['plugin']}'];

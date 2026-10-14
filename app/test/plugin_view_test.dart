@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -288,6 +290,109 @@ void main() {
     await tester.tap(find.text('‹ Friend network'));
     await rig.untilText('Turn on');
   });
+
+  testWidgets('git shows a pushed repository', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final rig = await Rig.start(tester, ['git']);
+    await rig.show('git', 'Git');
+    await rig.untilText('New repository');
+    await rig.shot('git-empty');
+    await tester.tap(find.text('New repository'));
+    await rig.untilText('Create');
+    await tester.enterText(find.widgetWithText(TextField, 'Name'), 'demo');
+    await tester.tap(find.text('Create'));
+    await rig.untilText('Nothing pushed yet');
+    await rig.shot('git-new-repo');
+
+    // A push as git-remote-ournet sends it, packed by real git.
+    final pack = await tester.runAsync(_demoPack);
+    if (pack == null) return markTestSkipped('git is not installed');
+    final request = utf8.encode(
+      '${jsonEncode({
+        'op': 'push',
+        'repo': 'demo',
+        'refs': {'refs/heads/main': pack.$1},
+        'old': {'refs/heads/main': ''},
+        'head': 'refs/heads/main',
+      })}\n',
+    );
+    await tester.runAsync(
+      () => rig.plugins.local(
+        'git',
+        Uint8List.fromList([...request, ...pack.$2]),
+      ),
+    );
+    await rig.untilText('README.md');
+    expect(find.textContaining('Hello from'), findsOneWidget);
+    await rig.shot('git-code');
+    await tester.tap(find.text('notes.txt'));
+    await rig.untilText('3 lines, 14 bytes');
+    await rig.shot('git-file');
+    await tester.tap(find.text('Commits'));
+    await rig.untilText('Second');
+    await tester.tap(find.text('Second'));
+    await rig.untilText('+TWO');
+    expect(find.text('-two'), findsOneWidget);
+    await rig.shot('git-commit');
+    await tester.tap(find.text('Pushes'));
+    await rig.untilText('main → ${pack.$1.substring(0, 7)}');
+  });
+}
+
+/// Two commits made and packed by git: the tip and the pack, or null
+/// without git.
+Future<(String, Uint8List)?> _demoPack() async {
+  final dir = Directory.systemTemp.createTempSync('ournet-git-view');
+  try {
+    Future<ProcessResult> git(List<String> args, {String? stdin}) async {
+      final p = await Process.start(
+        'git',
+        ['-c', 'init.defaultBranch=main', '-c', 'core.autocrlf=false', ...args],
+        workingDirectory: dir.path,
+        environment: {
+          'GIT_AUTHOR_NAME': 'Ada',
+          'GIT_AUTHOR_EMAIL': 'ada@example.com',
+          'GIT_COMMITTER_NAME': 'Ada',
+          'GIT_COMMITTER_EMAIL': 'ada@example.com',
+        },
+      );
+      if (stdin != null) p.stdin.write(stdin);
+      await p.stdin.close();
+      final out = BytesBuilder();
+      await p.stdout.forEach(out.add);
+      await p.stderr.drain<void>();
+      return ProcessResult(p.pid, await p.exitCode, out.takeBytes(), '');
+    }
+
+    if ((await git(['init'])).exitCode != 0) return null;
+    File(
+      '${dir.path}/README.md',
+    ).writeAsStringSync('# Demo\n\nHello from git.\n');
+    File('${dir.path}/notes.txt').writeAsStringSync('one\ntwo\nthree\n');
+    await git(['add', '.']);
+    await git(['commit', '-m', 'First']);
+    File('${dir.path}/notes.txt').writeAsStringSync('one\nTWO\nthree\n');
+    await git(['commit', '-am', 'Second']);
+    final tip = utf8
+        .decode((await git(['rev-parse', 'HEAD'])).stdout as List<int>)
+        .trim();
+    final pack = await git([
+      'pack-objects',
+      '--stdout',
+      '--revs',
+      '--delta-base-offset',
+      '-q',
+    ], stdin: '$tip\n');
+    return (tip, Uint8List.fromList(pack.stdout as List<int>));
+  } catch (_) {
+    return null;
+  } finally {
+    try {
+      dir.deleteSync(recursive: true);
+    } catch (_) {}
+  }
 }
 
 /// Says every device runs every plugin, and reaches none of them.

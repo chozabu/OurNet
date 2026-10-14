@@ -337,6 +337,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   StreamSubscription<PluginNotice>? _pluginNotices;
   StreamSubscription<void>? _pluginSections;
 
+  /// Programs on this computer reaching plugins granted `local` (git).
+  LocalBridge? _localBridge;
+  StreamSubscription<String>? _localBridgeSync;
+
   /// The public chat open in Chat, instead of a direct conversation.
   String? publicChat;
   final publicComposer = TextEditingController();
@@ -1280,6 +1284,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     unawaited(draftStore.flush().catchError((Object _) {}));
     _pluginNotices?.cancel();
     _pluginSections?.cancel();
+    _localBridgeSync?.cancel();
+    unawaited(_localBridge?.close());
     unawaited(plugins?.close());
     publicComposer.dispose();
     publicFocus.dispose();
@@ -1849,6 +1855,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       );
     });
     _pluginSections = node.registry.changes.listen((_) => redraw());
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      final bridge = _localBridge = LocalBridge(plugins);
+      _localBridgeSync = plugins.changes.listen((_) => bridge.sync());
+    }
     unawaited(
       plugins.load().then((_) {
         final folder = node.store.setting('pluginDevFolder');
@@ -1905,6 +1915,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// The Material icon a manifest names; a generic one for others.
   static IconData pluginIcon(String name) => switch (name) {
     'menu_book' => Icons.menu_book_outlined,
+    'source' => Icons.source_outlined,
     'article' => Icons.article_outlined,
     'campaign' => Icons.campaign_outlined,
     'casino' => Icons.casino_outlined,

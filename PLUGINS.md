@@ -186,6 +186,7 @@ The full world is `native/rust/wit/plugin.wit`; the Rust SDK is
 | `identity` | `identity` | me, this device, contacts (devices: name, online, runs this plugin), groups (space, name, members) |
 | `live` | `live` | send (reply via `on-reply`), datagram |
 | `tun` | `tun` | open (address, prefix, routes, MTU), write, close |
+| (none) | `local` | requests from programs on this computer arrive as `on-request` from device `local` |
 
 Exports: `init`, `on-objects`, `on-open(surface, context)`, `on-event`,
 `on-request`, `on-reply`, `on-timer`, `on-datagram`, `on-packet`,
@@ -221,6 +222,12 @@ As proposed, all on `ournet/2` and additive:
   Each is `[1][channel length][channel][data]` with channel `p:<plugin>`, and
   goes to `Registry.handleDatagrams`. Older builds refuse the request, and the
   datagram reports not sent.
+- **Local requests**: on desktop, while a running plugin is granted
+  `local`, the app's `LocalBridge` listens on a loopback port and writes it
+  with a random key to `~/.ournet/bridge.json`. `POST /plugins/<id>` with
+  that key reaches the plugin's `on-request` from device `local` (no WIT
+  change); the Host must be 127.0.0.1 or localhost. Builds before it refuse
+  a manifest asking for `local`.
 - Each running plugin granted `live` is advertised as capability
   `p:<plugin>`, after the built-in ones and within the 32 a peer reads;
   `identity.contacts` reports it per device.
@@ -228,7 +235,7 @@ As proposed, all on `ournet/2` and additive:
 ### Permissions
 
 The install prompt lists the grants in plain words; an update asking for more
-says which are new. `objects`, `identity`, `live` and `tun` are grantable;
+says which are new. `objects`, `identity`, `live`, `tun` and `local` are grantable;
 `log`, `clock`, `storage` and `ui` are always there. Not yet: publishing or
 reading core kinds (open question 1), `media`, `http`, `files`. A plugin never
 gets keys, raw store access, other plugins' data or synchronous calls into the
@@ -345,6 +352,7 @@ Phase 1 of [plugins/STORE-PLAN.md](plugins/STORE-PLAN.md):
 | `microblog` | Public posts in each person's own space, followed friend to friend; group posts; likes and replies | objects, identity |
 | `tictactoe` | Turn-based play as signed moves between two people; both reach the same board | objects, identity |
 | `pong` | Real-time play over datagrams; practice against the computer | live, Canvas, timers |
+| `git` | Repositories per scope: code at each branch, README, commits with diffs, who pushed what. Real git pushes and clones through `git-remote-ournet` (plugins/git/README.md) | objects, identity, local |
 | `vpn` (Friend network) | 10.77.0.0/16 between your devices and friends you allow; addresses from device IDs; senders' addresses checked. Each device has a page: traffic, refusals, and checks (a ping that asks the other side how it sees you, small and full-size datagram probes, an ICMP ping through its interface) with a diagnosis | identity, live, tun |
 
 Tests: `core/test/plugins_test.dart` and `vpn_plugin_test.dart` run the real
