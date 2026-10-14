@@ -1,8 +1,10 @@
 # OurNet
 
-OurNet is a serverless app for messaging and notes. It shares your data directly
-between your own devices and the people you trust, with no central platform in
-between.
+OurNet is a serverless app for notes, chat, forums and calendars. It shares your
+data directly between your own devices and the people you trust, with no
+central platform in between.
+
+![Notes on Windows](docs/screenshots/notes.png)
 
 Most communication tools depend on a company's servers: they hold your data,
 decide who can reach you, and give you little way to tell where information came
@@ -12,142 +14,123 @@ between people who have chosen to connect.
 
 The focus is on **identity, accountability and trust**:
 
-- **Persistent identity.** You have one identity that your friends recognise. It
-  works across your phone and PC, and it isn't tied to any device or provider.
-- **Accountability.** Content is signed and carries a record of who wrote it and
-  which people passed it along, so you can judge what you receive and trace
-  misuse.
-- **Accountable, not anonymous.** Everything reaches you through friends who
-  chose to connect, and every hop is signed. That is how OurNet aims to keep
-  out scams, spam and bots without a central moderator: an account nobody
-  vouched for has no way in, and whoever passes junk along can be seen and
-  dropped. The flip side is that OurNet is not an anonymity tool. Friend lists
-  are public, and people who need to hide who they talk to should use
-  something else.
+- **Persistent identity.** One identity your friends recognise, across your
+  phone and PC, not tied to any device or provider.
+- **Accountable, not anonymous.** Content is signed, and every hop that passed
+  it along is signed too. An account nobody vouched for has no way in, and
+  whoever passes junk along can be seen and dropped, which is how OurNet aims
+  to keep out scams, spam and bots without a central moderator. Friend lists
+  are public, so OurNet is not an anonymity tool.
 - **Trust in context.** Being someone's friend doesn't grant access to
   everything. Folders, groups and lists are encrypted and shared only with the
   people you pick.
 
-Today it covers Keep-style notes and checklists (including voice notes with
-on-device transcription), 1:1 and group conversations, file sharing, private
-groups with shared lists, a calendar of your own with a private calendar for
-each group ([CALENDAR.md](CALENDAR.md)), an activity feed of what friends did
-([ACTIVITY.md](ACTIVITY.md)), and private drive sync across your own
-devices. It runs on Windows and Android. The longer-term vision, which includes communities,
-wikis, maps and calls, is described in [CORE_IDEA.md](CORE_IDEA.md).
+> **Status:** early and changing fast. The encryption scheme has not been
+> audited. Don't rely on it yet for sensitive data.
 
-> **Status:** early prototype. The encryption scheme has not been audited, and
-> the protocol may change without migration. Don't rely on it yet for sensitive
-> data.
+## What it does
 
-## About this prototype
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/chat.png" alt="Group chat"></td>
+    <td width="50%"><img src="docs/screenshots/forums.png" alt="Forums"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/calendar.png" alt="Calendar"></td>
+    <td width="50%"><img src="docs/screenshots/notes-phone.png" alt="Notes on a phone" height="420"></td>
+  </tr>
+</table>
 
-This is the second prototype; it intentionally does not interoperate with the
-old Rust prototype (`ournetcc`).
+- **Notes and checklists**, Keep-style, including drawings, photos and voice
+  notes with on-device transcription ([NOTES_KEEP.md](NOTES_KEEP.md)).
+- **Chat**: one-to-one and group conversations, with replies, reactions,
+  files, and voice and video calls ([MESSAGING.md](MESSAGING.md)).
+- **Forums**: public forums and private group forums, with threaded replies
+  and voting.
+- **Groups** with their own chat, forum, notes, lists and calendar
+  ([SCOPES.md](SCOPES.md)).
+- **Calendar**: your own plus a private calendar for each group
+  ([CALENDAR.md](CALENDAR.md)).
+- **Maps** with live location sharing among friends ([MAPS.md](MAPS.md)).
+- **Activity**: a feed of what friends did ([ACTIVITY.md](ACTIVITY.md)).
+- **Files and private drive sync** across your own devices
+  ([PRIVATE_DRIVE.md](PRIVATE_DRIVE.md)).
 
-**Start here: [TRY_IT.md](TRY_IT.md).** Windows and Android debug builds are
-available locally. The current validation and remaining work are recorded in
-[PARITY.md](PARITY.md).
+It runs on Windows and Android. To try it, see [TRY_IT.md](TRY_IT.md).
 
-OurNet 0.2 adds [private drive and device sync](PRIVATE_DRIVE.md), threaded
-discussion navigation, and Enter/Shift+Enter composition. See
-[PERFORMANCE.md](PERFORMANCE.md) for repeatable measurements. Run
-`tool/package.ps1 -Android` to build a dated Windows ZIP and Android debug APK
-with SHA-256 sidecars. Packaged Windows folders contain `Launch.ps1` and can be
-replaced without deleting profile data. Settings shows the version/build ID and
-can copy basic diagnostics without keys or message contents.
+## Plugins
 
-See [Everyday sharing](EVERYDAY.md) for My inbox, Android sharing, private groups,
-shared lists, delivery behavior, and validation.
+New features can ship as WebAssembly plugins instead of growing the app. A
+plugin reuses OurNet's identity, encryption and friend network without ever
+holding keys, and gets only the access its manifest asks for and you grant.
+Plugins are signed and can be shared between friends.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/plugins.png" alt="Installed plugins"></td>
+    <td width="50%"><img src="docs/screenshots/blast-garden.png" alt="Blast Garden plugin"></td>
+  </tr>
+</table>
+
+The first-party plugins are a wiki, a microblog, noughts and crosses, Pong,
+Blast Garden and a friend-network VPN. Their sources are in `plugins/`; the
+design and API are in [PLUGINS.md](PLUGINS.md) and sharing in
+[plugins/SHARING.md](plugins/SHARING.md).
 
 ## Structure
 
 - `core`: pure Dart identity, signatures, encrypted objects, SQLite storage,
-  replication policy, provenance, revocation and vote resolution.
+  replication, provenance, revocation and the plugin registry.
 - `transport`: pure Dart iroh networking, attachment transfer and a headless
-  personal node. It has no Flutter dependency.
-- `app`: Flutter UI, OS key vault, file/clipboard integration, notifications and
-  WebRTC calling. Screens are grouped by feature under `lib/ui`.
-- `vendor/iroh_mobile`: pinned upstream Android native plugin. Our application
-  has no handwritten Rust business logic or generated application FFI bridge.
-- `tool`: setup and independent-profile launch scripts.
-
-Windows uses a signed precompiled upstream networking DLL. Android currently
-builds the vendored native library once; later Dart/UI edits do not require Rust
-source changes. Keep the lockfiles committed. See `vendor/README.md` for origins.
+  personal node. No Flutter dependency.
+- `app`: the Flutter UI, OS key vault, file and clipboard integration,
+  notifications and WebRTC calling. Screens are under `lib/ui`.
+- `native`: a Rust library for hot crypto, JPEG encoding and the plugin host,
+  built by a Dart build hook. The pure-Dart code runs where it isn't built.
+- `plugins`: first-party plugin sources and the packer.
+- `vendor`: pinned upstream code, with origins in `vendor/README.md`.
+- `tool`: setup, run, packaging and release scripts.
 
 ## Development
 
-Install Flutter with Dart, Windows C++ build tools for Windows, and the Android
-SDK/NDK and Rust Android targets for Android. The current checkout was built with
-Dart 3.12.2; `flutter doctor` reports local toolchain readiness.
+Install Flutter, the Windows C++ build tools for Windows, and the Android
+SDK/NDK and Rust Android targets for Android. `flutter doctor` reports what is
+missing.
 
 ```powershell
 .\tool\setup.ps1
-cd core
-dart test
-cd ..\transport
-dart test
-cd ..\app
-flutter test
-flutter analyze
+cd core; dart test
+cd ..\transport; dart test
+cd ..\app; flutter test; flutter analyze
 flutter run -d windows
 ```
 
-The core test loop does not load iroh or Flutter. Transport tests run actual
-local QUIC endpoints, including unadmitted caller rejection and private file
-access checks. Flutter tests cover navigation, phone layouts and the UI adapter.
+The core tests load neither iroh nor Flutter. Transport tests run real local
+QUIC endpoints. Contributor guidance, including compatibility and performance
+rules, is in [AGENTS.md](AGENTS.md) and [PERFORMANCE.md](PERFORMANCE.md).
+`tool/run.ps1 -Profile alice` opens a release build with its own identity, so
+two profiles can talk to each other on one PC.
 
-### Calls and linked devices
+For a headless personal node, run `dart run bin/node.dart my-node-data --local`
+from `transport`. It stores an encrypted identity vault and SQLite content in
+the chosen folder, and accepts `card`, `add <card>`, `sync`,
+`subscribe <space>`, `post <text>` and `quit`.
 
-Open **Settings → Profile and devices** to voice or video call another linked
-device. Calls from an admitted, non-revoked device belonging to the same person
-answer automatically while OurNet is running. A voice call opens the microphone;
-a video call opens the microphone and camera. Calls from friends still require
-acceptance. The receiving device needs operating-system media permissions.
-
-The call panel includes microphone mute and hangup, a mobile speaker toggle,
-and desktop microphone/output selectors whose choices are remembered locally.
-If Windows selects a virtual VR/streaming microphone, choose your physical microphone
-in the call panel. Video and own-device calls on mobile prefer speakerphone unless
-Bluetooth is available. Signalling uses the authenticated device link;
-media uses WebRTC with public STUN servers unless you configure your own, so
-calls behind carrier-grade or symmetric NAT can still require TURN.
-
-For a native media smoke test, run from `app`:
-
-```powershell
-flutter drive --profile -d windows --driver=test_driver/performance.dart --target=integration_test/calls_media_test.dart
-# Substitute a physical Android device ID to test Android. Profile builds use
-# org.chozabu.ournet.profile and do not replace the everyday app.
-```
-
-This uses temporary identities and a local loopback connection with the real
-camera/microphone. It checks rendered remote frames and bidirectional audio RTP
-packets, not speaker audibility. Test phone-to-laptop calls in both directions
-as well, including voice-only, video, mute, hangup, and audio-output selection.
-
-For an interactive headless personal node, run from `transport`:
-
-```powershell
-dart run bin/node.dart my-node-data --local
-```
-
-The CLI asks for a vault password, stores an encrypted identity vault and SQLite
-content in the chosen directory, and accepts `card`, `add <card>`, `sync`,
-`subscribe <space>`, `post <text>`, and `quit`. It is an initial operator interface,
-not yet a packaged background service or a multi-user hosting server.
+The README screenshots come from
+`flutter test test/readme_shots_test.dart --dart-define=README_SHOTS=<folder>`
+in `app`, which draws the app with made-up content.
 
 ## Product and protocol
 
-Read [CORE_IDEA.md](CORE_IDEA.md), [PROTOCOL.md](PROTOCOL.md),
-[CONNECTIVITY.md](CONNECTIVITY.md) (NAT, offline delivery and friend carriers),
-[RETROSHARE_COMPARISON.md](RETROSHARE_COMPARISON.md) (what we learn from RetroShare),
-and the historical [PROTOTYPE_REVIEW.md](PROTOTYPE_REVIEW.md). Provenance proves signed statements
-about recorded actions, not truth, real-world identity, or off-protocol copying.
-The current encryption is a prototype device-envelope scheme; forward secrecy,
-identity recovery and encrypted history migration remain separate work.
-
+[CORE_IDEA.md](CORE_IDEA.md) has the longer-term vision.
+[PROTOCOL.md](PROTOCOL.md) and [PROTOCOL_CHANGELOG.md](PROTOCOL_CHANGELOG.md)
+describe the wire format, [CONNECTIVITY.md](CONNECTIVITY.md) covers NAT,
+offline delivery and friend carriers, and
+[RETROSHARE_COMPARISON.md](RETROSHARE_COMPARISON.md) records what we take from
+RetroShare. Provenance proves signed statements about recorded actions, not
+truth, real-world identity or off-protocol copying. Forward secrecy, identity
+recovery and encrypted history migration are still to do.
+[PRIVACY.md](PRIVACY.md) is the privacy declaration for the store apps.
 
 ## License
 
