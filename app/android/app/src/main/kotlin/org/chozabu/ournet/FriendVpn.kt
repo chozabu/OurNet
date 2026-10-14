@@ -36,6 +36,14 @@ class FriendVpn : VpnService() {
             .setSession("OurNet friend network")
             .setMtu(mtu)
             .addAddress(address, prefix)
+        // OurNet's own sockets stay off the interface. Its connections carry
+        // the network's packets, so through it they would carry themselves,
+        // and the app would see the interface as a new default network and
+        // rebuild its connections each time the network opened.
+        try {
+            builder.addDisallowedApplication(packageName)
+        } catch (e: Exception) {
+        }
         for (route in routes) {
             val (ip, length) = route.split("/").let { it[0] to (it.getOrNull(1)?.toInt() ?: 32) }
             builder.addRoute(ip, length)

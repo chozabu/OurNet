@@ -263,6 +263,9 @@ Learned building it:
   friend still passes through Dart's iroh, one datagram each, until phase 4's
   single library. Android opens the interface through `FriendVpn` (a
   VpnService, with the system's consent) and hands its descriptor to Rust.
+  OurNet itself is excluded from it: otherwise its own connections could
+  route through the network they carry, and the app would take the
+  interface for a new default network and rebuild its endpoint.
   On Windows the app never runs as administrator: a small service,
   `ournet-tun` (`native/tun-helper`), runs as SYSTEM and owns a Wintun
   adapter, and the native host exchanges packets with it over two named
