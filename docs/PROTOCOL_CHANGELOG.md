@@ -7,7 +7,7 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
-## Unreleased: optional, changeable recovery phrase
+## 0.2.38: optional, changeable recovery phrase
 
 Additive; no change to `requiredCaps` or the ALPN.
 
