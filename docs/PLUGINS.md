@@ -185,6 +185,7 @@ The full world is `native/rust/wit/plugin.wit`; the Rust SDK is
 |---|---|---|
 | `log`, `clock`, `storage`, `ui`, `package-files`, `plugin-offers` | always | log; now, set/cancel timer; get/set/remove/keys; update a surface's data, notify; read its own package's files; offer a script plugin to install (only just after the person acted; the app asks them) |
 | `objects` | `objects` | publish (own kinds; personal, people, group or public audience), get, query, follow a public space |
+| `files` | `objects` | store bytes (at most 8 MiB) as a file and get a handle; publish an object with that file attached; read an object's file, fetched from friends when needed |
 | `identity` | `identity` | me, this device, contacts (devices: name, online, runs this plugin), groups (space, name, members) |
 | `live` | `live` | send (reply via `on-reply`), datagram |
 | `tun` | `tun` | open (address, prefix, routes, MTU), write, close |
@@ -206,6 +207,18 @@ Exports: `init`, `on-objects`, `on-open(surface, context)`, `on-event`,
   read.
 - **`ui.update` merges** (**Revised**): it sets top-level keys of a surface's
   data, so a plugin can update a counter without resending a page.
+- **Files are attachments** (October 2026). `files.store` encrypts bytes
+  into 128 KiB chunks with a new key, as a message's attachment is, and
+  returns a handle; `files.publish` signs an object with the file's fields
+  (`name`, `size`, `chunks`, `chunkBytes`, `key`) added to its payload, so
+  an object carries at most one file. Only the host hands out handles: one
+  for each file stored, and one for each file the person picks in a
+  `FilePick` widget (stored by the app, up to 64 MiB). `files.read` returns
+  an object's file, reading local chunks or fetching from friends; it gives
+  up after 25 s so the plugin hears why, and the plugin tries again later.
+  It is part of the `objects` grant, so plugins that have that grant can use
+  it after updating without asking again. Bytes cross the FFI raw: an
+  import's question and answer may each carry bytes after their JSON line.
 
 ### Data on the wire
 
@@ -214,6 +227,9 @@ As proposed, all on `ournet/2` and additive:
 - Kinds are `x.<plugin>.<name>`. Every build checks them against a 64 KiB
   payload cap and the generic field rules, and stores and relays them; the
   plugin's schema applies where it is installed (`Registry.accepts`).
+- A plugin object's file uses the fields every attachment uses, which every
+  build already checks, and its chunks are served and fetched like any
+  file's: no new request type.
 - Objects a plugin publishes carry an optional signed envelope field
   `app: "<id>@<version>"` (`SignedObject.app`).
 - Live request type `plugin`: `{plugin, payload (base64)}`, reply
@@ -241,7 +257,8 @@ says which are new. `objects`, `identity`, `live`, `tun` and `local` are grantab
 `log`, `clock`, `storage`, `ui`, `package-files` and `plugin-offers` are always there. Each
 import checks its grant when called too, since a language runtime imports
 them all and runs with each script plugin's grants. Not yet: publishing or
-reading core kinds (open question 1), `media`, `http`, `files`. A plugin never
+reading core kinds (open question 1), `media`, `http`, the device's own
+files. A plugin never
 gets keys, raw store access, other plugins' data or synchronous calls into the
 UI.
 
@@ -252,8 +269,37 @@ A package's `ui.rfwtxt` is an RFW library; each section names the widget
 sends events back with the widget's arguments plus what the widget adds
 (`value`, `target`, `x`/`y`, `key`/`down`). The libraries are `core.widgets`,
 `core.material` and **`ournet`**: `TextInput`, `Markup` (headings, lists,
-bold, italic, `[[links]]`), `Canvas` (rect, circle, line and text commands in
-a scaled space, with tap and drag), `Keys`, `Avatar`, `PersonName`, `TimeAgo`.
+bold, italic, `[[links]]`, and lines `![caption](object ID)` showing that
+object's picture), `Canvas` (rect, circle, line and text commands in a
+scaled space, with tap and drag), `Keys`, `Avatar`, `PersonName`, `TimeAgo`,
+`Image` (the picture attached to one of the plugin's objects, drawn like a
+message's: decoded off the UI isolate, cached by object) and `FilePick` (a
+button that asks for a file, `accept: "image"` or `"any"`, and sends
+`onPicked` with `{file, name, size}`; `file` is a handle for
+`files.publish`). `Image` and `Markup` show only the plugin's own objects.
+
+### In search and the activity feed
+
+A manifest may list kinds for the app's search and activity feed. The app
+reads the named payload fields itself, so neither ever calls a plugin:
+
+```json
+"search": {"page": {"title": "title", "text": "body", "key": "title"}},
+"activity": {"page": {"title": "title", "key": "title", "says": "edited a wiki page"}}
+```
+
+`title` is shown, `text` is searched and shown under it, and `key` names
+what an object is a version of: search shows the newest object for each
+key, and the feed gives each its own row per day. `says` is what the feed
+says someone did. A result or row opens the plugin's section in the scope
+the object belongs to (a group's when shared with several people in a space
+outside `x.<plugin>`, public, or personal), and `on-open`'s context carries
+`object`, its ID, once.
+
+Search pages through the listed kinds' history as it does messages. The
+feed reads the store's arrival index: the kinds a running manifest lists
+are recorded there as they arrive (`Store.setArrivalKinds`, a trigger on
+`arrival_kinds`), from when the plugin is installed.
 
 Learned building it:
 
@@ -352,7 +398,7 @@ Phase 1 of [STORE-PLAN.md](STORE-PLAN.md):
 
 | Plugin | Shows | Uses |
 |---|---|---|
-| `wiki` | Linked pages per scope (your own, a group's, a public commons), history, a notice when two people edit at once | objects, identity |
+| `wiki` | Linked pages per scope (your own, a group's, a public commons), history, a notice when two people edit at once; pictures and pages of any length (files); pages in search and the activity feed | objects, identity, files |
 | `microblog` | Public posts in each person's own space, followed friend to friend; group posts; likes and replies | objects, identity |
 | `tictactoe` | Turn-based play as signed moves between two people; both reach the same board | objects, identity |
 | `pong` | Real-time play over datagrams; practice against the computer | live, Canvas, timers |
@@ -375,6 +421,12 @@ host; `app/test/plugin_view_test.dart` draws each plugin with RFW (set
 
 Not yet verified: the helper's Wintun adapter on a real network (its pipes
 and protocol are tested), and the VPN on an Android device.
+Files, search and the activity feed (October 2026) answer three gaps found
+reviewing which features could be plugins: a plugin could not show
+pictures, hold more than 64 KiB in an object, or appear outside its own
+page. The JavaScript runtime does not offer `files` to scripts yet, and the
+Git plugin still carries packs in its own `x.git.chunk` objects; both could
+move to it.
 Next, in order of use: per-plugin traffic in Settings; the store plugin
 (STORE-PLAN.md phase 2); a foreground service keeping the VPN up when
 Android backgrounds the app; measured budgets in `PERFORMANCE.md`; then the

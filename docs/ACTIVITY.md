@@ -18,6 +18,7 @@ every object:
 | Files | group, drive or public space per day | "Sam shared 3 files", with a thumbnail |
 | People | friend | "Ana is now a friend" |
 | Chat (off by default) | conversation per day | "Sam sent 5 messages" |
+| Plugins | thing a plugin's manifest names per day (a wiki page) | "Jo edited a wiki page · 3 times" |
 
 The Chat list already shows unread conversations better than a feed could, so
 the feed never shows one row per message.
@@ -28,7 +29,12 @@ shows dimmed; what this device did is left out.
 
 Tapping a row opens: the note; the discussion (one post) or the forum (several);
 the event (one) or the calendar (several); the file in Files; the
-conversation, public chat or group chat; a friend's conversation.
+conversation, public chat or group chat; a friend's conversation; the
+plugin's page at that thing.
+
+Plugins choose their rows in their manifests (`activity`, see "In search and
+the activity feed" in PLUGINS.md); their arrivals are recorded from when the
+plugin is installed.
 
 ## Order: arrival, not creation
 
