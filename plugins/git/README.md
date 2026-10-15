@@ -39,8 +39,11 @@ commits with their changes, and the pushes: who moved which branch, when.
 | Kind | Holds |
 |---|---|
 | `x.git.repo` | name, description |
-| `x.git.push` | the refs moved (`refs`, and `old`: what the pusher had), whether forced, the IDs of the chunks carrying its pack (`parts`; `chunks` is a file's field in every build), size and object count |
-| `x.git.chunk` | 45 000 bytes of a pack, base64 |
+| `x.git.push` | the refs moved (`refs`, and `old`: what the pusher had), whether forced, size and object count; its pack is attached as the push's file (the `files` API: encrypted chunks fetched from whoever has them) |
+
+Before 0.2 a pack travelled in `x.git.chunk` objects of base64; 0.2 reads
+none of those pushes, and rebuilds what it keeps from the pushes it can
+read. Push such repositories again.
 
 - A push's pack is what `git pack-objects --revs` makes for the new commits
   minus everything the repository already had, so a repository is the union
@@ -55,8 +58,9 @@ commits with their changes, and the pushes: who moved which branch, when.
   Nothing is lost, and every device reaches the same refs. In public only the space's own person's pushes count; elsewhere the
   audience is who may push.
 - A fetch asks for the packs whose new commits this clone lacks, oldest
-  first, and hands each to `git index-pack`. A push that has not fully
-  arrived yet is reported, not guessed at.
+  first, and hands each to `git index-pack`, fetching a pack not on this
+  device from friends. A pack no friend could give yet is reported, not
+  guessed at, and asked for again every 30 seconds.
 - `git-remote-ournet` (gitremote-helpers(7): `list`, `fetch`, `push`) reaches
   the plugin through the app's local bridge (`core/lib/src/local_bridge.dart`):
   a loopback port and a random key in `~/.ournet/bridge.json` (or where

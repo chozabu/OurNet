@@ -1,9 +1,10 @@
 //! Git over OurNet. A repository is a signed `x.git.repo`; each push is an
-//! `x.git.push` naming the refs it moved and the `x.git.chunk`s that carry
-//! its packfile, exactly as `git pack-objects` wrote it. They sync like any
-//! object to the repository's audience: this person's devices, a group, or
-//! (in each person's own public space) friends who follow them. Nobody has
-//! to be online for a clone, and every push says who made it.
+//! `x.git.push` naming the refs it moved, with its packfile, exactly as
+//! `git pack-objects` wrote it, attached as the push's file. They sync like
+//! any object to the repository's audience: this person's devices, a group,
+//! or (in each person's own public space) friends who follow them; a pack is
+//! fetched from whoever has it when it is read. Nobody has to be online for
+//! a clone, and every push says who made it.
 //!
 //! Real git reaches it through `git-remote-ournet`, which talks to this
 //! plugin over the app's local bridge (the `local` grant): live requests
@@ -17,23 +18,26 @@ mod pack;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 
-use ournet_plugin::{json, store, ui, Audience, Context, Object, Plugin, Scope, Value};
+use ournet_plugin::{files, json, store, ui, Audience, Context, Object, Plugin, Scope, Value};
 use pack::{Lookup, Sha};
 use serde::{Deserialize, Serialize};
 
 const REPO: &str = "x.git.repo";
 const PUSH: &str = "x.git.push";
-const CHUNK: &str = "x.git.chunk";
 const PERSONAL: &str = "x.git";
 const SURFACE: &str = "Git";
 
-/// Raw bytes of pack per chunk: 60000 characters of base64.
-const CHUNK_BYTES: usize = 45_000;
-/// Largest pack one push may carry.
+/// Largest pack one push may carry: the most a plugin's file may hold.
 const MAX_PACK: usize = 16 * 1024 * 1024;
 /// Time an indexing step may take before it yields, in milliseconds.
 const STEP_MS: u64 = 300;
 const INDEX_TIMER: u64 = 1;
+/// Packs not here yet are asked for again after this, in milliseconds.
+const RETRY_MS: u32 = 30_000;
+const RETRY_TIMER: u64 = 2;
+/// What this version keeps in storage. Before 2, packs travelled as
+/// `x.git.chunk` objects; those pushes are left out and pushed again.
+const FORMAT: &[u8] = b"2";
 
 /// A person's public space: their own repositories, followed by friends.
 fn home(person: &str) -> String {
@@ -102,76 +106,41 @@ struct Push {
     force: bool,
     #[serde(default)]
     head: Option<String>,
-    chunks: Vec<String>,
+    /// It carries a pack as its file (a push that only deletes refs does
+    /// not).
+    pack: bool,
     size: u64,
     objects: u32,
-    /// Chunks not yet here.
-    missing: Vec<String>,
     /// 0 waiting, 1 indexed, 2 could not be read.
     #[serde(default)]
     indexed: u8,
+    /// Why it could not be read, or that its pack is not here yet.
     #[serde(default)]
     error: String,
 }
 
 impl Push {
+    /// Its pack (if any) has been read here.
     fn complete(&self) -> bool {
-        self.missing.is_empty()
+        self.indexed != 0
+    }
+
+    /// Its pack could not be fetched yet: no friend that has it answered.
+    fn fetching(&self) -> bool {
+        self.indexed == 0 && !self.error.is_empty()
     }
 }
 
-fn b64(bytes: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for c in bytes.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
-        out.push(T[(n >> 18) as usize & 63] as char);
-        out.push(T[(n >> 12) as usize & 63] as char);
-        out.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
-    }
-    out
-}
-
-fn unb64(text: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(text.len() / 4 * 3);
-    let (mut acc, mut bits) = (0u32, 0);
-    for c in text.bytes() {
-        let v = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            b'=' => break,
-            _ => return None,
-        };
-        acc = acc << 6 | v as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-        }
-    }
-    Some(out)
-}
-
-/// Joins a pack back together from its chunks.
-fn load_pack(chunks: &[String]) -> Result<Vec<u8>, String> {
-    let mut out = Vec::new();
-    for id in chunks {
-        let o = ournet_plugin::get(id).ok_or("a part of it has not arrived yet")?;
-        let data = o.json()["data"].as_str().and_then(unb64).ok_or("a part of it is damaged")?;
-        out.extend_from_slice(&data);
-    }
-    Ok(out)
+/// A push's pack: its file, fetched from friends when it is not here.
+fn load_pack(push: &str) -> Result<Vec<u8>, String> {
+    files::read(push)
 }
 
 /// The objects of one repository: where each is, and the packs lately read.
 struct Objects {
     key: String,
-    /// Indexed pushes, by ID, with their chunks.
-    packs: Vec<(String, Vec<String>)>,
+    /// Indexed pushes with packs, by ID.
+    packs: Vec<String>,
     at: HashMap<Sha, (u16, u32)>,
     cache: Vec<(u16, Rc<Vec<u8>>)>,
 }
@@ -179,12 +148,12 @@ struct Objects {
 impl Objects {
     fn load(key: &str, pushes: &[Push]) -> Objects {
         let mut o = Objects { key: key.into(), packs: Vec::new(), at: HashMap::new(), cache: Vec::new() };
-        for p in pushes.iter().filter(|p| p.indexed == 1 && !p.chunks.is_empty()) {
+        for p in pushes.iter().filter(|p| p.indexed == 1 && p.pack) {
             let n = o.packs.len() as u16;
             for e in pack::load_entries(&store::get(&format!("idx/{}", p.id)).unwrap_or_default()) {
                 o.at.insert(e.sha, (n, e.offset));
             }
-            o.packs.push((p.id.clone(), p.chunks.clone()));
+            o.packs.push(p.id.clone());
         }
         o
     }
@@ -193,7 +162,7 @@ impl Objects {
         if let Some((_, p)) = self.cache.iter().find(|(i, _)| *i == n) {
             return Ok(p.clone());
         }
-        let bytes = Rc::new(load_pack(&self.packs[n as usize].1)?);
+        let bytes = Rc::new(load_pack(&self.packs[n as usize])?);
         let held: usize = self.cache.iter().map(|(_, p)| p.len()).sum();
         if held + bytes.len() > 24 * 1024 * 1024 || self.cache.len() >= 4 {
             self.cache.remove(0);
@@ -277,6 +246,8 @@ struct Git {
     objects: Option<Objects>,
     /// Pushes to index, in order, and the one being indexed.
     queue: Vec<(String, String)>,
+    /// Pushes whose packs were not here, to ask for again.
+    retry: Vec<(String, String)>,
     indexing: Option<(String, String, pack::Indexer)>,
     followed: BTreeSet<String>,
 
@@ -373,12 +344,10 @@ impl Git {
                         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect())
                         .unwrap_or_default()
                 };
-                // `parts`, not `chunks`: every build reads `chunks` as a file's.
-                let chunks: Vec<String> = p["parts"]
-                    .as_array()
-                    .map(|a| a.iter().filter_map(|c| c.as_str().map(String::from)).collect())
-                    .unwrap_or_default();
-                let missing = chunks.iter().filter(|c| ournet_plugin::get(c).is_none()).cloned().collect();
+                // Before format 2 a pack came in `parts`: not readable now.
+                if p["parts"].as_array().is_some_and(|a| !a.is_empty()) {
+                    return None;
+                }
                 let push = Push {
                     id: o.id.clone(),
                     author: o.author.clone(),
@@ -389,12 +358,10 @@ impl Git {
                     head: p["head"].as_str().map(String::from),
                     size: p["size"].as_u64().unwrap_or(0),
                     objects: p["objects"].as_u64().unwrap_or(0) as u32,
-                    chunks,
-                    missing,
+                    pack: p.get("chunks").is_some(),
                     indexed: 0,
                     error: String::new(),
                 };
-                let complete = push.complete();
                 let list = self.load_pushes(&key);
                 if list.iter().any(|q| q.id == push.id) {
                     return None;
@@ -403,25 +370,7 @@ impl Git {
                 list.sort_by(|a, b| (a.created, &a.id).cmp(&(b.created, &b.id)));
                 self.save_pushes(&key);
                 self.save_repos();
-                if complete {
-                    self.queue.push((key.clone(), o.id.clone()));
-                }
-            }
-            CHUNK => {
-                let list = self.load_pushes(&key);
-                let mut done = Vec::new();
-                for push in list.iter_mut() {
-                    if let Some(i) = push.missing.iter().position(|c| *c == o.id) {
-                        push.missing.remove(i);
-                        if push.complete() {
-                            done.push(push.id.clone());
-                        }
-                    }
-                }
-                self.save_pushes(&key);
-                for id in done {
-                    self.queue.push((key.clone(), id));
-                }
+                self.queue.push((key.clone(), o.id.clone()));
             }
             _ => return None,
         }
@@ -454,15 +403,23 @@ impl Git {
         if self.indexing.is_none() {
             while let Some((key, id)) = (!self.queue.is_empty()).then(|| self.queue.remove(0)) {
                 let Some(push) = self.load_pushes(&key).iter().find(|p| p.id == id).cloned() else { continue };
-                if push.indexed != 0 || !push.complete() {
+                if push.complete() {
                     continue;
                 }
-                if push.chunks.is_empty() {
+                if !push.pack {
                     self.finish(&key, &id, Ok(Vec::new()));
                     continue;
                 }
+                let bytes = match load_pack(&id) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        // Not here yet, and no friend that has it answered.
+                        self.waiting(&key, &id, e);
+                        continue;
+                    }
+                };
                 let _ = store::set("indexing", id.as_bytes());
-                match load_pack(&push.chunks).and_then(pack::Indexer::new) {
+                match pack::Indexer::new(bytes) {
                     Ok(ix) => {
                         self.indexing = Some((key, id, ix));
                         break;
@@ -485,6 +442,51 @@ impl Git {
         self.schedule();
     }
 
+    /// Starts storage again in this version's format: forgets what an
+    /// earlier one kept and reads every repository and push back from the
+    /// host, which sends each object only once.
+    fn rebuild(&mut self) {
+        for key in store::keys("") {
+            store::remove(&key);
+        }
+        let mut found = Vec::new();
+        for kind in [REPO, PUSH] {
+            let mut before: Option<Object> = None;
+            loop {
+                let page = ournet_plugin::query(kind, None, before.as_ref(), 500);
+                let done = page.len() < 500;
+                before = page.last().cloned();
+                found.extend(page);
+                if done {
+                    break;
+                }
+            }
+        }
+        found.sort_by(|a, b| (a.created, &a.id).cmp(&(b.created, &b.id)));
+        for o in &found {
+            self.take(o);
+        }
+        // `init` queues what is unread from storage.
+        self.queue.clear();
+        self.pushes.clear();
+        let _ = store::set("format", FORMAT);
+    }
+
+    /// [id]'s pack could not be fetched: says why, and tries again later.
+    fn waiting(&mut self, key: &str, id: &str, why: String) {
+        if let Some(p) = self.load_pushes(key).iter_mut().find(|p| p.id == id) {
+            p.error = why;
+        }
+        self.save_pushes(key);
+        if !self.retry.iter().any(|(k, i)| k == key && i == id) {
+            self.retry.push((key.to_string(), id.to_string()));
+        }
+        ournet_plugin::timer::set(RETRY_TIMER, RETRY_MS);
+        if self.repo.as_deref() == Some(key) {
+            self.show();
+        }
+    }
+
     fn finish(&mut self, key: &str, id: &str, result: Result<Vec<pack::Entry>, String>) {
         let outcome = match result {
             Ok(entries) => store::set(&format!("idx/{id}"), &pack::save_entries(&entries)).map(|_| ()),
@@ -492,7 +494,10 @@ impl Git {
         };
         if let Some(p) = self.load_pushes(key).iter_mut().find(|p| p.id == id) {
             match outcome {
-                Ok(()) => p.indexed = 1,
+                Ok(()) => {
+                    p.indexed = 1;
+                    p.error.clear();
+                }
                 Err(e) => {
                     ournet_plugin::warn(&format!("could not read push {id}: {e}"));
                     p.indexed = 2;
@@ -552,14 +557,15 @@ impl Git {
             "list" => {
                 let refs = self.refs(&key);
                 let head = self.head(&key, &refs);
-                let waiting = self.load_pushes(&key).iter().filter(|p| !p.complete()).count();
+                let waiting = self.load_pushes(&key).iter().filter(|p| p.fetching()).count();
                 Ok((json!({"refs": refs, "head": head, "waiting": waiting}), Vec::new()))
             }
             "packs" => {
+                // Every pack, read here or not: `pack` fetches one not here.
                 let pushes = self.load_pushes(&key);
                 let packs: Vec<Value> = pushes
                     .iter()
-                    .filter(|p| p.complete() && !p.chunks.is_empty())
+                    .filter(|p| p.pack)
                     .map(|p| {
                         json!({
                             "id": p.id,
@@ -568,20 +574,23 @@ impl Git {
                         })
                     })
                     .collect();
-                let waiting = pushes.iter().filter(|p| !p.complete()).count();
+                let waiting = pushes.iter().filter(|p| p.fetching()).count();
                 Ok((json!({"packs": packs, "waiting": waiting}), Vec::new()))
             }
             "pack" => {
                 let id = request["id"].as_str().unwrap_or("");
                 let push = self.load_pushes(&key).iter().find(|p| p.id == id).cloned().ok_or("no such push")?;
-                Ok((json!({}), load_pack(&push.chunks)?))
+                if !push.pack {
+                    return Err("that push carries no pack".into());
+                }
+                Ok((json!({}), load_pack(&push.id)?))
             }
             "push" => self.receive(&key, request, body).map(|id| (json!({"id": id}), Vec::new())),
             _ => Err(format!("unknown request {op}")),
         }
     }
 
-    /// Publishes a push from local git: its pack in chunks, then the refs.
+    /// Publishes a push from local git: the refs it moves, with its pack.
     fn receive(&mut self, key: &str, request: &Value, pack_bytes: &[u8]) -> Result<String, String> {
         let repo = self.repos.get(key).cloned().ok_or("no such repository")?;
         if !Self::may_write(&repo.space, &self.me) {
@@ -622,18 +631,10 @@ impl Git {
             Where::Group => Audience::Group,
             Where::Public => Audience::Public,
         };
-        let mut chunks = Vec::new();
-        if objects > 0 {
-            for part in pack_bytes.chunks(CHUNK_BYTES) {
-                let payload = json!({"repo": repo.name, "data": b64(part)});
-                chunks.push(ournet_plugin::publish(CHUNK, &repo.space, to.clone(), &payload)?);
-            }
-        }
         let mut payload = json!({
             "repo": repo.name,
             "refs": refs,
             "old": old,
-            "parts": chunks,
             "size": if objects > 0 { pack_bytes.len() } else { 0 },
             "objects": objects,
         });
@@ -643,7 +644,12 @@ impl Git {
         if let Some(head) = request["head"].as_str().filter(|h| h.starts_with("refs/heads/")) {
             payload["head"] = head.into();
         }
-        ournet_plugin::publish(PUSH, &repo.space, to, &payload)
+        if objects == 0 {
+            return ournet_plugin::publish(PUSH, &repo.space, to, &payload);
+        }
+        // The pack is the push's file; the file's `size` is the pack's.
+        let file = files::store("pack", pack_bytes)?;
+        files::publish(PUSH, &repo.space, to, &payload, &file)
     }
 
     // The page ------------------------------------------------------------
@@ -727,8 +733,8 @@ impl Git {
         let branch = self.branch.clone().filter(|b| refs.contains_key(b)).or(head);
         self.branch = branch.clone();
         let pushes = self.load_pushes(&key).clone();
-        let waiting: usize = pushes.iter().map(|p| p.missing.len()).sum();
-        let unread = pushes.iter().filter(|p| p.complete() && p.indexed == 0).count();
+        let waiting = pushes.iter().filter(|p| p.fetching()).count();
+        let unread = pushes.iter().filter(|p| !p.complete() && !p.fetching()).count();
         let failed = pushes.iter().filter(|p| p.indexed == 2).count();
         let mut notice = Vec::new();
         for (base, side, _) in ref_state(&pushes).1 {
@@ -740,7 +746,7 @@ impl Git {
             ));
         }
         if waiting > 0 {
-            notice.push(format!("Waiting for {waiting} parts from friends."));
+            notice.push(format!("Waiting for {waiting} pushes' changes from friends."));
         }
         if unread > 0 {
             notice.push("Reading the newest pushes…".to_string());
@@ -1005,8 +1011,10 @@ impl Git {
                 if p.force {
                     moved.push("(forced)".into());
                 }
-                let state = if !p.complete() {
-                    format!(" · waiting for {} of {} parts", p.missing.len(), p.chunks.len())
+                let state = if p.fetching() {
+                    " · waiting for its changes from friends".to_string()
+                } else if !p.complete() {
+                    " · reading".to_string()
                 } else if p.indexed == 2 {
                     format!(" · could not be read: {}", p.error)
                 } else {
@@ -1294,6 +1302,9 @@ fn split(payload: &[u8]) -> (Value, &[u8]) {
 impl Plugin for Git {
     fn init(&mut self) {
         self.me = ournet_plugin::me();
+        if store::get("format").as_deref() != Some(FORMAT) {
+            self.rebuild();
+        }
         self.repos = store::get_json("repos").unwrap_or_default();
         self.followed = store::get_json("followed").unwrap_or_default();
         // A pack that stopped the plugin mid-read is not read again.
@@ -1308,7 +1319,7 @@ impl Plugin for Git {
         }
         for key in self.repos.keys().cloned().collect::<Vec<_>>() {
             for p in self.load_pushes(&key).clone() {
-                if p.complete() && p.indexed == 0 {
+                if !p.complete() {
                     self.queue.push((key.clone(), p.id));
                 }
             }
@@ -1353,7 +1364,16 @@ impl Plugin for Git {
         }
         self.space = space;
         self.place = place;
-        self.show();
+        // Opened from search or the activity feed: show that repository.
+        let opened = context.object.and_then(|id| ournet_plugin::get(&id)).and_then(|o| {
+            let p = o.json();
+            let name = p["repo"].as_str().or(p["name"].as_str())?.to_string();
+            Some(repo_key(&o.space, &name))
+        });
+        match opened.filter(|key| self.repos.contains_key(key)) {
+            Some(key) => self.open_repo(&key),
+            None => self.show(),
+        }
     }
 
     fn on_event(&mut self, _surface: &str, name: &str, args: Value) {
@@ -1448,6 +1468,10 @@ impl Plugin for Git {
     fn on_timer(&mut self, token: u64) {
         if token == INDEX_TIMER {
             self.index_step();
+        }
+        if token == RETRY_TIMER {
+            self.queue.append(&mut self.retry);
+            self.schedule();
         }
     }
 

@@ -1,7 +1,7 @@
 {
   "id": "git",
   "name": "Git",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "api": "0.1",
   "description": "Git repositories for yourself, a group, or friends in public: push and clone with ordinary git (git-remote-ournet), browse files, commits and changes here. Friends can clone while you are offline, and every push is signed by who made it.",
   "grants": ["objects", "identity", "local"],
@@ -14,16 +14,17 @@
       "repo": {"type": "string", "max": 100, "required": true},
       "refs": {"type": "map", "max": 24000, "required": true},
       "old": {"type": "map", "max": 24000},
-      "parts": {"type": "list", "max": 400, "items": {"type": "string", "max": 128}},
       "size": {"type": "int", "min": 0},
       "objects": {"type": "int", "min": 0},
       "force": {"type": "bool"},
       "head": {"type": "string", "max": 200}
-    },
-    "chunk": {
-      "repo": {"type": "string", "max": 100, "required": true},
-      "data": {"type": "string", "max": 60000, "required": true}
     }
+  },
+  "search": {
+    "repo": {"title": "name", "text": "description", "key": "name"}
+  },
+  "activity": {
+    "push": {"title": "repo", "key": "repo", "says": "pushed to a repository"}
   },
   "sections": [
     {"name": "git", "title": "Git", "icon": "source", "surface": "Git"}
