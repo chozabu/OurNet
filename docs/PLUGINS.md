@@ -179,7 +179,11 @@ native PluginHost ── wasmtime (Cranelift; component model; no WASI), one thr
 ## API (`ournet:plugin@0.1.0`)
 
 The full world is `native/rust/wit/plugin.wit`; the Rust SDK is
-`plugins/sdk`. In brief:
+`plugins/sdk`. A manifest's `api` says which of it a plugin needs: `0.1`,
+or `0.2` for one that uses `files` (October 2026). A build refuses a package
+naming an API it does not host when reading it, before anything installs,
+so a plugin that needs a newer app says so instead of failing to start. In
+brief:
 
 | Interface | Grant | Calls |
 |---|---|---|

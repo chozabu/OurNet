@@ -2,7 +2,7 @@
   "id": "wiki",
   "name": "Wiki",
   "version": "0.2.0",
-  "api": "0.1",
+  "api": "0.2",
   "description": "Linked pages anyone in the scope can edit: your own notes, a group's shared knowledge, or a public commons among friends. Pages can hold pictures and run long. Every edit is kept, signed by who made it.",
   "grants": ["objects", "identity"],
   "kinds": {

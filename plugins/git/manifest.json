@@ -2,7 +2,7 @@
   "id": "git",
   "name": "Git",
   "version": "0.2.0",
-  "api": "0.1",
+  "api": "0.2",
   "description": "Git repositories for yourself, a group, or friends in public: push and clone with ordinary git (git-remote-ournet), browse files, commits and changes here. Friends can clone while you are offline, and every push is signed by who made it.",
   "grants": ["objects", "identity", "local"],
   "kinds": {

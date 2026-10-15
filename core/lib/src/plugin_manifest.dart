@@ -15,8 +15,10 @@ class PluginManifest {
   /// through the app's [LocalBridge] (git, for the Git plugin).
   static const grantable = {'objects', 'identity', 'live', 'tun', 'local'};
 
-  /// The plugin API versions this build hosts.
-  static const apis = {'0.1'};
+  /// The plugin API versions this build hosts. 0.2 adds `files`: a plugin
+  /// that uses it says 0.2, so builds without it refuse it when reading the
+  /// package rather than failing to start it.
+  static const apis = {'0.1', '0.2'};
 
   final String id;
   final String name;

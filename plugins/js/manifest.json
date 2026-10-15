@@ -2,7 +2,7 @@
   "id": "js",
   "name": "JavaScript",
   "version": "0.2.0",
-  "api": "0.1",
+  "api": "0.2",
   "description": "Runs plugins written in JavaScript, each on its own with only what it was granted. Uses the Boa engine.",
   "provides": "runtime:js@1"
 }

@@ -2,7 +2,7 @@
   "id": "microblog",
   "name": "Microblog",
   "version": "0.2.0",
-  "api": "0.1",
+  "api": "0.2",
   "description": "Short posts, with a picture if you like. In public, your friends follow you and you follow them; in a group, posts stay with its members. Likes and replies included.",
   "grants": ["objects", "identity"],
   "kinds": {
