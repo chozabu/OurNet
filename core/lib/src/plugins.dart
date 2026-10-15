@@ -329,7 +329,7 @@ class Plugins {
   static const liveRequest = 'plugin';
 
   /// The largest file `files.store` takes and `files.read` returns.
-  static const maxFileBytes = 8 * 1024 * 1024;
+  static const maxFileBytes = 16 * 1024 * 1024;
 
   /// File handles a running plugin holds at once; the oldest go first.
   static const maxFileHandles = 64;
@@ -1487,7 +1487,7 @@ class Plugins {
     }
     final size = payload['size'];
     if (size is! int || size > maxFileBytes) {
-      throw StateError('Files are at most 8 MiB here');
+      throw StateError('Files are at most 16 MiB here');
     }
     final read = readFile;
     if (read != null) {
@@ -1625,7 +1625,7 @@ class Plugins {
           throw StateError('A file needs a plain name');
         }
         if (body == null || body.length > maxFileBytes) {
-          throw StateError('Files are at most 8 MiB');
+          throw StateError('Files are at most 16 MiB');
         }
         if (_running[plugin.id] == null) throw StateError('Plugin not running');
         return addFile(plugin.id, await storeFile(name.trim(), body));

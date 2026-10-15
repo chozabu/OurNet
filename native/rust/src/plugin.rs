@@ -200,7 +200,7 @@ const GRANTABLE: [&str; 4] = ["objects", "identity", "live", "tun"];
 const FILE_LIMIT: u64 = 16 << 20;
 
 /// The largest file `files.store` takes or `files.read` returns.
-const ATTACHMENT_LIMIT: usize = 8 << 20;
+const ATTACHMENT_LIMIT: usize = 16 << 20;
 
 /// The plugin's private key-value store, kept in one file and written after
 /// each call that changed it.
@@ -733,7 +733,7 @@ impl files::Host for Host {
     fn store(&mut self, name: String, data: Vec<u8>) -> Result<String, String> {
         self.granted("objects")?;
         if data.len() > ATTACHMENT_LIMIT {
-            return Err("files are at most 8 MiB".into());
+            return Err("files are at most 16 MiB".into());
         }
         let (handle, _) = self.ask_bytes("files.store", json!({"name": name}), Some(&data))?;
         handle.as_str().map(String::from).ok_or_else(|| "no handle".into())

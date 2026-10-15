@@ -140,6 +140,25 @@ fn from_json(value: &Value, context: &mut Context) -> JsResult<JsValue> {
     JsValue::from_json(value, context)
 }
 
+/// Argument [i] as an audience: "personal", "group", "public" or a list of
+/// people.
+fn audience(args: &[JsValue], i: usize, context: &mut Context) -> JsResult<Audience> {
+    Ok(match args.get(i).cloned().unwrap_or_default() {
+        v if v.is_string() => match text(args, i, context)?.as_str() {
+            "personal" => Audience::Personal,
+            "group" => Audience::Group,
+            "public" => Audience::Public,
+            other => return Err(fail(format!("unknown audience {other}"))),
+        },
+        _ => match json_arg(args, i, context)? {
+            Value::Array(people) => {
+                Audience::People(people.iter().filter_map(|p| p.as_str().map(String::from)).collect())
+            }
+            _ => return Err(fail("audience: personal, group, public or a list of people")),
+        },
+    })
+}
+
 fn fail(message: impl Into<String>) -> JsError {
     JsNativeError::error().with_message(message.into()).into()
 }
@@ -199,24 +218,27 @@ fn host_object(context: &mut Context) -> JsObject {
         }),
         ("publish", 4, |_, a, c| {
             let (kind, space) = (text(a, 0, c)?, text(a, 1, c)?);
-            let to = match a.get(2).cloned().unwrap_or_default() {
-                v if v.is_string() => match text(a, 2, c)?.as_str() {
-                    "personal" => Audience::Personal,
-                    "group" => Audience::Group,
-                    "public" => Audience::Public,
-                    other => return Err(fail(format!("unknown audience {other}"))),
-                },
-                _ => match json_arg(a, 2, c)? {
-                    Value::Array(people) => Audience::People(
-                        people.iter().filter_map(|p| p.as_str().map(String::from)).collect(),
-                    ),
-                    _ => return Err(fail("audience: personal, group, public or a list of people")),
-                },
-            };
+            let to = audience(a, 2, c)?;
             let payload = text(a, 3, c)?;
             let id = ournet_plugin::bindings::ournet::plugin::objects::publish(&kind, &space, &to, &payload)
                 .map_err(fail)?;
             Ok(JsString::from(id).into())
+        }),
+        ("fileStore", 2, |_, a, c| {
+            let file = ournet_plugin::files::store(&text(a, 0, c)?, &bytes(a, 1, c)?).map_err(fail)?;
+            Ok(JsString::from(file).into())
+        }),
+        ("filePublish", 5, |_, a, c| {
+            let (kind, space) = (text(a, 0, c)?, text(a, 1, c)?);
+            let to = audience(a, 2, c)?;
+            let (payload, file) = (text(a, 3, c)?, text(a, 4, c)?);
+            let id = ournet_plugin::bindings::ournet::plugin::files::publish(&kind, &space, &to, &payload, &file)
+                .map_err(fail)?;
+            Ok(JsString::from(id).into())
+        }),
+        ("fileRead", 1, |_, a, c| {
+            let data = ournet_plugin::files::read(&text(a, 0, c)?).map_err(fail)?;
+            byte_array(&data, c)
         }),
         ("get", 1, |_, a, c| match ournet_plugin::get(&text(a, 0, c)?) {
             Some(o) => from_json(&object_json(&o), c),

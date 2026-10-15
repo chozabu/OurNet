@@ -212,6 +212,32 @@ export function onEvent(surface, name) {
     );
   });
 
+  test('scripts attach files to their objects and read them', () async {
+    final (node, plugins) = await device();
+    await plugins.install(PluginPackage.read(runtime), grants: {});
+    await plugins.install(
+      script('''
+export function onEvent(surface, name) {
+  const file = ournet.files.store("note.txt", "a file from a script");
+  const id = ournet.files.publish("x.probe.note", "x.probe", "personal", { text: "hi" }, file);
+  ournet.ui.update(surface, { id, read: ournet.text(ournet.files.read(id)) });
+}
+''', grants: ['objects']),
+      grants: {'objects'},
+    );
+    await status(plugins, 'probe', PluginStatus.running);
+    plugins.event('probe', 'Main', 'go', {});
+    final shown = await until(
+      plugins,
+      'probe',
+      'Main',
+      (d) => d['read'] != null,
+    );
+    expect(shown['read'], 'a file from a script');
+    final payload = (await node.content(node.store.get(shown['id'])!))!;
+    expect(payload['name'], 'note.txt');
+  });
+
   test('handlers that throw are logged; promises settle from timers', () async {
     final (_, plugins) = await device();
     await plugins.install(PluginPackage.read(runtime), grants: {});

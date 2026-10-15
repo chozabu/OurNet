@@ -167,7 +167,7 @@ interface plugin-offers {
 interface files {
   use types.{audience};
 
-  /// Stores `data` (at most 8 MiB) as a file called `name`, ready to
+  /// Stores `data` (at most 16 MiB) as a file called `name`, ready to
   /// attach. Returns a handle for `publish`; handles last until the plugin
   /// stops. A file the person picks in a `FilePick` widget arrives as an
   /// event with a handle of its own.
@@ -175,7 +175,7 @@ interface files {
   /// Publishes like `objects.publish`, with the file `file` names attached.
   publish: func(kind: string, space: string, to: audience, payload: string, file: string) -> result<string, string>;
   /// The file attached to object `id`, one of this plugin's, fetched from
-  /// friends when it is not on this device yet. At most 8 MiB. Fails at
+  /// friends when it is not on this device yet. At most 16 MiB. Fails at
   /// once for an object without a file, or after a while when no friend
   /// that has it is reachable: try again later.
   read: func(id: string) -> result<list<u8>, string>;

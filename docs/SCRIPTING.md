@@ -72,7 +72,9 @@ export function restore(state) {}
   `"group"`, `"public"` or a list of people), `get`, `query`, `follow`, `me`,
   `thisDevice`, `contacts`, `groups`, `datagram`, `storage.*` (text,
   `getBytes`, `getJSON`/`setJSON`), `ui.update`, `ui.notify`, `read` (a
-  package file), `tun.*`, `log`/`warn`/`error` and `console`.
+  package file), `files.store`/`files.publish`/`files.read` (files attached
+  to the plugin's objects, as in PLUGINS.md), `tun.*`, `log`/`warn`/`error`
+  and `console`.
 - Async is optional: `ournet.send(device, data)` returns a promise of the
   reply's bytes (`ournet.text` and `ournet.json` read them) carrying its
   `id`, and `onReply(id, bytes, error)` is called as well; `ournet.sleep(ms)`

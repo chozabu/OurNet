@@ -311,9 +311,11 @@ class Activity {
     final (section, space, group) = place;
     final day = _day(at);
     // A plugin's things each get a row: one per page, say, not per wiki.
-    final thing = section == ActivitySection.plugins
-        ? '|${node.registry.activityOf(o.kind)!.keyOf(o, data!)}'
-        : '';
+    // Without a key, a space's objects of the day share one.
+    final listing = section == ActivitySection.plugins
+        ? node.registry.activityOf(o.kind)
+        : null;
+    final thing = listing?.key == null ? '' : '|${listing!.keyOf(o, data!)}';
     final key = section == ActivitySection.notes && o.kind == 'note_op'
         ? 'note|$space|$day'
         : '${section.name}|${o.kind}|$space$thing|$day';

@@ -288,12 +288,12 @@ void main() {
     );
   }, skip: skip);
 
-  test('a large push travels in chunks', () async {
+  test("a large push travels as the push's file", () async {
     final (node, plugins, _) = await device();
     final url = await createRepo(plugins, 'big');
     final work = '${temp.path}/big';
     await ok(['init', work]);
-    // Random bytes do not compress: about four chunks.
+    // Random bytes do not compress: two chunks of the file.
     final rng = Random(42);
     final random = Uint8List.fromList(
       List.generate(170 * 1024, (_) => rng.nextInt(256)),
@@ -302,7 +302,10 @@ void main() {
     await ok(['add', '.'], dir: work);
     await ok(['commit', '-m', 'Big'], dir: work);
     await ok(['push', url, 'main'], dir: work);
-    expect(node.store.allOf(kind: 'x.git.chunk').length, greaterThan(1));
+    final push = node.store.allOf(kind: 'x.git.push').single;
+    final payload = (await node.content(push))!;
+    expect(payload['chunks'], hasLength(2));
+    expect(payload['name'], 'pack');
     await ok(['clone', url, 'big-copy']);
     expect(File('${temp.path}/big-copy/blob.bin').readAsBytesSync(), random);
     final code = await until(

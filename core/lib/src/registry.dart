@@ -175,7 +175,8 @@ class PluginListing {
 
   /// A payload field naming the thing an object is a version of (a page's
   /// title, say): search shows the newest object for each, and the feed
-  /// gives each its own row.
+  /// gives each its own row. Without one, search shows every object and the
+  /// feed gives a space's objects of a day one row.
   final String? key;
 
   /// What the feed says someone did, after their name: `edited a page`.

@@ -257,7 +257,7 @@ pub fn offer_plugin(files: &[(String, Vec<u8>)], source: &Value) -> Result<(), S
 pub mod files {
     use super::{host, Audience, Value};
 
-    /// Stores [data] (at most 8 MiB) as a file called [name]; returns a
+    /// Stores [data] (at most 16 MiB) as a file called [name]; returns a
     /// handle for [publish]. A file the person picks in a `FilePick` widget
     /// arrives as an event with a handle of its own.
     pub fn store(name: &str, data: &[u8]) -> Result<String, String> {
@@ -270,7 +270,7 @@ pub mod files {
     }
 
     /// The file attached to object [id], fetched from friends when it is not
-    /// here yet (at most 8 MiB); an error means try again later.
+    /// here yet (at most 16 MiB); an error means try again later.
     pub fn read(id: &str) -> Result<Vec<u8>, String> {
         host::files::read(id)
     }

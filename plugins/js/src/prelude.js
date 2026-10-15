@@ -72,6 +72,21 @@
      * "personal", "group", "public" or a list of people.
      */
     publish: (kind, space, to, payload) => host.publish(kind, space, to, JSON.stringify(payload)),
+    /**
+     * Files attached to this plugin's objects (part of the `objects`
+     * grant). `store(name, data)` keeps bytes (or text) as a file and
+     * returns a handle; `publish(kind, space, to, payload, file)` publishes
+     * like `ournet.publish` with that file attached; `read(id)` returns an
+     * object's file as bytes, fetched from friends when needed, and throws
+     * when it is not here yet. A `FilePick` widget's `onPicked` brings a
+     * handle too.
+     */
+    files: {
+      store: (name, data) => host.fileStore(name, bytes(data)),
+      publish: (kind, space, to, payload, file) =>
+        host.filePublish(kind, space, to, JSON.stringify(payload), file),
+      read: (id) => host.fileRead(id),
+    },
     get: (id) => host.get(id),
     /** `{kind, space?, author?, before?: an object from a previous page, limit?}`; newest first. */
     query: (filter) => host.query(filter),
