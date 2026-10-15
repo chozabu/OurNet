@@ -17,8 +17,20 @@ is deliberately not there yet.
 - **Your position.** A blue dot with an accuracy circle (Android and Windows
   read it from the system). A computer with no location sensor shows where your
   phone last was, labelled with the phone's name.
-- **Search** finds friends by name and goes to typed coordinates. Place search
-  is not built yet.
+- **Search** finds friends and saved places by name, note or emoji, and goes
+  to typed coordinates. Address and venue search is not built yet.
+- **Saved places.** Long-press, then Save: a name, any single emoji (⭐ by
+  default), optional note and one or more lists. Saves are private by default.
+  Saved opens a searchable list; Show on map displays one list with clustered
+  markers. Hiding it does not delete anything. Deleting a list keeps its places.
+- **Group lists.** Create a list for a group, then explicitly select that group
+  when saving. Members organise lists and contribute pins; a pin's contributor
+  and the group owner can edit or delete it. A list's creator and group owner
+  can rename or delete it. Group notes are labelled as shared; a separate
+  private note stays with you. Save a copy starts with empty notes.
+- **Share a place.** The pin card sends a link to a chosen friend or group.
+  It contains only name, emoji and coordinates and opens directly in Maps.
+  Notes and list memberships are never included.
 - **Directions** hands the destination to the system: any maps app on Android,
   the OpenStreetMap route planner in a browser on Windows.
 - **Offline maps.** Every tile seen is kept (up to 256 MB, least recently used
@@ -77,8 +89,37 @@ is deliberately not there yet.
   location permission declaration and a foreground-service declaration in
   Play Console before the next release. Background location with the app
   closed *and* the "stay connected" service off is not supported.
-- The Locations page (a one-off coordinate share in a chat, an hour of expiry)
-  is the older feature and still works separately.
+- The old Locations screen has been retired; its navigation ID opens Maps.
+  Existing `location` records retain their original meaning and expiry.
+
+## Saved-place design and boundaries
+
+`Places.refresh()` projects only new map records using an insertion cursor.
+Widgets read the in-memory projection, never decrypt history in row builders.
+Access changes reproject map records only. Initial loading yields between
+pages. Updates preserve search text, editor drafts and scroll positions.
+Map markers are viewport-clustered outside a frame after camera movement,
+with at most 200 clusters; overlapping pins can be selected from a list.
+
+Private places and notes live in `_places`, encrypted to your own devices.
+Group pins, lists and memberships live in the group's space. Each entity has
+a stable ID and Lamport clock; higher clocks win, with signed object ID as
+the deterministic tie-break. List links are separate registers, so organising
+one list does not overwrite another. Removing a pin removes it from every
+list in that scope; removing a membership or list leaves the pin saved.
+The group owner's existing history-sharing and membership-change flows carry
+current map records and tombstones forward. Removed members cannot write new
+group content after learning the membership change; previously received data
+cannot be erased from their devices.
+
+The initial target is remembering places and planning together. Track
+recording remains a separate future feature: explicit start/pause/finish,
+visible recording state, private by default, sharing only after finishing,
+bounded sampling and storage, and physical-device background/battery testing.
+Venue/address search requires a provider and a deliberate policy for query
+disclosure, caching, attribution and offline availability. No external search
+service is silently enabled by saved places. Ratings, reviews, traffic and
+in-app route planning are outside this change.
 
 ## Where the map comes from
 
@@ -109,8 +150,8 @@ In order of how much each depends on the one before it.
 3. **Layers.** Satellite is the hard one (no free global source with a licence
    that allows an app); terrain/hillshade and public transport overlays are
    possible from open data. Traffic has no open source of equivalent quality.
-4. **Saved places and lists**, as encrypted objects like notes, sharable with a
-   group. Events in the calendar can already hold a place name: link them.
+4. **Calendar/place links.** Saved places and group lists now exist. Events
+   can already hold a place name; connecting them to saved pins is next.
 5. **Per-friend sharing controls**, then group maps (a group's members, trip
    plans, meeting points).
 6. **Pack sharing between friends** over the file transfer, so one person
@@ -129,7 +170,11 @@ In order of how much each depends on the one before it.
 - `app/lib/services/location_share.dart` (reading, sending, receiving),
   `map_tiles.dart` (tile source, styles, downloads), `app/lib/ui/map_page.dart`
   and `map_settings.dart`. Tests in `app/test/location_share_test.dart`,
-  `map_tiles_test.dart`, `map_page_test.dart`.
+  `map_tiles_test.dart`, `map_page_test.dart`, `saved_places_test.dart`.
+- `core/lib/src/places.dart` and `core/test/places_test.dart` cover saved
+  places, privacy, permissions, offline conflicts and incremental refresh.
+  `photo_scroll_test.dart` includes the saved-map history journey in
+  `map_places_journey.dart` (600 places, 2,400 versions).
 - Reading a tile is a small synchronous SQLite lookup from the tile provider,
   not from a widget build; it has not been measured on a long cache. Run
-  `tool/check.ps1 -Performance` and add a map case before relying on it.
+  `tool/check.ps1 -Performance` for the list, map and editor acceptance cases.

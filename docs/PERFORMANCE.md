@@ -43,6 +43,30 @@ Do not relax a failing budget merely to make a run pass.
 
 ### Notes photo scrolling
 
+This suite also runs `map_places_journey.dart`: 600 saved pins backed by
+2,400 versions, saved-list scrolling, clustered-map panning, and note typing
+while 12 map updates arrive. Scrolling and panning must read zero map records;
+updates may read only the arriving records. It uses the same frame and
+event-loop budgets, and reports `savedPlacesHistory` separately from photos.
+
+15 October 2026, Windows reference PC, profile, 60 Hz, one run:
+`MAPS_PERFORMANCE_BASELINE.json` records the saved-map journey. Saved opened
+in 1,752 ms. Slower-stage p95/p99 were 1.96/2.25 ms scrolling,
+3.92/5.64 ms panning, and 5.84/12.00 ms typing during updates. Worst event-loop
+delays were 2.72, 6.04 and 16.98 ms respectively. All enforced gates passed.
+There was one 37.81 ms raster outlier during panning. Scrolling and panning
+read zero map records; incoming updates read exactly 12. The map was offline
+without cached vector tiles, so these numbers cover saved-marker interaction,
+not populated-tile rendering or downloading. Android timing is unvalidated.
+
+Validation caveats: `tool/check.ps1 -Performance` stopped at the existing
+`core/test/format_test.dart` assertions that omit the `_listing` subscription
+already added by `Node`. The profile photo/map suite was therefore run
+directly with `PERF_ENFORCE=true` and passed. The full app suite had one
+location reconnect-test failure; its isolated rerun passed. Affected core
+suites and transport tests passed, and package analysis was clean. Other
+profile suites were not rerun after the preflight failure.
+
 `integration_test/photo_scroll_test.dart` is the repeatable photo-scrolling
 regression journey. It generates deterministic photo-like JPEGs (no personal
 data), imports them through the real encrypted attachment pipeline into a

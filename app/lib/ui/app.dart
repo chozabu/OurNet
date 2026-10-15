@@ -10,6 +10,7 @@ import '../services/windows_tun.dart';
 import '../services/location_share.dart';
 import '../services/map_tiles.dart';
 import 'map_page.dart';
+import 'place_links.dart';
 import 'plugin_view.dart';
 import 'plugins_page.dart';
 import 'storage_page.dart';
@@ -50,7 +51,6 @@ import '../services/connection_service.dart';
 import '../services/system_tray.dart';
 import '../services/undelivered.dart';
 import '../services/session.dart';
-import 'world_map.dart';
 import 'inline_image.dart';
 import 'image_viewer.dart';
 import 'friend_invite.dart';
@@ -105,6 +105,7 @@ part 'social.dart';
 part 'conversation.dart';
 part 'objects.dart';
 part 'network.dart';
+part 'map_flows.dart';
 part 'contact_details.dart';
 part 'voting.dart';
 part 'settings.dart';
@@ -1484,7 +1485,26 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           joined: (space) => node.subscriptions.contains(space),
           preview: (link) => Links.preview(node, link),
           open: followObjectLink,
-          child: child ?? const SizedBox.shrink(),
+          child: PlaceLinks(
+            open: (place) {
+              noteNavigator.currentState?.push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: Text(place.name)),
+                    body: MapPage(
+                      node: node,
+                      tiles: mapTiles,
+                      share: locationShare,
+                      nameOf: name,
+                      initialPlace: place,
+                      onShare: sharePlaceLink,
+                    ),
+                  ),
+                ),
+              );
+            },
+            child: child ?? const SizedBox.shrink(),
+          ),
         ),
       ),
     ),
@@ -1809,6 +1829,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     // A group's content, in whichever section is open.
     if (section != null &&
         section != ScopedSection.activity &&
+        section != ScopedSection.maps &&
         activeRoom != null) {
       return everydayPage(context);
     }
@@ -1835,7 +1856,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
             : '${name(contact.person)} · ${deviceLabel(contact)}';
       },
     ),
-    Destination.locations => locations(context),
     Destination.voting => voting(context),
     Destination.profile => profile(context),
     Destination.settings => settings(context),
@@ -1857,12 +1877,16 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       },
       nameOf: name,
     ),
-    Destination.maps => MapPage(
+    Destination.maps || Destination.locations => MapPage(
       node: node,
       tiles: mapTiles,
       share: locationShare,
       nameOf: name,
       onMessage: openConversation,
+      onShare: sharePlaceLink,
+      scope:
+          activeRoom?.object.space ??
+          (viewScope == ScopeKind.personal ? Places.personal : null),
     ),
   };
 

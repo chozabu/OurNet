@@ -7,6 +7,25 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: saved map places and lists
+
+Additive kinds over `ournet/2`: `map_place`, `map_list`, `map_link` and
+`map_note`. Older builds store and relay them without presenting them. The
+minimum peer capability is unchanged. Private records are encrypted to their
+author's own devices in `_places`; shared records use the existing group
+space and membership/key machinery. `map_note` is presented only in the
+personal space. IDs and Lamport clocks identify independent registers;
+deletions are tombstones, ties use signed object ID. Group owners carry
+current records forward through existing history-sharing flows.
+
+`ournet://place/<latitude>/<longitude>?name=...&emoji=...` is a self-contained
+user-shared point, never a note or a capability to read a private record.
+Live `position` and legacy `location` semantics are unchanged.
+
+Local setting `mapView` stores `[latitudeE7, longitudeE7, zoomMilli]` as
+integers, fixing camera persistence through canonical storage. Legacy
+`mapCamera` values remain readable and retain their original interpretation.
+
 ## 0.2.38: optional, changeable recovery phrase
 
 Additive; no change to `requiredCaps` or the ALPN.

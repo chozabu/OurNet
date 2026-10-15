@@ -864,7 +864,7 @@ extension _SocialPages on _OurNetAppState {
                         case 'helper':
                           chooseMessageHelper(context);
                         case 'places':
-                          update(() => tab = Destination.locations);
+                          update(() => tab = Destination.maps);
                       }
                     },
                     itemBuilder: (_) => [
@@ -910,7 +910,7 @@ extension _SocialPages on _OurNetAppState {
                         value: 'places',
                         child: ListTile(
                           leading: Icon(Icons.place_outlined),
-                          title: Text('Shared places'),
+                          title: Text('Open Maps'),
                         ),
                       ),
                     ],

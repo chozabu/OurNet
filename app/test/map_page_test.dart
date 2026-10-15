@@ -133,6 +133,12 @@ void main() {
     await tester.tap(find.text('Go to these coordinates'));
     await tester.pump(const Duration(milliseconds: 800));
     expect(find.text('Dropped pin'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(const Duration(seconds: 3));
+    expect(
+      (me.store.setting('mapView') as List).every((v) => v is int),
+      isTrue,
+    );
     // The tile layer keeps a short timer of its own; let it run out.
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 4));

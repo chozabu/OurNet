@@ -10,7 +10,9 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:vector_map_tiles/vector_map_tiles.dart' as vmt;
 import '../services/location_share.dart';
 import '../services/map_tiles.dart';
+import '../services/place_clusters.dart';
 import 'avatar.dart';
+import 'saved_places.dart';
 
 part 'map_settings.dart';
 
@@ -60,6 +62,9 @@ class MapPage extends StatefulWidget {
 
   /// Opens the chat with a friend.
   final void Function(String person)? onMessage;
+  final String? scope;
+  final PlaceLink? initialPlace;
+  final Future<void> Function(PlaceLink)? onShare;
   const MapPage({
     super.key,
     required this.node,
@@ -67,6 +72,9 @@ class MapPage extends StatefulWidget {
     required this.share,
     required this.nameOf,
     this.onMessage,
+    this.scope,
+    this.initialPlace,
+    this.onShare,
   });
   @override
   State<MapPage> createState() => _MapPageState();
@@ -83,6 +91,14 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
   bool? _styleDark;
   String? _selected;
   LatLng? _pin;
+  late final Places _places;
+  StreamSubscription<Set<String>>? _savedChanges;
+  SavedMapEntry? _savedPlace;
+  PlaceList? _shownList;
+  List<SavedMapEntry> _shownPlaces = [];
+  List<List<SavedMapEntry>> _clusters = [];
+  Timer? _clusterTimer;
+  String? _placesError;
   bool _follow = false;
   double _rotation = 0;
   bool _ready = false;
@@ -93,6 +109,15 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    if (widget.initialPlace case final place?) {
+      _pin = LatLng(place.lat, place.lng);
+    }
+    _places = Places(node);
+    _savedChanges = node.onChangesTo(
+      Places.kinds,
+      () => unawaited(_refreshPlaces()),
+    );
+    unawaited(_refreshPlaces());
     _fly = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 600),
@@ -155,9 +180,156 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
     if (mounted) setState(() {});
   }
 
+  Future<void> _refreshPlaces() async {
+    try {
+      await _places.refresh();
+      if (!mounted) return;
+      setState(() {
+        _placesError = null;
+        var list = _shownList;
+        final shown = list;
+        if (shown != null && shown.id != Places.saved) {
+          final current = _places.lists
+              .where((e) => e.space == shown.space && e.id == shown.id)
+              .firstOrNull;
+          list = current == null
+              ? null
+              : (space: current.space, id: current.id, name: current.name);
+          _shownList = list;
+        }
+        _shownPlaces = list == null ? [] : _places.inList(list.space, list.id);
+        final selected = _savedPlace;
+        if (selected != null) {
+          final latest = _places.place(selected.space, selected.id);
+          _savedPlace = latest?.deleted == false ? latest : null;
+        }
+      });
+      _scheduleClusters();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _placesError = 'Could not load saved places: $e');
+      }
+    }
+  }
+
+  void _pickSaved(SavedMapEntry place) {
+    final current = _places.place(place.space, place.id);
+    if (current == null || current.deleted) {
+      _say('This place is no longer available.');
+      return;
+    }
+    place = current;
+    _search.clear();
+    _searchFocus.unfocus();
+    setState(() {
+      _savedPlace = place;
+      _pin = null;
+      _selected = null;
+    });
+    _moveTo(LatLng(place.lat, place.lng), zoom: 16);
+  }
+
+  Future<void> _editPlace({
+    SavedMapEntry? entry,
+    SavedMapEntry? seed,
+    required LatLng point,
+  }) async {
+    final result = await editSavedPlace(
+      context,
+      _places,
+      lat: point.latitude,
+      lng: point.longitude,
+      entry: entry,
+      seed: seed,
+      suggestion: _linkedPin ? widget.initialPlace : null,
+      scope: widget.scope,
+    );
+    await _refreshPlaces();
+    if (mounted && result != null) {
+      final latest = _places.place(result.space, result.id);
+      if (latest != null && !latest.deleted) _pickSaved(latest);
+    }
+  }
+
+  Future<void> _openSaved() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => SavedPlacesPage(
+          places: _places,
+          scope: widget.scope,
+          shown: _shownList,
+          onSelect: _pickSaved,
+          onShow: (list) {
+            setState(() {
+              _shownList = list;
+              _shownPlaces = list == null
+                  ? []
+                  : _places.inList(list.space, list.id);
+            });
+            if (_ready && _shownPlaces.isNotEmpty) {
+              _controller.fitCamera(
+                CameraFit.bounds(
+                  bounds: LatLngBounds.fromPoints([
+                    for (final p in _shownPlaces) LatLng(p.lat, p.lng),
+                  ]),
+                  padding: const EdgeInsets.fromLTRB(60, 160, 60, 180),
+                  maxZoom: 16,
+                ),
+              );
+            }
+            _scheduleClusters();
+          },
+        ),
+      ),
+    );
+    await _refreshPlaces();
+  }
+
+  void _scheduleClusters() {
+    _clusterTimer?.cancel();
+    _clusterTimer = Timer(const Duration(milliseconds: 120), () {
+      if (!mounted || !_ready) return;
+      final clusters = clusterPlaces(_shownPlaces, _controller.camera);
+      setState(() => _clusters = clusters);
+    });
+  }
+
+  Future<void> _openCluster(List<SavedMapEntry> entries) async {
+    final selected = await showModalBottomSheet<SavedMapEntry>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => ListView.builder(
+        itemCount: entries.length,
+        itemBuilder: (_, i) => ListTile(
+          leading: Text(entries[i].emoji, style: const TextStyle(fontSize: 26)),
+          title: Text(entries[i].name),
+          onTap: () => Navigator.pop(context, entries[i]),
+        ),
+      ),
+    );
+    if (mounted && selected != null) _pickSaved(selected);
+  }
+
+  @override
+  void didUpdateWidget(MapPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.scope != widget.scope) {
+      _shownList = null;
+      _shownPlaces = [];
+      _clusters = [];
+      _savedPlace = null;
+      _pin = null;
+      _selected = null;
+      _search.clear();
+    }
+  }
+
   @override
   void dispose() {
     _positions?.cancel();
+    _savedChanges?.cancel();
+    _clusterTimer?.cancel();
     share.removeListener(_changed);
     widget.tiles.removeListener(_changed);
     _saveCamera?.cancel();
@@ -178,6 +350,22 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
   // Camera.
 
   ({LatLng center, double zoom}) get _start {
+    if (widget.initialPlace case final place?) {
+      return (center: LatLng(place.lat, place.lng), zoom: 15);
+    }
+    final view = node.store.setting('mapView');
+    if (view is List &&
+        view.length == 3 &&
+        view.every((v) => v is int) &&
+        (view[0] as int).abs() <= 900000000 &&
+        (view[1] as int).abs() <= 1800000000 &&
+        view[2] >= 2000 &&
+        view[2] <= 19000) {
+      return (
+        center: LatLng(view[0] / 1e7, view[1] / 1e7),
+        zoom: view[2] / 1000,
+      );
+    }
     final saved = node.store.setting('mapCamera');
     if (saved is List && saved.length == 3) {
       return (
@@ -231,6 +419,7 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
   }
 
   void _onCamera(MapCamera camera, bool gesture) {
+    _scheduleClusters();
     if (gesture) {
       _follow = false;
       if (_fly.isAnimating) _fly.stop();
@@ -240,10 +429,10 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
     }
     _saveCamera?.cancel();
     _saveCamera = Timer(const Duration(seconds: 2), () {
-      node.store.set('mapCamera', [
-        camera.center.latitude,
-        camera.center.longitude,
-        camera.zoom,
+      node.store.set('mapView', [
+        (camera.center.latitude * 1e7).round(),
+        (camera.center.longitude * 1e7).round(),
+        (camera.zoom * 1000).round(),
       ]);
     });
   }
@@ -275,6 +464,7 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
   void _select(String? person) {
     setState(() {
       _selected = person;
+      _savedPlace = null;
       if (person != null) _pin = null;
     });
     final fix = person == null ? null : node.locations.of(person);
@@ -341,17 +531,23 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
               minZoom: 2,
               maxZoom: 19,
               backgroundColor: land,
-              onMapReady: () => _ready = true,
-              onPositionChanged: (camera, gesture) => _onCamera(camera, gesture),
+              onMapReady: () {
+                _ready = true;
+                _scheduleClusters();
+              },
+              onPositionChanged: (camera, gesture) =>
+                  _onCamera(camera, gesture),
               onTap: (_, _) {
                 _searchFocus.unfocus();
                 setState(() {
                   _selected = null;
                   _pin = null;
+                  _savedPlace = null;
                 });
               },
               onLongPress: (_, point) => setState(() {
                 _pin = point;
+                _savedPlace = null;
                 _selected = null;
               }),
             ),
@@ -391,6 +587,53 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
               MarkerLayer(
                 rotate: true,
                 markers: [
+                  for (final group in _clusters.where((g) => g.length > 1))
+                    Marker(
+                      point: LatLng(group.first.lat, group.first.lng),
+                      width: 48,
+                      height: 48,
+                      child: FilledButton(
+                        style: FilledButton.styleFrom(
+                          padding: EdgeInsets.zero,
+                          shape: const CircleBorder(),
+                        ),
+                        onPressed: () => _openCluster(group),
+                        child: Text(
+                          '${group.length}',
+                          semanticsLabel: '${group.length} saved places',
+                        ),
+                      ),
+                    ),
+                  for (final place in [
+                    for (final g in _clusters.where(
+                      (g) => g.length == 1 && g.single.key != _savedPlace?.key,
+                    ))
+                      g.single,
+                    ?_savedPlace,
+                  ])
+                    Marker(
+                      point: LatLng(place.lat, place.lng),
+                      width: 48,
+                      height: 48,
+                      child: Tooltip(
+                        message: place.name,
+                        child: Material(
+                          color: scheme.surface,
+                          shape: const CircleBorder(),
+                          elevation: 3,
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: () => _pickSaved(place),
+                            child: Center(
+                              child: Text(
+                                place.emoji,
+                                style: const TextStyle(fontSize: 26),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   if (_pin != null)
                     Marker(
                       point: _pin!,
@@ -454,7 +697,8 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
                   ),
                   TextSourceAttribution(
                     'OpenFreeMap © OpenMapTiles',
-                    onTap: () => launchUrl(Uri.parse('https://openfreemap.org')),
+                    onTap: () =>
+                        launchUrl(Uri.parse('https://openfreemap.org')),
                   ),
                 ],
               ),
@@ -471,6 +715,31 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     _searchBar(context),
+                    if (_shownList case final list?)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: InputChip(
+                          label: Text(
+                            '${list.name} · ${_shownPlaces.length} places',
+                          ),
+                          onPressed: _openSaved,
+                          onDeleted: () => setState(() {
+                            _shownList = null;
+                            _shownPlaces = [];
+                            _clusters = [];
+                          }),
+                        ),
+                      ),
+                    if (_placesError != null)
+                      Material(
+                        child: ListTile(
+                          title: Text(_placesError!),
+                          trailing: TextButton(
+                            onPressed: _refreshPlaces,
+                            child: const Text('Retry'),
+                          ),
+                        ),
+                      ),
                     if (_search.text.trim().isNotEmpty)
                       _results(context)
                     else
@@ -483,9 +752,12 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
           Positioned(
             right: 12,
             bottom: 12,
-            child: SafeArea(child: _fabs(context, scheme, cardUp: card != null)),
+            child: SafeArea(
+              child: _fabs(context, scheme, cardUp: card != null),
+            ),
           ),
-          if (card != null) Align(alignment: Alignment.bottomCenter, child: card),
+          if (card != null)
+            Align(alignment: Alignment.bottomCenter, child: card),
         ],
       ),
     );
@@ -508,6 +780,11 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
       child: Row(
         children: [
           IconButton(
+            tooltip: 'Saved places',
+            icon: const Icon(Icons.bookmarks_outlined),
+            onPressed: _openSaved,
+          ),
+          IconButton(
             tooltip: 'Menu',
             icon: const Icon(Icons.menu),
             onPressed: () => _showMapMenu(context, this),
@@ -518,7 +795,7 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
               focusNode: _searchFocus,
               textInputAction: TextInputAction.search,
               decoration: const InputDecoration(
-                hintText: 'Search friends or coordinates',
+                hintText: 'Friends, saved places, coordinates',
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,
                 focusedBorder: InputBorder.none,
@@ -562,6 +839,8 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
       _goToPoint(point);
     } else if (_matches.isNotEmpty) {
       _pickPerson(_matches.first.$1);
+    } else if (_placeMatches.isNotEmpty) {
+      _pickSaved(_placeMatches.first);
     }
   }
 
@@ -570,6 +849,7 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
     _searchFocus.unfocus();
     setState(() {
       _pin = point;
+      _savedPlace = null;
       _selected = null;
     });
     _moveTo(point, zoom: 15);
@@ -581,9 +861,23 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
     _select(person);
   }
 
+  List<SavedMapEntry> get _placeMatches {
+    final q = _search.text.trim().toLowerCase();
+    if (q.isEmpty) return [];
+    return _places.all
+        .where(
+          (e) =>
+              (widget.scope == null || widget.scope == e.space) &&
+              '${e.name} ${e.note} ${e.emoji}'.toLowerCase().contains(q),
+        )
+        .take(30)
+        .toList();
+  }
+
   Widget _results(BuildContext context) {
     final point = parseCoordinates(_search.text);
     final matches = _matches;
+    final savedMatches = _placeMatches;
     final shared = node.contacts.values
         .map((c) => c.person)
         .where((p) => p != node.person)
@@ -591,9 +885,10 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
     final unlocated = [
       for (final p in shared)
         if (node.locations.of(p) == null &&
-            widget.nameOf(p).toLowerCase().contains(
-              _search.text.trim().toLowerCase(),
-            ))
+            widget
+                .nameOf(p)
+                .toLowerCase()
+                .contains(_search.text.trim().toLowerCase()))
           p,
     ];
     return Padding(
@@ -605,6 +900,16 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
             shrinkWrap: true,
             padding: const EdgeInsets.symmetric(vertical: 6),
             children: [
+              for (final place in savedMatches)
+                ListTile(
+                  leading: Text(
+                    place.emoji,
+                    style: const TextStyle(fontSize: 26),
+                  ),
+                  title: Text(place.name),
+                  subtitle: Text(_places.scopeName(place.space)),
+                  onTap: () => _pickSaved(place),
+                ),
               if (point != null)
                 ListTile(
                   leading: const Icon(Icons.place_outlined),
@@ -636,10 +941,13 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
                   subtitle: const Text('Has not shared a location yet'),
                   enabled: false,
                 ),
-              if (point == null && matches.isEmpty && unlocated.isEmpty)
+              if (point == null &&
+                  matches.isEmpty &&
+                  unlocated.isEmpty &&
+                  savedMatches.isEmpty)
                 const ListTile(
                   leading: Icon(Icons.search_off),
-                  title: Text('No friends match'),
+                  title: Text('No friends or saved places match'),
                   subtitle: Text(
                     'Place search is not available yet. Try coordinates like 51.5, -0.12',
                   ),
@@ -698,7 +1006,11 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
     );
   }
 
-  Widget _fabs(BuildContext context, ColorScheme scheme, {required bool cardUp}) {
+  Widget _fabs(
+    BuildContext context,
+    ColorScheme scheme, {
+    required bool cardUp,
+  }) {
     Widget round(Widget icon, String tip, VoidCallback onTap) => Tooltip(
       message: tip,
       child: Material(
@@ -745,7 +1057,68 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
     );
   }
 
+  bool get _linkedPin =>
+      widget.initialPlace != null &&
+      _pin != null &&
+      widget.initialPlace!.lat == _pin!.latitude &&
+      widget.initialPlace!.lng == _pin!.longitude;
+
   Widget? _card(BuildContext context) {
+    final place = _savedPlace;
+    if (place != null) {
+      final point = LatLng(place.lat, place.lng);
+      return _InfoCard(
+        key: ValueKey(place.key),
+        leading: Text(place.emoji, style: const TextStyle(fontSize: 36)),
+        title: place.name,
+        subtitle: [
+          _places.scopeName(place.space),
+          if (place.note.isNotEmpty) place.note,
+          if (_places.privateNote(place).isNotEmpty)
+            'Private note: ${_places.privateNote(place)}',
+        ].join(' · '),
+        actions: [
+          if (widget.onShare != null)
+            _Action(Icons.share_outlined, 'Share', () {
+              widget.onShare!((
+                lat: place.lat,
+                lng: place.lng,
+                name: place.name,
+                emoji: place.emoji,
+              ));
+            }),
+          _Action(
+            Icons.bookmark_add_outlined,
+            'Save a copy',
+            () => _editPlace(seed: place, point: point),
+          ),
+          _Action(
+            Icons.edit_outlined,
+            'Details',
+            () => _editPlace(entry: place, point: point),
+          ),
+          _Action(
+            Icons.directions_outlined,
+            'Directions',
+            () => openDirections(point),
+          ),
+          _Action(Icons.copy, 'Copy', () {
+            Clipboard.setData(
+              ClipboardData(
+                text: Places.link((
+                  lat: place.lat,
+                  lng: place.lng,
+                  name: place.name,
+                  emoji: place.emoji,
+                )),
+              ),
+            );
+            _say('Place copied');
+          }),
+        ],
+        onClose: () => setState(() => _savedPlace = null),
+      );
+    }
     final person = _selected;
     final pin = _pin;
     if (person != null) {
@@ -777,7 +1150,10 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
           }),
           _Action(Icons.copy, 'Copy', () {
             Clipboard.setData(
-              ClipboardData(text: '${fix.lat.toStringAsFixed(6)}, ${fix.lng.toStringAsFixed(6)}'),
+              ClipboardData(
+                text:
+                    '${fix.lat.toStringAsFixed(6)}, ${fix.lng.toStringAsFixed(6)}',
+              ),
             );
             _say('Coordinates copied');
           }),
@@ -788,12 +1164,26 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
     if (pin != null) {
       return _InfoCard(
         key: const ValueKey('pin'),
-        leading: const Icon(Icons.location_on, size: 40, color: Color(0xffea4335)),
-        title: 'Dropped pin',
+        leading: const Icon(
+          Icons.location_on,
+          size: 40,
+          color: Color(0xffea4335),
+        ),
+        title: _linkedPin ? widget.initialPlace!.name : 'Dropped pin',
         subtitle:
             '${pin.latitude.toStringAsFixed(5)}, ${pin.longitude.toStringAsFixed(5)}'
             '${_me == null ? '' : ' · ${distanceText(Distance().as(LengthUnit.Meter, LatLng(_me!.lat, _me!.lng), pin).toDouble())} from you'}',
         actions: [
+          if (widget.onShare != null)
+            _Action(Icons.share_outlined, 'Share', () {
+              widget.onShare!((
+                lat: pin.latitude,
+                lng: pin.longitude,
+                name: _linkedPin ? widget.initialPlace!.name : 'Dropped pin',
+                emoji: _linkedPin ? widget.initialPlace!.emoji : '📍',
+              ));
+            }),
+          _Action(Icons.star_border, 'Save', () => _editPlace(point: pin)),
           _Action(Icons.directions_outlined, 'Directions', () {
             openDirections(pin);
           }),
@@ -802,7 +1192,10 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
           }),
           _Action(Icons.copy, 'Copy', () {
             Clipboard.setData(
-              ClipboardData(text: '${pin.latitude.toStringAsFixed(6)}, ${pin.longitude.toStringAsFixed(6)}'),
+              ClipboardData(
+                text:
+                    '${pin.latitude.toStringAsFixed(6)}, ${pin.longitude.toStringAsFixed(6)}',
+              ),
             );
             _say('Coordinates copied');
           }),
@@ -818,7 +1211,9 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
   /// app is not built yet.
   Future<void> openDirections(LatLng to) async {
     final uri = Theme.of(context).platform == TargetPlatform.android
-        ? Uri.parse('geo:${to.latitude},${to.longitude}?q=${to.latitude},${to.longitude}')
+        ? Uri.parse(
+            'geo:${to.latitude},${to.longitude}?q=${to.latitude},${to.longitude}',
+          )
         : Uri.parse(
             'https://www.openstreetmap.org/directions?to=${to.latitude}%2C${to.longitude}',
           );
@@ -914,7 +1309,11 @@ class _FriendMarker extends StatelessWidget {
               shape: BoxShape.circle,
               border: Border.all(color: Colors.white, width: 2.5),
               boxShadow: const [
-                BoxShadow(blurRadius: 4, color: Colors.black38, offset: Offset(0, 1)),
+                BoxShadow(
+                  blurRadius: 4,
+                  color: Colors.black38,
+                  offset: Offset(0, 1),
+                ),
               ],
             ),
             child: _Avatar(
@@ -1100,6 +1499,8 @@ class _InfoCard extends StatelessWidget {
                           ),
                           Text(
                             subtitle,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],

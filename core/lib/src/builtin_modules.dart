@@ -370,6 +370,42 @@ bool _calRsvp(Json p) =>
 /// Shared positions: see `Locations`.
 const locationsModule = Module('locations', kinds: {'location': _location});
 
+/// Saved map places, lists, list memberships and strictly personal notes.
+const placesModule = Module(
+  'places',
+  kinds: {
+    'map_place': _mapPlace,
+    'map_list': _mapList,
+    'map_link': _mapLink,
+    'map_note': _mapNote,
+  },
+);
+bool _mapRegister(Json p) =>
+    _line(p['id'], 500) &&
+    p['clock'] is int &&
+    p['clock'] >= 0 &&
+    p['clock'] < 9007199254740000 &&
+    (p['deleted'] == null || p['deleted'] is bool) &&
+    (p['history'] == null || p['history'] is bool);
+bool _mapList(Json p) => _mapRegister(p) && _line(p['name'], 100);
+bool _mapPlace(Json p) =>
+    _mapRegister(p) &&
+    _line(p['name'], 200) &&
+    _line(p['emoji'], 32) &&
+    p['note'] is String &&
+    p['note'].length <= 4000 &&
+    p['lat'] is int &&
+    p['lat'].abs() <= 900000000 &&
+    p['lng'] is int &&
+    p['lng'].abs() <= 1800000000;
+bool _mapLink(Json p) =>
+    _mapRegister(p) &&
+    _line(p['place'], 200) &&
+    _line(p['list'], 200) &&
+    p['id'] == '${p['place']}|${p['list']}';
+bool _mapNote(Json p) =>
+    _mapRegister(p) && p['note'] is String && p['note'].length <= 4000;
+
 bool _location(Json p) =>
     p['lat'] is String &&
     p['lng'] is String &&

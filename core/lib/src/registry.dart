@@ -42,6 +42,7 @@ const builtinModules = <Module>[
   peopleModule,
   calendarModule,
   locationsModule,
+  placesModule,
   PublicChats.module,
 ];
 

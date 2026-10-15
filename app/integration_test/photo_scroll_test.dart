@@ -14,6 +14,7 @@ import 'package:ournet_transport/ournet_transport.dart'
     show Files, PeerNetwork, FolderSync, DiskFolderBackend;
 
 import 'perf_support.dart';
+import 'map_places_journey.dart';
 import '../test/scope_helpers.dart';
 
 /// Repeatable Notes photo-scrolling journey for physical devices.
@@ -87,6 +88,7 @@ const passGestures = int.fromEnvironment('PASS_GESTURES', defaultValue: -1);
 void main() {
   final binding = CountingBinding();
   binding.framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.fullyLive;
+  savedPlacesHistoryJourney(binding);
   testWidgets('Notes photo scrolling ($scenario)', (tester) async {
     final large = scenario == 'large';
     final photoCount = int.fromEnvironment(

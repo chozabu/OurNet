@@ -40,7 +40,7 @@ should check it too. The calendar does, refusing public events (see below).
 | Chat | ✓ (direct messages) | ✓ | ✓ (public chats) |
 | Forums | – | ✓ | ✓ |
 | Files | ✓ (drive, attachments) | ✓ | ✓ |
-| Maps | ✓ | – | – |
+| Maps | ✓ | ✓ (saved places and lists) | – |
 | Activity | ✓ | ✓ | ✓ |
 
 All is always allowed. When a scope does not allow a section, the section

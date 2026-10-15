@@ -11,7 +11,7 @@ void main() {
     expect(ScopedSection.calendar.allows(ScopeKind.public), isFalse);
     expect(ScopedSection.notes.allows(ScopeKind.public), isFalse);
     expect(ScopedSection.forums.allows(ScopeKind.personal), isFalse);
-    expect(ScopedSection.maps.allows(ScopeKind.group), isFalse);
+    expect(ScopedSection.maps.allows(ScopeKind.group), isTrue);
     for (final section in ScopedSection.values) {
       expect(section.allows(null), isTrue, reason: 'All shows $section');
     }
@@ -63,10 +63,11 @@ void main() {
     expect(find.text('Add file'), findsOneWidget);
     expect(find.byType(TextField), findsNothing);
 
-    // A group has no map yet: the section says so and offers All.
+    // A group's map opens with saved places scoped to that group.
     await openSection(tester, 'Maps');
     await settled(tester);
-    expect(find.text('No maps in Weekend trip'), findsOneWidget);
+    expect(find.byTooltip('Saved places'), findsOneWidget);
+    expect(find.text('No maps in Weekend trip'), findsNothing);
 
     // Back goes to Notes in the same group, then to All.
     await tester.binding.handlePopRoute();
@@ -79,6 +80,7 @@ void main() {
 
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 4));
     await node.close();
     await friend.close();
   });

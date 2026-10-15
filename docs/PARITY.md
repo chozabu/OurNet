@@ -28,7 +28,7 @@ See PRIVATE_DRIVE.md and PERFORMANCE.md for the new workflows and measurements.
 | Attachments | Encrypted chunked transfer, file picker, clipboard images, image viewer | Multi-chunk QUIC round trip, unauthorised friend refusal, corrupt blob refusal |
 | Public files | On-demand download and sharing through admitted holders | Cached holder serves a file with its author offline in QUIC test |
 | Forums | Subscriptions, posts, discussion/reply view, local read state | Post creation and navigation tests; multi-hop core sync tests |
-| Locations | Offline world map, encrypted selected-recipient coordinates, expiry | Coordinate/expiry policy tests; rendered map and phone layout inspected |
+| Maps | Offline vector maps, live friends, private/group saved places and lists, place links | Map/privacy/sync tests; saved-list history performance journey |
 | Voting and delegation | Typed signed objects; direct vote override; cycle-safe resolution | Delegation/cycle tests and phone layout |
 | Profile and contact views | Signed names, identity/device enrolment, contact graph, blocking/revocation | Core policy tests and phone layout |
 | Voice and video | WebRTC media with authenticated iroh signalling; ring, answer, mute, hang up | Loopback test with real camera/microphone (`calls_media_test.dart`); WAN calls need hands-on testing |

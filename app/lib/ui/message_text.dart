@@ -1,11 +1,13 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:ournet_core/ournet_core.dart' show Calendar, Links, PublicChats;
+import 'package:ournet_core/ournet_core.dart'
+    show Calendar, Links, PublicChats, Places;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'chat_links.dart';
 import 'object_links.dart';
 import 'event_links.dart';
+import 'place_links.dart';
 
 /// Message text with tappable links and light formatting, as other
 /// messengers write it: `*bold*`, `_italic_`, `~strike~` and `` `code` ``.
@@ -51,6 +53,10 @@ class MessageText extends StatefulWidget {
 
   /// [text] without formatting markers, for previews and copies.
   static String plain(String text) => text
+      .replaceAllMapped(
+        Places.linkPattern,
+        (m) => '📍 ${Places.parseLink(m.group(0)!)?.name ?? 'Shared place'}',
+      )
       .replaceAll(Calendar.linkPattern, '📅 Calendar event')
       .replaceAllMapped(Links.pattern, (m) {
         final link = Links.parse(m.group(0)!);
@@ -190,6 +196,8 @@ class _MessageTextState extends State<MessageText> {
     // Most messages hold no such link: look for the scheme before the
     // patterns, as this runs for every message each time it is drawn.
     final links = <Match>[
+      if (text.contains('ournet://place/'))
+        ...Places.linkPattern.allMatches(text),
       if (text.contains('ournet://event/'))
         ...Calendar.linkPattern.allMatches(text),
       if (text.contains('ournet://chat/'))
@@ -203,7 +211,9 @@ class _MessageTextState extends State<MessageText> {
       if (m.start < from) continue;
       final link = m.group(0)!;
       final Widget chip;
-      if (Calendar.parseLink(link) != null) {
+      if (Places.parseLink(link) case final place?) {
+        chip = PlaceLinkChip(place);
+      } else if (Calendar.parseLink(link) != null) {
         chip = EventLinkChip(link, style: base);
       } else if (PublicChats.parseLink(link) != null) {
         chip = ChatLinkChip(link, style: base);

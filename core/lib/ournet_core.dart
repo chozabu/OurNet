@@ -22,6 +22,7 @@ export 'src/room_forum.dart';
 export 'src/notes.dart';
 export 'src/calendar.dart';
 export 'src/locations.dart';
+export 'src/places.dart';
 export 'src/map_tiles.dart';
 export 'src/recurrence.dart';
 export 'src/quick_add.dart';

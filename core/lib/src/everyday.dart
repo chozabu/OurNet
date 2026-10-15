@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'calendar.dart';
+import 'places.dart';
 import 'model.dart';
 import 'node.dart';
 import 'notes.dart';
@@ -120,6 +121,7 @@ class Everyday {
       }
       final readers = await members(current);
       count += await Calendar.reshare(node, current, audience: (_) => readers);
+      count += await Places.reshare(node, current, audience: (_) => readers);
     }
     return count;
   }
@@ -779,6 +781,24 @@ class Everyday {
         return [
           if (shareHistory) ...joining,
           if (leaving.contains(e.author)) ...nextMembers,
+        ];
+      },
+    );
+    await Places.reshare(
+      node,
+      room,
+      into: id,
+      seal: reseal ? seal : null,
+      audience: (e) {
+        if (reseal) return nextMembers;
+        if (id != room.object.space) {
+          return shareHistory
+              ? nextMembers
+              : nextMembers.where(e.object.audience.contains).toList();
+        }
+        return [
+          if (shareHistory) ...joining,
+          if (leaving.contains(e.owner) || leaving.contains(e.object.author)) ...nextMembers,
         ];
       },
     );

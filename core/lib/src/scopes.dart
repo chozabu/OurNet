@@ -35,7 +35,7 @@ enum ScopedSection implements Section {
   chat({ScopeKind.personal, ScopeKind.group, ScopeKind.public}),
   forums({ScopeKind.group, ScopeKind.public}),
   files({ScopeKind.personal, ScopeKind.group, ScopeKind.public}),
-  maps({ScopeKind.personal}),
+  maps({ScopeKind.personal, ScopeKind.group}),
 
   /// What happened lately, across the other sections (docs/ACTIVITY.md).
   activity({ScopeKind.personal, ScopeKind.group, ScopeKind.public});

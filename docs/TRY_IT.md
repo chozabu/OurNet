@@ -54,8 +54,9 @@ verifies the upstream signature of the pinned native networking library.
    Subscribe to `files` to receive public file publications.
 6. Attach a file to a private message or publish one in Files. The receiving
    window downloads it on request while an author or admitted holder is online.
-7. Locations lets you share coordinates privately with a chosen person for one
-   hour. Voting supports direct votes and topic-specific delegation.
+7. In Maps, long-press to save a place with an emoji and note. Saved places can
+   belong to private or group lists; Share sends just the point to a chat.
+   Voting supports direct votes and topic-specific delegation.
 
 Voice/video controls are in Messages. Both apps must be connected and running.
 Microphone/camera access is requested by the media implementation when used.
