@@ -45,6 +45,16 @@ IP address. Voice and video calls use WebRTC, which contacts STUN servers
 public address; those operators see your IP address when you place or answer a
 call, but not the call itself.
 
+**To a push server and Google, on Android, so friends can wake OurNet.** With
+"Wake for friends' messages" on, your phone registers with OurNet's push server
+(push.chozabu.net unless you change it) through Google's Firebase Cloud
+Messaging. When a friend's device has a message for you it asks that server to
+wake your phone, and the server asks Google to deliver an empty notice. Neither
+sees your messages, which still come straight from your friend. The push server
+sees your phone's Firebase token, when it is woken, and the IP addresses of the
+devices that wake it; it does not learn who your friends are. Google sees when
+your phone is woken. Turn it off in Settings to stop this.
+
 **To a speech service, if you choose one.** Voice notes can be transcribed by
 Whisper, which runs on your device; downloading a Whisper model fetches it from
 Hugging Face, which sees your IP address. If you choose the system speech

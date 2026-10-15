@@ -7,6 +7,14 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: push wake-up
+
+Pull requests and replies may carry an optional `wake` object
+(`{url, device, token}`); older builds ignore it. Local settings: `pushWake`
+(off when false), `wakeServer`, `wakeRegistration`, `wakeGranted`, and
+`wake/<device>` for each peer's address. The minimum peer capability is
+unchanged.
+
 ## Unreleased: saved map places and lists
 
 Additive kinds over `ournet/2`: `map_place`, `map_list`, `map_link` and

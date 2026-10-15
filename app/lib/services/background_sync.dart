@@ -10,8 +10,9 @@ import 'notifications.dart';
 import 'session.dart';
 
 /// Work done while the app is in the background on Android: a periodic sync
-/// (WorkManager), a short stay online after sending (`linger`), and the
-/// buttons on chat notifications.
+/// (WorkManager), a short stay online after sending (`linger`), a friend
+/// waking this phone through the push server (`wake`, see wake.dart), and
+/// the buttons on chat notifications.
 ///
 /// Two friends' phones rarely have the app open at the same moment. A short
 /// periodic exchange lets either side collect what the other queued, and
@@ -22,7 +23,7 @@ import 'session.dart';
 /// the profile's file lock does not exclude them (POSIX locks are per
 /// process). The profile is therefore owned by whichever isolate holds
 /// [_owner] in the [IsolateNameServer]. Work is handed to a live owner as a
-/// command: `sync`, `linger`, or a notification action such as `reply`. With no owner, the isolate opens the profile itself. The
+/// command: `sync`, `linger`, `wake`, or a notification action such as `reply`. With no owner, the isolate opens the profile itself. The
 /// app asks such a run to `yield` before it opens the profile.
 @visibleForTesting
 const profileOwner = 'ournet-profile-owner';
@@ -31,7 +32,7 @@ const _task = 'ournet-background-sync';
 const _lingerTask = 'ournet-linger';
 
 /// Commands that only ask for a sync.
-const _syncing = {'sync', 'linger'};
+const _syncing = {'sync', 'linger', 'wake'};
 
 /// How long a background run keeps answering peers after its own exchange.
 const _linger = Duration(seconds: 10);

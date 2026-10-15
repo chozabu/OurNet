@@ -17,6 +17,9 @@ class Undelivered {
   /// Messages older than this are no longer waited for.
   static const _patience = Duration(minutes: 10);
 
+  /// Called when a new message starts waiting for some recipient device.
+  void Function()? onWaiting;
+
   void start() {
     _cursor = node.store.insertionCursor;
     _changes = node.changes.stream.listen((_) => _scan());
@@ -24,6 +27,7 @@ class Undelivered {
 
   void _scan() {
     final now = DateTime.now();
+    var added = false;
     while (true) {
       final page = node.store.insertedAfter(_cursor, ['message']);
       for (final (sequence, o) in page) {
@@ -34,11 +38,13 @@ class Undelivered {
               o.audience.contains(device.person) &&
               !node.revoked.contains(device.device)) {
             (_waiting[device.device] ??= {})[o.id] = now;
+            added = true;
           }
         }
       }
       if (page.length < 128) break;
     }
+    if (added) onWaiting?.call();
   }
 
   bool _received(String device, String id) => node.store
@@ -50,7 +56,11 @@ class Undelivered {
       );
 
   /// Whether any recent message still lacks a receipt from a recipient.
-  bool get any {
+  bool get any => waiting.isNotEmpty;
+
+  /// Recent messages without a receipt: their IDs per recipient device, with
+  /// when each was seen.
+  Map<String, Map<String, DateTime>> get waiting {
     final oldest = DateTime.now().subtract(_patience);
     for (final device in _waiting.keys.toList()) {
       final ids = _waiting[device]!
@@ -59,7 +69,7 @@ class Undelivered {
         );
       if (ids.isEmpty) _waiting.remove(device);
     }
-    return _waiting.isNotEmpty;
+    return _waiting;
   }
 
   void close() => _changes?.cancel();

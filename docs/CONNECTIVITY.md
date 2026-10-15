@@ -87,7 +87,7 @@ fact of friendship.
 | 3 | Friend carriers (below) | Delivery when sender and recipient are never online together | Designed |
 | 4 | Stay connected (Android foreground service) | Fast delivery; ringing a sleeping phone | Implemented |
 | 4c | Windows notification area | The same on a desktop: closing the window no longer disconnects | Implemented |
-| 4b | Push wake-up (UnifiedPush) | The same with less battery, given a push server | Shelved (branch) |
+| 4b | Push wake-up (FCM through a push server) | The same with less battery | Implemented; needs a Firebase project and the server deployed |
 | 5 | Own relays, shared in contact cards | Dependence on number0's relays | Relay list implemented; no OurNet relay deployed yet |
 | 6 | Call media over iroh when ICE fails | Calls behind carrier-grade NAT without TURN | Planned |
 | 7 | Packaged friend node (relay, carrier, push) | Making 3–5 one command to offer | Planned |
@@ -210,14 +210,54 @@ failing on the locked profile. Windows only delivers notification clicks to
 a running OurNet: a notification clicked after quitting does nothing. Both
 options are in Settings; turning off the icon makes closing quit again.
 
-### Push wake-up (shelved)
+### Push wake-up (implemented)
 
-A UnifiedPush implementation exists on the `unifiedpush-wakeup` branch: peers
-exchange Web Push addresses in each sync, and a sender pushes encrypted sync
-items (object plus signed handoff) to recipient devices that have not
-acknowledged them. It needs the recipient to install a distributor app and
-depends on a push server, so it is parked in favour of staying connected. It
-remains the better option for battery if those become acceptable.
+A friend's device that has a message for a sleeping Android phone asks a push
+server to wake it. The server sends an empty, high-priority Firebase Cloud
+Messaging (FCM) message; the phone then syncs as a background run does, or
+hands the sync to the app if it is running. Nothing else travels through the
+server: the message still comes straight from the friend, who stays online for
+a few minutes after sending (piece 2b) or is a desktop that stays on.
+
+FCM, rather than a UnifiedPush distributor, because Google Play services keeps
+one connection open for every app on the phone, so a wake costs OurNet almost
+nothing while it waits. A distributor app (or one built into OurNet) would hold
+a connection of its own, which saves little over staying connected. The cost is
+a server: sending through FCM needs the Firebase project's credentials, which
+cannot be handed to friends. The server is OurNetPushServer (PHP and SQLite, at
+`https://push.chozabu.net` by default, setting `wakeServer`).
+
+- **Registering.** With "Wake for friends' messages" on (Settings, Android, on
+  by default), the phone registers its FCM token with the server and gets an ID
+  and an admin secret. Firebase is configured from
+  `app/android/app/src/main/res/values/firebase.xml`; left empty, nothing
+  starts and the setting says push is unavailable.
+- **One token per friend device.** The phone derives a token for each admitted
+  device (HMAC of the device ID under a key kept in the profile) and grants the
+  server their SHA-256 hashes, replacing the whole list whenever its contacts
+  change. Blocking or revoking a device removes its token; the others keep
+  working. The server never sees tokens or device IDs, only hashes.
+- **Sharing the address.** Each pull and its reply carries `wake`: the server
+  URL, the phone's ID there, and the token for that peer only. A peer that is
+  not admitted gets none.
+- **Waking.** Four seconds after this person writes a private message, each
+  recipient device that has no receipt for it and told this device a wake
+  address gets one wake (any platform can send). A later message wakes again;
+  a delivered one does not.
+- **Abuse.** Only a device holding a granted token can wake the phone; a forged
+  or revoked token, or an unknown ID, is refused the same way. The server
+  allows one wake per token every 5 seconds and 120 per phone per hour, and
+  FCM collapses wakes queued while the phone is offline into one.
+
+The push server learns the phone's FCM token, when it is woken, and the IP
+addresses of devices that wake it; Google learns when the phone is woken. Turning
+the setting off unregisters and deletes the FCM token.
+
+Not yet: waking a phone for a call (ringing needs the call to reach a running
+app), and a way to ask a carrier to wake the recipient.
+
+An earlier UnifiedPush implementation, which pushed the messages themselves, is
+on the `unifiedpush-wakeup` branch.
 
 ## Friend carriers
 
@@ -359,7 +399,7 @@ Whether carriers fetch chunks eagerly or only on request is open (see below).
 - **Storage and bandwidth** for carriers, bounded by quotas they choose.
 - **Latency** grows with hops, and each carrier adds its own wake-up interval.
   A recipient that stays connected (piece 4) collects from an online carrier
-  at once; push (4b) would let a carrier wake one that does not.
+  at once; push (4b) could let a carrier wake one that does not.
 - **Evidence size.** Each hop adds a handoff and a receipt, against the limit
   of 128 evidence records per object. Hop and `via` limits keep this small.
 

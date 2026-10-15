@@ -96,6 +96,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
         ConnectionService.attach(applicationContext, engine)
+        PushWake.attach(applicationContext, engine)
         if (ConnectionService.enabled(this)) {
             FlutterEngineCache.getInstance().put(ConnectionService.ENGINE, engine)
         }

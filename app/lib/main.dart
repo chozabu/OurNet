@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'services/background_sync.dart';
 import 'services/session.dart';
 import 'services/system_tray.dart';
@@ -39,4 +40,14 @@ Future<void> main(List<String> arguments) async {
       ),
     );
   }
+}
+
+/// Run by Android in an engine of its own when a friend wakes this phone
+/// through the push server (PushWake.kt): syncs, through the app when it is
+/// running, then says it is done.
+@pragma('vm:entry-point')
+Future<void> pushWakeMain() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await runBackgroundCommand(const ['wake']);
+  await const MethodChannel('ournet/push-run').invokeMethod<void>('done');
 }

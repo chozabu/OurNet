@@ -235,6 +235,7 @@ class ConnectionService : Service() {
             // attaches to it instead of running main() a second time.
             cache.put(ENGINE, engine)
             attach(context, engine)
+            PushWake.attach(context, engine)
             engine.dartExecutor.executeDartEntrypoint(DartExecutor.DartEntrypoint.createDefault())
             return engine
         }

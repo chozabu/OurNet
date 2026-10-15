@@ -410,8 +410,15 @@ periodic task (about every 15 minutes, with network) syncs every admitted device
 and answers inbound requests for a further 10 seconds; it can be turned off.
 A pull request and its reply may carry an optional `build` string (at most 64
 characters) naming the sender's app build; peers ignore it, or show it when it
-differs from their own. A failed inbound handshake is logged and counted, and
-the endpoint keeps accepting further connections.
+differs from their own. They may also carry `wake`, the sender device's wake
+address for the receiving device: `{url, device, token}`, an https push server
+URL, the sender's ID there and a token for this peer alone (see
+[CONNECTIVITY.md](CONNECTIVITY.md), "Push wake-up"). A peer stores it for that
+device and an exchange without one clears it. A device with messages a peer's
+device has not acknowledged may post `{device, token}` to `<url>/v1/wake`; the
+server sends that device an empty push message, and it syncs. A failed inbound
+handshake is logged and counted, and the endpoint keeps accepting further
+connections.
 
 Local limits: a storage limit on stored objects and files together (setting
 `storageLimit`, 20 GiB by default; past it, objects from peers and files are
@@ -445,8 +452,8 @@ admitted iroh connections. Media uses the user's configured
 STUN/TURN servers, or public STUN servers (Google, Cloudflare) when none are
 configured; local mode uses none by default. Media does not inherit the iroh
 relay path, so networks needing a relay still need TURN.
-Planned connectivity work (friend carriers, push wake-up, own relays) is
-designed in [CONNECTIVITY.md](CONNECTIVITY.md).
+Planned connectivity work (friend carriers, own relays) and push wake-up are
+described in [CONNECTIVITY.md](CONNECTIVITY.md).
 
 A call to a person sends the same offer (one session id) to each of their
 admitted devices. The first `answer` binds the call to that device; the caller

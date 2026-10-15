@@ -80,4 +80,8 @@ dependencies {
     add("profileImplementation", "androidx.test:runner:1.7.0")
     add("profileImplementation", "junit:junit:4.13.2")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // Push wake-up (PushWake.kt). Configured by res/values/firebase.xml
+    // rather than the google-services plugin, so builds without it work.
+    implementation("com.google.firebase:firebase-messaging:25.0.0")
+    implementation("androidx.work:work-runtime:2.11.2")
 }

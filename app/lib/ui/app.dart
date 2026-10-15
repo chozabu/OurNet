@@ -50,6 +50,7 @@ import '../services/notifications.dart';
 import '../services/connection_service.dart';
 import '../services/system_tray.dart';
 import '../services/undelivered.dart';
+import '../services/wake.dart';
 import '../services/session.dart';
 import 'inline_image.dart';
 import 'image_viewer.dart';
@@ -225,6 +226,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// Sent messages without receipts; only where this isolate owns the
   /// profile (Android).
   Undelivered? undelivered;
+
+  /// Push wake-up: this phone's registration (Android, where this isolate
+  /// owns the profile), and waking friends' phones (everywhere).
+  WakeRegistration? wakeRegistration;
+  WakeSender? wakeSender;
+  Undelivered? _wakeUndelivered;
   bool savingNote = false;
   Future<List<DriveEntry>>? driveView;
   String? driveFolder;
@@ -805,6 +812,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         profileOpened(node);
         if (ownsProfile) {
           undelivered = Undelivered(node)..start();
+          wakeRegistration = WakeRegistration(node, onError: network.log)
+            ..start();
+          FcmChannel.listen(wakeRegistration!.tokenChanged);
           unawaited(
             keepConnected(stayConnected)
                 .then((_) => checkConnectionService())
@@ -819,6 +829,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           ).catchError((Object e) => notice('Background sync unavailable: $e')),
         );
       }
+      wakeSender = WakeSender(
+        node,
+        undelivered ?? (_wakeUndelivered = Undelivered(node)..start()),
+        onError: network.log,
+      )..start();
       if (Platform.isWindows) {
         notifications.onTap = () =>
             unawaited(SystemTray.show().catchError((Object _) {}));
@@ -1356,6 +1371,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       c.dispose();
     }
     undelivered?.close();
+    unawaited(wakeSender?.close());
+    _wakeUndelivered?.close();
+    wakeRegistration?.close();
     speech
       ..removeListener(refresh)
       ..close();

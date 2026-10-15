@@ -777,6 +777,24 @@ extension _SettingsPages on _OurNetAppState {
                 refresh();
               }),
       ),
+    if (Platform.isAndroid && wakeRegistration != null)
+      SwitchListTile(
+        title: const Text('Wake for friends’ messages'),
+        subtitle: Text(
+          [
+            'Friends’ devices can wake OurNet through Google’s push service and ${Uri.parse(wakeRegistration!.server).host}, so their messages arrive soon without staying connected. Wakes carry no content: messages still come straight from friends.',
+            if (node.store.setting('pushWake') != false &&
+                !wakeRegistration!.registered)
+              'Not available yet: this build has no push configuration, or the push server could not be reached.',
+          ].join('\n'),
+        ),
+        value: node.store.setting('pushWake') != false,
+        onChanged: (v) => act(() async {
+          node.store.set('pushWake', v);
+          await wakeRegistration!.refresh();
+          refresh();
+        }),
+      ),
     if (Platform.isAndroid &&
         stayConnected &&
         serviceStatus?.batteryRestricted == true)

@@ -649,6 +649,24 @@ class PeerNetwork implements PluginLink {
     return addresses;
   }
 
+  /// This device's wake address for [device], told to it in each exchange
+  /// so it can wake this one through a push server (see `docs/CONNECTIVITY.md`,
+  /// "Push wake-up"). Each friend device gets its own token, so one can be
+  /// revoked without the others. Set by the app; null sends none.
+  Json? Function(String device)? wakeAddress;
+
+  Json? _wakeFor(String device) {
+    final wake = wakeAddress?.call(device);
+    return wake != null && validWake(wake) ? wake : null;
+  }
+
+  /// Stores [peer]'s wake address for this device from its exchange; an
+  /// exchange without one clears it. Unchanged values are not rewritten.
+  void _learnWake(String peer, Object? wake) => node.store.set(
+    'wake/$peer',
+    wake is Json && validWake(wake) ? wake : null,
+  );
+
   /// Stores address hints for admitted devices, from [peer]'s exchange. A
   /// device's own address replaces what is stored, so a device that moves
   /// stays reachable; hints about other devices only fill a gap, so no peer
@@ -990,6 +1008,7 @@ class PeerNetwork implements PluginLink {
           'cursorPaging': true,
           'after': remoteCursor?.toJson(),
           'addresses': _sharedAddresses(device),
+          'wake': ?_wakeFor(device),
           ..._stamp,
         });
         lastReply = reply;
@@ -1015,6 +1034,7 @@ class PeerNetwork implements PluginLink {
         final remoteInventory = reply['inventory'] as Json;
         final outgoing = await node.offer(device, remoteInventory);
         await _learnAddresses(device, reply['addresses']);
+        _learnWake(device, reply['wake']);
         final pushed = await _push(device, outgoing);
         _progress[device] = _progress[device]! + incoming + outgoing.length;
         _activity();
@@ -1250,6 +1270,7 @@ class PeerNetwork implements PluginLink {
         'only': ids,
         'inventory': node.changeInventory(device, node.store.routesOf(ids)),
         'addresses': _sharedAddresses(device),
+        'wake': ?_wakeFor(device),
         ..._stamp,
       });
       final incoming = await node.receive(device, pulled['items']);
@@ -1260,6 +1281,7 @@ class PeerNetwork implements PluginLink {
         truncated: () => more = true,
       );
       await _learnAddresses(device, pulled['addresses']);
+      _learnWake(device, pulled['wake']);
       final pushed = await _push(device, outgoing);
       _progress[device] = _progress[device]! + incoming + outgoing.length;
       _activity();
@@ -1505,6 +1527,7 @@ class PeerNetwork implements PluginLink {
                 truncated: () => more = true,
               );
               await _learnAddresses(peer, j['addresses']);
+              _learnWake(peer, j['wake']);
               reply = {
                 'items': items,
                 'more': more,
@@ -1513,12 +1536,14 @@ class PeerNetwork implements PluginLink {
                   node.store.routesOf(ids),
                 ),
                 'addresses': _sharedAddresses(peer),
+                'wake': ?_wakeFor(peer),
                 ..._stamp,
               };
               break;
             }
             final items = await node.offer(peer, j['inventory']);
             await _learnAddresses(peer, j['addresses']);
+            _learnWake(peer, j['wake']);
             reply = {
               'seq': seq,
               'policy': policy,
@@ -1529,6 +1554,7 @@ class PeerNetwork implements PluginLink {
                 after: InventoryCursor.parse(j['after']),
               ),
               'addresses': _sharedAddresses(peer),
+              'wake': ?_wakeFor(peer),
               ..._stamp,
             };
           case 'push':
@@ -1845,3 +1871,15 @@ class _Mark {
     'theirPolicy': theirPolicy,
   };
 }
+
+/// A wake address: the push server's https URL, the device's ID there, and
+/// the token this peer may wake it with.
+bool validWake(Json wake) =>
+    wake.length == 3 &&
+    wake['url'] is String &&
+    (wake['url'] as String).length <= 256 &&
+    Uri.tryParse(wake['url'] as String)?.scheme == 'https' &&
+    wake['device'] is String &&
+    (wake['device'] as String).length <= 64 &&
+    wake['token'] is String &&
+    (wake['token'] as String).length <= 128;
