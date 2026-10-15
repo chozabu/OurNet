@@ -21,6 +21,113 @@ void main() {
     b = await friendOf(a);
   });
 
+  test('plugin kinds a manifest lists show, a row per thing', () async {
+    final manifest = PluginManifest.parse({
+      'id': 'wiki',
+      'name': 'Wiki',
+      'version': '1.0.0',
+      'api': '0.1',
+      'grants': ['objects'],
+      'kinds': {
+        'page': {
+          'title': {'type': 'string', 'required': true},
+        },
+        'image': <String, Object?>{},
+      },
+      'activity': {
+        'page': {'title': 'title', 'key': 'title', 'says': 'edited a page'},
+      },
+    });
+    final listing = manifest.activity['x.wiki.page']!;
+    expect(listing.says, 'edited a page');
+    a.registry.addActivity(listing);
+    a.store.setArrivalKinds('wiki', manifest.activity.keys);
+    final feed = Activity(a);
+    expect(feed.shows('x.wiki.page'), isTrue);
+    expect(feed.shows('x.wiki.image'), isFalse);
+    final us = [a.person, b.person];
+    for (final title in ['Bread', 'bread', 'Cheese']) {
+      await b.publish(
+        'x.wiki.page',
+        {'title': title},
+        space: 'x.wiki',
+        audience: us,
+      );
+    }
+    await b.publish('x.wiki.image', {}, space: 'x.wiki', audience: us);
+    await syncPair(a, b);
+    await feed.refresh();
+    final rows = feed.entries
+        .where((e) => e.section == ActivitySection.plugins)
+        .toList();
+    // Bread twice (titles match whatever their case), Cheese once; the
+    // image kind is not listed.
+    expect(rows.map((e) => e.count), unorderedEquals([2, 1]));
+    expect(rows.every((e) => e.space == 'x.wiki' && e.group == null), isTrue);
+    expect(rows.every((e) => e.inScope(ScopeKind.personal)), isTrue);
+
+    // Without the plugin, arrivals are no longer recorded.
+    a.store.setArrivalKinds('wiki', const []);
+    await b.publish(
+      'x.wiki.page',
+      {'title': 'Later'},
+      space: 'x.wiki',
+      audience: us,
+    );
+    await syncPair(a, b);
+    await feed.refresh();
+    expect(
+      feed.entries.where((e) => e.section == ActivitySection.plugins),
+      hasLength(2),
+    );
+  });
+
+  test('a manifest\'s search and activity must name its kinds', () {
+    Json manifest(Json extra) => {
+      'id': 'wiki',
+      'name': 'Wiki',
+      'version': '1.0.0',
+      'api': '0.1',
+      'kinds': {
+        'page': {
+          'title': {'type': 'string'},
+        },
+      },
+      ...extra,
+    };
+    final m = PluginManifest.parse(
+      manifest({
+        'search': {
+          'page': {'title': 'title', 'text': 'body', 'key': 'title'},
+        },
+      }),
+    );
+    expect(m.search['x.wiki.page']!.text, 'body');
+    expect(m.activity, isEmpty);
+    for (final bad in [
+      {
+        'search': {
+          'other': {'title': 'title'},
+        },
+      },
+      {
+        'search': {'page': <String, Object?>{}},
+      },
+      {
+        'activity': {
+          'page': {'title': 'title'},
+        },
+      },
+      {
+        'search': {
+          'page': {'title': 'no spaces'},
+        },
+      },
+    ]) {
+      expect(() => PluginManifest.parse(manifest(bad)), throwsFormatException);
+    }
+  });
+
   test('merges what arrived about one thing on one day into a row', () async {
     await b.publish('post', {'text': 'One', 'title': 'Sourdough'});
     await b.publish('post', {'text': 'Two'});

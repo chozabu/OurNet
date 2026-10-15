@@ -667,8 +667,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _activityRefresh = CoalescedTask(() async {
       if (await activity.refresh()) redraw();
     }, (e) => notice('Activity: $e'));
-    _activityChanges = node.onChangesTo(
-      Activity.kinds,
+    _activityChanges = node.onChangesWhere(
+      activity.shows,
       _activityRefresh.schedule,
     );
     _activityRefresh.schedule();

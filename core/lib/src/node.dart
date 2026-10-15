@@ -82,9 +82,15 @@ class Node {
   StreamSubscription<Set<String>> onChangesTo(
     Set<String> kinds,
     void Function() changed,
+  ) => onChangesWhere(kinds.contains, changed);
+
+  /// [onChangesTo], for kinds that pass [test]: a set that changes as it
+  /// runs, such as the plugin kinds the activity feed shows.
+  StreamSubscription<Set<String>> onChangesWhere(
+    bool Function(String kind) test,
+    void Function() changed,
   ) => changedKinds.stream.listen((now) {
-    if (now.isEmpty ||
-        now.any((k) => kinds.contains(k) || accessKinds.contains(k))) {
+    if (now.isEmpty || now.any((k) => test(k) || accessKinds.contains(k))) {
       changed();
     }
   });

@@ -38,6 +38,9 @@ class PluginManifest {
   /// Checks for each kind the plugin owns, by full kind (`x.<id>.<name>`).
   final Map<String, ContentCheck> kinds;
   final List<PluginSection> sections;
+
+  /// How search and the activity feed list its kinds, by full kind.
+  final Map<String, PluginListing> search, activity;
   final Json json;
 
   PluginManifest._(
@@ -50,6 +53,8 @@ class PluginManifest {
     required this.grants,
     required this.kinds,
     required this.sections,
+    this.search = const {},
+    this.activity = const {},
     this.provides,
     this.runtime,
   });
@@ -129,6 +134,41 @@ class PluginManifest {
         ),
       );
     }
+    Map<String, PluginListing> listings(String key, {bool activity = false}) {
+      final declared = j[key] ?? const {};
+      if (declared is! Map) throw FormatException('manifest: $key is a map');
+      final found = <String, PluginListing>{};
+      for (final MapEntry(key: name, value: spec) in declared.entries) {
+        final kind = PluginKinds.of(id, '$name');
+        if (!kinds.containsKey(kind) || spec is! Map) {
+          throw FormatException('manifest: $key names kind $name');
+        }
+        String? field(String k, {bool required = false}) {
+          final v = spec[k];
+          if (v == null && !required) return null;
+          if (v is! String || !_field.hasMatch(v)) {
+            throw FormatException('manifest: $key.$name.$k is a field name');
+          }
+          return v;
+        }
+
+        final says = spec['says'];
+        if (activity &&
+            (says is! String || says.trim().isEmpty || says.length > 40)) {
+          throw FormatException('manifest: $key.$name.says is short text');
+        }
+        found[kind] = PluginListing(
+          kind: kind,
+          plugin: id,
+          title: field('title', required: true)!,
+          text: field('text'),
+          key: field('key'),
+          says: activity ? (says as String).trim() : 'added something',
+        );
+      }
+      return found;
+    }
+
     final provides = j['provides'];
     final runtime = j['runtime'];
     if (provides != null &&
@@ -166,6 +206,8 @@ class PluginManifest {
       grants: grants,
       kinds: kinds,
       sections: sections,
+      search: listings('search'),
+      activity: listings('activity', activity: true),
     );
   }
 
@@ -206,6 +248,7 @@ class PluginManifest {
   }
 
   static final _name = RegExp(r'^[a-z][a-z0-9_]{0,31}$');
+  static final _field = RegExp(r'^[A-Za-z][A-Za-z0-9_]{0,63}$');
   static final _language = RegExp(r'^[a-z][a-z0-9-]{0,23}@[0-9]{1,4}$');
   static final _runtime = RegExp(r'^runtime:[a-z][a-z0-9-]{0,23}@[0-9]{1,4}$');
 }

@@ -9,7 +9,8 @@ import 'scopes.dart';
 import 'store.dart';
 
 /// The kinds of thing the activity feed shows, each a filter of its own.
-enum ActivitySection { posts, notes, calendar, files, people, chat }
+/// `plugins` holds what plugins list under `activity` in their manifests.
+enum ActivitySection { posts, notes, calendar, files, people, chat, plugins }
 
 /// One thing that changed: what arrived about it on one day, merged.
 class ActivityItem {
@@ -103,8 +104,13 @@ class Activity {
   final Notes? notes;
   Activity(this.node, {this.notes});
 
-  /// The kinds whose arrival may change the feed.
+  /// The kinds whose arrival may change the feed, besides plugin kinds
+  /// ([shows]).
   static const kinds = {...Store.activityKinds};
+
+  /// Whether the arrival of an object of [kind] may change the feed.
+  bool shows(String kind) =>
+      kinds.contains(kind) || node.registry.activityOf(kind) != null;
 
   /// Objects read per call to [more] at most, so a storm of note edits that
   /// merges into a few rows cannot make one call read without end.
@@ -304,9 +310,13 @@ class Activity {
     if (place == null) return null;
     final (section, space, group) = place;
     final day = _day(at);
+    // A plugin's things each get a row: one per page, say, not per wiki.
+    final thing = section == ActivitySection.plugins
+        ? '|${node.registry.activityOf(o.kind)!.keyOf(o, data!)}'
+        : '';
     final key = section == ActivitySection.notes && o.kind == 'note_op'
         ? 'note|$space|$day'
-        : '${section.name}|${o.kind}|$space|$day';
+        : '${section.name}|${o.kind}|$space$thing|$day';
     final entry = _entries[key] ??= ActivityEntry(
       key,
       section,
@@ -355,8 +365,19 @@ class Activity {
       case PublicChats.messageKind:
         return (ActivitySection.chat, o.space, null);
     }
+    if (node.registry.activityOf(o.kind) != null) {
+      return (ActivitySection.plugins, o.space, pluginGroup(o));
+    }
     return null;
   }
+
+  /// The group a plugin's object belongs to: one shared with several
+  /// people in a space that is not the plugin's own (`x.<plugin>…`) is in a
+  /// group's space, as plugins publish to a group.
+  static String? pluginGroup(SignedObject o) =>
+      !o.isPublic && o.audience.length > 1 && !o.space.startsWith('x.')
+      ? o.space
+      : null;
 
   /// The start of [at]'s local day: rows merge within a day.
   static int _day(int at) {

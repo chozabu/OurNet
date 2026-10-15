@@ -939,7 +939,41 @@ class Store {
       END;
       CREATE TRIGGER IF NOT EXISTS arrival_removed AFTER DELETE ON objects
       BEGIN DELETE FROM arrivals WHERE id=OLD.id; END;
+      CREATE TABLE IF NOT EXISTS arrival_kinds(kind TEXT PRIMARY KEY);
+      CREATE TRIGGER IF NOT EXISTS arrival_added_plugin AFTER INSERT ON objects
+      WHEN NEW.kind GLOB 'x.*'
+        AND NEW.kind IN (SELECT kind FROM arrival_kinds) BEGIN
+        INSERT OR IGNORE INTO arrivals VALUES(NEW.id,
+          CASE WHEN NEW.created > $_nowMs - $lateArrival THEN $_nowMs
+          ELSE NEW.created END);
+      END;
     ''');
+  }
+
+  /// Records arrivals of [kinds], [plugin]'s, from now on, for the feed:
+  /// what its manifest lists under `activity`. Replaces what it had.
+  void setArrivalKinds(String plugin, Iterable<String> kinds) {
+    final current = {
+      for (final row in _select(
+        'SELECT kind FROM arrival_kinds WHERE kind GLOB ?',
+        ['x.$plugin.*'],
+      ))
+        row['kind'] as String,
+    };
+    if (current.length == kinds.length && current.containsAll(kinds)) return;
+    db.execute('BEGIN IMMEDIATE');
+    try {
+      db.execute('DELETE FROM arrival_kinds WHERE kind GLOB ?', [
+        'x.$plugin.*',
+      ]);
+      for (final kind in kinds) {
+        db.execute('INSERT OR IGNORE INTO arrival_kinds VALUES(?)', [kind]);
+      }
+      db.execute('COMMIT');
+    } catch (_) {
+      db.execute('ROLLBACK');
+      rethrow;
+    }
   }
 
   /// Objects the activity feed shows, by when they arrived: newest first

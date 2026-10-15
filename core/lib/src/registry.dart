@@ -151,6 +151,58 @@ class PluginSection implements Section {
   bool allows(ScopeKind? scope) => scope == null || scopes.contains(scope);
 }
 
+/// How the app lists objects of a plugin's kind outside the plugin, in
+/// search or the activity feed, as its manifest declares:
+///
+/// ```json
+/// "search": {"page": {"title": "title", "text": "body", "key": "title"}},
+/// "activity": {"page": {"title": "title", "key": "title", "says": "edited a page"}}
+/// ```
+///
+/// The app reads the named payload fields itself and never calls the plugin;
+/// opening a result opens the plugin with the object's ID in `on-open`'s
+/// context.
+class PluginListing {
+  /// The kind, `x.<plugin>.<name>`.
+  final String kind;
+  final String plugin;
+
+  /// The payload field shown as the title.
+  final String title;
+
+  /// A payload field searched and shown under the title.
+  final String? text;
+
+  /// A payload field naming the thing an object is a version of (a page's
+  /// title, say): search shows the newest object for each, and the feed
+  /// gives each its own row.
+  final String? key;
+
+  /// What the feed says someone did, after their name: `edited a page`.
+  final String says;
+
+  const PluginListing({
+    required this.kind,
+    required this.plugin,
+    required this.title,
+    this.text,
+    this.key,
+    this.says = 'added something',
+  });
+
+  /// [field] of [payload] as one trimmed line, or null.
+  static String? line(Json payload, String? field) {
+    final v = field == null ? null : payload[field];
+    if (v is! String) return null;
+    final line = v.trim().replaceAll(RegExp(r'\s+'), ' ');
+    return line.isEmpty ? null : line;
+  }
+
+  /// What [payload] is a version of, for [key]; its object ID without one.
+  String keyOf(SignedObject o, Json payload) =>
+      line(payload, key)?.toLowerCase() ?? o.id;
+}
+
 /// What modules contribute at run time on this node: plugin kinds and their
 /// checks, live request handlers and navigation sections. Built-in kinds are
 /// in [builtinModules]; built-in features register their request handlers
@@ -162,6 +214,8 @@ class Registry {
   final _sections = <String, PluginSection>{};
   final _capabilities = <String, String>{};
   final _datagrams = <String, ({String owner, DatagramHandler handle})>{};
+  final _search = <String, PluginListing>{};
+  final _activity = <String, PluginListing>{};
   final _changes = StreamController<void>.broadcast();
 
   /// Fires when sections are added or removed.
@@ -224,6 +278,18 @@ class Registry {
   /// Plugin sections, in the order they were added.
   List<PluginSection> get sections => List.unmodifiable(_sections.values);
 
+  /// Lists [listing]'s kind in search.
+  void addSearch(PluginListing listing) => _search[listing.kind] = listing;
+
+  /// Shows [listing]'s kind in the activity feed.
+  void addActivity(PluginListing listing) => _activity[listing.kind] = listing;
+
+  /// Plugin kinds search lists, in the order they were added.
+  List<PluginListing> get searchable => List.unmodifiable(_search.values);
+
+  /// How the activity feed shows [kind]; null when it does not.
+  PluginListing? activityOf(String kind) => _activity[kind];
+
   /// Tells peers [owner] can do [capability] (`p:<plugin>` for a plugin that
   /// takes live messages), in the capabilities sync messages carry.
   void advertise(String owner, String capability) =>
@@ -254,6 +320,8 @@ class Registry {
   void removeOwner(String owner) {
     _kinds.removeWhere((_, v) => v.owner == owner);
     _requests.removeWhere((_, v) => v.owner == owner);
+    _search.removeWhere((_, v) => v.plugin == owner);
+    _activity.removeWhere((_, v) => v.plugin == owner);
     withdraw(owner);
     final before = _sections.length;
     _sections.removeWhere((_, v) => v.plugin == owner);

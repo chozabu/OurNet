@@ -874,6 +874,7 @@ class Plugins {
   Future<void> uninstall(String id) async {
     _stop(id);
     node.registry.removeOwner(id);
+    node.store.setArrivalKinds(id, const []);
     final removed = _installed.remove(id);
     final publisher = removed?.publisher;
     if (removed != null && removed.manifest.isRuntime) {
@@ -1073,6 +1074,9 @@ class Plugins {
     for (final section in plugin.manifest.sections) {
       node.registry.addSection(section);
     }
+    plugin.manifest.search.values.forEach(node.registry.addSearch);
+    plugin.manifest.activity.values.forEach(node.registry.addActivity);
+    node.store.setArrivalKinds(plugin.id, plugin.manifest.activity.keys);
   }
 
   /// Starts [plugin]; [storage] is `snapshot` or `restore` for the host to
