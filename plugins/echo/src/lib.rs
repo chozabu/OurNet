@@ -1,7 +1,7 @@
 //! Test plugin: each call does something observable through the API, so a
 //! host test can check the whole round trip.
 
-use ournet_plugin::{json, store, timer, ui, Audience, Context, Object, Plugin, Value};
+use ournet_plugin::{files, json, store, timer, ui, Audience, Context, Object, Plugin, Value};
 
 #[derive(Default)]
 struct Echo {
@@ -36,6 +36,25 @@ impl Plugin for Echo {
                     .map(|o| o.json()["text"].as_str().unwrap_or("").to_string())
                     .collect();
                 ui::update(surface, &json!({"texts": texts}));
+            }
+            "file" => {
+                // Stores bytes, attaches them to a note and reads them back.
+                let text = args["text"].as_str().unwrap_or("");
+                let read = files::store("echo.txt", text.as_bytes())
+                    .and_then(|file| {
+                        files::publish("x.echo.note", "x.echo", Audience::Personal, &json!({"text": "with a file"}), &file)
+                    })
+                    .and_then(|id| files::read(&id));
+                ui::update(surface, &json!({"fileRead": match read {
+                    Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                    Err(e) => format!("error: {e}"),
+                }}));
+            }
+            "picked" => {
+                // A file the person picked arrives as a handle.
+                let file = args["file"].as_str().unwrap_or("");
+                let id = files::publish("x.echo.note", "x.echo", Audience::Personal, &json!({"text": "picked"}), file);
+                ui::update(surface, &json!({"pickedId": id.unwrap_or_else(|e| format!("error: {e}"))}));
             }
             "timer" => timer::set(7, 20),
             "send" => {

@@ -32,7 +32,8 @@ wasmtime::component::bindgen!({ path: "wit", world: "plugin" });
 
 use crate::tun as interface;
 use ournet::plugin::{
-    clock, identity, live, log, objects, package_files, plugin_offers, storage, tun, types, ui,
+    clock, files, identity, live, log, objects, package_files, plugin_offers, storage, tun, types,
+    ui,
 };
 
 /// Posts one message to Dart: the plugin's handle and a buffer Dart frees
@@ -40,7 +41,7 @@ use ournet::plugin::{
 type Post = unsafe extern "C" fn(handle: u64, data: *mut u8, len: usize);
 
 /// Bumped when the message protocol or the WIT world changes.
-const HOST_VERSION: u32 = 1;
+const HOST_VERSION: u32 = 2;
 
 /// CPU time one call into a plugin may use, excluding time spent waiting on
 /// the host. A plugin over it is stopped: it has looped, not worked.
@@ -198,6 +199,9 @@ const GRANTABLE: [&str; 4] = ["objects", "identity", "live", "tun"];
 /// The largest package entry `package-files.read` returns.
 const FILE_LIMIT: u64 = 16 << 20;
 
+/// The largest file `files.store` takes or `files.read` returns.
+const ATTACHMENT_LIMIT: usize = 8 << 20;
+
 /// The plugin's private key-value store, kept in one file and written after
 /// each call that changed it.
 struct Storage {
@@ -330,12 +334,23 @@ impl Host {
 
     /// Asks Dart to run import [function] and waits for its answer.
     fn ask(&mut self, function: &str, args: Value) -> Result<Value, String> {
+        self.ask_bytes(function, args, None).map(|(value, _)| value)
+    }
+
+    /// [ask], with raw bytes after the question and after the answer: an
+    /// answer is its JSON line, then optionally a newline and bytes.
+    fn ask_bytes(
+        &mut self,
+        function: &str,
+        args: Value,
+        body: Option<&[u8]>,
+    ) -> Result<(Value, Vec<u8>), String> {
         self.next_question += 1;
         let id = self.next_question;
         post(
             self.handle,
             &json!({"type": "import", "id": id, "fn": function, "args": args}),
-            None,
+            body,
         );
         let began = Instant::now();
         let answer = loop {
@@ -347,10 +362,12 @@ impl Host {
             }
         };
         self.waited += began.elapsed();
-        let value: Value = serde_json::from_slice(&answer?).map_err(|e| e.to_string())?;
+        let answer = answer?;
+        let (line, bytes) = split(&answer);
+        let value: Value = serde_json::from_slice(line).map_err(|e| e.to_string())?;
         match value.get("error").and_then(Value::as_str) {
             Some(error) => Err(error.to_string()),
-            None => Ok(value.get("ok").cloned().unwrap_or(Value::Null)),
+            None => Ok((value.get("ok").cloned().unwrap_or(Value::Null), bytes.to_vec())),
         }
     }
 
@@ -447,6 +464,16 @@ impl storage::Host for Host {
     }
 }
 
+/// An audience as imports carry it.
+fn audience(to: types::Audience) -> Value {
+    match to {
+        types::Audience::Personal => json!({"personal": true}),
+        types::Audience::People(people) => json!({"people": people}),
+        types::Audience::Group => json!({"group": true}),
+        types::Audience::Public => json!({"public": true}),
+    }
+}
+
 impl objects::Host for Host {
     fn publish(
         &mut self,
@@ -456,15 +483,9 @@ impl objects::Host for Host {
         payload: String,
     ) -> Result<String, String> {
         self.granted("objects")?;
-        let to = match to {
-            types::Audience::Personal => json!({"personal": true}),
-            types::Audience::People(people) => json!({"people": people}),
-            types::Audience::Group => json!({"group": true}),
-            types::Audience::Public => json!({"public": true}),
-        };
         let id = self.ask(
             "objects.publish",
-            json!({"kind": kind, "space": space, "to": to, "payload": payload}),
+            json!({"kind": kind, "space": space, "to": audience(to), "payload": payload}),
         )?;
         id.as_str()
             .map(String::from)
@@ -708,6 +729,37 @@ impl plugin_offers::Host for Host {
     }
 }
 
+impl files::Host for Host {
+    fn store(&mut self, name: String, data: Vec<u8>) -> Result<String, String> {
+        self.granted("objects")?;
+        if data.len() > ATTACHMENT_LIMIT {
+            return Err("files are at most 8 MiB".into());
+        }
+        let (handle, _) = self.ask_bytes("files.store", json!({"name": name}), Some(&data))?;
+        handle.as_str().map(String::from).ok_or_else(|| "no handle".into())
+    }
+    fn publish(
+        &mut self,
+        kind: String,
+        space: String,
+        to: types::Audience,
+        payload: String,
+        file: String,
+    ) -> Result<String, String> {
+        self.granted("objects")?;
+        let id = self.ask(
+            "files.publish",
+            json!({"kind": kind, "space": space, "to": audience(to), "payload": payload, "file": file}),
+        )?;
+        id.as_str().map(String::from).ok_or_else(|| "no object ID".into())
+    }
+    fn read(&mut self, id: String) -> Result<Vec<u8>, String> {
+        self.granted("objects")?;
+        let (_, bytes) = self.ask_bytes("files.read", json!({"id": id}), None)?;
+        Ok(bytes)
+    }
+}
+
 /// Standard base64, for bytes in an import's JSON.
 fn base64(bytes: &[u8]) -> String {
     const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -784,9 +836,11 @@ fn check_imports(
             .strip_prefix("ournet:plugin/")
             .and_then(|rest| rest.split('@').next())
             .ok_or_else(|| format!("imports {name}, which OurNet does not provide"))?;
+        // Files are attached to the plugin's own objects: part of that grant.
+        let granted = if interface == "files" { "objects" } else { interface };
         let allowed = ALWAYS.contains(&interface)
-            || grants.iter().any(|g| g == interface)
-            || (runtime && GRANTABLE.contains(&interface));
+            || grants.iter().any(|g| g == granted)
+            || (runtime && GRANTABLE.contains(&granted));
         if !allowed {
             return Err(format!("uses {interface}, which it was not granted"));
         }

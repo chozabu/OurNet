@@ -148,9 +148,15 @@ final class PluginHost {
     return _call(handle, message.address, message.length) == 1;
   }
 
-  /// Answers the plugin's import [id]: `{"ok": …}` or `{"error": …}`.
-  bool answer(int handle, int id, Map<String, Object?> answer) {
-    final message = Uint8List.fromList(utf8.encode(jsonEncode(answer)));
+  /// Answers the plugin's import [id]: `{"ok": …}` or `{"error": …}`, and
+  /// [body] bytes after it for imports that return bytes.
+  bool answer(
+    int handle,
+    int id,
+    Map<String, Object?> answer, [
+    Uint8List? body,
+  ]) {
+    final message = _frame(answer, body);
     return _answer(handle, id, message.address, message.length) == 1;
   }
 

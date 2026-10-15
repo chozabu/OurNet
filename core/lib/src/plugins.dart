@@ -306,6 +306,11 @@ class Plugins {
   /// Closes what [openTun] opened for [plugin].
   void Function(String plugin)? closeTun;
 
+  /// Reads the file attached to [object], fetching chunks this device
+  /// lacks from friends, for `files.read`. Without it, only local chunks
+  /// are read.
+  Future<Uint8List> Function(SignedObject object, int limit)? readFile;
+
   /// Where compiled code is kept; [directory]'s `.cache` unless given.
   final String cache;
 
@@ -322,6 +327,16 @@ class Plugins {
 
   /// The live request type plugins' messages travel as.
   static const liveRequest = 'plugin';
+
+  /// The largest file `files.store` takes and `files.read` returns.
+  static const maxFileBytes = 8 * 1024 * 1024;
+
+  /// File handles a running plugin holds at once; the oldest go first.
+  static const maxFileHandles = 64;
+
+  /// Chunk size of files plugins store: the same as a picked file's.
+  static const fileChunkBytes = 128 * 1024;
+  static final _random = Random.secure();
 
   /// Largest live message, either way.
   static const maxLiveBytes = 256 * 1024;
@@ -1229,7 +1244,15 @@ class Plugins {
           call.complete(message);
         }
       case 'import':
-        unawaited(_answer(running, h['id'] as int, '${h['fn']}', h['args']));
+        unawaited(
+          _answer(
+            running,
+            h['id'] as int,
+            '${h['fn']}',
+            h['args'],
+            message.body,
+          ),
+        );
       case 'send':
         unawaited(
           _send(running, h['request'] as int, '${h['device']}', message.body),
@@ -1388,31 +1411,163 @@ class Plugins {
     int id,
     String fn,
     Object? args,
+    Uint8List body,
   ) async {
     Json answer;
+    Uint8List? bytes;
     try {
-      answer = {
-        'ok': await _import(
-          running.plugin,
-          fn,
-          args is Map ? args.cast() : const {},
-        ),
-      };
+      final result = await _import(
+        running.plugin,
+        fn,
+        args is Map ? args.cast() : const {},
+        body,
+      );
+      // Bytes go after the answer as they are, not as JSON.
+      if (result is Uint8List) {
+        bytes = result;
+        answer = {'ok': null};
+      } else {
+        answer = {'ok': result};
+      }
     } catch (e) {
       answer = {'error': e is StateError ? e.message : '$e'};
     }
     final handle = running.handle;
     if (handle != null && _running[running.plugin.id] == running) {
-      host!.answer(handle, id, answer);
+      host!.answer(handle, id, answer, bytes);
     }
+  }
+
+  /// Hands [plugin] a handle to an attachment stored already (`name`,
+  /// `size`, `chunks`, `chunkBytes`, `key`), such as a file the person
+  /// picked, for `files.publish`. Null when it is not running.
+  String? addFile(String plugin, Json file) {
+    final running = _running[plugin];
+    if (running == null) return null;
+    final handle = 'f${running.nextFile++}';
+    running.files[handle] = Map.unmodifiable({
+      for (final key in const ['name', 'size', 'chunks', 'chunkBytes', 'key'])
+        key: file[key],
+    });
+    while (running.files.length > maxFileHandles) {
+      running.files.remove(running.files.keys.first);
+    }
+    return handle;
+  }
+
+  /// Encrypts [data] into stored chunks, as `Files.store` does a picked
+  /// file, and returns the fields that describe it.
+  Future<Json> _storeFile(String name, Uint8List data) async {
+    final key = List<int>.generate(32, (_) => _random.nextInt(256));
+    final chunks = <String>[];
+    for (var at = 0; at < data.length; at += fileChunkBytes) {
+      final end = min(at + fileChunkBytes, data.length);
+      chunks.add(
+        await node.blobs.encode(Uint8List.sublistView(data, at, end), key),
+      );
+    }
+    return {
+      'name': name,
+      'size': data.length,
+      'chunks': chunks,
+      'chunkBytes': fileChunkBytes,
+      'key': b64(key),
+    };
+  }
+
+  /// The file attached to [o], at most [maxFileBytes].
+  Future<Uint8List> _readFile(SignedObject o) async {
+    final payload = await node.content(o);
+    if (payload == null || payload['chunks'] is! List) {
+      throw StateError('It has no file');
+    }
+    final size = payload['size'];
+    if (size is! int || size > maxFileBytes) {
+      throw StateError('Files are at most 8 MiB here');
+    }
+    final read = readFile;
+    if (read != null) {
+      // Answered before the host stops waiting, so the plugin hears why.
+      return read(o, maxFileBytes).timeout(
+        const Duration(seconds: 25),
+        onTimeout: () => throw StateError('Not here yet: try again later'),
+      );
+    }
+    final key = payload['key'];
+    final local = await node.blobs.readLocal(
+      (payload['chunks'] as List).cast(),
+      key is String ? unb64(key) : null,
+      limit: maxFileBytes,
+      expectedSize: size,
+    );
+    if (local == null) throw StateError('Not here yet: try again later');
+    return local;
   }
 
   /// Whether [space] belongs to [plugin]: `x.<plugin>` or under it.
   static bool _ownSpace(String plugin, String space) =>
       space == 'x.$plugin' || space.startsWith('x.$plugin.');
 
-  Future<Object?> _import(InstalledPlugin plugin, String fn, Json args) async {
-    final interface = fn.split('.').first;
+  static final _unsafeName = RegExp(r'[/\\\x00-\x1f]');
+
+  /// Signs and publishes an object of [plugin]'s [kind] from an import's
+  /// [args] (`space`, `to`, `payload`), with [file]'s fields attached.
+  Future<String> _publish(
+    InstalledPlugin plugin,
+    String kind,
+    Json args, {
+    Json? file,
+  }) async {
+    final space = args['space'];
+    if (space is! String || space.isEmpty || space.length > 128) {
+      throw StateError('A space is needed');
+    }
+    final payload = jsonDecode('${args['payload']}');
+    if (payload is! Map) throw StateError('A payload is a JSON object');
+    final to = args['to'] as Map? ?? const {};
+    final List<String> audience;
+    if (to['personal'] == true) {
+      audience = [node.person];
+    } else if (to['people'] case final List people) {
+      if (people.isEmpty || people.length > 63) {
+        throw StateError('Between 1 and 63 people');
+      }
+      audience = people.cast<String>();
+    } else if (to['group'] == true) {
+      final group = (await groups?.call() ?? const <PluginGroup>[])
+          .where((g) => g.space == space)
+          .firstOrNull;
+      if (group == null) throw StateError('Not a group of yours');
+      audience = group.members;
+    } else if (to['public'] == true) {
+      if (!_ownSpace(plugin.id, space)) {
+        throw StateError('Public objects go in x.${plugin.id} spaces');
+      }
+      audience = const [];
+    } else {
+      throw StateError('No audience');
+    }
+    final o = await node.publish(
+      kind,
+      {...(frozen(payload) as Map).cast<String, Object?>(), ...?file},
+      space: space,
+      audience: audience,
+      app: '${plugin.id}@${plugin.manifest.version}',
+    );
+    return o.id;
+  }
+
+  Future<Object?> _import(
+    InstalledPlugin plugin,
+    String fn,
+    Json args, [
+    Uint8List? body,
+  ]) async {
+    // Files are attached to the plugin's own objects: part of that grant.
+    final interface = switch (fn.split('.').first) {
+      'files' => 'objects',
+      final other => other,
+    };
     if (PluginManifest.grantable.contains(interface) &&
         !plugin.granted.contains(interface)) {
       throw StateError('$interface was not granted');
@@ -1456,44 +1611,30 @@ class Plugins {
         }
         return null;
       case 'objects.publish':
-        final kind = own(args['kind']);
-        final space = args['space'];
-        if (space is! String || space.isEmpty || space.length > 128) {
-          throw StateError('A space is needed');
+        return _publish(plugin, own(args['kind']), args);
+      case 'files.store':
+        final name = args['name'];
+        if (name is! String ||
+            name.trim().isEmpty ||
+            name.length > 255 ||
+            _unsafeName.hasMatch(name)) {
+          throw StateError('A file needs a plain name');
         }
-        final payload = jsonDecode('${args['payload']}');
-        if (payload is! Map) throw StateError('A payload is a JSON object');
-        final to = args['to'] as Map? ?? const {};
-        final List<String> audience;
-        if (to['personal'] == true) {
-          audience = [node.person];
-        } else if (to['people'] case final List people) {
-          if (people.isEmpty || people.length > 63) {
-            throw StateError('Between 1 and 63 people');
-          }
-          audience = people.cast<String>();
-        } else if (to['group'] == true) {
-          final group = (await groups?.call() ?? const <PluginGroup>[])
-              .where((g) => g.space == space)
-              .firstOrNull;
-          if (group == null) throw StateError('Not a group of yours');
-          audience = group.members;
-        } else if (to['public'] == true) {
-          if (!_ownSpace(plugin.id, space)) {
-            throw StateError('Public objects go in x.${plugin.id} spaces');
-          }
-          audience = const [];
-        } else {
-          throw StateError('No audience');
+        if (body == null || body.length > maxFileBytes) {
+          throw StateError('Files are at most 8 MiB');
         }
-        final o = await node.publish(
-          kind,
-          (frozen(payload) as Map).cast(),
-          space: space,
-          audience: audience,
-          app: '${plugin.id}@${plugin.manifest.version}',
-        );
-        return o.id;
+        if (_running[plugin.id] == null) throw StateError('Plugin not running');
+        return addFile(plugin.id, await _storeFile(name.trim(), body));
+      case 'files.publish':
+        final file = _running[plugin.id]?.files['${args['file']}'];
+        if (file == null) throw StateError('No such file: store it first');
+        return _publish(plugin, own(args['kind']), args, file: file);
+      case 'files.read':
+        final o = node.store.get('${args['id']}');
+        if (o == null || PluginKinds.pluginOf(o.kind) != plugin.id) {
+          throw StateError('No such object of this plugin');
+        }
+        return _readFile(o);
       case 'objects.get':
         final o = node.store.get('${args['id']}');
         if (o == null || PluginKinds.pluginOf(o.kind) != plugin.id) return null;
@@ -1654,6 +1795,10 @@ class _Running {
   int? handle;
   int nextCall = 0;
   final calls = <int, Completer<PluginMessage>>{};
+
+  /// Files stored for it to attach, by handle ([Plugins.addFile]).
+  final files = <String, Json>{};
+  int nextFile = 0;
   StreamSubscription<Set<String>>? changes;
   bool feeding = false, feedAgain = false;
   _Running(this.plugin);

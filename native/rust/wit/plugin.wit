@@ -160,6 +160,27 @@ interface plugin-offers {
   offer: func(files: list<tuple<string, list<u8>>>, source: string) -> result<_, string>;
 }
 
+/// Files attached to this plugin's objects: pictures, long texts, any
+/// bytes. The host encrypts them in chunks, as it does a message's
+/// attachment, and friends fetch them from devices that have them. An
+/// object carries at most one file. Part of the `objects` grant.
+interface files {
+  use types.{audience};
+
+  /// Stores `data` (at most 8 MiB) as a file called `name`, ready to
+  /// attach. Returns a handle for `publish`; handles last until the plugin
+  /// stops. A file the person picks in a `FilePick` widget arrives as an
+  /// event with a handle of its own.
+  store: func(name: string, data: list<u8>) -> result<string, string>;
+  /// Publishes like `objects.publish`, with the file `file` names attached.
+  publish: func(kind: string, space: string, to: audience, payload: string, file: string) -> result<string, string>;
+  /// The file attached to object `id`, one of this plugin's, fetched from
+  /// friends when it is not on this device yet. At most 8 MiB. Fails at
+  /// once for an object without a file, or after a while when no friend
+  /// that has it is reachable: try again later.
+  read: func(id: string) -> result<list<u8>, string>;
+}
+
 /// What the app shows. Widgets come from the package's RFW library; a
 /// plugin updates the data they read.
 interface ui {
@@ -182,6 +203,7 @@ world plugin {
   import ui;
   import package-files;
   import plugin-offers;
+  import files;
 
   /// Called once after loading, and after a hot reload's `restore`.
   export init: func();

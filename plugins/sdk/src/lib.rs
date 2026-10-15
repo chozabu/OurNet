@@ -70,6 +70,9 @@ pub struct Context {
     pub space: Option<String>,
     /// The group's name, for [Scope::Group].
     pub name: Option<String>,
+    /// An object of this plugin's to show: one a search result or an
+    /// Activity row was opened from.
+    pub object: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -93,6 +96,7 @@ impl Context {
             },
             space: text("space"),
             name: text("name"),
+            object: text("object"),
         }
     }
 }
@@ -245,6 +249,31 @@ pub fn read(name: &str) -> Option<Vec<u8>> {
 /// files came from). Only while handling one of their events.
 pub fn offer_plugin(files: &[(String, Vec<u8>)], source: &Value) -> Result<(), String> {
     host::plugin_offers::offer(files, &source.to_string())
+}
+
+/// Files attached to this plugin's objects (part of the `objects` grant):
+/// pictures, long texts, any bytes, encrypted in chunks and fetched from
+/// friends like a message's attachment.
+pub mod files {
+    use super::{host, Audience, Value};
+
+    /// Stores [data] (at most 8 MiB) as a file called [name]; returns a
+    /// handle for [publish]. A file the person picks in a `FilePick` widget
+    /// arrives as an event with a handle of its own.
+    pub fn store(name: &str, data: &[u8]) -> Result<String, String> {
+        host::files::store(name, data)
+    }
+
+    /// Like [super::publish], with the file [file] names attached.
+    pub fn publish(kind: &str, space: &str, to: Audience, payload: &Value, file: &str) -> Result<String, String> {
+        host::files::publish(kind, space, &to, &payload.to_string(), file)
+    }
+
+    /// The file attached to object [id], fetched from friends when it is not
+    /// here yet (at most 8 MiB); an error means try again later.
+    pub fn read(id: &str) -> Result<Vec<u8>, String> {
+        host::files::read(id)
+    }
 }
 
 /// What the app shows.

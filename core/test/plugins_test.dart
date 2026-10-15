@@ -127,6 +127,51 @@ void main() {
     ]);
   });
 
+  test('a plugin attaches files to its objects and reads them', () async {
+    final (node, plugins) = await device();
+    await plugins.install(PluginPackage.read(package), grants: grants);
+    await running(plugins);
+
+    plugins.event('echo', 'Echo', 'file', {'text': 'bytes of a file'});
+    expect(
+      (await until(plugins, (d) => d['fileRead'] != null))['fileRead'],
+      'bytes of a file',
+    );
+    final note = node.store
+        .objects(kind: 'x.echo.note', limit: 10)
+        .firstWhere((o) => o.app != null);
+    final payload = (await node.content(note))!;
+    expect(payload['text'], 'with a file');
+    expect(payload['name'], 'echo.txt');
+    expect(payload['size'], 15);
+    expect(payload['chunks'], hasLength(1));
+    expect(payload['key'], isA<String>());
+
+    // A picked file comes as a handle; one the host never gave is refused.
+    final handle = plugins.addFile('echo', {
+      'name': 'picked.txt',
+      'size': payload['size'],
+      'chunks': payload['chunks'],
+      'chunkBytes': payload['chunkBytes'],
+      'key': payload['key'],
+    })!;
+    plugins.event('echo', 'Echo', 'picked', {'file': handle});
+    final picked =
+        (await until(plugins, (d) => d['pickedId'] != null))['pickedId']
+            as String;
+    final pickedPayload = (await node.content(node.store.get(picked)!))!;
+    expect(pickedPayload['name'], 'picked.txt');
+    expect(pickedPayload['text'], 'picked');
+    plugins.event('echo', 'Echo', 'picked', {'file': 'f999'});
+    expect(
+      (await until(
+        plugins,
+        (d) => '${d['pickedId']}'.startsWith('error'),
+      ))['pickedId'],
+      contains('store it first'),
+    );
+  });
+
   test('timers fire on the plugin thread', () async {
     final (_, plugins) = await device();
     await plugins.install(PluginPackage.read(package), grants: grants);
