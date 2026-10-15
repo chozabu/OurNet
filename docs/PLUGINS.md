@@ -185,7 +185,7 @@ The full world is `native/rust/wit/plugin.wit`; the Rust SDK is
 |---|---|---|
 | `log`, `clock`, `storage`, `ui`, `package-files`, `plugin-offers` | always | log; now, set/cancel timer; get/set/remove/keys; update a surface's data, notify; read its own package's files; offer a script plugin to install (only just after the person acted; the app asks them) |
 | `objects` | `objects` | publish (own kinds; personal, people, group or public audience), get, query, follow a public space |
-| `files` | `objects` | store bytes (at most 8 MiB) as a file and get a handle; publish an object with that file attached; read an object's file, fetched from friends when needed |
+| `files` | `objects` | store bytes (at most 16 MiB) as a file and get a handle; publish an object with that file attached; read an object's file, fetched from friends when needed |
 | `identity` | `identity` | me, this device, contacts (devices: name, online, runs this plugin), groups (space, name, members) |
 | `live` | `live` | send (reply via `on-reply`), datagram |
 | `tun` | `tun` | open (address, prefix, routes, MTU), write, close |
@@ -272,11 +272,11 @@ sends events back with the widget's arguments plus what the widget adds
 bold, italic, `[[links]]`, and lines `![caption](object ID)` showing that
 object's picture), `Canvas` (rect, circle, line and text commands in a
 scaled space, with tap and drag), `Keys`, `Avatar`, `PersonName`, `TimeAgo`,
-`Image` (the picture attached to one of the plugin's objects, drawn like a
+`Picture` (the picture attached to one of the plugin's objects, drawn like a
 message's: decoded off the UI isolate, cached by object) and `FilePick` (a
 button that asks for a file, `accept: "image"` or `"any"`, and sends
 `onPicked` with `{file, name, size}`; `file` is a handle for
-`files.publish`). `Image` and `Markup` show only the plugin's own objects.
+`files.publish`). `Picture` and `Markup` show only the plugin's own objects.
 
 ### In search and the activity feed
 
@@ -290,7 +290,9 @@ reads the named payload fields itself, so neither ever calls a plugin:
 
 `title` is shown, `text` is searched and shown under it, and `key` names
 what an object is a version of: search shows the newest object for each
-key, and the feed gives each its own row per day. `says` is what the feed
+key, and the feed gives each its own row per day; without `key`, search
+shows every object and the feed merges a space's objects of a day into one
+row. `says` is what the feed
 says someone did. A result or row opens the plugin's section in the scope
 the object belongs to (a group's when shared with several people in a space
 outside `x.<plugin>`, public, or personal), and `on-open`'s context carries
@@ -399,10 +401,10 @@ Phase 1 of [STORE-PLAN.md](STORE-PLAN.md):
 | Plugin | Shows | Uses |
 |---|---|---|
 | `wiki` | Linked pages per scope (your own, a group's, a public commons), history, a notice when two people edit at once; pictures and pages of any length (files); pages in search and the activity feed | objects, identity, files |
-| `microblog` | Public posts in each person's own space, followed friend to friend; group posts; likes and replies | objects, identity |
+| `microblog` | Public posts in each person's own space, followed friend to friend; group posts; likes and replies; a picture per post; posts in search and the activity feed | objects, identity, files |
 | `tictactoe` | Turn-based play as signed moves between two people; both reach the same board | objects, identity |
 | `pong` | Real-time play over datagrams; practice against the computer | live, Canvas, timers |
-| `git` | Repositories per scope: code at each branch, README, commits with diffs, who pushed what. Real git pushes and clones through `git-remote-ournet` (plugins/git/README.md) | objects, identity, local |
+| `git` | Repositories per scope: code at each branch, README, commits with diffs, who pushed what. Real git pushes and clones through `git-remote-ournet` (plugins/git/README.md); each push's pack is its file; repositories in search, pushes in the activity feed | objects, identity, local, files |
 | `vpn` (Friend network) | 10.77.0.0/16 between your devices and friends you allow; addresses from device IDs; senders' addresses checked. Each device has a page: traffic, refusals, and checks (a ping that asks the other side how it sees you, small and full-size datagram probes, an ICMP ping through its interface) with a diagnosis | identity, live, tun |
 
 Tests: `core/test/plugins_test.dart` and `vpn_plugin_test.dart` run the real
@@ -424,9 +426,11 @@ and protocol are tested), and the VPN on an Android device.
 Files, search and the activity feed (October 2026) answer three gaps found
 reviewing which features could be plugins: a plugin could not show
 pictures, hold more than 64 KiB in an object, or appear outside its own
-page. The JavaScript runtime does not offer `files` to scripts yet, and the
-Git plugin still carries packs in its own `x.git.chunk` objects; both could
-move to it.
+page. Scripts have `ournet.files` (JS runtime 0.2), Git 0.2 attaches each
+push's pack as its file (it carried them in base64 `x.git.chunk` objects
+before, and reads none of those), and Microblog 0.2 posts pictures; all
+three, and the wiki, list their kinds for search and the feed. Plugins
+that import `files` need a build with it: older ones refuse to load them.
 Next, in order of use: per-plugin traffic in Settings; the store plugin
 (STORE-PLAN.md phase 2); a foreground service keeping the VPN up when
 Android backgrounds the app; measured budgets in `PERFORMANCE.md`; then the

@@ -249,7 +249,7 @@ LocalWidgetLibrary ournetWidgets({
 }) => LocalWidgetLibrary(<String, LocalWidgetBuilder>{
   // The picture attached to one of the plugin's objects, by `object` ID;
   // `height` limits it.
-  'Image': (context, source) =>
+  'Picture': (context, source) =>
       image?.call(
         source.v<String>(['object']) ?? '',
         _number(source, ['height']),

@@ -40,6 +40,22 @@ widget Feed = Column(
       padding: [16.0, 4.0, 16.0, 8.0],
       child: TextInput(hint: data.hint, value: data.draft, clearOnSubmit: true, onSubmitted: event "post" { }),
     ),
+    Padding(
+      padding: [16.0, 0.0, 16.0, 8.0],
+      child: switch data.attached {
+        "": Row(
+          children: [
+            FilePick(label: "Add a picture", accept: "image", onPicked: event "picture" { }),
+          ],
+        ),
+        default: Row(
+          children: [
+            Expanded(child: Text(text: ["Picture: ", data.attached, " · press Enter to post"], style: { fontSize: 12.0 })),
+            TextButton(onPressed: event "nopicture" { }, child: Text(text: "Remove")),
+          ],
+        ),
+      },
+    ),
     Divider(),
     Expanded(
       child: ListView(
@@ -68,6 +84,10 @@ widget Feed = Column(
                           default: Text(text: ["↳ ", post.replyTo], style: { fontSize: 12.0, color: 0xFF777777 }),
                         },
                         Padding(padding: [0.0, 4.0, 0.0, 0.0], child: Markup(text: post.text)),
+                        switch post.picture {
+                          "": SizedBoxShrink(),
+                          default: Padding(padding: [0.0, 6.0, 0.0, 0.0], child: Picture(object: post.picture, height: 280.0)),
+                        },
                         Row(
                           children: [
                             TextButton(onPressed: event "like" { id: post.id }, child: Text(text: post.likes)),

@@ -1,9 +1,9 @@
 {
   "id": "microblog",
   "name": "Microblog",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "api": "0.1",
-  "description": "Short posts. In public, your friends follow you and you follow them; in a group, posts stay with its members. Likes and replies included.",
+  "description": "Short posts, with a picture if you like. In public, your friends follow you and you follow them; in a group, posts stay with its members. Likes and replies included.",
   "grants": ["objects", "identity"],
   "kinds": {
     "post": {
@@ -15,6 +15,12 @@
       "post": {"type": "string", "max": 128, "required": true},
       "on": {"type": "bool", "required": true}
     }
+  },
+  "search": {
+    "post": {"title": "text"}
+  },
+  "activity": {
+    "post": {"title": "text", "says": "posted"}
   },
   "sections": [
     {"name": "microblog", "title": "Microblog", "icon": "campaign", "surface": "Feed", "scopes": ["group", "public"]}

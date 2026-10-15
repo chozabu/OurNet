@@ -285,6 +285,47 @@ void main() {
     await rig.shot('microblog');
   });
 
+  testWidgets('a microblog post can carry a picture', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final rig = await Rig.start(tester, ['microblog']);
+    final stored = (await tester.runAsync(
+      () => rig.plugins.storeFile(
+        'sky.jpg',
+        Uint8List.fromList(List.filled(200, 3)),
+      ),
+    ))!;
+    Future<Json?> pick(String plugin, String accept) async => {
+      'file': rig.plugins.addFile(plugin, stored),
+      'name': stored['name'],
+      'size': stored['size'],
+    };
+    Widget image(String plugin, String id, double? height) =>
+        Text('picture $id');
+    await rig.show(
+      'microblog',
+      'Feed',
+      context: const {'scope': 'public'},
+      pickFile: pick,
+      image: image,
+    );
+    await rig.untilText('Add a picture');
+    await tester.tap(find.text('Add a picture'));
+    await rig.until(
+      () => find.textContaining('Picture: sky.jpg').evaluate().isNotEmpty,
+    );
+    // A picture alone is enough to post.
+    await tester.enterText(find.byType(TextField), '');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await rig.until(
+      () => rig.node.store.objects(kind: 'x.microblog.post').isNotEmpty,
+    );
+    final post = rig.node.store.objects(kind: 'x.microblog.post').single;
+    await rig.untilText('picture ${post.id}');
+    expect(find.text('Add a picture'), findsOneWidget);
+  });
+
   testWidgets('noughts and crosses starts a game with a friend', (
     tester,
   ) async {

@@ -7,11 +7,11 @@
 //! unless unfollowed. In a group, posts go to the group's space and members.
 //!
 //! The host hands each object over once, so the plugin keeps recent posts
-//! and like tallies in its storage.
+//! and like tallies in its storage. A post may carry a picture as its file.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ournet_plugin::{json, store, ui, Audience, Context, Object, Plugin, Scope, Value};
+use ournet_plugin::{files, json, store, ui, Audience, Context, Object, Plugin, Scope, Value};
 use serde::{Deserialize, Serialize};
 
 const POST: &str = "x.microblog.post";
@@ -29,6 +29,9 @@ struct Post {
     text: String,
     #[serde(default)]
     reply: Option<String>,
+    /// It carries a picture.
+    #[serde(default)]
+    picture: bool,
 }
 
 /// Who likes a post: each person's newest like decides.
@@ -59,6 +62,9 @@ struct Microblog {
     group: Option<String>,
     group_name: String,
     reply_to: Option<String>,
+    /// A picture the person picked for the next post: its file handle and
+    /// name.
+    picture: Option<(String, String)>,
     show_people: bool,
 }
 
@@ -138,6 +144,7 @@ impl Microblog {
                     "author": p.author,
                     "at": p.at as i64,
                     "text": p.text,
+                    "picture": if p.picture { p.id.as_str() } else { "" },
                     "replyTo": reply_to,
                     "likes": format!("{} {}", if mine { "♥" } else { "♡" }, if count > 0 { count.to_string() } else { String::new() }),
                     "replies": if n > 0 { format!("Reply · {n}") } else { "Reply".into() },
@@ -178,6 +185,7 @@ impl Microblog {
                 "hint": if self.reply_to.is_some() { "Your reply" } else { "What's happening?" },
                 "draft": "",
                 "replying": replying,
+                "attached": self.picture.as_ref().map_or("", |(_, name)| name.as_str()),
                 "empty": view.is_empty(),
                 "emptyText": "Nothing yet. Say something, or follow friends under People.",
                 "posts": view,
@@ -202,6 +210,7 @@ impl Microblog {
                     at,
                     text: text.to_string(),
                     reply: p["reply"].as_str().map(String::from),
+                    picture: p.get("chunks").is_some(),
                 });
                 posts.sort_by(|a, b| (b.at, &b.id).cmp(&(a.at, &a.id)));
                 posts.truncate(KEEP);
@@ -271,7 +280,7 @@ impl Plugin for Microblog {
         match name {
             "post" => {
                 let body = text("value").trim().to_string();
-                if body.is_empty() {
+                if body.is_empty() && self.picture.is_none() {
                     return;
                 }
                 let (space, to) = self.target();
@@ -279,9 +288,21 @@ impl Plugin for Microblog {
                 if let Some(reply) = self.reply_to.take() {
                     payload["reply"] = reply.into();
                 }
-                if let Err(e) = ournet_plugin::publish(POST, &space, to, &payload) {
+                let posted = match self.picture.take() {
+                    Some((file, _)) => files::publish(POST, &space, to, &payload, &file),
+                    None => ournet_plugin::publish(POST, &space, to, &payload),
+                };
+                if let Err(e) = posted {
                     ui::notify("Not posted", &e);
                 }
+                self.show();
+            }
+            "picture" => {
+                self.picture = Some((text("file"), text("name")));
+                self.show();
+            }
+            "nopicture" => {
+                self.picture = None;
                 self.show();
             }
             "like" => {

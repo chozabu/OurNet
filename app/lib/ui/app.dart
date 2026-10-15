@@ -2147,7 +2147,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   }
 }
 
-/// The picture attached to [plugin]'s object [id], as a plugin's `Image`
+/// The picture attached to [plugin]'s object [id], as a plugin's `Picture`
 /// widget or a `![…](id)` line draws it: through [InlineImage], so it is
 /// decoded off the UI isolate and cached like a message's picture. Nothing
 /// for an object that is not the plugin's, not here yet, or not a picture.
