@@ -18,8 +18,18 @@ class PluginView extends StatefulWidget {
 
   /// Where it is shown: `{scope, space?, name?}`, passed to `on-open`.
   final Json context;
+
+  /// An object of the plugin's to show, from search or the activity feed:
+  /// `on-open` gets it once, as the context's `object`.
+  final String? object;
   final String Function(String person) nameOf;
   final Widget Function(String person, double size) avatar;
+
+  /// Draws the file attached to one of the plugin's objects.
+  final PluginImage? image;
+
+  /// Asks the person for a file and stores it for the plugin to attach.
+  final PluginFilePicker? pickFile;
   const PluginView({
     super.key,
     required this.plugins,
@@ -28,6 +38,9 @@ class PluginView extends StatefulWidget {
     required this.context,
     required this.nameOf,
     required this.avatar,
+    this.object,
+    this.image,
+    this.pickFile,
   });
 
   @override
@@ -76,7 +89,16 @@ class _PluginViewState extends State<PluginView> {
       ..update(_material, createMaterialWidgets())
       ..update(
         _ournet,
-        ournetWidgets(nameOf: widget.nameOf, avatar: widget.avatar),
+        ournetWidgets(
+          nameOf: widget.nameOf,
+          avatar: widget.avatar,
+          image: widget.image == null
+              ? null
+              : (id, height) => widget.image!(widget.plugin, id, height),
+          pickFile: widget.pickFile == null
+              ? null
+              : (accept) => widget.pickFile!(widget.plugin, accept),
+        ),
       );
     _loadLibrary();
     _changes = widget.plugins.changes.listen((id) {
@@ -97,13 +119,16 @@ class _PluginViewState extends State<PluginView> {
     }
     if (old.plugin != widget.plugin ||
         old.surface != widget.surface ||
-        jsonEncode(old.context) != jsonEncode(widget.context)) {
+        jsonEncode(old.context) != jsonEncode(widget.context) ||
+        (widget.object != null && widget.object != old.object)) {
       _open();
     }
   }
 
-  void _open() =>
-      widget.plugins.open(widget.plugin, widget.surface, widget.context);
+  void _open() => widget.plugins.open(widget.plugin, widget.surface, {
+    ...widget.context,
+    'object': ?widget.object,
+  });
 
   void _loadLibrary() {
     final source = widget.plugins[widget.plugin]?.ui;
@@ -201,13 +226,47 @@ class _PluginViewState extends State<PluginView> {
   }
 }
 
+/// Draws the file attached to [plugin]'s object [id], [height] tall at most.
+typedef PluginImage =
+    Widget Function(String plugin, String id, double? height);
+
+/// Asks the person for a file (`image` or `any`, as [accept] says), stores
+/// it, and returns what `FilePick`'s `onPicked` sends [plugin]: `{file,
+/// name, size}`, `file` a handle for `files.publish`. Null if they did not
+/// pick one.
+typedef PluginFilePicker =
+    Future<Json?> Function(String plugin, String accept);
+
 /// OurNet's widgets for plugin interfaces, as library `ournet`: what core
-/// RFW lacks (text input, a canvas, keys) and what makes a plugin look like
-/// the rest of the app (people's names and pictures, times, simple markup).
+/// RFW lacks (text input, a canvas, keys, files) and what makes a plugin
+/// look like the rest of the app (people's names and pictures, times,
+/// simple markup, pictures).
 LocalWidgetLibrary ournetWidgets({
   required String Function(String person) nameOf,
   required Widget Function(String person, double size) avatar,
+  Widget Function(String id, double? height)? image,
+  Future<Json?> Function(String accept)? pickFile,
 }) => LocalWidgetLibrary(<String, LocalWidgetBuilder>{
+  // The picture attached to one of the plugin's objects, by `object` ID;
+  // `height` limits it.
+  'Image': (context, source) =>
+      image?.call(
+        source.v<String>(['object']) ?? '',
+        _number(source, ['height']),
+      ) ??
+      const SizedBox.shrink(),
+  // A button that asks for a file (`accept`: `image` or `any`) and sends
+  // `onPicked` with `{file, name, size}`; `file` is for `files.publish`.
+  'FilePick': (context, source) => _FilePick(
+    label: source.v<String>(['label']) ?? 'Add a file',
+    accept: source.v<String>(['accept']) ?? 'any',
+    pick: pickFile,
+    onPicked: source.handler<ValueChanged<Json>>(
+      ['onPicked'],
+      (trigger) =>
+          (picked) => trigger(picked),
+    ),
+  ),
   // A text field. `onSubmitted` and `onChanged` send `{value}`.
   'TextInput': (context, source) => _TextInput(
     value: source.v<String>(['value']) ?? '',
@@ -241,10 +300,12 @@ LocalWidgetLibrary ournetWidgets({
     _ago(source.v<int>(['at']) ?? 0),
     style: Theme.of(context).textTheme.bodySmall,
   ),
-  // Markdown-like text: headings, bullets, **bold**, *italic*, and
-  // [[links]] that send `onLink` with `{target}`.
+  // Markdown-like text: headings, bullets, **bold**, *italic*, [[links]]
+  // that send `onLink` with `{target}`, and lines `![caption](object ID)`
+  // showing that object's picture.
   'Markup': (context, source) => _Markup(
     text: source.v<String>(['text']) ?? '',
+    image: image,
     onLink: source.handler<ValueChanged<String>>(
       ['onLink'],
       (trigger) =>
@@ -407,10 +468,61 @@ class _TextInputState extends State<_TextInput> {
   );
 }
 
+class _FilePick extends StatefulWidget {
+  final String label, accept;
+  final Future<Json?> Function(String accept)? pick;
+  final ValueChanged<Json>? onPicked;
+  const _FilePick({
+    required this.label,
+    required this.accept,
+    required this.pick,
+    required this.onPicked,
+  });
+
+  @override
+  State<_FilePick> createState() => _FilePickState();
+}
+
+class _FilePickState extends State<_FilePick> {
+  bool _busy = false;
+
+  Future<void> _pick() async {
+    setState(() => _busy = true);
+    try {
+      final picked = await widget.pick!(widget.accept);
+      if (picked != null) widget.onPicked?.call(picked);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => OutlinedButton.icon(
+    onPressed: widget.pick == null || _busy ? null : _pick,
+    icon: _busy
+        ? const SizedBox.square(
+            dimension: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        : Icon(
+            widget.accept == 'image'
+                ? Icons.add_photo_alternate_outlined
+                : Icons.attach_file,
+          ),
+    label: Text(widget.label),
+  );
+}
+
 class _Markup extends StatelessWidget {
   final String text;
   final ValueChanged<String>? onLink;
-  const _Markup({required this.text, required this.onLink});
+  final Widget Function(String id, double? height)? image;
+  const _Markup({required this.text, required this.onLink, this.image});
+
+  /// A line that is only `![caption](object ID)`.
+  static final _picture = RegExp(
+    r'^!\[([^\]]*)\]\(([A-Za-z0-9_=+/-]{8,128})\)$',
+  );
 
   static final _inline = RegExp(r'\*\*(.+?)\*\*|\*(.+?)\*|\[\[(.+?)\]\]');
 
@@ -466,6 +578,23 @@ class _Markup extends StatelessWidget {
       final trimmed = line.trimRight();
       if (trimmed.isEmpty) {
         blocks.add(const SizedBox(height: 8));
+        continue;
+      }
+      final picture = _picture.firstMatch(trimmed);
+      if (picture != null) {
+        final caption = picture[1]!.trim();
+        blocks.add(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                image?.call(picture[2]!, 320) ?? const SizedBox.shrink(),
+                if (caption.isNotEmpty) Text(caption, style: theme.bodySmall),
+              ],
+            ),
+          ),
+        );
         continue;
       }
       final heading = RegExp(r'^(#{1,3}) (.*)$').firstMatch(trimmed);

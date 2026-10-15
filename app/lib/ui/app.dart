@@ -334,6 +334,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
 
   /// The plugin section open, for [Destination.plugin].
   PluginSection? pluginSection;
+
+  /// An object of [pluginSection]'s plugin to show, from search or the
+  /// activity feed; its page is told once.
+  String? pluginObject;
   StreamSubscription<PluginNotice>? _pluginNotices;
   StreamSubscription<PluginOffered>? _pluginOffers;
   StreamSubscription<void>? _pluginSections;
@@ -1832,6 +1836,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           )
           ..link = network
           ..fetch = ((o) => files.readBytes(o, limit: PluginPackage.maxBytes))
+          ..readFile = ((o, limit) => files.readBytes(o, limit: limit))
           ..nameOf = name
           ..follow = notes.state.subscribe
           ..openTun = openPluginInterface
@@ -1981,6 +1986,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       );
     }
     final room = activeRoom;
+    // Told once: a later return to the page keeps where the person went.
+    final object = pluginObject;
+    pluginObject = null;
     return PluginView(
       key: ValueKey(section.id),
       plugins: plugins,
@@ -1993,9 +2001,76 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
               'name': '${room.data['name']}',
             }
           : {'scope': scope?.name ?? 'all'},
+      object: object,
       nameOf: name,
       avatar: (person, size) => conversationAvatar(person, radius: size / 2),
+      image: (plugin, id, height) => _PluginPicture(
+        key: ValueKey(id),
+        node: node,
+        files: files,
+        plugin: plugin,
+        id: id,
+        height: height,
+        online: network.running,
+      ),
+      pickFile: pickPluginFile,
     );
+  }
+
+  /// Asks for a file for [plugin] to attach (see [PluginFilePicker]) and
+  /// stores it encrypted, as a message's attachment is.
+  Future<Json?> pickPluginFile(String plugin, String accept) async {
+    final picked = await FilePicker.pickFiles(
+      dialogTitle: accept == 'image' ? 'Choose a picture' : 'Choose a file',
+      type: accept == 'image' ? FileType.image : FileType.any,
+    );
+    final path = picked.firstOrNull?.path;
+    if (path == null) return null;
+    try {
+      final stored = await files.store(path);
+      final handle = plugins?.addFile(plugin, stored);
+      if (handle == null) throw StateError('The plugin is not running');
+      return {'file': handle, 'name': stored['name'], 'size': stored['size']};
+    } catch (e) {
+      notice('Could not add the file: $e');
+      return null;
+    }
+  }
+
+  /// Opens [o], an object of a plugin's, in that plugin's page, in the
+  /// scope it belongs to: from search or the activity feed.
+  Future<void> openPluginObject(SignedObject o) async {
+    final plugin = PluginKinds.pluginOf(o.kind);
+    final sections = pluginSections.where((s) => s.plugin == plugin);
+    final group = Activity.pluginGroup(o);
+    final kind = group != null
+        ? ScopeKind.group
+        : o.isPublic
+        ? ScopeKind.public
+        : ScopeKind.personal;
+    final section =
+        sections.where((s) => s.allows(kind)).firstOrNull ??
+        sections.firstOrNull;
+    if (section == null) {
+      notice('Switch its plugin on to open this');
+      return;
+    }
+    final room = group == null ? null : await activityRoom(group);
+    if (!mounted) return;
+    update(() {
+      if (room != null) {
+        showGroup(room, section: Destination.plugin);
+      } else if (kind == ScopeKind.public) {
+        setScope(ScopeKind.public);
+      } else {
+        reveal(ScopeKind.personal);
+      }
+      tab = Destination.plugin;
+      pluginSection = section;
+      pluginObject = o.id;
+      showConversation = false;
+      showForum = false;
+    });
   }
 
   Future<Uint8List?> pickPluginPackage() async {
@@ -2070,4 +2145,66 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       redraw();
     }
   }
+}
+
+/// The picture attached to [plugin]'s object [id], as a plugin's `Image`
+/// widget or a `![…](id)` line draws it: through [InlineImage], so it is
+/// decoded off the UI isolate and cached like a message's picture. Nothing
+/// for an object that is not the plugin's, not here yet, or not a picture.
+class _PluginPicture extends StatefulWidget {
+  final Node node;
+  final Files files;
+  final String plugin, id;
+  final double? height;
+  final bool online;
+  const _PluginPicture({
+    super.key,
+    required this.node,
+    required this.files,
+    required this.plugin,
+    required this.id,
+    required this.height,
+    required this.online,
+  });
+
+  @override
+  State<_PluginPicture> createState() => _PluginPictureState();
+}
+
+class _PluginPictureState extends State<_PluginPicture> {
+  late final Future<(SignedObject, Json)?> _found = _find();
+
+  Future<(SignedObject, Json)?> _find() async {
+    final o = widget.node.store.get(widget.id);
+    if (o == null || PluginKinds.pluginOf(o.kind) != widget.plugin) {
+      return null;
+    }
+    final payload = await widget.node.content(o);
+    return payload != null && isImagePayload(payload) ? (o, payload) : null;
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      FutureBuilder<(SignedObject, Json)?>(
+        future: _found,
+        builder: (context, snapshot) {
+          final found = snapshot.data;
+          if (found == null) {
+            return SizedBox(height: snapshot.hasData ? 0 : widget.height);
+          }
+          return ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: widget.height ?? double.infinity,
+            ),
+            child: InlineImage(
+              files: widget.files,
+              object: found.$1,
+              payload: found.$2,
+              online: widget.online,
+              height: widget.height,
+              fit: BoxFit.contain,
+            ),
+          );
+        },
+      );
 }

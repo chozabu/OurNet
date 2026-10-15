@@ -94,10 +94,55 @@ extension _DiscoveryPages on _OurNetAppState {
         ),
       );
     }
+    await _pluginHits(result);
     result.sort(
       (a, b) => b.item.object.created.compareTo(a.item.object.created),
     );
     return result;
+  }
+
+  /// What plugins that are switched on list under `search`: the fields
+  /// their manifests name, read here without calling them, the newest
+  /// object of each thing (a page's latest edit, say).
+  Future<void> _pluginHits(List<_SearchHit> result) async {
+    for (final listing in node.registry.searchable) {
+      final plugin = plugins?[listing.plugin];
+      if (plugin == null || !plugin.enabled) continue;
+      final seen = <String>{};
+      await for (final object in scanHistory([listing.kind])) {
+        if (!contentVisible(object)) continue;
+        final payload = await node.content(object);
+        if (payload == null || payload['deleted'] == true) continue;
+        // Newest first, so the first of each thing is its latest version.
+        if (!seen.add('${object.space}|${listing.keyOf(object, payload)}')) {
+          continue;
+        }
+        final title = PluginListing.line(payload, listing.title);
+        if (title == null) continue;
+        final group = Activity.pluginGroup(object);
+        final where = group != null
+            ? knownRooms
+                      .where((r) => r.object.space == group)
+                      .map((r) => '${r.data['name']}')
+                      .firstOrNull ??
+                  'A group'
+            : object.isPublic
+            ? 'Public'
+            : 'Only you';
+        result.add(
+          _SearchHit(
+            EverydayItem(object, {
+              'title': title,
+              'text': payload[listing.text] is String
+                  ? payload[listing.text]
+                  : '',
+            }),
+            'Plugins',
+            '${plugin.manifest.name} · $where',
+          ),
+        );
+      }
+    }
   }
 
   Future<void> openSource(EverydayItem item, [EverydayItem? room]) async {
@@ -106,6 +151,10 @@ extension _DiscoveryPages on _OurNetAppState {
       return;
     }
     final o = item.object;
+    if (PluginKinds.pluginOf(o.kind) != null) {
+      await openPluginObject(o);
+      return;
+    }
     if (o.kind == Calendar.eventKind) {
       await openEventLink(Calendar.link(o.space, item.data['event'] as String));
       return;
@@ -182,6 +231,7 @@ extension _DiscoveryPages on _OurNetAppState {
               'Forums',
               'Files',
               'Calendar',
+              if (node.registry.searchable.isNotEmpty) 'Plugins',
             ])
               Padding(
                 padding: const EdgeInsets.only(right: 8),

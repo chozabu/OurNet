@@ -11,6 +11,7 @@ extension _ActivityPage on _OurNetAppState {
     ActivitySection.files: 'Files',
     ActivitySection.people: 'People',
     ActivitySection.chat: 'Chat',
+    ActivitySection.plugins: 'Plugins',
   };
 
   static const _sectionIcons = {
@@ -20,6 +21,7 @@ extension _ActivityPage on _OurNetAppState {
     ActivitySection.files: Icons.folder_outlined,
     ActivitySection.people: Icons.person_add_alt,
     ActivitySection.chat: Icons.chat_bubble_outline,
+    ActivitySection.plugins: Icons.extension_outlined,
   };
 
   /// The sections switched off, as saved; chat is off until switched on.
@@ -233,6 +235,11 @@ extension _ActivityPage on _OurNetAppState {
           'A group';
     }
     final kind = e.items.firstOrNull?.object.kind;
+    if (e.section == ActivitySection.plugins) {
+      final plugin = PluginKinds.pluginOf(kind ?? '');
+      final name = plugins?[plugin ?? '']?.manifest.name ?? plugin ?? '';
+      return e.public ? '$name · Public' : name;
+    }
     return switch (kind) {
       'post' => forumName(e.space),
       PublicChats.messageKind => publicChats.info(e.space)?.name ?? e.space,
@@ -250,6 +257,9 @@ extension _ActivityPage on _OurNetAppState {
   String? activityLine(ActivityItem item) {
     final d = item.data;
     if (d == null) return null;
+    if (node.registry.activityOf(item.object.kind) case final listing?) {
+      return PluginListing.line(d, listing.title);
+    }
     final text = d['title'] ?? d['name'] ?? d['text'];
     if (text is! String) return null;
     final line = text.trim().replaceAll(RegExp(r'\s+'), ' ');
@@ -293,6 +303,11 @@ extension _ActivityPage on _OurNetAppState {
         return n == 1 ? 'shared a file' : 'shared $n files';
       case ActivitySection.chat:
         return n == 1 ? 'sent a message' : 'sent $n messages';
+      case ActivitySection.plugins:
+        final says =
+            node.registry.activityOf(first.object.kind)?.says ??
+            'added something';
+        return n == 1 ? says : '$says · $n times';
     }
   }
 
@@ -442,6 +457,10 @@ extension _ActivityPage on _OurNetAppState {
     if (item == null) return;
     final o = item.object;
     final data = item.data;
+    if (e.section == ActivitySection.plugins) {
+      await openPluginObject(o);
+      return;
+    }
     switch (o.kind) {
       case 'note_op':
         await openNote(e.space);
