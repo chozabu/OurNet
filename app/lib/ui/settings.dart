@@ -638,7 +638,7 @@ extension _SettingsPages on _OurNetAppState {
         title: const Text('Network'),
         subtitle: Text(
           network.error ??
-              'Internet mode uses iroh’s default discovery and relays. Local mode disables relays.',
+              'Internet mode uses iroh’s address lookup and relays. Local mode disables relays.',
         ),
         trailing: OutlinedButton(
           onPressed: () => act(
@@ -646,6 +646,38 @@ extension _SettingsPages on _OurNetAppState {
           ),
           child: Text(network.running ? 'Disconnect' : 'Connect locally'),
         ),
+      ),
+      ListTile(
+        title: const Text('Relays'),
+        subtitle: Text(
+          network.extraRelays.isEmpty
+              ? 'Public relays, used when devices can’t connect directly. Tap to add your own.'
+              : '${network.extraRelays.length} of your own, then the public relays',
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => act(() async {
+          final text = await ask(
+            context,
+            'Your own relays',
+            initial: network.extraRelays.join('\n'),
+            hint: 'https://relay.example.com, one per line',
+            lines: 3,
+          );
+          if (text == null) return;
+          final urls = [
+            for (final line in text.split(RegExp(r'[\s,]+')))
+              if (line.isNotEmpty) line,
+          ];
+          for (final url in urls) {
+            if (Uri.tryParse(url)?.scheme case 'http' || 'https') continue;
+            throw StateError('Not a relay URL: $url');
+          }
+          network.extraRelays = urls;
+          if (network.running && !network.local) {
+            await network.restart('relays changed');
+          }
+          refresh();
+        }),
       ),
       if (Platform.isAndroid)
         SwitchListTile(

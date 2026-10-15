@@ -63,6 +63,8 @@ Health deviceHealth(PeerNetwork network, String device, {DateTime? now}) {
   final details = <String>[
     if (synced != null) 'Last synced ${_ago(synced, now)}' else 'Never synced',
     if (inbound != null) 'Last reached this device ${_ago(inbound, now)}',
+    if (network.paths[device] case final path?)
+      'Last connection ${path.describe()}',
     ?buildNote(network, device),
   ];
   if (!network.running) {
@@ -483,6 +485,7 @@ class ConnectionHealthCard extends StatelessWidget {
 /// Sync health for diagnostics; device IDs are shortened, nothing secret.
 Map<String, Object?> syncDiagnostics(PeerNetwork network) => {
   'mode': network.local ? 'local' : 'internet',
+  'relayList': network.relayUrls,
   'relays': [
     for (final r in network.relays)
       {'url': r.url, 'connected': r.connected, 'error': r.error},
@@ -504,6 +507,7 @@ Map<String, Object?> syncDiagnostics(PeerNetwork network) => {
         'error': network.syncErrors[device],
         'build': network.peerBuilds[device],
         'version': network.peerVersions[device],
+        'path': network.paths[device]?.toJson(),
       },
   ],
 };

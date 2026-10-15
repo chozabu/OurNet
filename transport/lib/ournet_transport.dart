@@ -3,3 +3,4 @@ export 'src/files.dart';
 export 'src/drive_sync.dart';
 export 'src/folder_sync.dart';
 export 'src/traffic.dart';
+export 'src/peer_path.dart';

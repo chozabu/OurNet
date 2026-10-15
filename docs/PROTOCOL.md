@@ -433,8 +433,9 @@ garbage collection, retention controls and resumable large-file UX remain work.
 
 ## Infrastructure and media
 
-Local mode disables iroh relays. Internet mode uses iroh's default discovery and
-relay infrastructure; replacing those defaults needs operator configuration.
+Local mode disables iroh relays. Internet mode uses iroh's default address
+lookup and a relay list: relays added in Settings, OurNet's own when deployed,
+then number0's public relays.
 There is no application account server. Media uses WebRTC, with signalling over
 admitted iroh connections. Media uses the user's configured
 STUN/TURN servers, or public STUN servers (Google, Cloudflare) when none are

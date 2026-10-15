@@ -7,6 +7,7 @@ import 'package:iroh_quic/iroh_quic.dart' as iroh;
 import 'package:ournet_core/ournet_core.dart';
 import 'sync_queue.dart';
 import 'traffic.dart';
+import 'peer_path.dart';
 
 part 'pairing.dart';
 part 'friend_invitation.dart';
@@ -132,6 +133,52 @@ class PeerNetwork implements PluginLink {
 
   /// Whether this network uses relays and address lookup.
   bool local = false;
+
+  /// n0's public relays (iroh 1.0 `defaults::prod`). Always listed beside
+  /// [ourRelays], so that neither operator alone can cut devices off.
+  static const n0Relays = [
+    'https://use1-1.relay.n0.iroh.link./',
+    'https://usw1-1.relay.n0.iroh.link./',
+    'https://euc1-1.relay.n0.iroh.link./',
+    'https://aps1-1.relay.n0.iroh.link./',
+  ];
+
+  /// Relays run for OurNet. Empty until one is deployed.
+  static const ourRelays = <String>[];
+
+  /// Relays added in settings, kept on this device only.
+  List<String> get extraRelays => [
+    for (final url in node.store.setting('relays') as List? ?? const [])
+      if (url is String) url,
+  ];
+  set extraRelays(List<String> urls) => node.store.set('relays', urls);
+
+  /// Every relay this device may use as its home relay; iroh picks the one
+  /// that answers fastest and moves to another when it fails. Peers reach
+  /// a device through the relay its address names, so devices with
+  /// different lists still connect.
+  List<String> get relayUrls => {
+    ...extraRelays,
+    ...ourRelays,
+    ...n0Relays,
+  }.toList();
+
+  /// [relayUrls] that parse: one bad entry in settings must not stop the
+  /// network.
+  iroh.RelayMap _relayMap() {
+    final urls = <iroh.RelayUrl>[];
+    for (final url in relayUrls) {
+      try {
+        urls.add(iroh.RelayUrl.parse(url));
+      } catch (_) {
+        log('Ignoring relay $url: not a relay URL');
+      }
+    }
+    return iroh.RelayMap(urls);
+  }
+
+  /// How each device was last reached, from its connections' path events.
+  final Map<String, PeerPath> paths = {};
 
   final Map<String, DateTime> _heardAt = {};
 
@@ -463,7 +510,9 @@ class PeerNetwork implements PluginLink {
           await node.identity.deviceKey.extractPrivateKeyBytes(),
         ),
         alpns: [_alpn],
-        relayMode: local ? iroh.RelayMode.disabled : iroh.RelayMode.n0Default,
+        relayMode: local
+            ? iroh.RelayMode.disabled
+            : iroh.RelayMode.custom(_relayMap()),
       );
       error = null;
       this.local = local;
@@ -626,6 +675,53 @@ class PeerNetwork implements PluginLink {
   /// Outgoing connections opened since this network was created.
   int dialed = 0;
 
+  /// Records the path [connection] to [device] takes in [paths]. The path
+  /// chosen during the handshake is selected before this subscribes, so
+  /// until a later selection is seen, a direct path that opens or closes
+  /// (iroh closes every path as the connection ends) is taken as the one
+  /// used: iroh prefers a direct path whenever one works.
+  void _watchPath(iroh.Connection connection, String device) {
+    var selected = false;
+    PeerPath? seen;
+    void note(String remoteAddr, {required bool select}) {
+      final path = PeerPath.parse(remoteAddr, DateTime.now());
+      if (path == null) return;
+      if (select) {
+        selected = true;
+      } else if (selected || (seen?.isDirect ?? false) && !path.isDirect) {
+        return;
+      }
+      seen = path;
+      final last = paths[device];
+      paths[device] = path;
+      if (last?.kind != path.kind) notifyListeners();
+    }
+
+    final StreamSubscription<iroh.PathEvent> events;
+    try {
+      events = connection.pathEvents().listen((event) {
+        switch (event) {
+          case iroh.PathSelected(:final remoteAddr):
+            note(remoteAddr, select: true);
+          case iroh.PathOpened(:final remoteAddr):
+          case iroh.PathClosed(:final remoteAddr):
+            note(remoteAddr, select: false);
+          default:
+        }
+      }, onError: (Object _) {});
+    } catch (_) {
+      return;
+    }
+    // The last events (paths closing) follow the connection's end.
+    unawaited(
+      connection
+          .closed()
+          .then((_) {}, onError: (Object _) {})
+          .then((_) => Future<void>.delayed(const Duration(seconds: 2)))
+          .whenComplete(events.cancel),
+    );
+  }
+
   final _accounted = Expando<bool>();
 
   /// Wire bytes of the connections still open.
@@ -666,6 +762,7 @@ class PeerNetwork implements PluginLink {
         connection.close();
         throw StateError('Connection cancelled');
       }
+      _watchPath(connection, device);
       return connection;
     });
     try {
@@ -1223,6 +1320,7 @@ class PeerNetwork implements PluginLink {
           connection.close();
           continue;
         }
+        if (admitted) _watchPath(connection, peer);
         if (_activeInbound >= maxInbound && _idleInbound.isEmpty) {
           // An admitted device is told to come back shortly, rather than
           // seeing a failure it would back off from for a minute or more.
@@ -1612,9 +1710,17 @@ class PeerNetwork implements PluginLink {
     var wait = watchdogWait * (1 << min(_watchdogRestarts, 4));
     if (wait > watchdogMaxWait) wait = watchdogMaxWait;
     if (DateTime.now().difference(since) < wait) return;
+    // Devices still reach this one without a relay (on the same network,
+    // say): the endpoint works, and rebuilding it would cut them off.
+    if (_reachedSince(DateTime.now().subtract(wait))) return;
     _watchdogRestarts++;
     unawaited(restart('relay unreachable').catchError((Object _) {}));
   }
+
+  /// Whether a device synced with or reached this one after [since].
+  bool _reachedSince(DateTime since) =>
+      lastSync.values.any((t) => t.isAfter(since)) ||
+      lastInbound.values.any((t) => t.isAfter(since));
 
   /// Rebuilds the endpoint (same identity, same automatic syncing) and syncs
   /// with everyone, unless [canRestart] or an open pairing says not now.

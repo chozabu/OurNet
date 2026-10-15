@@ -88,9 +88,24 @@ fact of friendship.
 | 4 | Stay connected (Android foreground service) | Fast delivery; ringing a sleeping phone | Implemented |
 | 4c | Windows notification area | The same on a desktop: closing the window no longer disconnects | Implemented |
 | 4b | Push wake-up (UnifiedPush) | The same with less battery, given a push server | Shelved (branch) |
-| 5 | Own relays, shared in contact cards | Dependence on number0's relays | Planned |
+| 5 | Own relays, shared in contact cards | Dependence on number0's relays | Relay list implemented; no OurNet relay deployed yet |
 | 6 | Call media over iroh when ICE fails | Calls behind carrier-grade NAT without TURN | Planned |
 | 7 | Packaged friend node (relay, carrier, push) | Making 3–5 one command to offer | Planned |
+
+### Relay list (implemented)
+
+Internet mode no longer binds with iroh's built-in default relays. It passes an
+explicit list: relays added in Settings (kept on that device), OurNet's own
+(`PeerNetwork.ourRelays`, empty until one is deployed), then number0's four
+public relays. iroh takes the fastest as the home relay and moves to another
+when it fails. A device's address names its home relay, and peers dial that
+relay directly, so devices with different lists still reach each other. An
+entry that is not a relay URL is skipped rather than stopping the network.
+
+Each device's health shows how it was last reached: direct on the local
+network, direct over the internet, or through which relay. This comes from
+iroh's path events on every admitted connection (`PeerNetwork.paths`, also in
+diagnostics).
 
 ### Default STUN (implemented)
 
@@ -154,7 +169,10 @@ service now reports default-network changes (`ConnectivityManager`), and
 `PeerNetwork.networkChanged` rebuilds the endpoint three seconds after a
 change settles (at most every 30 seconds), then syncs with everyone. A
 watchdog also rebuilds it when every home relay has been down for 90
-seconds, backing off to 15 minutes while it stays down. Neither happens
+seconds, backing off to 15 minutes while it stays down, unless a device has
+synced or reached this one within that time: then the endpoint works without
+a relay (on the same network, say), and a rebuild would only cut those direct
+connections. Neither happens
 during a call, or while a pairing or invitation is open; peers find the new
 endpoint by its ID through iroh's address lookup.
 
