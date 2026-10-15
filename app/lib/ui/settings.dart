@@ -444,399 +444,461 @@ extension _SettingsPages on _OurNetAppState {
     );
   }
 
-  Widget settings(BuildContext context) => ListView(
-    children: [
-      ListTile(
-        leading: node.avatars.of(node.person) == null
-            ? const Icon(Icons.account_circle_outlined)
-            : conversationAvatar(node.person, radius: 14),
-        title: const Text('Profile and devices'),
-        subtitle: const Text(
-          'Your name, picture, linked devices and device access',
-        ),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () => update(() => tab = Destination.profile),
-      ),
-      ListTile(
-        leading: const Icon(Icons.hub_outlined),
-        title: const Text('Network and connections'),
-        subtitle: const Text('Connection status, contacts and sync controls'),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () => update(() => tab = Destination.network),
-      ),
-      if (plugins != null)
-        ListTile(
-          leading: const Icon(Icons.extension_outlined),
-          title: const Text('Plugins'),
-          subtitle: Text(
-            plugins!.installed.isEmpty
-                ? 'Games, wikis and more, sandboxed'
-                : plugins!.installed.map((p) => p.manifest.name).join(', '),
+  /// Settings, or those matching [settingsSearch] while it is open.
+  Widget settings(BuildContext context) {
+    final entries = settingsEntries(context);
+    if (!settingsSearching) return ListView(children: entries);
+    final terms = settingsSearch.text.trim().toLowerCase().split(RegExp(r'\s+'))
+      ..removeWhere((t) => t.isEmpty);
+    final found = terms.isEmpty
+        ? entries
+        : [
+            for (final entry in entries)
+              if (settingWords(entry) case final words
+                  when terms.every(words.contains))
+                entry,
+          ];
+    return ListView(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: TextField(
+            controller: settingsSearch,
+            autofocus: true,
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search),
+              hintText: 'Search settings',
+              isDense: true,
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (_) => update(() {}),
           ),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => update(() => tab = Destination.plugins),
         ),
+        ...found,
+        if (found.isEmpty)
+          ListTile(
+            leading: const Icon(Icons.search_off),
+            title: const Text('No settings match'),
+            subtitle: Text(
+              'Search your notes, conversations and files for '
+              '“${settingsSearch.text.trim()}” instead',
+            ),
+            onTap: () => update(() {
+              search.text = settingsSearch.text.trim();
+              tab = Destination.search;
+              settingsSearching = false;
+            }),
+          ),
+      ],
+    );
+  }
+
+  /// The lowercase words a settings search matches [entry] by: a tile's
+  /// title and subtitle. Dividers and the activity log match nothing.
+  String settingWords(Widget entry) {
+    String text(Widget? w) => switch (w) {
+      Text(:final data?) => data,
+      Text(:final textSpan?) => textSpan.toPlainText(),
+      _ => '',
+    };
+    return switch (entry) {
+      ListTile(:final title, :final subtitle) ||
+      SwitchListTile(
+        :final title,
+        :final subtitle,
+      ) => '${text(title)} ${text(subtitle)}',
+      SpeechSettings() =>
+        'voice notes transcription speech text whisper dictation',
+      _ => '',
+    }.toLowerCase();
+  }
+
+  List<Widget> settingsEntries(BuildContext context) => [
+    ListTile(
+      leading: node.avatars.of(node.person) == null
+          ? const Icon(Icons.account_circle_outlined)
+          : conversationAvatar(node.person, radius: 14),
+      title: const Text('Profile and devices'),
+      subtitle: const Text(
+        'Your name, picture, linked devices and device access',
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => update(() => tab = Destination.profile),
+    ),
+    ListTile(
+      leading: const Icon(Icons.hub_outlined),
+      title: const Text('Network and connections'),
+      subtitle: const Text('Connection status, contacts and sync controls'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => update(() => tab = Destination.network),
+    ),
+    if (plugins != null)
       ListTile(
-        leading: const Icon(Icons.storage),
-        title: const Text('Storage'),
+        leading: const Icon(Icons.extension_outlined),
+        title: const Text('Plugins'),
         subtitle: Text(
-          '${bytesText(node.store.storedBytes)} used · ${bytesText(node.store.storageLimit)} limit',
-        ),
-        onTap: () => update(() => tab = Destination.storage),
-        trailing: const Icon(Icons.chevron_right),
-      ),
-      ListTile(
-        leading: const Icon(Icons.insights),
-        title: const Text('Network stats'),
-        subtitle: const Text(
-          'Live bandwidth, totals, per-device traffic and connection health',
+          plugins!.installed.isEmpty
+              ? 'Games, wikis and more, sandboxed'
+              : plugins!.installed.map((p) => p.manifest.name).join(', '),
         ),
         trailing: const Icon(Icons.chevron_right),
-        onTap: () => update(() => tab = Destination.stats),
+        onTap: () => update(() => tab = Destination.plugins),
       ),
-      ListTile(
-        leading: const Icon(Icons.archive_outlined),
-        title: const Text('Save a backup'),
-        subtitle: const Text(
-          'Everything in this profile in one zip, with your keys sealed under a passphrase',
-        ),
-        onTap: () async {
-          try {
-            if (await saveBackup(context, node)) notice('Backup saved');
-          } catch (e) {
-            notice('Could not save the backup: $e');
-          }
-        },
+    ListTile(
+      leading: const Icon(Icons.storage),
+      title: const Text('Storage'),
+      subtitle: Text(
+        '${bytesText(node.store.storedBytes)} used · ${bytesText(node.store.storageLimit)} limit',
       ),
-      ListTile(
-        leading: const Icon(Icons.unarchive_outlined),
-        title: const Text('Restore from a backup'),
-        subtitle: const Text('Replaces everything on this device'),
-        onTap: () => restoreBackup(
-          context,
-          node,
-          replacing: true,
-          stopApp: network.stop,
-        ).catchError((Object e) => notice('Could not restore: $e')),
+      onTap: () => update(() => tab = Destination.storage),
+      trailing: const Icon(Icons.chevron_right),
+    ),
+    ListTile(
+      leading: const Icon(Icons.insights),
+      title: const Text('Network stats'),
+      subtitle: const Text(
+        'Live bandwidth, totals, per-device traffic and connection health',
       ),
-      ListTile(
-        leading: const Icon(Icons.bug_report_outlined),
-        title: const Text('Diagnostics'),
-        subtitle: const Text('Status and problem reports'),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () => openDiagnostics(context),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => update(() => tab = Destination.stats),
+    ),
+    ListTile(
+      leading: const Icon(Icons.archive_outlined),
+      title: const Text('Save a backup'),
+      subtitle: const Text(
+        'Everything in this profile in one zip, with your keys sealed under a passphrase',
       ),
-      SwitchListTile(
-        title: const Text('Compact spacing'),
-        value: compact,
-        onChanged: (value) {
-          update(() => compact = value);
-          node.store.set('compact', value);
-        },
+      onTap: () async {
+        try {
+          if (await saveBackup(context, node)) notice('Backup saved');
+        } catch (e) {
+          notice('Could not save the backup: $e');
+        }
+      },
+    ),
+    ListTile(
+      leading: const Icon(Icons.unarchive_outlined),
+      title: const Text('Restore from a backup'),
+      subtitle: const Text('Replaces everything on this device'),
+      onTap: () => restoreBackup(
+        context,
+        node,
+        replacing: true,
+        stopApp: network.stop,
+      ).catchError((Object e) => notice('Could not restore: $e')),
+    ),
+    ListTile(
+      leading: const Icon(Icons.bug_report_outlined),
+      title: const Text('Diagnostics'),
+      subtitle: const Text('Status and problem reports'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => openDiagnostics(context),
+    ),
+    SwitchListTile(
+      title: const Text('Compact spacing'),
+      value: compact,
+      onChanged: (value) {
+        update(() => compact = value);
+        node.store.set('compact', value);
+      },
+    ),
+    SwitchListTile(
+      title: const Text('Show names in direct messages'),
+      subtitle: const Text(
+        'Put the sender\'s name above their messages, as in group chats.',
       ),
-      SwitchListTile(
-        title: const Text('Show names in direct messages'),
-        subtitle: const Text(
-          'Put the sender\'s name above their messages, as in group chats.',
-        ),
-        value: showSenderNames,
-        onChanged: (value) => update(() => node.store.set('chatNames', value)),
-      ),
-      ListTile(
-        title: const Text('Accent colour'),
-        subtitle: Wrap(
-          spacing: 8,
-          children: [
-            for (final colour in [
-              0xff137d72,
-              0xff365bd6,
-              0xff8654b5,
-              0xffb65d23,
-            ])
-              IconButton(
-                tooltip: 'Use ${colour.toRadixString(16)} accent',
-                onPressed: () {
-                  update(() => accent = colour);
-                  node.store.set('accent', colour);
-                },
-                icon: Icon(
-                  accent == colour ? Icons.check_circle : Icons.circle,
-                  color: Color(colour),
-                ),
+      value: showSenderNames,
+      onChanged: (value) => update(() => node.store.set('chatNames', value)),
+    ),
+    ListTile(
+      title: const Text('Accent colour'),
+      subtitle: Wrap(
+        spacing: 8,
+        children: [
+          for (final colour in [0xff137d72, 0xff365bd6, 0xff8654b5, 0xffb65d23])
+            IconButton(
+              tooltip: 'Use ${colour.toRadixString(16)} accent',
+              onPressed: () {
+                update(() => accent = colour);
+                node.store.set('accent', colour);
+              },
+              icon: Icon(
+                accent == colour ? Icons.check_circle : Icons.circle,
+                color: Color(colour),
               ),
-          ],
-        ),
+            ),
+        ],
       ),
-      SwitchListTile(
-        title: const Text('Notifications'),
-        subtitle: Text(
-          Platform.isAndroid
-              ? 'Messages, replies to you and forum activity. Choose which sound in Android settings.'
-              : 'Messages, replies to you and forum activity.',
+    ),
+    SwitchListTile(
+      title: const Text('Notifications'),
+      subtitle: Text(
+        Platform.isAndroid
+            ? 'Messages, replies to you and forum activity. Choose which sound in Android settings.'
+            : 'Messages, replies to you and forum activity.',
+      ),
+      value: notifications.enabled,
+      onChanged: (v) => act(() async {
+        await notifications.setEnabled(v);
+        refresh();
+      }),
+    ),
+    SwitchListTile(
+      title: const Text('Show message text in notifications'),
+      subtitle: const Text(
+        'Off shows only who wrote. Android can also hide it on the lock screen.',
+      ),
+      value: notifications.previews,
+      onChanged: notifications.enabled
+          ? (v) => update(() => node.store.set('notificationPreviews', v))
+          : null,
+    ),
+    SwitchListTile(
+      title: const Text('Typing indicators'),
+      subtitle: const Text(
+        'Let friends see when you are typing to them, and see when they are. '
+        'Sent live only, to devices that are online.',
+      ),
+      value: typing.enabled,
+      onChanged: (v) => update(() => node.store.set('typingIndicator', v)),
+    ),
+    SwitchListTile(
+      title: const Text('Show public forums and chats to friends'),
+      subtitle: const Text(
+        'Friends can find the public forums and chats you follow under '
+        'Browse. You can also turn it off for one forum or chat from its menu.',
+      ),
+      value: listings.enabled,
+      onChanged: (v) => act(() async {
+        await listings.setEnabled(v);
+        refresh();
+      }),
+    ),
+    const Divider(),
+    SpeechSettings(speech: speech, notice: notice),
+    ListTile(
+      leading: const Icon(Icons.label_outline),
+      title: const Text('Note labels'),
+      subtitle: const Text(
+        'Private to you and synced between your own devices',
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () async {
+        await manageLabels(context, notes.state, notice: notice);
+        update(() {});
+      },
+    ),
+    const Divider(),
+    SwitchListTile(
+      title: const Text('Dark appearance'),
+      value: dark,
+      onChanged: (v) {
+        update(() => dark = v);
+        node.store.set('dark', v);
+      },
+    ),
+    ListTile(
+      title: const Text('Network'),
+      subtitle: Text(
+        network.error ??
+            'Internet mode uses iroh’s address lookup and relays. Local mode disables relays.',
+      ),
+      trailing: OutlinedButton(
+        onPressed: () => act(
+          network.running ? network.stop : () => network.start(local: true),
         ),
-        value: notifications.enabled,
+        child: Text(network.running ? 'Disconnect' : 'Connect locally'),
+      ),
+    ),
+    ListTile(
+      title: const Text('Relays'),
+      subtitle: Text(
+        [
+          if (network.extraRelays.isNotEmpty)
+            'Yours: ${relayHosts(network.extraRelays)}',
+          'Built in: ${relayHosts(builtInRelays)}',
+          'Used when devices can’t connect directly. Tap to add your own.',
+        ].join('\n'),
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => act(() async {
+        final text = await ask(
+          context,
+          'Your own relays',
+          initial: network.extraRelays.join('\n'),
+          hint:
+              'https://relay.example.com, one per line. The built-in '
+              'relays are always used as well.',
+          lines: 3,
+        );
+        if (text == null) return;
+        final urls = [
+          for (final line in text.split(RegExp(r'[\s,]+')))
+            if (line.isNotEmpty) line,
+        ];
+        for (final url in urls) {
+          if (Uri.tryParse(url)?.scheme case 'http' || 'https') continue;
+          throw StateError('Not a relay URL: $url');
+        }
+        network.extraRelays = urls;
+        if (network.running && !network.local) {
+          await network.restart('relays changed');
+        }
+        refresh();
+      }),
+    ),
+    if (Platform.isAndroid)
+      SwitchListTile(
+        title: const Text('Background sync'),
+        subtitle: const Text(
+          'Exchange with friends about every 15 minutes while OurNet is closed, so messages arrive without both of you having it open.',
+        ),
+        value: node.store.setting('backgroundSync') != false,
         onChanged: (v) => act(() async {
-          await notifications.setEnabled(v);
+          await scheduleBackgroundSync(enabled: v);
+          node.store.set('backgroundSync', v);
           refresh();
         }),
       ),
+    if (Platform.isAndroid && ownsProfile)
       SwitchListTile(
-        title: const Text('Show message text in notifications'),
+        title: const Text('Stay connected'),
         subtitle: const Text(
-          'Off shows only who wrote. Android can also hide it on the lock screen.',
+          'Keep a connection to friends open while OurNet is closed, so messages and calls arrive straight away. Without it, calls ring only while OurNet is open. Android shows a notification while it is on, and it uses more battery.',
         ),
-        value: notifications.previews,
-        onChanged: notifications.enabled
-            ? (v) => update(() => node.store.set('notificationPreviews', v))
-            : null,
+        value: stayConnected,
+        onChanged: node.store.setting('autoConnect') == false
+            ? null
+            : (v) => act(() async {
+                node.store.set('stayConnected', v);
+                await keepConnected(v);
+                await checkConnectionService();
+                refresh();
+              }),
       ),
-      SwitchListTile(
-        title: const Text('Typing indicators'),
-        subtitle: const Text(
-          'Let friends see when you are typing to them, and see when they are. '
-          'Sent live only, to devices that are online.',
-        ),
-        value: typing.enabled,
-        onChanged: (v) => update(() => node.store.set('typingIndicator', v)),
-      ),
-      SwitchListTile(
-        title: const Text('Show public forums and chats to friends'),
-        subtitle: const Text(
-          'Friends can find the public forums and chats you follow under '
-          'Browse. You can also turn it off for one forum or chat from its menu.',
-        ),
-        value: listings.enabled,
-        onChanged: (v) => act(() async {
-          await listings.setEnabled(v);
-          refresh();
-        }),
-      ),
-      const Divider(),
-      SpeechSettings(speech: speech, notice: notice),
+    if (Platform.isAndroid &&
+        stayConnected &&
+        serviceStatus?.batteryRestricted == true)
       ListTile(
-        leading: const Icon(Icons.label_outline),
-        title: const Text('Note labels'),
+        leading: const Icon(Icons.battery_alert_outlined),
+        title: const Text('Battery optimisation may cut OurNet off'),
         subtitle: const Text(
-          'Private to you and synced between your own devices',
-        ),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () async {
-          await manageLabels(context, notes.state, notice: notice);
-          update(() {});
-        },
-      ),
-      const Divider(),
-      SwitchListTile(
-        title: const Text('Dark appearance'),
-        value: dark,
-        onChanged: (v) {
-          update(() => dark = v);
-          node.store.set('dark', v);
-        },
-      ),
-      ListTile(
-        title: const Text('Network'),
-        subtitle: Text(
-          network.error ??
-              'Internet mode uses iroh’s address lookup and relays. Local mode disables relays.',
+          'With the screen off, this phone may stop OurNet or hold back its network, so messages and your location stop reaching friends. In OurNet’s settings, set Battery to Unrestricted.',
         ),
         trailing: OutlinedButton(
-          onPressed: () => act(
-            network.running ? network.stop : () => network.start(local: true),
-          ),
-          child: Text(network.running ? 'Disconnect' : 'Connect locally'),
+          onPressed: () => act(() async {
+            if (!await openBatterySettings()) {
+              notice('Open Android Settings › Apps › OurNet › Battery');
+            }
+          }),
+          child: const Text('Open'),
         ),
       ),
+    if (Platform.isAndroid &&
+        stayConnected &&
+        serviceStatus?.fullScreen == false)
       ListTile(
-        title: const Text('Relays'),
-        subtitle: Text(
-          [
-            if (network.extraRelays.isNotEmpty)
-              'Yours: ${relayHosts(network.extraRelays)}',
-            'Built in: ${relayHosts(builtInRelays)}',
-            'Used when devices can’t connect directly. Tap to add your own.',
-          ].join('\n'),
+        leading: const Icon(Icons.phone_locked_outlined),
+        title: const Text('Calls cannot wake the screen'),
+        subtitle: const Text(
+          'While the phone is locked, an incoming call only shows as a notification. Allow OurNet to show full-screen notifications to answer calls from the lock screen.',
         ),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () => act(() async {
-          final text = await ask(
-            context,
-            'Your own relays',
-            initial: network.extraRelays.join('\n'),
-            hint:
-                'https://relay.example.com, one per line. The built-in '
-                'relays are always used as well.',
-            lines: 3,
-          );
-          if (text == null) return;
-          final urls = [
-            for (final line in text.split(RegExp(r'[\s,]+')))
-              if (line.isNotEmpty) line,
-          ];
-          for (final url in urls) {
-            if (Uri.tryParse(url)?.scheme case 'http' || 'https') continue;
-            throw StateError('Not a relay URL: $url');
-          }
-          network.extraRelays = urls;
-          if (network.running && !network.local) {
-            await network.restart('relays changed');
-          }
+        trailing: OutlinedButton(
+          onPressed: () => act(() async {
+            if (!await openFullScreenSettings()) {
+              notice(
+                'Open Android Settings › Apps › OurNet › Full screen notifications',
+              );
+            }
+          }),
+          child: const Text('Open'),
+        ),
+      ),
+    if (Platform.isAndroid &&
+        stayConnected &&
+        serviceStatus != null &&
+        !serviceStatus!.running)
+      ListTile(
+        leading: const Icon(Icons.cloud_off_outlined),
+        title: const Text('Android stopped the connection'),
+        subtitle: const Text(
+          'OurNet is not staying connected in the background right now.',
+        ),
+        trailing: OutlinedButton(
+          onPressed: () => act(checkConnectionService),
+          child: const Text('Reconnect'),
+        ),
+      ),
+    if (Platform.isWindows)
+      SwitchListTile(
+        title: const Text('Keep running in the notification area'),
+        subtitle: const Text(
+          'Closing the window leaves OurNet connected to friends, so messages arrive and notify straight away. Quit from its icon.',
+        ),
+        value: keepInTray,
+        onChanged: (v) => act(() async {
+          node.store.set('keepInTray', v);
+          await SystemTray.keep(v);
           refresh();
         }),
       ),
-      if (Platform.isAndroid)
-        SwitchListTile(
-          title: const Text('Background sync'),
-          subtitle: const Text(
-            'Exchange with friends about every 15 minutes while OurNet is closed, so messages arrive without both of you having it open.',
-          ),
-          value: node.store.setting('backgroundSync') != false,
-          onChanged: (v) => act(() async {
-            await scheduleBackgroundSync(enabled: v);
-            node.store.set('backgroundSync', v);
-            refresh();
-          }),
-        ),
-      if (Platform.isAndroid && ownsProfile)
-        SwitchListTile(
-          title: const Text('Stay connected'),
-          subtitle: const Text(
-            'Keep a connection to friends open while OurNet is closed, so messages and calls arrive straight away. Without it, calls ring only while OurNet is open. Android shows a notification while it is on, and it uses more battery.',
-          ),
-          value: stayConnected,
-          onChanged: node.store.setting('autoConnect') == false
-              ? null
-              : (v) => act(() async {
-                  node.store.set('stayConnected', v);
-                  await keepConnected(v);
-                  await checkConnectionService();
-                  refresh();
-                }),
-        ),
-      if (Platform.isAndroid &&
-          stayConnected &&
-          serviceStatus?.batteryRestricted == true)
-        ListTile(
-          leading: const Icon(Icons.battery_alert_outlined),
-          title: const Text('Battery optimisation may cut OurNet off'),
-          subtitle: const Text(
-            'With the screen off, this phone may stop OurNet or hold back its network, so messages and your location stop reaching friends. In OurNet’s settings, set Battery to Unrestricted.',
-          ),
-          trailing: OutlinedButton(
-            onPressed: () => act(() async {
-              if (!await openBatterySettings()) {
-                notice('Open Android Settings › Apps › OurNet › Battery');
-              }
-            }),
-            child: const Text('Open'),
-          ),
-        ),
-      if (Platform.isAndroid &&
-          stayConnected &&
-          serviceStatus?.fullScreen == false)
-        ListTile(
-          leading: const Icon(Icons.phone_locked_outlined),
-          title: const Text('Calls cannot wake the screen'),
-          subtitle: const Text(
-            'While the phone is locked, an incoming call only shows as a notification. Allow OurNet to show full-screen notifications to answer calls from the lock screen.',
-          ),
-          trailing: OutlinedButton(
-            onPressed: () => act(() async {
-              if (!await openFullScreenSettings()) {
-                notice(
-                  'Open Android Settings › Apps › OurNet › Full screen notifications',
-                );
-              }
-            }),
-            child: const Text('Open'),
-          ),
-        ),
-      if (Platform.isAndroid &&
-          stayConnected &&
-          serviceStatus != null &&
-          !serviceStatus!.running)
-        ListTile(
-          leading: const Icon(Icons.cloud_off_outlined),
-          title: const Text('Android stopped the connection'),
-          subtitle: const Text(
-            'OurNet is not staying connected in the background right now.',
-          ),
-          trailing: OutlinedButton(
-            onPressed: () => act(checkConnectionService),
-            child: const Text('Reconnect'),
-          ),
-        ),
-      if (Platform.isWindows)
-        SwitchListTile(
-          title: const Text('Keep running in the notification area'),
-          subtitle: const Text(
-            'Closing the window leaves OurNet connected to friends, so messages arrive and notify straight away. Quit from its icon.',
-          ),
-          value: keepInTray,
-          onChanged: (v) => act(() async {
-            node.store.set('keepInTray', v);
-            await SystemTray.keep(v);
-            refresh();
-          }),
-        ),
-      if (Platform.isWindows && startsWithWindows != null)
-        SwitchListTile(
-          title: const Text('Start with Windows'),
-          subtitle: const Text(
-            'Open OurNet in the notification area when you sign in.',
-          ),
-          value: startsWithWindows!,
-          onChanged: (v) => act(() async {
-            await SystemTray.setStartsWithWindows(v);
-            update(() => startsWithWindows = v);
-          }),
-        ),
-      ListTile(
-        title: const Text('Call connectivity'),
+    if (Platform.isWindows && startsWithWindows != null)
+      SwitchListTile(
+        title: const Text('Start with Windows'),
         subtitle: const Text(
-          'STUN/TURN servers as a JSON array. Unset uses public STUN servers (none in local mode); an empty array uses direct candidates only.',
+          'Open OurNet in the notification area when you sign in.',
         ),
-        trailing: TextButton(
-          onPressed: () => act(() async {
-            final text = await ask(
-              context,
-              'ICE servers',
-              initial: jsonEncode(
-                node.store.setting('iceServers') ?? defaultIceServers,
-              ),
-              lines: 4,
-            );
-            if (text != null) {
-              final servers = jsonDecode(text);
-              if (servers is! List) throw StateError('Expected a JSON array');
-              node.store.set('iceServers', servers);
-            }
-          }),
-          child: const Text('Configure'),
-        ),
+        value: startsWithWindows!,
+        onChanged: (v) => act(() async {
+          await SystemTray.setStartsWithWindows(v);
+          update(() => startsWithWindows = v);
+        }),
       ),
-      const Divider(),
-      const ListTile(
-        title: Text('Prototype limits'),
-        subtitle: Text(
-          '64 MiB per file · 128 evidence records per received item, about 60 hops. No guaranteed incoming calls while the mobile app is suspended.',
-        ),
+    ListTile(
+      title: const Text('Call connectivity'),
+      subtitle: const Text(
+        'STUN/TURN servers as a JSON array. Unset uses public STUN servers (none in local mode); an empty array uses direct candidates only.',
       ),
-      const Padding(
-        padding: EdgeInsets.all(16),
-        child: Text(
-          'Network activity',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-      ),
-      ...network.events
-          .take(30)
-          .map(
-            (e) => Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: SelectableText(e),
+      trailing: TextButton(
+        onPressed: () => act(() async {
+          final text = await ask(
+            context,
+            'ICE servers',
+            initial: jsonEncode(
+              node.store.setting('iceServers') ?? defaultIceServers,
             ),
+            lines: 4,
+          );
+          if (text != null) {
+            final servers = jsonDecode(text);
+            if (servers is! List) throw StateError('Expected a JSON array');
+            node.store.set('iceServers', servers);
+          }
+        }),
+        child: const Text('Configure'),
+      ),
+    ),
+    const Divider(),
+    const ListTile(
+      title: Text('Prototype limits'),
+      subtitle: Text(
+        '64 MiB per file · 128 evidence records per received item, about 60 hops. No guaranteed incoming calls while the mobile app is suspended.',
+      ),
+    ),
+    const Padding(
+      padding: EdgeInsets.all(16),
+      child: Text(
+        'Network activity',
+        style: TextStyle(fontWeight: FontWeight.bold),
+      ),
+    ),
+    ...network.events
+        .take(30)
+        .map(
+          (e) => Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: SelectableText(e),
           ),
-    ],
-  );
+        ),
+  ];
 }

@@ -496,6 +496,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
 
   /// The network page's friend search and filter.
   final networkSearch = TextEditingController();
+
+  /// The Settings page's own search, open while [settingsSearching].
+  final settingsSearch = TextEditingController();
+  bool settingsSearching = false;
   String networkFilter = 'all';
   bool showArchivedChats = false;
 
@@ -1357,6 +1361,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     composerFocus.dispose();
     search.dispose();
     networkSearch.dispose();
+    settingsSearch.dispose();
     fileSearch.dispose();
     super.dispose();
   }
@@ -1631,11 +1636,25 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                       },
                       icon: Icon(dark ? Icons.light_mode : Icons.dark_mode),
                     ),
-                  IconButton(
-                    tooltip: 'Search everything',
-                    onPressed: () => update(() => tab = Destination.search),
-                    icon: const Icon(Icons.search),
-                  ),
+                  if (tab == Destination.settings)
+                    IconButton(
+                      tooltip: settingsSearching
+                          ? 'Close search'
+                          : 'Search settings',
+                      onPressed: () => update(() {
+                        settingsSearching = !settingsSearching;
+                        settingsSearch.clear();
+                      }),
+                      icon: Icon(
+                        settingsSearching ? Icons.search_off : Icons.search,
+                      ),
+                    )
+                  else
+                    IconButton(
+                      tooltip: 'Search everything',
+                      onPressed: () => update(() => tab = Destination.search),
+                      icon: const Icon(Icons.search),
+                    ),
                   if (wide)
                     IconButton(
                       tooltip: 'Your profile',
