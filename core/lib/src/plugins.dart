@@ -1461,7 +1461,7 @@ class Plugins {
 
   /// Encrypts [data] into stored chunks, as `Files.store` does a picked
   /// file, and returns the fields that describe it.
-  Future<Json> _storeFile(String name, Uint8List data) async {
+  Future<Json> storeFile(String name, Uint8List data) async {
     final key = List<int>.generate(32, (_) => _random.nextInt(256));
     final chunks = <String>[];
     for (var at = 0; at < data.length; at += fileChunkBytes) {
@@ -1628,7 +1628,7 @@ class Plugins {
           throw StateError('Files are at most 8 MiB');
         }
         if (_running[plugin.id] == null) throw StateError('Plugin not running');
-        return addFile(plugin.id, await _storeFile(name.trim(), body));
+        return addFile(plugin.id, await storeFile(name.trim(), body));
       case 'files.publish':
         final file = _running[plugin.id]?.files['${args['file']}'];
         if (file == null) throw StateError('No such file: store it first');

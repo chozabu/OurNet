@@ -92,12 +92,12 @@ class _PluginViewState extends State<PluginView> {
         ournetWidgets(
           nameOf: widget.nameOf,
           avatar: widget.avatar,
-          image: widget.image == null
-              ? null
-              : (id, height) => widget.image!(widget.plugin, id, height),
-          pickFile: widget.pickFile == null
-              ? null
-              : (accept) => widget.pickFile!(widget.plugin, accept),
+          // Read when used: a rebuilt view may bring other callbacks.
+          image: (id, height) =>
+              widget.image?.call(widget.plugin, id, height) ??
+              const SizedBox.shrink(),
+          pickFile: (accept) async =>
+              widget.pickFile?.call(widget.plugin, accept),
         ),
       );
     _loadLibrary();

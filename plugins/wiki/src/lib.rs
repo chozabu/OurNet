@@ -7,13 +7,25 @@
 //! The host hands every revision over once, so the plugin keeps a small
 //! index per space (title → newest revision) in its storage and fetches a
 //! page's text only to show it.
+//!
+//! A page longer than fits in an object keeps its whole text in a file
+//! attached to the revision, and the start of it in `body`, which is what
+//! versions before 0.2 show. Pictures are `x.wiki.image` objects carrying
+//! the picture as their file, shown by a `![caption](id)` line.
 
 use std::collections::BTreeMap;
 
-use ournet_plugin::{json, store, ui, Audience, Context, Object, Plugin, Scope, Value};
+use ournet_plugin::{files, json, store, ui, Audience, Context, Object, Plugin, Scope, Value};
 use serde::{Deserialize, Serialize};
 
 const KIND: &str = "x.wiki.page";
+const IMAGE: &str = "x.wiki.image";
+/// Bytes of a page kept in `body`; longer pages attach the whole text.
+/// Small enough that, escaped as JSON, it stays under the host's 64 KiB
+/// for a plugin's payload.
+const BODY_BYTES: usize = 24_000;
+/// The longest page: what a file may hold.
+const PAGE_BYTES: usize = 8 << 20;
 const PERSONAL: &str = "x.wiki";
 const COMMONS: &str = "x.wiki.commons";
 const SURFACE: &str = "Wiki";
@@ -122,10 +134,42 @@ impl Wiki {
         }
     }
 
+    /// A revision's text: its attached file when it has one (a long page),
+    /// else `body`. A file not here yet shows the start, and says so.
     fn body(id: &str) -> String {
-        ournet_plugin::get(id)
-            .map(|o| o.json()["body"].as_str().unwrap_or("").to_string())
-            .unwrap_or_default()
+        let Some(o) = ournet_plugin::get(id) else { return String::new() };
+        let p = o.json();
+        let start = p["body"].as_str().unwrap_or("").to_string();
+        if p.get("chunks").is_none() {
+            return start;
+        }
+        match files::read(id) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(e) => format!("{start}\n\n*The rest of this page is not here yet ({e}).*"),
+        }
+    }
+
+    fn to(&self) -> Audience {
+        match self.audience {
+            Where::Personal => Audience::Personal,
+            Where::Group => Audience::Group,
+            Where::Public => Audience::Public,
+        }
+    }
+
+    /// Publishes a picture the person picked, where the page lives, and
+    /// adds a line showing it to the draft.
+    fn add_picture(&mut self, file: &str, name: &str) {
+        match files::publish(IMAGE, &self.space, self.to(), &json!({}), file) {
+            Ok(id) => {
+                let caption: String = name.chars().filter(|c| !"[]()".contains(*c)).collect();
+                if !self.draft_body.is_empty() && !self.draft_body.ends_with('\n') {
+                    self.draft_body.push('\n');
+                }
+                self.draft_body.push_str(&format!("![{caption}]({id})\n"));
+            }
+            Err(e) => ui::notify("Could not add the picture", &e),
+        }
     }
 
     fn show(&mut self) {
@@ -208,6 +252,8 @@ impl Wiki {
                             let body = p["body"].as_str().unwrap_or("");
                             let summary = if p["deleted"].as_bool() == Some(true) {
                                 "Deleted".to_string()
+                            } else if let Some(size) = p["size"].as_u64().filter(|_| p.get("chunks").is_some()) {
+                                format!("A long page, {} KB", size.div_ceil(1024))
                             } else {
                                 format!("{} characters", body.chars().count())
                             };
@@ -271,16 +317,27 @@ impl Wiki {
             .as_ref()
             .and_then(|k| self.index.get(&self.space)?.get(k))
             .map(|r| r.id.clone());
-        let mut payload = json!({"title": title, "body": self.draft_body});
+        let text = &self.draft_body;
+        if text.len() > PAGE_BYTES {
+            ui::notify("Could not save", "A page is at most 8 MB");
+            return;
+        }
+        // A long page keeps its start in `body` and all of it in a file.
+        let mut start = text.len().min(BODY_BYTES);
+        while !text.is_char_boundary(start) {
+            start -= 1;
+        }
+        let mut payload = json!({"title": title, "body": &text[..start]});
         if let Some(base) = base {
             payload["base"] = base.into();
         }
-        let to = match self.audience {
-            Where::Personal => Audience::Personal,
-            Where::Group => Audience::Group,
-            Where::Public => Audience::Public,
+        let published = if start < text.len() {
+            files::store("page.md", text.as_bytes())
+                .and_then(|file| files::publish(KIND, &self.space, self.to(), &payload, &file))
+        } else {
+            ournet_plugin::publish(KIND, &self.space, self.to(), &payload)
         };
-        match ournet_plugin::publish(KIND, &self.space, to, &payload) {
+        match published {
             Ok(_) => {
                 // The index takes it when the host hands it back.
                 self.page = Some(key(&title));
@@ -340,7 +397,15 @@ impl Plugin for Wiki {
         self.place = place;
         let space = self.space.clone();
         self.load_index(&space);
-        self.show();
+        // Opened from search or the activity feed: show that page.
+        let page = context
+            .object
+            .and_then(|id| ournet_plugin::get(&id))
+            .filter(|o| o.kind == KIND && o.space == self.space);
+        match page.and_then(|o| o.json()["title"].as_str().map(String::from)) {
+            Some(title) => self.open_page(&title),
+            None => self.show(),
+        }
     }
 
     fn on_event(&mut self, _surface: &str, name: &str, args: Value) {
@@ -374,6 +439,10 @@ impl Plugin for Wiki {
             "body" => self.draft_body = text("value"),
             "save" => {
                 self.save();
+                self.show();
+            }
+            "picture" => {
+                self.add_picture(&text("file"), &text("name"));
                 self.show();
             }
             "cancel" => {

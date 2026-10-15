@@ -67,6 +67,9 @@ class Rig {
     String id,
     String surface, {
     Json context = const {'scope': 'personal'},
+    PluginFilePicker? pickFile,
+    PluginImage? image,
+    String? object,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -83,6 +86,9 @@ class Rig {
                 context: context,
                 nameOf: (p) => p == node.person ? 'You' : 'Friend',
                 avatar: (p, size) => CircleAvatar(radius: size / 2),
+                pickFile: pickFile,
+                image: image,
+                object: object,
               ),
             ),
           ),
@@ -171,7 +177,7 @@ void main() {
     expect(find.text('Home'), findsOneWidget);
     await rig.shot('wiki-page');
     final stored = rig.node.store.objects(kind: 'x.wiki.page');
-    expect(stored.single.app, 'wiki@0.1.0');
+    expect(stored.single.app, 'wiki@0.2.0');
 
     // A link to a page nobody wrote starts it.
     await tester.tap(find.text('Recipes'));
@@ -196,6 +202,67 @@ void main() {
       () => find.textContaining('characters').evaluate().length == 2,
     );
     await rig.shot('wiki-history');
+  });
+
+  testWidgets('wiki pages hold pictures, run long and open from a link', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final rig = await Rig.start(tester, ['wiki']);
+    final picked = <String>[];
+    // Stored as the app stores a picked file, before the person picks it.
+    final stored = (await tester.runAsync(
+      () => rig.plugins.storeFile(
+        'cat.png',
+        Uint8List.fromList(List.filled(300, 7)),
+      ),
+    ))!;
+    Future<Json?> pick(String plugin, String accept) async {
+      picked.add(accept);
+      return {
+        'file': rig.plugins.addFile(plugin, stored),
+        'name': stored['name'],
+        'size': stored['size'],
+      };
+    }
+
+    Widget image(String plugin, String id, double? height) =>
+        Text('picture $plugin $id');
+    await rig.show('wiki', 'Wiki', pickFile: pick, image: image);
+    await rig.untilText('New page');
+    await tester.tap(find.text('New page'));
+    await rig.untilText('Save');
+    await tester.enterText(find.widgetWithText(TextField, 'Title'), 'Cats');
+    // Longer than an object holds: the whole text goes in a file.
+    final long = '${'Whiskers. ' * 4000}The end.';
+    await tester.enterText(find.widgetWithText(TextField, 'Text'), long);
+    await rig.until(() => true);
+    await tester.tap(find.text('Add a picture'));
+    await rig.until(() => rig.node.store.objects(kind: 'x.wiki.image').isNotEmpty);
+    expect(picked, ['image']);
+    final picture = rig.node.store.objects(kind: 'x.wiki.image').single;
+    await rig.until(
+      () => find
+          .textContaining('![cat.png](${picture.id})')
+          .evaluate()
+          .isNotEmpty,
+    );
+    await tester.tap(find.text('Save'));
+    await rig.untilText('picture wiki ${picture.id}');
+    expect(find.textContaining('The end.'), findsOneWidget);
+    final page = rig.node.store.objects(kind: 'x.wiki.page').single;
+    final payload = (await tester.runAsync(() => rig.node.content(page)))!;
+    expect(payload['chunks'], isNotEmpty);
+    expect((payload['body'] as String).length, lessThan(long.length));
+    final file = (await tester.runAsync(() => rig.node.content(picture)))!;
+    expect(file['name'], 'cat.png');
+
+    // Search and the activity feed open the plugin at an object.
+    await rig.show('wiki', 'Wiki', image: image, object: page.id);
+    await rig.until(() => find.textContaining('The end.').evaluate().isNotEmpty);
+    expect(find.text('Cats'), findsOneWidget);
   });
 
   testWidgets('the microblog posts, likes and replies', (tester) async {
