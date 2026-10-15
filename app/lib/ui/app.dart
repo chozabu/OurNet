@@ -1,3 +1,4 @@
+import 'header_when_room.dart';
 import 'app_notice.dart';
 import 'chat_composer.dart';
 import 'conversation_history.dart';
@@ -1491,22 +1492,19 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           final navigation = Column(
             children: [
               Expanded(
-                child: ListView(
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.fromLTRB(24, 28, 24, 4),
-                      child: Text(
-                        'OurNet',
-                        style: TextStyle(
-                          fontSize: 27,
-                          fontWeight: FontWeight.w800,
-                        ),
+                child: HeaderWhenRoom(
+                  // The name gives way when the menu has to scroll.
+                  header: const Padding(
+                    padding: EdgeInsets.fromLTRB(24, 28, 24, 20),
+                    child: Text(
+                      'OurNet',
+                      style: TextStyle(
+                        fontSize: 27,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const Padding(
-                      padding: EdgeInsets.fromLTRB(24, 0, 24, 24),
-                      child: Text('Your things. Your people.'),
-                    ),
+                  ),
+                  children: [
                     for (final d in Destination.navigation)
                       ListTile(
                         leading: Icon(d.icon),
@@ -1531,26 +1529,28 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                           if (!wide) Navigator.pop(context);
                         },
                       ),
+                    if (pluginSections.isNotEmpty) const Divider(),
+                    for (final s in pluginSections)
+                      ListTile(
+                        leading: Icon(pluginIcon(s.icon)),
+                        title: Text(s.title),
+                        selected:
+                            tab == Destination.plugin &&
+                            pluginSection?.id == s.id,
+                        onTap: () {
+                          update(() {
+                            tab = Destination.plugin;
+                            pluginSection = s;
+                            showConversation = false;
+                            showForum = false;
+                          });
+                          if (!wide) Navigator.pop(context);
+                        },
+                      ),
                   ],
                 ),
               ),
               const Divider(),
-              for (final s in pluginSections)
-                ListTile(
-                  leading: Icon(pluginIcon(s.icon)),
-                  title: Text(s.title),
-                  selected:
-                      tab == Destination.plugin && pluginSection?.id == s.id,
-                  onTap: () {
-                    update(() {
-                      tab = Destination.plugin;
-                      pluginSection = s;
-                      showConversation = false;
-                      showForum = false;
-                    });
-                    if (!wide) Navigator.pop(context);
-                  },
-                ),
               ListTile(
                 leading: const Icon(Icons.settings_outlined),
                 title: const Text('Settings'),
@@ -1583,6 +1583,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
             },
             child: Scaffold(
               appBar: AppBar(
+                // Material 3 tints the bar when any scrollable under it is
+                // scrolled, so it changed colour by section (chat history
+                // counts, a map never reports). It stays plain everywhere.
+                notificationPredicate: (_) => false,
                 leading: tab.parent == null
                     ? null
                     : BackButton(
@@ -2184,27 +2188,26 @@ class _PluginPictureState extends State<_PluginPicture> {
   }
 
   @override
-  Widget build(BuildContext context) =>
-      FutureBuilder<(SignedObject, Json)?>(
-        future: _found,
-        builder: (context, snapshot) {
-          final found = snapshot.data;
-          if (found == null) {
-            return SizedBox(height: snapshot.hasData ? 0 : widget.height);
-          }
-          return ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: widget.height ?? double.infinity,
-            ),
-            child: InlineImage(
-              files: widget.files,
-              object: found.$1,
-              payload: found.$2,
-              online: widget.online,
-              height: widget.height,
-              fit: BoxFit.contain,
-            ),
-          );
-        },
+  Widget build(BuildContext context) => FutureBuilder<(SignedObject, Json)?>(
+    future: _found,
+    builder: (context, snapshot) {
+      final found = snapshot.data;
+      if (found == null) {
+        return SizedBox(height: snapshot.hasData ? 0 : widget.height);
+      }
+      return ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: widget.height ?? double.infinity,
+        ),
+        child: InlineImage(
+          files: widget.files,
+          object: found.$1,
+          payload: found.$2,
+          online: widget.online,
+          height: widget.height,
+          fit: BoxFit.contain,
+        ),
       );
+    },
+  );
 }
