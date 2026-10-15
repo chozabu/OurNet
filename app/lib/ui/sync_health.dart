@@ -51,6 +51,14 @@ String friendlySyncError(String error, {int? order}) {
 String _label(PeerNetwork network, String device) =>
     network.node.contacts[device]?.label ?? 'Device';
 
+/// The relays every build uses, ours first, then n0's.
+const builtInRelays = [...PeerNetwork.ourRelays, ...PeerNetwork.n0Relays];
+
+/// Relay URLs as their host names, for a settings line.
+String relayHosts(Iterable<String> urls) => urls
+    .map((u) => (Uri.tryParse(u)?.host ?? u).replaceAll(RegExp(r'\.$'), ''))
+    .join(', ');
+
 String _ago(DateTime time, DateTime now) => syncAge(now.difference(time));
 
 /// Health of the exchange with one contact device.

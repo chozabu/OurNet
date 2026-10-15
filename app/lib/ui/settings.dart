@@ -650,9 +650,12 @@ extension _SettingsPages on _OurNetAppState {
       ListTile(
         title: const Text('Relays'),
         subtitle: Text(
-          network.extraRelays.isEmpty
-              ? 'Public relays, used when devices can’t connect directly. Tap to add your own.'
-              : '${network.extraRelays.length} of your own, then the public relays',
+          [
+            if (network.extraRelays.isNotEmpty)
+              'Yours: ${relayHosts(network.extraRelays)}',
+            'Built in: ${relayHosts(builtInRelays)}',
+            'Used when devices can’t connect directly. Tap to add your own.',
+          ].join('\n'),
         ),
         trailing: const Icon(Icons.chevron_right),
         onTap: () => act(() async {
@@ -660,7 +663,9 @@ extension _SettingsPages on _OurNetAppState {
             context,
             'Your own relays',
             initial: network.extraRelays.join('\n'),
-            hint: 'https://relay.example.com, one per line',
+            hint:
+                'https://relay.example.com, one per line. The built-in '
+                'relays are always used as well.',
             lines: 3,
           );
           if (text == null) return;
