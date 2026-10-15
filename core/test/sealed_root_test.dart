@@ -43,21 +43,157 @@ void main() {
     },
   );
 
-  test('short phrases are refused before anything is sealed', () async {
-    final identity = await LocalIdentity.create();
+  test('any phrase seals, and an empty one opens without asking', () async {
+    final original = await LocalIdentity.create();
+    final short = await original.seal(
+      'abc',
+      memory: memory,
+      iterations: iterations,
+    );
+    expect(short.hasPhrase, isTrue);
+    await expectLater(short.unlockRoot(), throwsStateError);
+    await short.unlockRoot('abc');
+
+    // Padding does not count: the phrase is trimmed before use.
+    final open = await original.seal('   ');
+    expect(open.root, isNull);
+    expect(open.hasPhrase, isFalse);
+    // Sealed at the lowest cost whatever was asked: nothing needs guessing.
+    expect(open.sealedRoot!.toJson()['memory'], 8 * 1024);
+    expect(open.sealedRoot!.toJson()['iterations'], 1);
+    final restored = await LocalIdentity.restore(await open.exportSecrets());
+    expect(restored.hasPhrase, isFalse);
+    final root = await restored.unlockRoot();
+    expect(
+      (await root.extractPublicKey()).bytes,
+      (await original.root!.extractPublicKey()).bytes,
+    );
+    // Builds before phrase-less copies open them with an empty phrase.
+    await open.sealedRoot!.open('');
+  });
+
+  test('the phrase can be changed, or removed, with the root', () async {
+    final original = await LocalIdentity.create();
+    final first = await sealed(original);
+    final root = await first.unlockRoot(phrase);
+    final changed = await first.seal(
+      'new words entirely',
+      unlocked: root,
+      memory: memory,
+      iterations: iterations,
+    );
+    expect(changed.device, original.device);
+    await expectLater(changed.unlockRoot(phrase), throwsStateError);
+    await changed.unlockRoot('new words entirely');
+    final removed = await changed.seal(
+      '',
+      unlocked: await changed.unlockRoot('new words entirely'),
+    );
+    expect(removed.hasPhrase, isFalse);
+
+    final other = await LocalIdentity.create();
     await expectLater(
-      identity.seal('too short', memory: memory, iterations: iterations),
+      first.seal('x', unlocked: other.root, memory: memory),
       throwsStateError,
     );
-    await expectLater(
-      // Padding does not count: the phrase is trimmed before use.
-      identity.seal(
-        '    too short     ',
+    final foreign = (await sealed(other)).sealedRoot!;
+    expect(() => first.adopt(foreign), throwsStateError);
+    expect(first.adopt(removed.sealedRoot!).hasPhrase, isFalse);
+  });
+
+  test(
+    'a new phrase reaches other devices, which keep theirs until confirmed',
+    () async {
+      var time = 1000;
+      final laptop = Node(
+        await sealed(await LocalIdentity.create(label: 'Laptop')),
+        Store(),
+        clock: () => time++,
+      );
+      final request = await LocalIdentity.create(label: 'Phone');
+      final phone = Node(
+        await request.enrol(
+          await laptop.identity.authorise(
+            request.certificate,
+            unlocked: await laptop.identity.unlockRoot(phrase),
+          ),
+          sealedRoot: laptop.identity.sealedRoot,
+        ),
+        Store(),
+        clock: () => time++,
+      );
+      await laptop.addContact(phone.identity.certificate);
+      await phone.addContact(laptop.identity.certificate);
+      expect(await phone.pendingRootChange(), isNull);
+
+      // Taking a copy is announced, and is not a change to confirm.
+      await phone.announceRootCopy();
+      await syncPair(phone, laptop);
+      expect(await laptop.pendingRootChange(), isNull);
+      expect(
+        (await laptop.rootCopies())[phone.identity.device]!.copy.same(
+          laptop.identity.sealedRoot,
+        ),
+        isTrue,
+      );
+
+      final changed = await laptop.identity.seal(
+        'a different phrase',
+        unlocked: await laptop.identity.unlockRoot(phrase),
         memory: memory,
         iterations: iterations,
-      ),
-      throwsStateError,
-    );
+      );
+      laptop.updateIdentity(changed);
+      await laptop.announceRootCopy(changed: true);
+      await syncPair(laptop, phone);
+
+      final pending = await phone.pendingRootChange();
+      expect(pending, isNotNull);
+      expect(pending!.device.device, laptop.identity.device);
+      // Nothing changes here until the new phrase opens it.
+      await phone.identity.unlockRoot(phrase);
+      await expectLater(pending.copy.open(phrase), throwsStateError);
+      await pending.copy.open('a different phrase');
+      await phone.adoptRootChange(pending);
+      expect(phone.identity.sealedRoot!.same(changed.sealedRoot), isTrue);
+      await phone.identity.unlockRoot('a different phrase');
+      expect(await phone.pendingRootChange(), isNull);
+
+      // The laptop learns the phone took it.
+      await syncPair(phone, laptop);
+      expect(
+        (await laptop.rootCopies())[phone.identity.device]!.copy.same(
+          laptop.identity.sealedRoot,
+        ),
+        isTrue,
+      );
+      expect(await laptop.pendingRootChange(), isNull);
+
+      // A declined change stays declined, until a newer one.
+      final again = await laptop.identity.seal(
+        'third time',
+        unlocked: await laptop.identity.unlockRoot('a different phrase'),
+        memory: memory,
+        iterations: iterations,
+      );
+      laptop.updateIdentity(again);
+      await laptop.announceRootCopy(changed: true);
+      await syncPair(laptop, phone);
+      phone.declineRootChange((await phone.pendingRootChange())!);
+      expect(await phone.pendingRootChange(), isNull);
+      await phone.identity.unlockRoot('a different phrase');
+    },
+  );
+
+  test('a copy announced by a friend is never offered', () async {
+    final laptop = Node(await sealed(await LocalIdentity.create()), Store());
+    final friend = Node(await sealed(await LocalIdentity.create()), Store());
+    await laptop.addContact(friend.identity.certificate);
+    await friend.addContact(laptop.identity.certificate);
+    await friend.announceRootCopy(changed: true);
+    await syncPair(friend, laptop);
+    expect(await laptop.rootCopies(), isEmpty);
+    expect(await laptop.pendingRootChange(), isNull);
   });
 
   test('a sealed device adds and revokes only once unlocked', () async {

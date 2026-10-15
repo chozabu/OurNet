@@ -472,6 +472,30 @@ extension _NetworkPages on _OurNetAppState {
     }
   }
 
+  /// Once per change, asks to take a recovery phrase set on another of this
+  /// person's devices. Settings keeps showing it until it is answered.
+  Future<void> offerRootChange() async {
+    final dialogContext = noteNavigator.currentContext;
+    if (_offeringRootChange || !mounted || dialogContext == null) return;
+    if (noteNavigator.currentState?.canPop() == true) return;
+    _offeringRootChange = true;
+    try {
+      final change = await node.pendingRootChange();
+      if (change == null ||
+          change.at <= _rootChangeOffered ||
+          !dialogContext.mounted) {
+        return;
+      }
+      _rootChangeOffered = change.at;
+      await confirmRootChange(dialogContext, node, change);
+      refresh();
+    } catch (e) {
+      notice('Could not update your recovery phrase: $e');
+    } finally {
+      _offeringRootChange = false;
+    }
+  }
+
   /// Syncs one device and reports the outcome, which [PeerNetwork.sync]
   /// records rather than throws.
   Future<void> syncNow(String device) async {

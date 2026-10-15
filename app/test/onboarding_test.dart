@@ -76,10 +76,9 @@ void main() {
     );
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField).first, 'short');
-    await tester.tap(find.text('Save backup'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('at least 12 characters'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).first, '');
+    await tester.pump();
+    expect(find.textContaining('anyone who gets this file'), findsOneWidget);
     await tester.enterText(find.byType(TextField).first, 'long enough phrase');
     await tester.enterText(find.byType(TextField).last, 'another long phrase');
     await tester.tap(find.text('Save backup'));

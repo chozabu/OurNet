@@ -7,6 +7,23 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: optional, changeable recovery phrase
+
+Additive; no change to `requiredCaps` or the ALPN.
+
+- A sealed root (`ournet/root/2`) may carry `phrase: false`: it was sealed
+  with an empty phrase, at the lowest Argon2id cost, and opens without
+  asking. Older builds ignore the field and open it with an empty phrase.
+  Phrases have no minimum length any more, nor do backup passphrases; the
+  app rates them instead.
+- New kind `sealed_root` in `_identity`, sealed to the author's own devices
+  only: `{sealedRoot, changed}`, the copy of the root the authoring device
+  now holds. `changed: true` marks a phrase set there; the person's other
+  devices keep their own copy until the new phrase opens the new one, or
+  they decline it. Each device announces its copy once, so others can show
+  which devices still use another phrase. Older builds store and relay it
+  like any unknown kind.
+
 ## Unreleased: forum votes
 
 Additive; no change to `requiredCaps` or the ALPN.

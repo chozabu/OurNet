@@ -281,6 +281,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// People asking to connect, read with the other data.
   List<ConnectRequest> connectRequests = const [];
   bool _offeringHistory = false;
+
+  /// Recovery phrase changes made on other devices: see [offerRootChange].
+  StreamSubscription<Set<String>>? _rootCopies;
+  bool _offeringRootChange = false;
+  int _rootChangeOffered = 0;
   late final CoalescedTask _deliveryRefresh;
   bool addingAttachment = false;
   final imports = ValueNotifier<Map<Object, ({int completed, int total})>>({});
@@ -717,6 +722,19 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       if (widget.enablePlatform) unawaited(offerHistory());
     });
     _deliveryRefresh.schedule();
+    if (widget.enablePlatform) {
+      _rootCopies = node.onChangesTo({
+        Node.rootCopyKind,
+      }, () => unawaited(offerRootChange()));
+      unawaited(
+        node.announceRootCopyOnce().catchError(
+          (Object e) => network.log(
+            'Could not tell your devices which recovery phrase this one uses: $e',
+          ),
+        ),
+      );
+      unawaited(offerRootChange());
+    }
     unawaited(
       node.connections.incoming().then((requests) {
         if (mounted) update(() => connectRequests = requests);
@@ -1305,6 +1323,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     if (onBackgroundSync == _backgroundSync) onBackgroundSync = null;
     _pausedStop?.cancel();
     _changes?.cancel();
+    _rootCopies?.cancel();
     _dataRefresh.close();
     _keyGrants?.close();
     _listings?.close();

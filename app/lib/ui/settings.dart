@@ -91,6 +91,7 @@ extension _SettingsPages on _OurNetAppState {
         const Text(
           'This device cannot add or remove devices. Use one of yours that can.',
         ),
+      RecoveryPhraseCard(node: node, deviceLabel: deviceLabel),
       ...newDeviceBanners(context),
       ListTile(
         leading: const Icon(Icons.devices),

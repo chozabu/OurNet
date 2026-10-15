@@ -17,7 +17,11 @@ their recovery phrase: Argon2id (parameters carried with the copy, 64 MiB and
 associated data. Any device holding a copy can add and revoke devices once the
 phrase opens it, so losing one device no longer freezes the identity. A device
 from before phrases holds its root in the clear until it first adds or removes
-a device, when it must set a phrase and seals it. Anyone who has both a
+a device, when it seals it under a phrase or none. A copy sealed without one
+(`phrase: false`, lowest cost) opens without asking, so only the device's own
+vault protects it. Changing the phrase on one device publishes the new copy
+(`sealed_root`, to the person's own devices); each other device keeps its old
+copy until the new phrase opens the new one there. Anyone who has both a
 device holding a copy and its phrase controls the identity; there is no root
 rotation. Root-signed revocations stop future admission and
 forwarding locally once received. Revoked devices' evidence, including

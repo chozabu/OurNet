@@ -11,6 +11,7 @@ import '../build_info.dart';
 import '../services/session.dart';
 import 'app.dart';
 import 'onboarding.dart';
+import 'recovery_phrase.dart';
 
 bool get _desktop =>
     Platform.isWindows || Platform.isLinux || Platform.isMacOS;
@@ -71,9 +72,10 @@ Future<bool> saveBackup(BuildContext context, Node node) async {
       builder: (_) => PassphraseDialog<BackupInfo>(
         title: 'Protect your backup',
         explanation:
-            'The backup holds your keys. Choose a passphrase of at least '
-            '${Backup.minimumPassphrase} characters to seal them: you need it '
-            'to restore, and OurNet cannot recover it for you.',
+            'The backup holds your keys. Choose a passphrase to seal them: '
+            'you need it to restore, and OurNet cannot recover it for you. '
+            'Anyone who gets a copy of the file can try guesses at it, so '
+            'make it strong.',
         confirm: true,
         action: 'Save backup',
         working: 'Saving your backup. You can keep using OurNet.',
@@ -236,6 +238,12 @@ class _PassphraseDialogState<T> extends State<PassphraseDialog<T>> {
   bool busy = false, hidden = true;
   String? error;
 
+  @override
+  void initState() {
+    super.initState();
+    if (widget.confirm) passphrase.addListener(() => setState(() {}));
+  }
+
   Future<void> submit() async {
     if (busy) return;
     setState(() {
@@ -244,7 +252,6 @@ class _PassphraseDialogState<T> extends State<PassphraseDialog<T>> {
     });
     try {
       if (widget.confirm) {
-        SealedRoot.checkPhrase(passphrase.text);
         if (passphrase.text.trim() != repeat.text.trim()) {
           throw StateError('The two passphrases do not match');
         }
@@ -299,6 +306,8 @@ class _PassphraseDialogState<T> extends State<PassphraseDialog<T>> {
                 ),
                 onSubmitted: (_) => widget.confirm ? null : submit(),
               ),
+              if (widget.confirm)
+                PhraseStrengthMeter(passphrase.text, file: true),
               if (widget.confirm)
                 TextField(
                   controller: repeat,

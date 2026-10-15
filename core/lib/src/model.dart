@@ -171,13 +171,24 @@ class DeviceCertificate {
 /// holding the identity: the root is used only to add and remove devices, so
 /// asking for it then costs little. Argon2id parameters travel with the copy,
 /// so they can be raised later without breaking older copies.
+///
+/// The phrase may be empty: the copy then opens without asking, and only the
+/// device's own vault protects it. It is still a sealed copy, so linking,
+/// sharing and later setting a phrase work the same way either way.
 class SealedRoot {
-  static const minimumPhrase = 12;
   static const _domain = 'ournet/root/2';
   final Json data;
   SealedRoot._(Json data) : data = frozen(jsonDecode(canonical(data)));
   String get person => data['person'] as String;
   Json toJson() => data;
+
+  /// False for a copy sealed with an empty phrase, which opens without one.
+  /// Builds before this ignore the field; an empty phrase opens it there too.
+  bool get hasPhrase => data['phrase'] != false;
+
+  /// Whether [other] is this same copy, not merely the same root.
+  bool same(SealedRoot? other) =>
+      other != null && other.data['salt'] == data['salt'];
 
   /// Rejects anything malformed, and parameters that would let a copy make
   /// this device spend unbounded memory or time deriving a key.
@@ -188,7 +199,8 @@ class SealedRoot {
         (j['aead'] != null && j['aead'] != aeadAlgorithm) ||
         j['person'] is! String ||
         j['salt'] is! String ||
-        j['box'] is! String) {
+        j['box'] is! String ||
+        (j['phrase'] != null && j['phrase'] != false)) {
       throw const FormatException('Invalid sealed root');
     }
     final memory = j['memory'], iterations = j['iterations'];
@@ -206,28 +218,22 @@ class SealedRoot {
     return SealedRoot._(j.cast<String, dynamic>());
   }
 
-  static void checkPhrase(String phrase) {
-    if (phrase.trim().length < minimumPhrase) {
-      throw StateError(
-        'Use a recovery phrase of at least $minimumPhrase characters',
-      );
-    }
-  }
-
   /// Argon2id cost of new seals, in KiB and passes. Copies made earlier keep
   /// the cost recorded in them.
   static const defaultMemory = 128 * 1024;
   static const defaultIterations = 3;
 
   /// [memory] is in KiB. The defaults take about a second on a desktop and a
-  /// few seconds on a phone; tests pass smaller values.
+  /// few seconds on a phone; tests pass smaller values. An empty [phrase]
+  /// seals at the lowest cost, since no guess is needed to open it.
   static Future<SealedRoot> seal(
     SimpleKeyPair root,
     String phrase, {
     int memory = defaultMemory,
     int iterations = defaultIterations,
   }) async {
-    checkPhrase(phrase);
+    final empty = phrase.trim().isEmpty;
+    if (empty) (memory, iterations) = (8 * 1024, 1);
     final person = b64((await root.extractPublicKey()).bytes);
     final salt = List.generate(16, (_) => Random.secure().nextInt(256));
     final key = await _derive(phrase, salt, memory, iterations);
@@ -245,6 +251,7 @@ class SealedRoot {
       'iterations': iterations,
       'salt': b64(salt),
       'box': b64(box.concatenation()),
+      if (empty) 'phrase': false,
     });
   }
 
@@ -295,6 +302,22 @@ class SealedRoot {
     );
     return SecretKey(key);
   }
+}
+
+/// The copy of the root one of this person's devices said it holds.
+class RootCopy {
+  final DeviceCertificate device;
+  final SealedRoot copy;
+
+  /// Whether a new phrase was set on [device], rather than taken there.
+  final bool changed;
+  final int at;
+  const RootCopy(
+    this.device,
+    this.copy, {
+    required this.changed,
+    required this.at,
+  });
 }
 
 /// Secrets are exported only to the platform vault, never the content store.
@@ -372,21 +395,26 @@ class LocalIdentity {
     return LocalIdentity(root, device, agreement, cert, sealedRoot: sealed);
   }
 
-  /// This device with its root sealed under [phrase], and no longer held in
-  /// the clear.
+  /// Whether opening the root needs a phrase. A root in the clear, from
+  /// before it was first sealed, does not.
+  bool get hasPhrase => sealedRoot?.hasPhrase ?? false;
+
+  /// This device with its root sealed under [phrase] (which may be empty),
+  /// and no longer held in the clear. A device whose root is already sealed
+  /// passes it [unlocked], to change the phrase.
   Future<LocalIdentity> seal(
     String phrase, {
+    SimpleKeyPair? unlocked,
     int memory = SealedRoot.defaultMemory,
     int iterations = SealedRoot.defaultIterations,
   }) async {
-    final clear = root;
+    final clear = unlocked ?? root;
     if (clear == null) throw StateError('This device has no root to seal');
-    return LocalIdentity(
-      null,
-      deviceKey,
-      agreementKey,
-      certificate,
-      sealedRoot: await SealedRoot.seal(
+    if (b64((await clear.extractPublicKey()).bytes) != person) {
+      throw StateError('That root is not this person');
+    }
+    return adopt(
+      await SealedRoot.seal(
         clear,
         phrase,
         memory: memory,
@@ -395,13 +423,30 @@ class LocalIdentity {
     );
   }
 
-  /// The root, for adding or removing a device. [phrase] opens a sealed copy.
+  /// This device keeping [copy] in place of whatever it held: a copy sealed
+  /// under a new phrase on another of this person's devices.
+  LocalIdentity adopt(SealedRoot copy) {
+    if (copy.person != person) {
+      throw StateError('Sealed root is for another person');
+    }
+    return LocalIdentity(
+      null,
+      deviceKey,
+      agreementKey,
+      certificate,
+      sealedRoot: copy,
+    );
+  }
+
+  /// The root, for adding or removing a device. [phrase] opens a sealed copy;
+  /// a copy sealed without one opens without it.
   Future<SimpleKeyPair> unlockRoot([String? phrase]) async {
     if (root case final clear?) return clear;
     final sealed = sealedRoot;
     if (sealed == null) {
       throw StateError('This device cannot add or remove devices');
     }
+    if (!sealed.hasPhrase) return sealed.open('');
     if (phrase == null) throw StateError('Enter your recovery phrase');
     return sealed.open(phrase);
   }

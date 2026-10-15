@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:isolate';
+
 import 'package:cryptography/cryptography.dart';
 
 import 'model.dart';
@@ -700,6 +701,96 @@ class Node {
     }, space: '_identity');
     await applyRevocation(object);
     return object;
+  }
+
+  /// Records which copy of the root this device holds, for this person's
+  /// other devices only. [changed] marks a phrase just set here: the others
+  /// ask before taking it, and keep their own copy until they do.
+  Future<SignedObject> announceRootCopy({bool changed = false}) {
+    final copy = identity.sealedRoot;
+    if (copy == null) {
+      return Future.error(StateError('This device holds no sealed root'));
+    }
+    if (changed) store.set(_rootCopySince, now());
+    store.set(_rootCopyAnnounced, copy.data['salt']);
+    return publish(
+      rootCopyKind,
+      {'sealedRoot': copy.toJson(), 'changed': changed},
+      space: '_identity',
+      audience: [person],
+    );
+  }
+
+  static const rootCopyKind = 'sealed_root';
+  static const _rootCopySince = 'rootCopySince',
+      _rootCopyAnnounced = 'rootCopyAnnounced';
+
+  /// [announceRootCopy], once per copy: for a device whose copy predates
+  /// announcements, or that took one while it could not publish.
+  Future<void> announceRootCopyOnce() async {
+    final copy = identity.sealedRoot;
+    if (copy == null) return;
+    if (store.setting(_rootCopyAnnounced) == copy.data['salt']) return;
+    await announceRootCopy();
+  }
+
+  /// The copy each of this person's other active devices last said it
+  /// holds, by device.
+  Future<Map<String, RootCopy>> rootCopies() async {
+    final copies = <String, RootCopy>{};
+    for (final o in store.objects(kind: rootCopyKind, author: person)) {
+      final device = o.certificate.device;
+      // Newest first: the first from each device is what it holds now.
+      if (device == identity.device ||
+          revoked.contains(device) ||
+          copies.containsKey(device)) {
+        continue;
+      }
+      final p = await content(o);
+      if (p == null) continue;
+      try {
+        copies[device] = RootCopy(
+          o.certificate,
+          SealedRoot.fromJson(p['sealedRoot']),
+          changed: p['changed'] == true,
+          at: o.created,
+        );
+      } on FormatException {
+        continue;
+      }
+    }
+    return copies;
+  }
+
+  /// A phrase set on another of this person's devices since this one last
+  /// took or declined one, if it differs from the copy held here.
+  Future<RootCopy?> pendingRootChange() async {
+    final held = identity.sealedRoot;
+    if (held == null) return null;
+    final since = store.setting(_rootCopySince) as int? ?? 0;
+    RootCopy? newest;
+    for (final c in (await rootCopies()).values) {
+      if (!c.changed || c.at <= since || held.same(c.copy)) continue;
+      if (c.copy.person != person) continue;
+      if (newest == null || c.at > newest.at) newest = c;
+    }
+    return newest;
+  }
+
+  /// Keeps this device's copy in place of [change], until a newer one.
+  void declineRootChange(RootCopy change) {
+    store.set(_rootCopySince, change.at);
+    notify();
+  }
+
+  /// Takes [change] once its phrase has opened it here: replaces this
+  /// device's copy and tells the others. The caller saves the identity.
+  Future<LocalIdentity> adoptRootChange(RootCopy change) async {
+    final next = identity.adopt(change.copy);
+    updateIdentity(next);
+    store.set(_rootCopySince, change.at);
+    await announceRootCopy();
+    return next;
   }
 
   /// Gives one of this person's devices a new name. A device's certificate

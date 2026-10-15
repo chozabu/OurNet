@@ -294,6 +294,7 @@ const peopleModule = Module(
     'profile': _profile,
     'avatar': _avatar,
     'device_name': _deviceName,
+    'sealed_root': _sealedRoot,
     'contact_state': _contactState,
     'friends': _friends,
     'connect': _connect,
@@ -319,6 +320,17 @@ bool _deviceName(Json p) =>
     p['label'] is String &&
     (p['label'] as String).trim().isNotEmpty &&
     (p['label'] as String).length <= 100;
+
+/// Which copy of the root a device holds: see `Node.announceRootCopy`.
+bool _sealedRoot(Json p) {
+  if (p['changed'] is! bool) return false;
+  try {
+    SealedRoot.fromJson(p['sealedRoot']);
+    return true;
+  } on FormatException {
+    return false;
+  }
+}
 
 /// Blocking or disconnecting, shared among the author's own devices.
 bool _contactState(Json p) =>

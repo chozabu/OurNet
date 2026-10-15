@@ -51,14 +51,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Set a recovery phrase'), findsOneWidget);
     final fields = find.byType(TextField);
-    await tester.enterText(fields.at(0), 'too short');
-    await tester.enterText(fields.at(1), 'too short');
-    await tester.tap(find.widgetWithText(FilledButton, 'Set phrase'));
-    await tester.pumpAndSettle();
-    expect(
-      find.text('Use a recovery phrase of at least 12 characters'),
-      findsOneWidget,
-    );
+    // No length rule, only a warning.
+    await tester.enterText(fields.at(0), 'abc');
+    await tester.pump();
+    expect(find.text(PhraseStrength.weak.label), findsOneWidget);
     await tester.enterText(fields.at(0), phrase);
     await tester.enterText(fields.at(1), '$phrase!');
     await tester.tap(find.widgetWithText(FilledButton, 'Set phrase'));
@@ -123,4 +119,164 @@ void main() {
     expect(node.identity.sealedRoot, isNull);
     await node.close();
   });
+
+  testWidgets('skipping seals without a phrase, which then never asks', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final node = Node(await LocalIdentity.create(label: 'PC'), Store());
+    SimpleKeyPair? unlocked;
+    var closed = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async {
+              closed = false;
+              unlocked = await unlockRoot(context, node);
+              closed = true;
+            },
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Skip'));
+    for (var i = 0; i < 100 && !closed; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    expect(closed, isTrue);
+    expect(unlocked, isNotNull);
+    expect(node.identity.root, isNull);
+    expect(node.identity.hasPhrase, isFalse);
+
+    // Opens straight away: no dialog.
+    closed = false;
+    await tester.tap(find.text('Open'));
+    for (var i = 0; i < 100 && !closed; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pump();
+    }
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(closed, isTrue);
+    expect(unlocked, isNotNull);
+    await node.close();
+  });
+
+  testWidgets(
+    'a phrase changed on one device is confirmed on another before it '
+    'switches',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({});
+      late Node laptop, phone;
+      await tester.runAsync(() async {
+        laptop = Node(
+          await (await LocalIdentity.create(
+            label: 'Laptop',
+          )).seal('', memory: 8 * 1024, iterations: 1),
+          Store(),
+        );
+        final request = await LocalIdentity.create(label: 'Phone');
+        phone = Node(
+          await request.enrol(
+            await laptop.identity.authorise(
+              request.certificate,
+              unlocked: await laptop.identity.unlockRoot(),
+            ),
+            sealedRoot: laptop.identity.sealedRoot,
+          ),
+          Store(),
+        );
+        await laptop.addContact(phone.identity.certificate);
+        await phone.addContact(laptop.identity.certificate);
+      });
+
+      var done = false;
+      Future<void> settle() async {
+        for (var i = 0; i < 600 && !done; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 50)),
+          );
+          await tester.pump();
+        }
+        await tester.pumpAndSettle();
+      }
+
+      Future<void> open(Future<void> Function(BuildContext) action) async {
+        done = false;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Builder(
+              builder: (context) => TextButton(
+                onPressed: () async {
+                  await action(context);
+                  done = true;
+                },
+                child: const Text('Open'),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('Open'));
+        await tester.pumpAndSettle();
+      }
+
+      // No phrase yet: changing it asks for no current one.
+      await open((context) => changeRecoveryPhrase(context, laptop));
+      for (
+        var i = 0;
+        i < 50 && find.byType(TextField).evaluate().isEmpty;
+        i++
+      ) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pumpAndSettle();
+      }
+      expect(find.text('New recovery phrase'), findsOneWidget);
+      await tester.enterText(find.byType(TextField).at(0), phrase);
+      await tester.pump();
+      await tester.enterText(find.byType(TextField).at(1), phrase);
+      await tester.tap(find.widgetWithText(FilledButton, 'Change phrase'));
+      await settle();
+      expect(laptop.identity.hasPhrase, isTrue);
+
+      await tester.runAsync(() => syncPair(laptop, phone));
+      final change = (await tester.runAsync(phone.pendingRootChange))!;
+      expect(phone.identity.hasPhrase, isFalse);
+
+      await open((context) => confirmRootChange(context, phone, change));
+      expect(find.text('Recovery phrase changed'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'not the phrase');
+      await tester.tap(find.widgetWithText(FilledButton, 'Use new phrase'));
+      for (
+        var i = 0;
+        i < 200 && find.textContaining('not right').evaluate().isEmpty;
+        i++
+      ) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump();
+      }
+      expect(find.textContaining('not right'), findsOneWidget);
+      expect(phone.identity.hasPhrase, isFalse);
+      await tester.enterText(find.byType(TextField), phrase);
+      await tester.tap(find.widgetWithText(FilledButton, 'Use new phrase'));
+      await settle();
+      expect(done, isTrue);
+      expect(phone.identity.hasPhrase, isTrue);
+      expect(await tester.runAsync(phone.pendingRootChange), isNull);
+      await laptop.close();
+      await phone.close();
+    },
+  );
 }

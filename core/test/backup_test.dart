@@ -118,13 +118,21 @@ void main() {
     );
   });
 
-  test('a short passphrase is refused before anything is written', () async {
+  test('any passphrase seals a backup, however short', () async {
     final node = await profile();
-    await expectLater(
-      Backup.create(node, '${temp.path}/b.zip', 'short'),
-      throwsStateError,
+    await Backup.create(
+      node,
+      '${temp.path}/b.zip',
+      'short',
+      memory: memory,
+      iterations: iterations,
     );
-    expect(File('${temp.path}/b.zip').existsSync(), isFalse);
+    final staged = await Backup.stage(
+      '${temp.path}/b.zip',
+      'short',
+      '${temp.path}/out.db',
+    );
+    await staged.discard();
   });
 
   test('files that are not backups are refused', () async {

@@ -101,10 +101,6 @@ class Backup {
   static const _domain = 'ournet/backup/1';
   static const _database = 'ournet.db';
 
-  /// Shorter than a recovery phrase would be welcome, but a backup is
-  /// copied around, so a weak passphrase is brute-forced offline.
-  static const minimumPassphrase = SealedRoot.minimumPhrase;
-
   /// Writes a backup of [node] to [path], replacing any file there.
   static Future<BackupInfo> create(
     Node node,
@@ -116,7 +112,6 @@ class Backup {
   }) async {
     final source = node.store.path;
     if (source == null) throw StateError('Only a stored profile can be saved');
-    SealedRoot.checkPhrase(passphrase);
     final certificate = node.identity.certificate;
     final info = BackupInfo(
       version: version,

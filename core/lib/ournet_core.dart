@@ -3,6 +3,7 @@ library;
 // Unlocked roots cross the core API (LocalIdentity.unlockRoot).
 export 'package:cryptography/cryptography.dart' show SimpleKeyPair;
 export 'src/model.dart';
+export 'src/phrase_strength.dart';
 export 'src/registry.dart';
 export 'src/local_bridge.dart';
 export 'src/plugin_manifest.dart';
