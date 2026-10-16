@@ -7,7 +7,7 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
-## Unreleased: wake addresses in quick exchanges
+## 0.2.40: wake addresses in quick exchanges
 
 `delta` requests and replies carry `wake` (the address, or null for none),
 learnt like the full exchange's. In 0.2.39 only full exchanges carried it, and
