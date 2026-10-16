@@ -18,6 +18,9 @@ at tag v1.9.4, commit `927cfce34f31707e17f2bff35c349632fb9e2c3a`: the top-level
 CMake files, `cmake/`, `include/`, `src/` and `ggml/` with only the CPU backend
 (`ggml/src/ggml-cpu`). Examples, tests, bindings, models and GPU backends are
 omitted. The MIT license is retained. `app/plugins/ournet_speech` builds it into
-one static CPU-only library per platform; no model is bundled. Upgrade by
+one static CPU-only library per platform; no model is bundled. The one local
+change is the top-level `cmake_minimum_required`, raised from `3.5` to
+`3.14...3.28` (as in `ggml/`) so CMake does not warn about pre-3.10
+compatibility; keep it when upgrading. Upgrade by
 copying the same directories from a newer tag and re-running
 `integration_test/voice_note_test.dart` on Windows and an Android device.

@@ -52,6 +52,22 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
+# audioplayers_windows and geolocator_windows install NuGet packages while
+# configuring, and warn "Nuget.exe not found" before downloading nuget.exe
+# when it is not on PATH (it usually is not). Hand them nuget.exe here, from
+# PATH or the same pinned download, so they skip the lookup and the warning.
+find_program(OURNET_NUGET_ON_PATH nuget)
+if(OURNET_NUGET_ON_PATH)
+  set(NUGET "${OURNET_NUGET_ON_PATH}" CACHE FILEPATH "nuget.exe" FORCE)
+else()
+  include(FetchContent)
+  FetchContent_Declare(ournet_nuget
+    URL "https://dist.nuget.org/win-x86-commandline/v6.5.0/nuget.exe"
+    URL_HASH SHA256=d5fce5185de92b7356ea9264b997a620e35c6f6c3c061e471e0dc3a84b3d74fd
+    DOWNLOAD_NO_EXTRACT TRUE)
+  FetchContent_MakeAvailable(ournet_nuget)
+  set(NUGET "${ournet_nuget_SOURCE_DIR}/nuget.exe" CACHE FILEPATH "nuget.exe" FORCE)
+endif()
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
