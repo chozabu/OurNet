@@ -2,14 +2,15 @@
 <!-- Firebase Cloud Messaging, for push wake-up (PushWake.kt). Copy these from
      the Firebase project's google-services.json (see OurNetPushServer's
      README). They identify the app and are not secret. Left empty, Firebase
-     does not start and push wake-up is unavailable. -->
+     does not start and push wake-up is unavailable. Firebase project
+     ournet-5148f; profile builds override the app ID in src/profile. -->
 <resources>
     <!-- client[0].client_info.mobilesdk_app_id -->
-    <string name="google_app_id" translatable="false"></string>
+    <string name="google_app_id" translatable="false">1:1047089662826:android:bd6a432890e1a3a9ed7313</string>
     <!-- client[0].api_key[0].current_key -->
-    <string name="google_api_key" translatable="false"></string>
+    <string name="google_api_key" translatable="false">AIzaSyDTPltLNplotaQSy6PquTH2yMrXoKmIAdk</string>
     <!-- project_info.project_number -->
-    <string name="gcm_defaultSenderId" translatable="false"></string>
+    <string name="gcm_defaultSenderId" translatable="false">1047089662826</string>
     <!-- project_info.project_id -->
-    <string name="project_id" translatable="false"></string>
+    <string name="project_id" translatable="false">ournet-5148f</string>
 </resources>

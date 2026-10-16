@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Profile builds install as org.chozabu.ournet.profile, registered as an
+     app of its own in the Firebase project. -->
+<resources>
+    <string name="google_app_id" translatable="false">1:1047089662826:android:9ac6352a9f3e0eaeed7313</string>
+</resources>
