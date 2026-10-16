@@ -16,7 +16,7 @@ sha2 = { version = "=0.10.9", default-features = false }
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 jpeg-encoder = { version = "0.6", default-features = false, features = ["std"] }
 # The plugin host (src/plugin.rs): components only, compiled with Cranelift.
-wasmtime = { version = "=48.0.5", default-features = false, features = ["runtime", "cranelift", "component-model", "std", "anyhow"] }
+wasmtime = { version = "=48.0.6", default-features = false, features = ["runtime", "cranelift", "component-model", "std", "anyhow"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
