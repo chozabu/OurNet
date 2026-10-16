@@ -17,6 +17,10 @@ class FolderItem {
     this.size = 0,
     this.contentStamp,
   ]);
+
+  /// The token a scan reports for a symlink or junction, which is never
+  /// followed or synced.
+  static const link = 'link';
 }
 
 abstract class FolderBackend {
@@ -86,8 +90,10 @@ class DiskFolderBackend extends FolderBackend {
   }
 
   @override
-  Future<FolderItem?> stat(String path) async {
-    final stat = await FileStat.stat(await _path(path));
+  Future<FolderItem?> stat(String path) async =>
+      _item(await FileStat.stat(await _path(path)), path);
+
+  FolderItem? _item(FileStat stat, String path) {
     if (stat.type == FileSystemEntityType.notFound) return null;
     if (stat.type == FileSystemEntityType.directory)
       return const FolderItem(true, 'directory');
@@ -111,26 +117,31 @@ class DiskFolderBackend extends FolderBackend {
   @override
   Future<Map<String, FolderItem>> scan() async {
     final result = <String, FolderItem>{};
-    Future<void> visit(String relative) async {
+    // The root and its ancestors are checked once. Below it, the listing
+    // itself reports links without following them, so entries need no
+    // per-path ancestor walk.
+    Future<void> visit(String relative, String directory) async {
       if (relative.split('/').length > 64)
         throw StateError('Folder nesting exceeds 64 levels');
       await for (final entity in Directory(
-        await _path(relative),
+        directory,
       ).list(followLinks: false)) {
         final name = entity.uri.pathSegments.where((s) => s.isNotEmpty).last;
         if (name.toLowerCase().startsWith('.ournet-')) continue;
         final path = relative.isEmpty ? name : '$relative/$name';
-        final item = await stat(path);
+        final item = entity is Link
+            ? const FolderItem(false, FolderItem.link)
+            : _item(await FileStat.stat(entity.path), path);
         if (item == null)
           throw StateError('Folder changed while scanning; retry');
         result[path] = item;
         if (result.length > 10000)
           throw StateError('Folder limit is 10,000 entries');
-        if (item.directory) await visit(path);
+        if (item.directory) await visit(path, entity.path);
       }
     }
 
-    await visit('');
+    await visit('', await _path(''));
     return result;
   }
 
@@ -267,6 +278,7 @@ class FolderSync {
           .toLowerCase()
           .replaceAll(RegExp(r'/+$'), '');
     }
+
     final normalized = normalize(location);
     for (final config in configs.values) {
       final other = normalize(config['location'] as String);
@@ -292,6 +304,7 @@ class FolderSync {
     node.store.removeSettingsUnder('folder-sync/item/$root/');
     await _watchers.remove(root)?.cancel();
     status.remove(root);
+    _shown = Map.of(status);
     onUpdate?.call();
   }
 
@@ -303,20 +316,25 @@ class FolderSync {
     }
     _debounce ??= Timer(const Duration(seconds: 1), () {
       _debounce = null;
-      unawaited(sync());
+      unawaited(_sync(quiet: true));
     });
   }
 
-  Future<void> sync() async {
+  /// Checks every connection now, showing that it is checking.
+  Future<void> sync() => _sync(quiet: false);
+
+  // Background passes redraw only when what they show changes: the app
+  // rebuilds on every update, and most passes find nothing to do.
+  Future<void> _sync({required bool quiet}) async {
     if (_closed) return;
     if (_active != null) return _active;
-    _active = _run();
-    onUpdate?.call();
+    if (connections.isEmpty) return;
+    _active = _run(quiet);
     try {
       await _active;
     } finally {
       _active = null;
-      onUpdate?.call();
+      _show();
       if (_again) {
         _again = false;
         schedule();
@@ -324,11 +342,23 @@ class FolderSync {
     }
   }
 
-  Future<void> _run() async {
+  Map<String, String> _shown = const {};
+  void _show() {
+    if (_shown.length == status.length &&
+        status.entries.every((e) => _shown[e.key] == e.value))
+      return;
+    _shown = Map.of(status);
+    onUpdate?.call();
+  }
+
+  Future<void> _run(bool quiet) async {
     for (final root in connections.keys) {
       if (_closed) return;
       try {
-        status[root] = 'Checking local changes…';
+        if (!quiet || status[root] == null) {
+          status[root] = 'Checking local changes…';
+          _show();
+        }
         await _syncRoot(root);
       } catch (e) {
         status[root] = '$e';
@@ -407,13 +437,17 @@ class FolderSync {
       remote[path] = entry;
     }
     final synced = {for (final v in state.values) v['path'] as String};
-    final unsupported = local.keys.where((p) => !safeFolderPath(p)).toSet();
+    final unsupported = local.keys
+        .where((p) => !safeFolderPath(p) || local[p]!.token == FolderItem.link)
+        .toSet();
     for (final path in unsupported) {
+      final problem = local[path]!.token == FolderItem.link
+          ? 'Linked file or folder is not synced'
+          : 'Unsupported local filename';
       // A name that was never synced is left out of this pass. One that was
       // would look deleted here, so it still needs a person to resolve it.
-      if (synced.contains(path))
-        throw StateError('Unsupported local filename: $path');
-      report('Unsupported local filename: $path');
+      if (synced.contains(path)) throw StateError('$problem: $path');
+      report('$problem: $path');
     }
     if (unsupported.isNotEmpty)
       local = {
@@ -702,7 +736,7 @@ class FolderSync {
           }
           if (v.deleted) continue; // Delete leaves last, after children.
           status[root] = 'Syncing $path';
-          onUpdate?.call();
+          _show();
           FolderItem written;
           if (v.isFolder) {
             await fs.mkdir(path);

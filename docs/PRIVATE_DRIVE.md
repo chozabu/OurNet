@@ -87,7 +87,8 @@ file edits still retain separate revision branches; name collisions never overwr
 an existing destination.
 Symlinks/junctions, unsupported portable filenames, nested/overlapping local
 connections, native files-on-demand placeholders, and a mobile background service
-are not supported. SAF providers must expose modification timestamps and support
+are not supported. A link or unsupported name that was never synced is skipped
+and reported while the rest of the folder keeps syncing. SAF providers must expose modification timestamps and support
 safe document creation/rename; unsupported providers report a connection error.
 Local change detection uses filesystem/provider metadata, so edits deliberately
 preserving all reported size/timestamps may not be detected.

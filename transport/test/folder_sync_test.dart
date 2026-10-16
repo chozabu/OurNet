@@ -407,6 +407,48 @@ void main() {
       expect(await Directory('${phone.path}/photos').exists(), false);
     },
   );
+  test('a linked folder is reported and the rest still syncs', () async {
+    final outside = await Directory('${temp.path}/outside').create();
+    await File('${outside.path}/secret.txt').writeAsString('outside');
+    await Link('${desktop.path}/linked').create(outside.path);
+    await File('${desktop.path}/plain.txt').writeAsString('plain');
+    await left.sync();
+    expect(left.status[root], contains('Linked file or folder is not synced'));
+    await exchange();
+    await right.sync();
+    expect(await File('${phone.path}/plain.txt').readAsString(), 'plain');
+    expect(await Directory('${phone.path}/linked').exists(), false);
+    expect(
+      (await Drive(a).entries()).map((e) => e.current.data['name']),
+      isNot(contains('secret.txt')),
+    );
+  });
+  test('background passes redraw only when the status changes', () async {
+    var updates = 0;
+    final watcher = FolderSync(
+      Files(a, PeerNetwork(a)),
+      DiskFolderBackend.new,
+      onUpdate: () => updates++,
+    );
+    addTearDown(watcher.close);
+    await Future<void>.delayed(const Duration(seconds: 2));
+    while (watcher.busy) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    expect(updates, greaterThan(0)); // The first result is shown.
+    final shown = updates;
+    watcher.schedule();
+    await Future<void>.delayed(const Duration(seconds: 2));
+    while (watcher.busy) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    expect(updates, shown);
+    await left.disconnect(root);
+    final idle = updates;
+    watcher.schedule();
+    await Future<void>.delayed(const Duration(seconds: 2));
+    expect(updates, idle); // Nothing connected: nothing to redraw.
+  });
   test('backend compare-before-write preserves a newer local edit', () async {
     final file = File('${desktop.path}/race.txt');
     await file.writeAsString('before');
