@@ -278,7 +278,9 @@ class _PluginsPageState extends State<PluginsPage> {
   @override
   void initState() {
     super.initState();
-    _changes = plugins.changes.listen((_) {
+    // Not [Plugins.changes]: this page shows no surfaces, and a chatty
+    // plugin's updates would keep the offers' debounce from ever firing.
+    _changes = plugins.statusChanges.listen((_) {
       if (mounted) setState(() {});
       _refreshOffers();
     });

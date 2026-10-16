@@ -394,30 +394,51 @@ class _ImageViewerState extends State<_ImageViewer> {
         controller: controller,
         itemCount: widget.images.length,
         onPageChanged: (value) => setState(() => page = value),
-        itemBuilder: (context, index) => FutureBuilder<Uint8List>(
-          future: widget.files.readBytes(
-            widget.images[index].object,
-            limit: 32 * 1024 * 1024,
-          ),
-          builder: (context, snapshot) {
-            if (snapshot.hasError) {
-              return const Center(
-                child: Text(
-                  'This image is not available on this device yet.',
-                  style: TextStyle(color: Colors.white),
-                ),
-              );
-            }
-            if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            return InteractiveViewer(
-              maxScale: 6,
-              child: Center(child: Image.memory(snapshot.data!)),
-            );
-          },
+        itemBuilder: (context, index) => _ImagePage(
+          key: ValueKey(widget.images[index].object.id),
+          files: widget.files,
+          image: widget.images[index],
         ),
       ),
     );
   }
+}
+
+/// One page of [_ImageViewer]. It reads its original once, so turning pages
+/// (which redraws the viewer) neither re-reads nor re-decodes it.
+class _ImagePage extends StatefulWidget {
+  final Files files;
+  final EverydayItem image;
+  const _ImagePage({super.key, required this.files, required this.image});
+  @override
+  State<_ImagePage> createState() => _ImagePageState();
+}
+
+class _ImagePageState extends State<_ImagePage> {
+  late final Future<Uint8List> bytes = widget.files.readBytes(
+    widget.image.object,
+    limit: 32 * 1024 * 1024,
+  );
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<Uint8List>(
+    future: bytes,
+    builder: (context, snapshot) {
+      if (snapshot.hasError) {
+        return const Center(
+          child: Text(
+            'This image is not available on this device yet.',
+            style: TextStyle(color: Colors.white),
+          ),
+        );
+      }
+      if (!snapshot.hasData) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      return InteractiveViewer(
+        maxScale: 6,
+        child: Center(child: Image.memory(snapshot.data!)),
+      );
+    },
+  );
 }

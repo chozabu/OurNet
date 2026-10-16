@@ -347,13 +347,16 @@ extension _ObjectsPages on _OurNetAppState {
             ? null
             : () => saveFile(context, o, p),
         icon: const Icon(Icons.download),
-        label: Text(
-          fileProgress.containsKey(o.id)
-              ? '${p['name']} · preparing ${(fileProgress[o.id]! * 100).round()}%'
-              : fileErrors.containsKey(o.id)
-              ? '${p['name']} · Retry download'
-              : '${p['name']} · ${p['size']} bytes',
-        ),
+        label: fileProgress.containsKey(o.id)
+            ? fileProgressOf(
+                o.id,
+                (f) => Text('${p['name']} · preparing ${(f * 100).round()}%'),
+              )
+            : Text(
+                fileErrors.containsKey(o.id)
+                    ? '${p['name']} · Retry download'
+                    : '${p['name']} · ${p['size']} bytes',
+              ),
       ),
     if (fileErrors[o.id] case final error?)
       Text('$error · Verified chunks are kept for retry.'),
@@ -610,7 +613,8 @@ extension _ObjectsPages on _OurNetAppState {
           if (done == total ||
               progressClock.elapsedMilliseconds - lastUpdate >= 100) {
             lastUpdate = progressClock.elapsedMilliseconds;
-            update(() => fileProgress[o.id] = total == 0 ? 1 : done / total);
+            fileProgress[o.id] = total == 0 ? 1 : done / total;
+            fileProgressTick.value++;
           }
         },
       );

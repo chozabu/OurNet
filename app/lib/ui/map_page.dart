@@ -130,7 +130,6 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
     });
     share.addListener(_changed);
     widget.tiles.addListener(_changed);
-    _search.addListener(() => setState(() {}));
     // Ages tick over without any new data.
     _refreshAges = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() {});
@@ -711,40 +710,44 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
               alignment: Alignment.topCenter,
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 560),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _searchBar(context),
-                    if (_shownList case final list?)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: InputChip(
-                          label: Text(
-                            '${list.name} · ${_shownPlaces.length} places',
-                          ),
-                          onPressed: _openSaved,
-                          onDeleted: () => setState(() {
-                            _shownList = null;
-                            _shownPlaces = [];
-                            _clusters = [];
-                          }),
-                        ),
-                      ),
-                    if (_placesError != null)
-                      Material(
-                        child: ListTile(
-                          title: Text(_placesError!),
-                          trailing: TextButton(
-                            onPressed: _refreshPlaces,
-                            child: const Text('Retry'),
+                child: ListenableBuilder(
+                  // Typing redraws the search bar and results, not the map.
+                  listenable: _search,
+                  builder: (context, _) => Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _searchBar(context),
+                      if (_shownList case final list?)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: InputChip(
+                            label: Text(
+                              '${list.name} · ${_shownPlaces.length} places',
+                            ),
+                            onPressed: _openSaved,
+                            onDeleted: () => setState(() {
+                              _shownList = null;
+                              _shownPlaces = [];
+                              _clusters = [];
+                            }),
                           ),
                         ),
-                      ),
-                    if (_search.text.trim().isNotEmpty)
-                      _results(context)
-                    else
-                      _peopleChips(context, people),
-                  ],
+                      if (_placesError != null)
+                        Material(
+                          child: ListTile(
+                            title: Text(_placesError!),
+                            trailing: TextButton(
+                              onPressed: _refreshPlaces,
+                              child: const Text('Retry'),
+                            ),
+                          ),
+                        ),
+                      if (_search.text.trim().isNotEmpty)
+                        _results(context)
+                      else
+                        _peopleChips(context, people),
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -66,16 +66,30 @@ extension _ConversationPages on _OurNetAppState {
     },
   );
 
+  /// Unread counts and chat flags for every row, read once per build.
+  ({
+    Map<String, int> unread,
+    Set<String> pinned,
+    Set<String> muted,
+    Set<String> marked,
+  })
+  chatRowState() => memo(
+    'chatRowState',
+    () => (
+      unread: node.store.unreadByPeer(node.person, blocked: node.blocked),
+      pinned: node.store.trueSettings('chatPinned/'),
+      muted: node.store.trueSettings('chatMuted/'),
+      marked: node.store.trueSettings('chatUnread/'),
+    ),
+  );
+
   /// Friends in chat-list order: pinned, then most recent message, then
   /// name. Archived chats stay apart until a newer message arrives.
   ({List<String> active, List<String> archived}) chatOrder() =>
       memo('chatOrder', () {
         final recent = recentChats();
         int latest(String p) => recent[p]?.created ?? 0;
-        final pins = {
-          for (final p in people)
-            if (node.store.setting('chatPinned/$p') == true) p,
-        };
+        final pins = chatRowState().pinned;
         bool pinned(String p) => pins.contains(p);
         final sorted = people.toList()
           ..sort((a, b) {
@@ -115,14 +129,11 @@ extension _ConversationPages on _OurNetAppState {
   Widget chatTile(BuildContext context, String person) {
     final theme = Theme.of(context);
     final latest = recentChats()[person];
-    final muted = chatMuted(node, person);
-    final pinned = node.store.setting('chatPinned/$person') == true;
-    final count = node.store.conversationUnread(
-      node.person,
-      peer: person,
-      blocked: node.blocked,
-    );
-    final markedUnread = node.store.setting('chatUnread/$person') == true;
+    final rows = chatRowState();
+    final muted = rows.muted.contains(person);
+    final pinned = rows.pinned.contains(person);
+    final count = rows.unread[person] ?? 0;
+    final markedUnread = rows.marked.contains(person);
     final object = latest == null ? null : node.store.get(latest.id);
     final Widget subtitle = typing.isTyping(person)
         ? Text(
@@ -864,11 +875,12 @@ extension _ConversationPages on _OurNetAppState {
                       ? null
                       : () => saveFile(context, o, p),
                   icon: const Icon(Icons.download, size: 16),
-                  label: Text(
-                    fileProgress.containsKey(o.id)
-                        ? 'Preparing ${(fileProgress[o.id]! * 100).round()}%'
-                        : 'Save original',
-                  ),
+                  label: fileProgress.containsKey(o.id)
+                      ? fileProgressOf(
+                          o.id,
+                          (f) => Text('Preparing ${(f * 100).round()}%'),
+                        )
+                      : const Text('Save original'),
                 ),
               if (fileErrors[o.id] case final error?)
                 Text(
@@ -1023,24 +1035,34 @@ extension _ConversationPages on _OurNetAppState {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      Text(
-                        progress != null
-                            ? 'Preparing ${(progress * 100).round()}%'
-                            : fileErrors.containsKey(o.id)
-                            ? 'Tap to retry download'
-                            : readable,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
+                      if (progress != null)
+                        fileProgressOf(
+                          o.id,
+                          (f) => Text(
+                            'Preparing ${(f * 100).round()}%',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        )
+                      else
+                        Text(
+                          fileErrors.containsKey(o.id)
+                              ? 'Tap to retry download'
+                              : readable,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
                     ],
                   ),
                 ),
                 const SizedBox(width: 8),
                 progress != null
-                    ? SizedBox.square(
-                        dimension: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          value: progress,
+                    ? fileProgressOf(
+                        o.id,
+                        (f) => SizedBox.square(
+                          dimension: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            value: f,
+                          ),
                         ),
                       )
                     : const Icon(Icons.download, size: 20),

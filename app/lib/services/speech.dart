@@ -234,15 +234,20 @@ class Speech extends ChangeNotifier {
       final sink = part.openWrite();
       final digest = _DigestSink();
       final hashing = sha256.startChunkedConversion(digest);
-      var received = 0;
+      var received = 0, shown = 0;
       try {
         await for (final chunk in response) {
           received += chunk.length;
           if (received > model.size) throw StateError('Unexpected model size.');
           hashing.add(chunk);
           sink.add(chunk);
-          downloadProgress = received / model.size;
-          notifyListeners();
+          // Listeners redraw on each 0.1% step, not on every HTTP chunk.
+          final step = received * 1000 ~/ model.size;
+          if (step != shown) {
+            shown = step;
+            downloadProgress = step / 1000;
+            notifyListeners();
+          }
         }
       } finally {
         await sink.close();

@@ -533,6 +533,16 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// Per conversation: what a voice message being prepared is doing.
   final voiceProgress = <String, String>{};
   final fileProgress = <String, double>{};
+
+  /// Bumped as downloads advance, so only their progress labels redraw.
+  final fileProgressTick = ValueNotifier(0);
+
+  /// [build] from [id]'s download fraction, redrawn as it advances.
+  Widget fileProgressOf(String id, Widget Function(double progress) build) =>
+      ValueListenableBuilder(
+        valueListenable: fileProgressTick,
+        builder: (context, tick, child) => build(fileProgress[id] ?? 0),
+      );
   final fileErrors = <String, String>{};
   final search = TextEditingController();
 
@@ -1329,6 +1339,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     unawaited(draftStore.flush().catchError((Object _) {}));
+    fileProgressTick.dispose();
     _pluginNotices?.cancel();
     _pluginOffers?.cancel();
     _pluginSections?.cancel();
