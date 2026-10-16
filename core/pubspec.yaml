@@ -10,7 +10,7 @@ dependencies:
     path: ../native
   crypto: ^3.0.7
   sqlite3: ^3.1.0
-  image: 4.5.4
+  image: 4.12.0
   archive: ^4.0.7
 dev_dependencies:
   test: ^1.26.0
