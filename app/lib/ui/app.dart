@@ -1253,6 +1253,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     // Messages on screen are marked read as they are shown, which only
     // counts while the app is in front: show them again on return.
     if (state == AppLifecycleState.resumed) redraw();
+    // A window that has only lost focus keeps checking at the usual pace.
+    if (state != AppLifecycleState.inactive) {
+      folderSync.background = state != AppLifecycleState.resumed;
+    }
     if (widget.enablePlatform) {
       if (state == AppLifecycleState.resumed) {
         performance.start();

@@ -70,8 +70,14 @@ is local to this device and never dictates another device's location.
   revisions, even if their contents happen to match. There is no timestamp winner.
 * **Sync now** checks a connection immediately. Desktop filesystem notifications
   trigger debounced checks; a 15-second reconciliation catches missed events and
-  changes to Android document trees. Reopening the app also schedules a check.
-  Mobile work is not guaranteed while OurNet is suspended or closed.
+  changes to Android document trees (every 5 minutes while the app is in the
+  background; drive changes still sync at once). Reopening the app also
+  schedules a check. Mobile work is not guaranteed while OurNet is suspended
+  or closed.
+* A folder deleted locally lists the entries deleted with it (`removed`, up to
+  1,000). Records arrive in pages, newest first, so another device may get the
+  folder's deletion before its children's; it then waits for those instead of
+  restoring the folder as a conflict.
 * **Disconnect (keep files)** stops synchronization without deleting either copy.
   Missing roots, revoked permissions, incomplete provider listings, unsupported
   names and case collisions fail safely instead of looking like mass deletions.

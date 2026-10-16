@@ -252,10 +252,32 @@ class FolderSync {
     : _automatic = automatic {
     if (automatic) {
       _changes = node.onChangesTo(const {'drive'}, schedule);
-      _timer = Timer.periodic(const Duration(seconds: 15), (_) => schedule());
+      _poll();
       schedule();
     }
   }
+
+  bool _background = false;
+
+  /// How often connections are checked for changes no notification reported.
+  /// In the background the check slows down to save battery: an Android
+  /// folder is rescanned whole each time. Drive changes still sync at once.
+  Duration get pollInterval =>
+      _background ? const Duration(minutes: 5) : const Duration(seconds: 15);
+
+  /// Whether the app is in the background.
+  set background(bool value) {
+    if (value == _background) return;
+    _background = value;
+    if (_timer != null && !_closed) _poll();
+    if (!value) schedule();
+  }
+
+  void _poll() {
+    _timer?.cancel();
+    _timer = Timer.periodic(pollInterval, (_) => schedule());
+  }
+
   Map<String, dynamic> get connections => Map<String, dynamic>.from(
     node.store.setting('folder-sync/connections') as Map? ?? {},
   );
@@ -488,6 +510,10 @@ class FolderSync {
       String path,
       FolderItem? item,
     ) async {
+      // A folder's list of entries deleted with it belongs to that deletion.
+      data = {...data};
+      if (data['deleted'] != true || data['removed'] is! List)
+        data.remove('removed');
       final SignedObject object;
       if (item == null || item.directory) {
         object = await drive.write(data, parents: parents);
@@ -568,8 +594,44 @@ class FolderSync {
       final baselineByPath = {
         for (final item in state.values) item['path'] as String: item,
       };
+      // A folder deleted elsewhere lists the entries deleted with it
+      // ('removed'). Records travel in pages, newest first, so the folder's
+      // deletion can arrive before its children's: an unchanged child it
+      // lists is on its way out, not a concurrent addition.
+      int byDepth(String a, String b) {
+        final d = a.split('/').length.compareTo(b.split('/').length);
+        return d == 0 ? a.compareTo(b) : d;
+      }
+
+      final departing = <String>{};
+      for (final path in local.keys.toList()..sort(byDepth)) {
+        final entry = remote[path], base = baselineByPath[path];
+        if (!path.contains('/') ||
+            entry == null ||
+            base == null ||
+            entry.conflicted ||
+            entry.current.deleted ||
+            base['token'] != local[path]!.token ||
+            base['revision'] != entry.current.data['revision'])
+          continue;
+        final parentPath = path.substring(0, path.lastIndexOf('/'));
+        final parent = remote[parentPath];
+        if (departing.contains(parentPath) ||
+            (parent != null &&
+                !parent.conflicted &&
+                parent.current.deleted &&
+                (parent.current.data['removed'] as List?)?.contains(
+                      entry.current.entry,
+                    ) ==
+                    true))
+          departing.add(path);
+      }
+      final waiting = {
+        for (final path in departing) path.substring(0, path.lastIndexOf('/')),
+      };
       final dirtyParents = <String>{};
       for (final item in local.entries) {
+        if (departing.contains(item.key)) continue;
         final liveRemoteChild =
             remote[item.key]?.heads.any((v) => !v.deleted) ?? false;
         if (baselineByPath[item.key]?['token'] == item.value.token &&
@@ -605,11 +667,22 @@ class FolderSync {
         remote[path] = DriveEntry(entry.history, [version, ...entry.heads]);
       }
       // Local additions are processed parent-first, including empty directories.
-      final paths = {...local.keys, ...remote.keys}.toList()
-        ..sort((a, b) {
-          final d = a.split('/').length.compareTo(b.split('/').length);
-          return d == 0 ? a.compareTo(b) : d;
-        });
+      final paths = {...local.keys, ...remote.keys}.toList()..sort(byDepth);
+      // Entries deleted here this pass, by parent path, so a folder deleted
+      // with them can list them.
+      final removedUnder = <String, List<String>>{};
+      for (final e in remote.entries) {
+        final base = state[e.value.current.entry];
+        if (!e.key.contains('/') ||
+            local.containsKey(e.key) ||
+            base == null ||
+            base['path'] != e.key ||
+            base['token'] == null)
+          continue;
+        (removedUnder[e.key.substring(0, e.key.lastIndexOf('/'))] ??= []).add(
+          e.value.current.entry,
+        );
+      }
       final folderIds = <String, String>{
         '': root,
         // A concurrent new child follows its parent's stable identity even
@@ -696,10 +769,20 @@ class FolderSync {
               continue;
             }
             final baseRevision = base['revision'] as String;
+            final removed = removedUnder[path];
             state[v.entry] = {
               'path': path,
               'revision': await revise(
-                {...v.data, 'deleted': item == null},
+                {
+                  ...v.data,
+                  'deleted': item == null,
+                  // Bounded: a longer list only costs the early arrival case.
+                  if (item == null &&
+                      v.isFolder &&
+                      removed != null &&
+                      removed.length <= 1000)
+                    'removed': removed,
+                },
                 [baseRevision],
                 path,
                 item,
@@ -763,6 +846,8 @@ class FolderSync {
             continue;
           final item = local[path];
           if (item?.token != base['token']) continue;
+          // Its children's deletions have not arrived yet.
+          if (waiting.contains(path)) continue;
           if (item != null) await fs.remove(path, item.token);
           state[v.entry] = {
             'path': path,

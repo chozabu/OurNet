@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:test/test.dart';
 import 'package:ournet_core/ournet_core.dart';
@@ -381,6 +382,49 @@ void main() {
       );
     },
   );
+  test(
+    'a folder deletion arriving before its children\'s does not resurrect it',
+    () async {
+      await Directory('${desktop.path}/photos/sub').create(recursive: true);
+      await File('${desktop.path}/photos/old.txt').writeAsString('old');
+      await File('${desktop.path}/photos/sub/deep.txt').writeAsString('deep');
+      await settle();
+      await Directory('${desktop.path}/photos').delete(recursive: true);
+      await left.sync();
+      // Records travel in pages, newest first, so a large deletion reaches
+      // peers in parts. Deliver only the folder's own deletion.
+      final tombstone = (await Drive(a).entries())
+          .singleWhere((e) => e.current.data['name'] == 'photos')
+          .current
+          .object
+          .id;
+      final offered = await a.offer(
+        b.identity.device,
+        b.inventoryAfter(peerDevice: a.identity.device),
+      );
+      final only = offered.where((i) => jsonEncode(i).contains(tombstone));
+      expect(only, hasLength(1));
+      await b.receive(a.identity.device, only.toList());
+      await right.sync();
+      expect(right.status[root], isNot(contains('photos')));
+      expect(await File('${phone.path}/photos/old.txt').exists(), true);
+      await exchange();
+      await settle();
+      final folder = (await Drive(
+        a,
+      ).entries()).singleWhere((e) => e.current.data['name'] == 'photos');
+      expect(folder.conflicted, false);
+      expect(folder.current.deleted, true);
+      expect(await Directory('${phone.path}/photos').exists(), false);
+    },
+  );
+  test('folder checks slow down in the background', () async {
+    expect(left.pollInterval, const Duration(seconds: 15));
+    left.background = true;
+    expect(left.pollInterval, const Duration(minutes: 5));
+    left.background = false;
+    expect(left.pollInterval, const Duration(seconds: 15));
+  });
   test(
     'a new child follows a folder moved outside the connected subtree',
     () async {

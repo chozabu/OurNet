@@ -7,6 +7,13 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: folder deletions list their children
+
+A `drive` folder revision with `deleted: true` written by folder sync may carry
+`removed`, the entry IDs of its children deleted in the same pass (at most
+1,000). Readers use it only while that folder is deleted; older builds ignore
+it. The minimum peer capability is unchanged.
+
 ## 0.2.40: wake addresses in quick exchanges
 
 `delta` requests and replies carry `wake` (the address, or null for none),
