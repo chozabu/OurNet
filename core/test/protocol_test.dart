@@ -297,8 +297,8 @@ void main() {
       await b.close();
     });
     await friend(a, b);
-    await a.publish('post', {'text': 'first'});
-    await a.publish('post', {'text': 'second'});
+    final first = await a.publish('post', {'text': 'first'});
+    final second = await a.publish('post', {'text': 'second'});
     final page = await a.offer(b.identity.device, b.inventoryAfter());
     expect(page, hasLength(2));
     final broken = Json.from(page.first)
@@ -306,10 +306,23 @@ void main() {
         ...page.first['object'],
         'signature': page.last['object']['signature'],
       };
-    expect(await b.receive(a.identity.device, [broken, page.last]), isPositive);
+    final held = <String>{};
+    expect(
+      await b.receive(a.identity.device, [broken, page.last], held: held),
+      isPositive,
+    );
     expect(b.store.count, 1);
-    // With nothing accepted the rejection is still reported.
-    await expectLater(b.receive(a.identity.device, [broken]), throwsStateError);
+    expect(held, hasLength(1));
+    expect({first.id, second.id}, containsAll(held));
+    final kept = {...held};
+    // With nothing accepted the rejection is still reported, and items
+    // already held are still reported as held (a delta reply's receipts).
+    held.clear();
+    await expectLater(
+      b.receive(a.identity.device, [broken, page.last], held: held),
+      throwsStateError,
+    );
+    expect(held, kept);
   });
 
   test('offered pages fit the receiver\'s encoded page limit', () async {

@@ -640,11 +640,13 @@ class PeerNetwork implements PluginLink {
     if (peer == null) return const {};
     final self = _endpoint;
     final addresses = <String, String>{};
+    // One query for every known address, not one per shared certificate.
+    final known = node.store.settingsUnder('address/');
     for (final wire in node.sharedCertificates(peer)) {
       final id = (wire['data'] as Json)['device'] as String;
       final address = id == node.identity.device
           ? (self == null ? null : b64(self.addr.encode()))
-          : node.store.setting('address/$id');
+          : known[id];
       if (address is String) addresses[id] = address;
     }
     return addresses;
@@ -1829,7 +1831,9 @@ class PeerNetwork implements PluginLink {
   }
 }
 
-/// A connection to one device kept for the requests that follow.
+/// A connection to one device carrying live datagrams (see
+/// [PeerNetwork.datagram]), dialled here or opened by the peer. One dialled
+/// here closes after [PeerNetwork.datagramIdle] with nothing sent or received.
 class _DatagramLink {
   _DatagramLink(this.connection, this._closed);
   final iroh.Connection connection;
@@ -1846,6 +1850,7 @@ class _DatagramLink {
   }
 }
 
+/// A connection to one device kept for the requests that follow.
 class _Pooled {
   _Pooled(this.connection);
   final iroh.Connection connection;

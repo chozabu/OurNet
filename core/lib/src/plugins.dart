@@ -339,6 +339,7 @@ class Plugins {
   final _running = <String, _Running>{};
   final _surfaces = <String, Map<String, Json>>{};
   final _changes = StreamController<String>.broadcast();
+  final _statusChanges = StreamController<String>.broadcast();
   final _tunPackets =
       StreamController<({String plugin, Uint8List packet})>.broadcast();
   final _notices = StreamController<PluginNotice>.broadcast();
@@ -354,6 +355,10 @@ class Plugins {
 
   /// Fires with a plugin's ID when its status or what it shows changes.
   Stream<String> get changes => _changes.stream;
+
+  /// Like [changes], without what a plugin shows: fires when it is installed,
+  /// removed, started, stopped or fails, not on every surface update.
+  Stream<String> get statusChanges => _statusChanges.stream;
   Stream<PluginNotice> get notices => _notices.stream;
 
   /// Script plugins other plugins offer for the person to install (a Git
@@ -1058,6 +1063,7 @@ class Plugins {
     }
     node.registry.unhandle(liveRequest, _answerRequest);
     await _changes.close();
+    await _statusChanges.close();
     await _tunPackets.close();
     await _notices.close();
     await _offered.close();
@@ -1165,8 +1171,9 @@ class Plugins {
     }
   }
 
-  void _changed(String id) {
+  void _changed(String id, {bool surface = false}) {
     if (!_changes.isClosed) _changes.add(id);
+    if (!surface && !_statusChanges.isClosed) _statusChanges.add(id);
   }
 
   void _notice(String plugin, String kind, String title, String body) {
@@ -1271,7 +1278,7 @@ class Plugins {
         surfaces[surface] = Map.unmodifiable(
           {...?surfaces[surface], ...data}..removeWhere((_, v) => v == null),
         );
-        _changed(plugin.id);
+        _changed(plugin.id, surface: true);
       case 'datagram':
         final link = this.link;
         if (link != null && plugin.granted.contains('live')) {

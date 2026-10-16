@@ -1056,16 +1056,13 @@ class Node {
     final sent = request['items'];
     final accepted = <String>[];
     if (sent is List && sent.isNotEmpty) {
+      final held = <String>{};
       try {
-        await receive(peerDevice, sent);
+        await receive(peerDevice, sent, held: held);
       } on StateError {
         // Refused items are compared and offered again as usual.
       }
-      for (final item in sent) {
-        if (_parse(item)?.object.id case final id? when store.get(id) != null) {
-          accepted.add(id);
-        }
-      }
+      accepted.addAll(held);
     }
     final since = request['since'];
     final theirs = request['changes'];
@@ -1567,7 +1564,14 @@ class Node {
           ],
         };
 
-  Future<int> receive(String peerDevice, List<dynamic> items) async {
+  /// Checks and stores a page of [items], returning how many records were
+  /// added. [held], when given, collects the ids of the page's objects this
+  /// device holds afterwards, whether newly stored or already present.
+  Future<int> receive(
+    String peerDevice,
+    List<dynamic> items, {
+    Set<String>? held,
+  }) async {
     if (!allowedPeer(peerDevice)) throw StateError('Peer is not admitted');
     if (items.length > 32 || bytes(items).length > maxPageBytes)
       throw StateError('Page quota exceeded');
@@ -1609,6 +1613,12 @@ class Node {
         if (store.hasEvidence(r['object'], r['handoff'])) r,
     ]);
     changed += store.batch(() => signed.where(store.putEvidence).length);
+    held?.addAll(
+      store.heldObjects([
+        for (final item in parsed)
+          if (item != null) item.object.id,
+      ]),
+    );
     if (changed > 0) notify();
     // Report rejection when nothing was accepted, so callers back off.
     if (changed == 0 && rejected != null) {

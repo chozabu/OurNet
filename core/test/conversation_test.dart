@@ -48,10 +48,14 @@ void main() {
       expect(store.conversationUnread('peer'), 121);
       expect(store.conversationUnread(identity.person), 0);
       expect(store.conversationUnread('peer', blocked: {identity.person}), 0);
+      expect(store.unreadByPeer('peer'), {identity.person: 121});
+      expect(store.unreadByPeer(identity.person), isEmpty);
+      expect(store.unreadByPeer('peer', blocked: {identity.person}), isEmpty);
       final readId = expected.first;
       store.set('read/$readId', true);
       store.set('read/$readId', true);
       expect(store.conversationUnread('peer'), 120);
+      expect(store.unreadByPeer('peer'), {identity.person: 120});
       store.set('read/$readId', false);
       expect(store.conversationUnread('peer'), 121);
       expect(
@@ -71,10 +75,13 @@ void main() {
         identity.certificate,
       );
       store.put(expired);
+      // The grouped query drops expired records itself, like the single one.
+      expect(store.unreadByPeer('peer'), {identity.person: 121});
       expect(store.conversationUnread('peer'), 121);
       store.db.execute('DELETE FROM objects');
       expect(store.conversation(identity.person, 'peer'), isEmpty);
       expect(store.conversationUnread('peer'), 0);
+      expect(store.unreadByPeer('peer'), isEmpty);
     },
   );
 

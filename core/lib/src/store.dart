@@ -529,10 +529,7 @@ class Store {
     String? peer,
     Set<String> blocked = const {},
   }) {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    _execute('DELETE FROM message_unread WHERE expires>0 AND expires<=?', [
-      now,
-    ]);
+    _dropExpiredUnread();
     return _select(
           'SELECT COALESCE(SUM(unread),0) AS n FROM message_counts WHERE owner=? '
           '${peer == null ? '' : 'AND peer=? '}'
@@ -541,6 +538,29 @@ class Store {
         ).first['n']
         as int;
   }
+
+  /// Unread counts per peer for [owner] in one query, by the same rules as
+  /// [conversationUnread]: peers with none are left out.
+  Map<String, int> unreadByPeer(
+    String owner, {
+    Set<String> blocked = const {},
+  }) {
+    _dropExpiredUnread();
+    return {
+      for (final row in _select(
+        'SELECT peer,SUM(unread) AS n FROM message_counts WHERE owner=? '
+        'AND peer NOT IN (SELECT value FROM json_each(?)) '
+        'GROUP BY peer HAVING n>0',
+        [owner, jsonEncode(blocked.toList())],
+      ))
+        row['peer'] as String: row['n'] as int,
+    };
+  }
+
+  void _dropExpiredUnread() => _execute(
+    'DELETE FROM message_unread WHERE expires>0 AND expires<=?',
+    [DateTime.now().millisecondsSinceEpoch],
+  );
 
   /// Unread messages from [peer] to [owner], newest first.
   List<SignedObject> unreadMessages(
@@ -1315,6 +1335,15 @@ class Store {
 
   bool hasBlob(String id) =>
       _select('SELECT 1 FROM blobs WHERE id=?', [id]).isNotEmpty;
+
+  /// Those of the object [ids] stored here, in one query.
+  Set<String> heldObjects(Iterable<String> ids) => {
+    for (final row in _select(
+      'SELECT id FROM objects WHERE id IN (SELECT DISTINCT value FROM json_each(?))',
+      [jsonEncode(ids.toList())],
+    ))
+      row['id'] as String,
+  };
 
   /// Those of [ids] stored here, in one query.
   Set<String> heldBlobs(List<String> ids) => {

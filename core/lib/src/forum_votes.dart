@@ -56,23 +56,27 @@ class ForumVotes {
       ...?(node.store.setting(_waitingKey) as List?)?.cast<String>(),
     ];
     final before = waiting.length;
+    // Each post's voter map is decoded once and written once per page, not
+    // once per vote on it.
+    final page = _VoteMaps(node);
     // Votes this device could not read when they arrived; a group key that
     // arrived later may open them.
     for (final id in waiting.toList()) {
       final o = node.store.get(id);
       final p = o == null ? null : await node.content(o);
       if (o == null || p != null) waiting.remove(id);
-      if (o != null && p != null) _apply(o, p);
+      if (o != null && p != null) _apply(o, p, page);
     }
+    node.store.batch(page.flush);
     var changed = waiting.length != before;
     while (true) {
-      final page = node.store.objectsAfter(kind, cursor);
-      if (page.isEmpty) break;
-      for (final (rowid, o) in page) {
+      final votes = node.store.objectsAfter(kind, cursor);
+      if (votes.isEmpty) break;
+      for (final (rowid, o) in votes) {
         cursor = rowid;
         final p = await node.content(o);
         if (p != null) {
-          _apply(o, p);
+          _apply(o, p, page);
         } else if (node.visible(o) &&
             waiting.length < _maxWaiting &&
             !waiting.contains(o.id)) {
@@ -80,20 +84,21 @@ class ForumVotes {
           changed = true;
         }
       }
-      node.store.set(_cursorKey, cursor);
-      if (page.length < 128) break;
+      node.store.batch(() {
+        page.flush();
+        node.store.set(_cursorKey, cursor);
+      });
+      if (votes.length < 128) break;
     }
     if (changed) node.store.set(_waitingKey, waiting);
   }
 
-  void _apply(SignedObject o, Json p) {
+  void _apply(SignedObject o, Json p, [_VoteMaps? maps]) {
     final target = p['object'];
     final value = p['value'];
     if (target is! String || value is! int || value.abs() > 1) return;
     final key = 'votes/$target';
-    final all = Map<String, dynamic>.from(
-      node.store.setting(key) as Map? ?? const {},
-    );
+    final all = (maps ?? _VoteMaps(node)).of(key);
     final previous = all[o.author];
     if (previous is Map) {
       final order = (previous['created'] as int).compareTo(o.created);
@@ -108,7 +113,11 @@ class ForumVotes {
       'space': o.space,
       'public': o.isPublic,
     };
-    node.store.set(key, all);
+    if (maps != null) {
+      maps.dirty.add(key);
+    } else {
+      node.store.set(key, all);
+    }
   }
 
   /// Each person's current vote on [target], left out where withdrawn unless
@@ -193,6 +202,25 @@ class ForumVotes {
     );
     _apply(o, {'object': target(post, payload), 'value': value});
     return o;
+  }
+}
+
+/// Voter maps read during one pass over votes, written back together.
+class _VoteMaps {
+  final Node node;
+  _VoteMaps(this.node);
+  final _maps = <String, Map<String, dynamic>>{};
+  final dirty = <String>{};
+
+  Map<String, dynamic> of(String key) =>
+      _maps[key] ??= Map.from(node.store.setting(key) as Map? ?? const {});
+
+  /// Writes the changed maps; callers run it in a [Store.batch].
+  void flush() {
+    for (final key in dirty) {
+      node.store.set(key, _maps[key]);
+    }
+    dirty.clear();
   }
 }
 
