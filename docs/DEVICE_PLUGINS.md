@@ -214,6 +214,11 @@ live local samples, select a process in the table and walk the End-task
 confirmation without ending anything, and check the receiver's banner, log
 and Stop. Analysis is clean.
 
+After rebasing onto the dependency updates and adding thermal-zone and
+NVIDIA temperatures: native 4 passed (the sensor test reads two thermal
+zones and an RTX 4090 without administrator rights), core 400 with two
+skips, and the app 268 with two skips; analysis clean.
+
 The Windows debug build starts with the new native host. The plugins were
 not driven by hand in the running app, nor between two real devices; the
 widget tests run the real native host and plugins instead. Android remains

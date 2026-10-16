@@ -13,7 +13,10 @@ Bundled Device Dashboard and Remote Input plugins use additive plugin host API
 0.3 interfaces for resource monitoring, process control, mouse/keyboard input
 and write-only clipboard transfer. Their live messages use the existing
 `plugin` request envelope; no stored object kinds or peer minimum change.
-Older apps refuse the API 0.3 packages individually.
+Older apps refuse the API 0.3 packages individually. The 0.2 plugin
+messages add optional fields only (`v`, `processRows`, `status`, `gpu`), and
+the host refuses device capabilities to requests from devices not certified
+to the same identity.
 
 A `drive` folder revision with `deleted: true` written by folder sync may carry
 `removed`, the entry IDs of its children deleted in the same pass (at most
