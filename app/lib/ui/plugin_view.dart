@@ -104,7 +104,11 @@ class _PluginViewState extends State<PluginView> {
     _loadLibrary();
     _changes = widget.plugins.changes.listen((id) {
       if (id != widget.plugin || !mounted) return;
+      final before = _problemState();
       _loadLibrary();
+      // [_show] redraws only for new data: a plugin that stopped or failed,
+      // or whose interface stopped loading, needs a redraw of its own.
+      if (_problemState() != before) setState(() {});
       _show();
     });
     _show();
@@ -124,6 +128,12 @@ class _PluginViewState extends State<PluginView> {
         (widget.object != null && widget.object != old.object)) {
       _open();
     }
+  }
+
+  /// What decides whether [build] shows a problem instead of the plugin.
+  (String?, PluginStatus?, String?) _problemState() {
+    final plugin = widget.plugins[widget.plugin];
+    return (_error, plugin?.status, plugin?.error);
   }
 
   void _open() => widget.plugins.open(widget.plugin, widget.surface, {
@@ -232,15 +242,13 @@ class _PluginViewState extends State<PluginView> {
 }
 
 /// Draws the file attached to [plugin]'s object [id], [height] tall at most.
-typedef PluginImage =
-    Widget Function(String plugin, String id, double? height);
+typedef PluginImage = Widget Function(String plugin, String id, double? height);
 
 /// Asks the person for a file (`image` or `any`, as [accept] says), stores
 /// it, and returns what `FilePick`'s `onPicked` sends [plugin]: `{file,
 /// name, size}`, `file` a handle for `files.publish`. Null if they did not
 /// pick one.
-typedef PluginFilePicker =
-    Future<Json?> Function(String plugin, String accept);
+typedef PluginFilePicker = Future<Json?> Function(String plugin, String accept);
 
 /// OurNet's widgets for plugin interfaces, as library `ournet`: what core
 /// RFW lacks (text input, a canvas, keys, files) and what makes a plugin

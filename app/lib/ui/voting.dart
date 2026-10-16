@@ -51,16 +51,19 @@ extension _VotingPages on _OurNetAppState {
           o.id,
           o.space,
           memo('votesBySpace', () {
-            // Only votes and delegations in the post's space count.
-            final bySpace = <String, List<SignedObject>>{};
-            for (final v in node.store.objects()) {
-              if ((v.kind == 'vote' || v.kind == 'delegate') &&
-                  node.visible(v)) {
-                (bySpace[v.space] ??= []).add(v);
-              }
-            }
-            return bySpace;
-          })[o.space] ??
+                // Only votes and delegations in the post's space count.
+                final bySpace = <String, List<SignedObject>>{};
+                // Asked by kind: the newest objects of every kind would leave
+                // older votes out once other activity passed the limit.
+                for (final v in node.store.objects(
+                  kinds: ['vote', 'delegate'],
+                )) {
+                  if (node.visible(v)) {
+                    (bySpace[v.space] ??= []).add(v);
+                  }
+                }
+                return bySpace;
+              })[o.space] ??
               const <SignedObject>[],
         );
         final score = latest.values.fold<int>(0, (a, b) => a + b);
