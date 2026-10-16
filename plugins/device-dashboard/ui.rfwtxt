@@ -1,0 +1,56 @@
+import core.widgets;
+import core.material;
+import ournet;
+
+widget Dashboard = ListView(
+  padding: [16.0, 12.0, 16.0, 24.0],
+  children: [
+    Text(text: "Device Dashboard", style: {fontSize: 24.0, fontWeight: "w600"}),
+    Text(text: "Live information between your own devices. Nothing is saved to history."),
+    OutlinedButton(onPressed: event "sharing" {}, child: Text(text: data.shareLabel)),
+    switch data.sharing {
+      true: OutlinedButton(onPressed: event "control" {}, child: Text(text: data.controlLabel)),
+      default: SizedBoxShrink(),
+    },
+    Text(text: "Choose a device", style: {fontSize: 18.0, fontWeight: "w600"}),
+    TextButton(onPressed: event "local" {}, child: Text(text: "This device")),
+    ...for device in data.devices:
+      ListTile(title: Text(text: device.name), subtitle: Text(text: device.state),
+        onTap: event "select" {device: device.id}),
+    Text(text: data.targetName),
+    Text(text: data.status),
+    Row(children: [
+      TextButton(onPressed: event "refresh" {}, child: Text(text: "Refresh")),
+      TextButton(onPressed: event "watch" {}, child: Text(text: data.watchLabel)),
+    ]),
+    ...for metric in data.metrics:
+      ListTile(title: Text(text: metric.name), subtitle: Text(text: metric.value)),
+    switch data.hasReport {
+      true: Column(crossAxisAlignment: "stretch", children: [
+        Text(text: data.historyLabel),
+        Canvas(width: 300.0, height: 100.0, background: 0xff15232b, commands: data.graph,
+          label: "CPU usage history"),
+      ]),
+      default: SizedBoxShrink(),
+    },
+    Text(text: data.sensorNote),
+    switch data.confirming {
+      true: Card(child: Padding(padding: [12.0, 12.0, 12.0, 12.0], child:
+        Column(crossAxisAlignment: "stretch", children: [
+          Text(text: "End this process? Unsaved work may be lost."),
+          Text(text: data.confirmName),
+          Row(children: [
+            ElevatedButton(onPressed: event "confirm" {}, child: Text(text: "End process")),
+            TextButton(onPressed: event "cancel" {}, child: Text(text: "Cancel")),
+          ]),
+        ])
+      )),
+      default: SizedBoxShrink(),
+    },
+    Text(text: "Processes · top 128 by CPU, then memory · refreshed at most every 3 seconds",
+      style: {fontSize: 16.0, fontWeight: "w600"}),
+    ...for process in data.processes:
+      ListTile(title: Text(text: process.name), subtitle: Text(text: process.detail),
+        trailing: TextButton(onPressed: event "stop" {pid: process.pid}, child: Text(text: "End…"))),
+  ],
+);

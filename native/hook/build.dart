@@ -20,6 +20,7 @@ void main(List<String> args) async {
       crate.resolve('src/lib.rs'),
       crate.resolve('src/plugin.rs'),
       crate.resolve('src/tun.rs'),
+      crate.resolve('src/device.rs'),
       crate.resolve('wit/plugin.wit'),
     ]);
     if (triple == null || !await _installed(triple)) {

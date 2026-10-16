@@ -103,10 +103,11 @@ void main() {
       }),
     );
     expect(m.search['x.wiki.page']!.text, 'body');
-    // A plugin using files says API 0.2; a newer API is refused on reading.
+    // Files use API 0.2, device capabilities use 0.3; newer APIs are refused.
     expect(PluginManifest.parse({...manifest({}), 'api': '0.2'}).api, '0.2');
+    expect(PluginManifest.parse({...manifest({}), 'api': '0.3'}).api, '0.3');
     expect(
-      () => PluginManifest.parse({...manifest({}), 'api': '0.3'}),
+      () => PluginManifest.parse({...manifest({}), 'api': '0.4'}),
       throwsFormatException,
     );
     expect(m.activity, isEmpty);

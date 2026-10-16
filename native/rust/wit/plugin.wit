@@ -191,6 +191,26 @@ interface ui {
   notify: func(title: string, body: string);
 }
 
+/// Read-only resource samples. Requires `system-monitor`.
+interface system-monitor {
+  snapshot: func(processes: bool) -> result<string, string>;
+}
+
+/// End exactly the process shown by a sample, guarding against PID reuse.
+interface process-control {
+  stop: func(pid: u32, started: u64) -> result<_, string>;
+}
+
+/// Bounded mouse, text and named-key operations; requires `remote-input`.
+interface remote-input {
+  execute: func(command: string) -> result<_, string>;
+}
+
+/// Write text only: this interface cannot read the system clipboard.
+interface clipboard-write {
+  write: func(text: string) -> result<_, string>;
+}
+
 world plugin {
   use types.{object};
   import log;
@@ -204,6 +224,10 @@ world plugin {
   import package-files;
   import plugin-offers;
   import files;
+  import system-monitor;
+  import process-control;
+  import remote-input;
+  import clipboard-write;
 
   /// Called once after loading, and after a hot reload's `restore`.
   export init: func();

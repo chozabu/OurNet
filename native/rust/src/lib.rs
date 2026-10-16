@@ -9,6 +9,7 @@ use std::slice;
 
 mod plugin;
 mod tun;
+mod device;
 
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, Tag};

@@ -1,0 +1,6 @@
+{
+  "id":"device-dashboard", "name":"Device Dashboard", "version":"0.1.0", "api":"0.3",
+  "description":"Watch resource usage and running processes on your own Windows devices. Sharing and process control start off on each launch. Other devices can view the dashboard as controllers.",
+  "grants":["identity","live","system-monitor","process-control"],
+  "sections":[{"name":"dashboard","title":"Device Dashboard","icon":"devices","surface":"Dashboard","scopes":["personal"]}]
+}

@@ -1,0 +1,68 @@
+import core.widgets;
+import core.material;
+import ournet;
+
+widget RemoteInput = ListView(
+  padding: [16.0, 12.0, 16.0, 24.0],
+  children: [
+    Text(text: "Remote Input", style: {fontSize: 24.0, fontWeight: "w600"}),
+    Text(text: data.note),
+    OutlinedButton(onPressed: event "receiving" {}, child: Text(text: data.inputLabel)),
+    OutlinedButton(onPressed: event "clipboard" {}, child: Text(text: data.clipboardLabel)),
+    TextButton(onPressed: event "disable" {}, child: Text(text: "Stop all incoming control")),
+    Text(text: data.lastInput),
+    Text(text: "Choose a device", style: {fontSize: 18.0, fontWeight: "w600"}),
+    TextButton(onPressed: event "refresh" {}, child: Text(text: "Refresh devices")),
+    ...for device in data.devices:
+      ListTile(title: Text(text: device.name), subtitle: Text(text: device.state),
+        onTap: event "select" {device: device.id}),
+    Text(text: data.targetName),
+    Text(text: data.status),
+    TextInput(label: "Text to send", hint: "Type, paste or dictate here", lines: 3, maxLength: 16384,
+      value: data.text, onChanged: event "text" {}),
+    Row(children: [
+      TextButton(onPressed: event "type" {}, child: Text(text: "Type")),
+      TextButton(onPressed: event "copy" {}, child: Text(text: "Copy")),
+      TextButton(onPressed: event "paste" {}, child: Text(text: "Paste")),
+    ]),
+    Text(text: "Copy replaces the other device's clipboard. Paste also inserts it into the focused app."),
+    Text(text: "Touchpad · drag to move", style: {fontSize: 18.0, fontWeight: "w600"}),
+    Canvas(width: 300.0, height: 150.0, background: 0xff233340, commands: data.pad,
+      label: "Remote touchpad", onPointer: event "pointer" {}, onDrag: event "padDrag" {}),
+    Row(children: [
+      TextButton(onPressed: event "click" {button: "left"}, child: Text(text: "Left click")),
+      TextButton(onPressed: event "click" {button: "right"}, child: Text(text: "Right click")),
+    ]),
+    Row(children: [
+      TextButton(onPressed: event "scroll" {amount: 3}, child: Text(text: "Scroll up")),
+      TextButton(onPressed: event "scroll" {amount: -3}, child: Text(text: "Scroll down")),
+    ]),
+    Row(children: [
+      TextButton(onPressed: event "key" {key: "enter"}, child: Text(text: "Enter")),
+      TextButton(onPressed: event "key" {key: "backspace"}, child: Text(text: "Backspace")),
+      TextButton(onPressed: event "key" {key: "escape"}, child: Text(text: "Esc")),
+    ]),
+    Row(children: [
+      TextButton(onPressed: event "key" {key: "tab"}, child: Text(text: "Tab")),
+      TextButton(onPressed: event "key" {key: "left"}, child: Text(text: "←")),
+      TextButton(onPressed: event "key" {key: "up"}, child: Text(text: "↑")),
+      TextButton(onPressed: event "key" {key: "right"}, child: Text(text: "→")),
+      TextButton(onPressed: event "key" {key: "down"}, child: Text(text: "↓")),
+    ]),
+    Row(children: [
+      TextButton(onPressed: event "key" {key: "pageup"}, child: Text(text: "Previous slide")),
+      TextButton(onPressed: event "key" {key: "pagedown"}, child: Text(text: "Next slide")),
+    ]),
+    Text(text: "Media", style: {fontSize: 18.0, fontWeight: "w600"}),
+    Row(children: [
+      TextButton(onPressed: event "key" {key: "previous"}, child: Text(text: "Previous")),
+      TextButton(onPressed: event "key" {key: "play"}, child: Text(text: "Play / pause")),
+      TextButton(onPressed: event "key" {key: "next"}, child: Text(text: "Next")),
+    ]),
+    Row(children: [
+      TextButton(onPressed: event "key" {key: "volumedown"}, child: Text(text: "Volume −")),
+      TextButton(onPressed: event "key" {key: "volumeup"}, child: Text(text: "Volume +")),
+      TextButton(onPressed: event "key" {key: "mute"}, child: Text(text: "Mute")),
+    ]),
+  ],
+);

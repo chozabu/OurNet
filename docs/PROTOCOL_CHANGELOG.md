@@ -7,7 +7,13 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
-## Unreleased: folder deletions list their children
+## 0.2.41: device plugins and folder deletions
+
+Bundled Device Dashboard and Remote Input plugins use additive plugin host API
+0.3 interfaces for resource monitoring, process control, mouse/keyboard input
+and write-only clipboard transfer. Their live messages use the existing
+`plugin` request envelope; no stored object kinds or peer minimum change.
+Older apps refuse the API 0.3 packages individually.
 
 A `drive` folder revision with `deleted: true` written by folder sync may carry
 `removed`, the entry IDs of its children deleted in the same pass (at most

@@ -180,7 +180,8 @@ native PluginHost ── wasmtime (Cranelift; component model; no WASI), one thr
 
 The full world is `native/rust/wit/plugin.wit`; the Rust SDK is
 `plugins/sdk`. A manifest's `api` says which of it a plugin needs: `0.1`,
-or `0.2` for one that uses `files` (October 2026). A build refuses a package
+`0.2` for one that uses `files`, or `0.3` for device capabilities
+(October 2026). A build refuses a package
 naming an API it does not host when reading it, before anything installs,
 so a plugin that needs a newer app says so instead of failing to start. In
 brief:
@@ -193,6 +194,10 @@ brief:
 | `identity` | `identity` | me, this device, contacts (devices: name, online, runs this plugin), groups (space, name, members) |
 | `live` | `live` | send (reply via `on-reply`), datagram |
 | `tun` | `tun` | open (address, prefix, routes, MTU), write, close |
+| `system-monitor` | `system-monitor` | bounded JSON resource/process sample (API 0.3) |
+| `process-control` | `process-control` | end a sampled process with a matching start time (API 0.3) |
+| `remote-input` | `remote-input` | bounded mouse, Unicode text and named-key input (API 0.3) |
+| `clipboard-write` | `clipboard-write` | write text without clipboard read access (API 0.3) |
 | (none) | `local` | requests from programs on this computer arrive as `on-request` from device `local` |
 
 Exports: `init`, `on-objects`, `on-open(surface, context)`, `on-event`,
@@ -401,6 +406,11 @@ Phase 1 of [STORE-PLAN.md](STORE-PLAN.md):
   versions.
 
 ## First-party plugins
+
+Device Dashboard and Remote Input add opt-in, own-device monitoring, process
+control, mouse/keyboard input and write-only clipboard transfer. Their host
+capabilities use API 0.3 with four separate grants. See
+[DEVICE_PLUGINS.md](DEVICE_PLUGINS.md) for setup, permissions and platform limits.
 
 | Plugin | Shows | Uses |
 |---|---|---|

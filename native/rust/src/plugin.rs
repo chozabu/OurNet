@@ -33,7 +33,7 @@ wasmtime::component::bindgen!({ path: "wit", world: "plugin" });
 use crate::tun as interface;
 use ournet::plugin::{
     clock, files, identity, live, log, objects, package_files, plugin_offers, storage, tun, types,
-    ui,
+    ui, system_monitor, process_control, remote_input, clipboard_write,
 };
 
 /// Posts one message to Dart: the plugin's handle and a buffer Dart frees
@@ -41,7 +41,7 @@ use ournet::plugin::{
 type Post = unsafe extern "C" fn(handle: u64, data: *mut u8, len: usize);
 
 /// Bumped when the message protocol or the WIT world changes.
-const HOST_VERSION: u32 = 2;
+const HOST_VERSION: u32 = 3;
 
 /// CPU time one call into a plugin may use, excluding time spent waiting on
 /// the host. A plugin over it is stopped: it has looped, not worked.
@@ -194,7 +194,7 @@ const ALWAYS: [&str; 7] = ["types", "log", "clock", "storage", "ui", "package-fi
 const OFFER_LIMIT: usize = 4 << 20;
 
 /// Interfaces a plugin may be granted.
-const GRANTABLE: [&str; 4] = ["objects", "identity", "live", "tun"];
+const GRANTABLE: [&str; 8] = ["objects", "identity", "live", "tun", "system-monitor", "process-control", "remote-input", "clipboard-write"];
 
 /// The largest package entry `package-files.read` returns.
 const FILE_LIMIT: u64 = 16 << 20;
@@ -307,6 +307,7 @@ struct Host {
     tun: Option<interface::Tun>,
     grants: Vec<String>,
     package: Option<PathBuf>,
+    device: crate::device::Monitor,
 }
 
 /// A token bucket: whether one more may go now.
@@ -399,6 +400,38 @@ fn object_from(v: &Value) -> Option<types::Object> {
 }
 
 impl types::Host for Host {}
+
+impl system_monitor::Host for Host {
+    fn snapshot(&mut self, processes: bool) -> Result<String, String> {
+        self.granted("system-monitor")?;
+        // OS sampling is host work, like an import answered by Dart. In
+        // particular Windows' first performance-counter query may wait.
+        let began = Instant::now();
+        let result = self.device.snapshot(processes).map(|v| v.to_string());
+        self.waited += began.elapsed();
+        result
+    }
+}
+impl process_control::Host for Host {
+    fn stop(&mut self, pid: u32, started: u64) -> Result<(), String> {
+        self.granted("process-control")?;
+        self.device.stop(pid, started)
+    }
+}
+impl remote_input::Host for Host {
+    fn execute(&mut self, command: String) -> Result<(), String> {
+        self.granted("remote-input")?;
+        crate::device::input(&command)
+    }
+}
+impl clipboard_write::Host for Host {
+    fn write(&mut self, text: String) -> Result<(), String> {
+        self.granted("clipboard-write")?;
+        if text.len() > 16384 { return Err("Text exceeds 16 KiB".into()); }
+        self.ask("clipboard-write.write", json!({"text": text}))?;
+        Ok(())
+    }
+}
 
 impl log::Host for Host {
     fn log(&mut self, level: log::Level, message: String) {
@@ -902,6 +935,7 @@ impl Running {
             tun: None,
             grants: config.grants.clone(),
             package: config.package,
+            device: crate::device::Monitor::default(),
         };
         let mut store = Store::new(engine, host);
         Self::configure(&mut store);

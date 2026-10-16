@@ -31,6 +31,24 @@ pub use bindings::ournet::plugin::identity::{Contact, Device, Group};
 pub use bindings::ournet::plugin::types::{Audience, Object};
 pub use serde_json::{self, json, Value};
 
+/// Device capabilities added in host API 0.3, each with its own grant.
+pub mod device {
+    use super::{host, Value};
+    pub fn snapshot(processes: bool) -> Result<Value, String> {
+        let text = host::system_monitor::snapshot(processes)?;
+        serde_json::from_str(&text).map_err(|e| e.to_string())
+    }
+    pub fn stop(pid: u32, started: u64) -> Result<(), String> {
+        host::process_control::stop(pid, started)
+    }
+    pub fn input(command: &Value) -> Result<(), String> {
+        host::remote_input::execute(&command.to_string())
+    }
+    pub fn copy(text: &str) -> Result<(), String> {
+        host::clipboard_write::write(text)
+    }
+}
+
 /// A plugin. Every method has a default that does nothing, so a plugin
 /// implements only what it uses. One value lives for as long as the plugin
 /// runs; a hot reload hands its [Plugin::save_state] to the new version.

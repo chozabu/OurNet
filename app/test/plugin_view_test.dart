@@ -151,6 +151,67 @@ Future<void> _loadFonts() async {
 }
 
 void main() {
+  for (final (id, surface, title) in [
+    ('device-dashboard', 'Dashboard', 'Device Dashboard'),
+    ('remote-input', 'RemoteInput', 'Remote Input'),
+  ]) {
+    testWidgets('$title draws on a phone and preserves text while updating', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final rig = await Rig.start(tester, [id]);
+      await rig.show(id, surface);
+      await rig.untilText(title);
+      expect(tester.takeException(), isNull);
+      if (id == 'device-dashboard' && Platform.isWindows) {
+        rig.plugins.event(id, surface, 'local', {});
+        await rig.untilText('Memory');
+        expect(rig.plugins.surface(id, surface)['processes'], isNotEmpty);
+        final process =
+            (rig.plugins.surface(id, surface)['processes'] as List).first
+                as Map;
+        rig.plugins.event(id, surface, 'stop', {'pid': process['pid']});
+        await rig.until(
+          () => rig.plugins.surface(id, surface)['confirming'] == true,
+        );
+        await tester.scrollUntilVisible(
+          find.text('End this process? Unsaved work may be lost.'),
+          200,
+          scrollable: find.byType(Scrollable).first,
+        );
+        rig.plugins.event(id, surface, 'cancel', {});
+        await rig.until(
+          () => rig.plugins.surface(id, surface)['confirming'] == false,
+        );
+      }
+      if (id == 'remote-input') {
+        final field = find.byType(TextField);
+        await tester.scrollUntilVisible(
+          field,
+          200,
+          scrollable: find.byType(Scrollable).first,
+        );
+        expect(tester.widget<TextField>(field).maxLength, 16384);
+        await tester.enterText(field, 'Dictated text 👋');
+        await rig.until(
+          () => rig.plugins.surface(id, surface)['text'] == 'Dictated text 👋',
+        );
+        rig.plugins.event(id, surface, 'clipboard', {});
+        await rig.until(
+          () => rig.plugins.surface(id, surface)['clipboard'] == true,
+        );
+        expect(
+          (tester.widget<TextField>(field)).controller!.text,
+          'Dictated text 👋',
+        );
+      }
+      await rig.shot(id);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('the wiki writes, links and keeps history', (tester) async {
     tester.view.physicalSize = const Size(800, 600);
     tester.view.devicePixelRatio = 1;
@@ -240,7 +301,9 @@ void main() {
     await tester.enterText(find.widgetWithText(TextField, 'Text'), long);
     await rig.until(() => true);
     await tester.tap(find.text('Add a picture'));
-    await rig.until(() => rig.node.store.objects(kind: 'x.wiki.image').isNotEmpty);
+    await rig.until(
+      () => rig.node.store.objects(kind: 'x.wiki.image').isNotEmpty,
+    );
     expect(picked, ['image']);
     final picture = rig.node.store.objects(kind: 'x.wiki.image').single;
     await rig.until(
@@ -261,7 +324,9 @@ void main() {
 
     // Search and the activity feed open the plugin at an object.
     await rig.show('wiki', 'Wiki', image: image, object: page.id);
-    await rig.until(() => find.textContaining('The end.').evaluate().isNotEmpty);
+    await rig.until(
+      () => find.textContaining('The end.').evaluate().isNotEmpty,
+    );
     expect(find.text('Cats'), findsOneWidget);
   });
 

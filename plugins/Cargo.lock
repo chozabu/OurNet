@@ -310,6 +310,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 
 [[package]]
+name = "device-dashboard"
+version = "0.1.0"
+dependencies = [
+ "ournet-plugin",
+ "serde_json",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1018,6 +1026,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32eef8b209c3c1c15dbad02c1f30f9539f00dc7253e0cbcdaae442a50a09d7c1"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "remote-input"
+version = "0.1.0"
+dependencies = [
+ "ournet-plugin",
+ "serde_json",
 ]
 
 [[package]]

@@ -286,6 +286,7 @@ LocalWidgetLibrary ournetWidgets({
     hint: source.v<String>(['hint']),
     label: source.v<String>(['label']),
     lines: source.v<int>(['lines']) ?? 1,
+    maxLength: source.v<int>(['maxLength']),
     clearOnSubmit: source.v<bool>(['clearOnSubmit']) ?? false,
     onSubmitted: source.handler<ValueChanged<String>>(
       ['onSubmitted'],
@@ -424,6 +425,7 @@ class _TextInput extends StatefulWidget {
   final String value;
   final String? hint, label;
   final int lines;
+  final int? maxLength;
   final bool clearOnSubmit;
   final ValueChanged<String>? onSubmitted, onChanged;
   const _TextInput({
@@ -431,6 +433,7 @@ class _TextInput extends StatefulWidget {
     required this.hint,
     required this.label,
     required this.lines,
+    this.maxLength,
     required this.clearOnSubmit,
     required this.onSubmitted,
     required this.onChanged,
@@ -466,6 +469,7 @@ class _TextInputState extends State<_TextInput> {
   @override
   Widget build(BuildContext context) => TextField(
     controller: controller,
+    maxLength: widget.maxLength?.clamp(1, 65536),
     minLines: widget.lines > 1 ? widget.lines : null,
     maxLines: widget.lines > 1 ? null : 1,
     keyboardType: widget.lines > 1 ? TextInputType.multiline : null,

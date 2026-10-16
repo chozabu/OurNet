@@ -298,6 +298,9 @@ class Plugins {
   /// `{"memory": true}` (packets come to [tunPackets]). Null: no VPNs here.
   Future<Json> Function(String plugin, Json settings)? openTun;
 
+  /// Write-only clipboard capability, supplied by the foreground app.
+  Future<void> Function(String text)? writeClipboard;
+
   /// Closes what [openTun] opened for [plugin].
   void Function(String plugin)? closeTun;
 
@@ -318,6 +321,7 @@ class Plugins {
       owner: 'plugins',
       poolable: true,
     );
+    unawaited(_warmDeviceNames());
   }
 
   /// The live request type plugins' messages travel as.
@@ -345,6 +349,51 @@ class Plugins {
   final _notices = StreamController<PluginNotice>.broadcast();
   final _offered = StreamController<PluginOffered>.broadcast();
   bool _closed = false;
+  int _deviceNameCursor = 0;
+  final _deviceNameRecords = <String, SignedObject>{};
+
+  // identity.contacts is used at input rates. Consume each public rename
+  // once, in bounded arrival-order pages, instead of scanning name history
+  // for every pointer reply. Retain only the current name per known device.
+  bool _advanceDeviceNames() {
+    final page = node.store.objectsAfter('device_name', _deviceNameCursor);
+    for (final (cursor, object) in page) {
+      _deviceNameCursor = cursor;
+      if (!object.isPublic || !node.visible(object)) continue;
+      final payload = object.data['payload'];
+      if (payload is! Map) continue;
+      final device = payload['device'], label = payload['label'];
+      if (device is! String || label is! String || label.isEmpty) continue;
+      final owner = device == node.identity.device
+          ? node.person
+          : node.contacts[device]?.person;
+      if (owner != object.author) continue;
+      final previous = _deviceNameRecords[device];
+      if (previous == null ||
+          object.created > previous.created ||
+          (object.created == previous.created &&
+              object.id.compareTo(previous.id) < 0)) {
+        _deviceNameRecords[device] = object;
+      }
+    }
+    return page.length == 256;
+  }
+
+  Future<void> _warmDeviceNames() async {
+    do {
+      await Future<void>.delayed(Duration.zero);
+      if (_closed) return;
+    } while (_advanceDeviceNames());
+  }
+
+  Map<String, String> _deviceNames() {
+    _advanceDeviceNames();
+    return {
+      for (final entry in _deviceNameRecords.entries)
+        if (node.visible(entry.value))
+          entry.key: '${(entry.value.data['payload'] as Map)['label']}',
+    };
+  }
 
   /// When each plugin last had an event from the person: offering a plugin
   /// to install is allowed only just after one.
@@ -1673,10 +1722,19 @@ class Plugins {
         return null;
       case 'identity.me':
         return node.person;
+      case 'clipboard-write.write':
+        final text = args['text'];
+        if (text is! String || utf8.encode(text).length > 16384) {
+          throw StateError('Text exceeds 16 KiB');
+        }
+        final write = writeClipboard;
+        if (write == null) throw StateError('Clipboard is unavailable');
+        await write(text);
+        return null;
       case 'identity.device':
         return node.identity.device;
       case 'identity.contacts':
-        final names = node.deviceNames();
+        final names = _deviceNames();
         final now = node.now();
         final people = <String, List<Json>>{};
         for (final c in node.contacts.values) {
@@ -1684,7 +1742,7 @@ class Plugins {
           final seen = node.lastSeen(c.device);
           (people[c.person] ??= []).add({
             'id': c.device,
-            'name': names[c.device] ?? '',
+            'name': names[c.device] ?? c.label,
             'online': seen != null && now - seen < 10 * 60 * 1000,
             'plugin': link?.runs(c.device, plugin.id) ?? false,
           });

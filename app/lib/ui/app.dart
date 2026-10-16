@@ -1948,6 +1948,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           ..nameOf = name
           ..follow = notes.state.subscribe
           ..openTun = openPluginInterface
+          ..writeClipboard = (text) {
+            return Clipboard.setData(ClipboardData(text: text));
+          }
           ..closeTun = (_) {
             if (Platform.isAndroid) {
               unawaited(
@@ -2050,6 +2053,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     'grid' => Icons.grid_3x3,
     'sports' => Icons.sports_esports_outlined,
     'vpn' => Icons.vpn_lock_outlined,
+    'devices' => Icons.devices_outlined,
     'chat' => Icons.chat_outlined,
     'bug_report' => Icons.bug_report_outlined,
     'poll' => Icons.poll_outlined,

@@ -12,13 +12,25 @@ class PluginManifest {
   /// Interfaces a plugin uses only when the person grants them at install:
   /// its own objects, names and groups, live messages to friends, a virtual
   /// network interface (a VPN), and requests from programs on this computer
-  /// through the app's [LocalBridge] (git, for the Git plugin).
-  static const grantable = {'objects', 'identity', 'live', 'tun', 'local'};
+  /// through the app's [LocalBridge] (git, for the Git plugin). Device
+  /// monitoring, process control, input and clipboard writes are separate grants.
+  static const grantable = {
+    'objects',
+    'identity',
+    'live',
+    'tun',
+    'local',
+    'system-monitor',
+    'process-control',
+    'remote-input',
+    'clipboard-write',
+  };
 
-  /// The plugin API versions this build hosts. 0.2 adds `files`: a plugin
-  /// that uses it says 0.2, so builds without it refuse it when reading the
-  /// package rather than failing to start it.
-  static const apis = {'0.1', '0.2'};
+  /// The plugin API versions this build hosts. 0.3 adds permissioned device
+  /// monitoring, process control, input and clipboard writes. 0.2 adds `files`.
+  /// Packages declare the API they need so older builds refuse them when
+  /// reading the package rather than failing to start them.
+  static const apis = {'0.1', '0.2', '0.3'};
 
   final String id;
   final String name;

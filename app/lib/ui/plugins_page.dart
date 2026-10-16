@@ -8,6 +8,11 @@ import 'package:ournet_core/ournet_core.dart';
 
 /// What each grant lets a plugin do, as the install prompt says it.
 const grantMeanings = {
+  'system-monitor': 'Read system resource usage and running process names',
+  'process-control': 'End running processes on this device',
+  'remote-input':
+      'Control the mouse and type into other applications on this device',
+  'clipboard-write': 'Replace text in this device’s clipboard (cannot read it)',
   'objects': 'Save and sync its own data, signed by you',
   'identity': "See your friends' and groups' names and who is in each group",
   'live': "Exchange live messages with friends' devices that run it",
