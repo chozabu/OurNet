@@ -599,10 +599,10 @@ class Store {
   /// to consume new immutable records without revisiting retained history.
   List<(int, SignedObject)> objectsAfter(String kind, int cursor) => [
     for (final row in _select(
-      'SELECT rowid,id FROM objects WHERE kind=? AND rowid>? ORDER BY rowid LIMIT 256',
+      'SELECT rowid,id,wire FROM objects WHERE kind=? AND rowid>? ORDER BY rowid LIMIT 256',
       [kind, cursor],
     ))
-      (row['rowid'] as int, get(row['id'] as String)!),
+      (row['rowid'] as int, _parse(row['id'] as String, row['wire'] as String)),
   ];
 
   /// Objects newest first. [after] resumes just past one already returned, so

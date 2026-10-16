@@ -5,12 +5,10 @@ import 'package:ournet_transport/ournet_transport.dart';
 import '../services/thumbnails.dart';
 import 'image_viewer.dart';
 
+final _imageName = RegExp(r'\.(png|jpe?g|webp|gif|bmp)$', caseSensitive: false);
+
 bool isImagePayload(Json p) =>
-    p['chunks'] is List &&
-    RegExp(
-      r'\.(png|jpe?g|webp|gif|bmp)$',
-      caseSensitive: false,
-    ).hasMatch('${p['name']}');
+    p['chunks'] is List && _imageName.hasMatch('${p['name']}');
 
 /// A list preview for an image attachment. It displays the stored encrypted
 /// thumbnail through a stable image cache key, so recreating the row (e.g. when

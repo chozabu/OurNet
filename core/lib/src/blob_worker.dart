@@ -274,9 +274,9 @@ Future<TransferableTypedData?> _readLocal(
         if (bytes.length > 128 * 1024 + 64 || blobHash(bytes) != hash) {
           throw StateError('Invalid file chunk');
         }
-        final plain = key == null
-            ? bytes
-            : Uint8List.fromList(await openBlob(bytes, key));
+        final opened = key == null ? bytes : await openBlob(bytes, key);
+        // Copied once more into the transfer below, so no copy here.
+        final plain = opened is Uint8List ? opened : Uint8List.fromList(opened);
         size += plain.length;
         if (size > budget) throw StateError('File size exceeded');
         chunks.add(plain);

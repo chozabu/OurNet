@@ -27,6 +27,7 @@ class Undelivered {
 
   void _scan() {
     final now = DateTime.now();
+    final target = node.store.insertionCursor;
     var added = false;
     while (true) {
       final page = node.store.insertedAfter(_cursor, ['message']);
@@ -44,6 +45,9 @@ class Undelivered {
       }
       if (page.length < 128) break;
     }
+    // Everything up to here was seen (this runs synchronously), so the next
+    // scan need not walk the other kinds stored since the last message.
+    if (_cursor < target) _cursor = target;
     if (added) onWaiting?.call();
   }
 

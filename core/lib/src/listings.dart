@@ -223,6 +223,7 @@ class Listings {
     final friends = {for (final c in node.contacts.values) c.person};
     final seen = <String>{};
     final bySpace = <String, Listing>{};
+    final allowed = <String, bool>{};
     for (final o in node.store.objects(kind: kind, space: home, limit: maxScan)) {
       if (!o.isPublic ||
           !node.visible(o) ||
@@ -233,7 +234,9 @@ class Listings {
       final p = o.data['payload'];
       if (p is! Json) continue;
       final target = p['space'];
-      if (target is! String || !advertisable(target)) continue;
+      if (target is! String || !(allowed[target] ??= advertisable(target))) {
+        continue;
+      }
       // Newest first: a person's latest word on a space is the one that counts.
       if (!seen.add('${o.author} $target') || p['off'] == true) continue;
       final name = p['name'];

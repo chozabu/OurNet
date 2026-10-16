@@ -1321,8 +1321,8 @@ class NoteEditorState extends State<NoteEditor> with WidgetsBindingObserver {
 
   void toggleCheckboxes() {
     remember();
-    if (checklistMode && allItems().isNotEmpty) {
-      final items = allItems();
+    final items = checklistMode ? allItems() : const <String>[];
+    if (items.isNotEmpty) {
       final text = [
         if (inputs['text']!.text.isNotEmpty) inputs['text']!.text,
         ...items.map((i) => inputs[_itemField(i)]!.text),

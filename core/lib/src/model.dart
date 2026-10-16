@@ -85,8 +85,11 @@ String canonicalHash(String canonical) => sha256Hex(utf8.encode(canonical));
 String blobHash(List<int> value) => sha256Hex(value);
 String b64(List<int> value) => base64UrlEncode(value);
 List<int> unb64(String value) => base64Url.decode(value);
-String randomId() =>
-    b64(List.generate(24, (_) => Random.secure().nextInt(256)));
+String randomId() => b64(randomBytes(24));
+
+/// [length] bytes from one shared secure generator.
+List<int> randomBytes(int length) =>
+    List<int>.generate(length, (_) => _secure.nextInt(256));
 
 /// The signature algorithm, named as `sig` inside what new builds sign, so a
 /// successor can be introduced beside it. Signed data without `sig` is from
@@ -235,7 +238,7 @@ class SealedRoot {
     final empty = phrase.trim().isEmpty;
     if (empty) (memory, iterations) = (8 * 1024, 1);
     final person = b64((await root.extractPublicKey()).bytes);
-    final salt = List.generate(16, (_) => Random.secure().nextInt(256));
+    final salt = randomBytes(16);
     final key = await _derive(phrase, salt, memory, iterations);
     final box = await aead.encrypt(
       await root.extractPrivateKeyBytes(),
@@ -524,7 +527,8 @@ class SignedObject {
   /// milliseconds since the epoch. Prefer this over comparing with 0.
   int get expires => data['expires'];
   bool get hasExpiry => expires != 0;
-  List<String> get audience => (data['audience'] as List).cast<String>();
+  late final List<String> audience = (data['audience'] as List)
+      .cast<String>();
   bool get isPublic => audience.isEmpty;
 
   /// The plugin that wrote this object, `<id>@<version>`; null for objects
@@ -618,7 +622,7 @@ GroupKey groupKeyFrom(Json k) => (id: k['id'] as String, key: unb64(k['key']));
 
 Json newGroupKey() => {
   'id': randomId(),
-  'key': b64(List<int>.generate(32, (_) => _secure.nextInt(256))),
+  'key': b64(randomBytes(32)),
 };
 
 final _secure = Random.secure();
@@ -786,10 +790,11 @@ Future<Uint8List> sealBlob(
     secretKey: key,
     aad: versioned ? const [blobVersion] : const [],
   );
-  return Uint8List.fromList([
-    if (versioned) blobVersion,
-    ...box.concatenation(),
-  ]);
+  final body = box.concatenation();
+  final at = versioned ? 1 : 0;
+  final sealed = Uint8List(at + body.length)..setRange(at, at + body.length, body);
+  if (versioned) sealed[0] = blobVersion;
+  return sealed;
 }
 
 /// Opens a blob written by [sealBlob], or by builds before versioning, whose

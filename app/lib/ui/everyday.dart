@@ -368,13 +368,13 @@ extension _EverydayPages on _OurNetAppState {
                           roomChecks.remove(item.data['entry']);
                         }
                       }
-                      final visible = all.where((i) {
-                        final type = i.data['type'];
-                        if (type == 'pin' || i.data['deleted'] == true) {
-                          return false;
-                        }
-                        return type == 'file';
-                      }).toList();
+                      final visible = all
+                          .where(
+                            (i) =>
+                                i.data['type'] == 'file' &&
+                                i.data['deleted'] != true,
+                          )
+                          .toList();
                       visible.sort((a, b) {
                         final pinned = (pins.contains(b.data['entry']) ? 1 : 0)
                             .compareTo(pins.contains(a.data['entry']) ? 1 : 0);

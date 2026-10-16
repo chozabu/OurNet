@@ -413,13 +413,12 @@ class NoteState {
   Future<void> label(Iterable<String> notes, String label, bool value) =>
       setAll([
         for (final note in notes)
-          if (labelsOf(note).contains(label) != value)
+          if (labelsOf(note) case final current
+              when current.contains(label) != value)
             (
               'labels',
               note,
-              value
-                  ? [...labelsOf(note), label]
-                  : (labelsOf(note)..remove(label)),
+              value ? [...current, label] : (current..remove(label)),
             ),
       ]);
 }

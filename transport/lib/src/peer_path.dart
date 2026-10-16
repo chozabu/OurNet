@@ -24,10 +24,12 @@ class PeerPath {
 
   /// Reads iroh's debug rendering of a transport address: `Relay(<url>)`
   /// or `Ip(<socket address>)`. Null for anything else.
+  static final _relay = RegExp(r'^Relay\((.+)\)$'), _ip = RegExp(r'^Ip\((.+)\)$');
+
   static PeerPath? parse(String remoteAddr, DateTime at) {
-    final relay = RegExp(r'^Relay\((.+)\)$').firstMatch(remoteAddr);
+    final relay = _relay.firstMatch(remoteAddr);
     if (relay != null) return PeerPath(PathKind.relay, relay[1]!, at);
-    final ip = RegExp(r'^Ip\((.+)\)$').firstMatch(remoteAddr);
+    final ip = _ip.firstMatch(remoteAddr);
     if (ip == null) return null;
     final address = ip[1]!;
     return PeerPath(

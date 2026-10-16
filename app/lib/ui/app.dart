@@ -220,7 +220,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// an event, or reminders): reading its history costs time on a large
   /// profile, and most sessions never ask.
   CalendarController? calendarControllerOrNull;
-  CalendarFlows? calendarFlowsOrNull;
   final groupCalendars = <String, CalendarController>{};
 
   /// Sent messages without receipts; only where this isolate owns the
@@ -1494,6 +1493,33 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     return result;
   }
 
+  // Only these three choose the theme; the root redraws far more often.
+  (bool, bool, int)? _themeKey;
+  ThemeData? _themeData;
+  ThemeData _theme() {
+    final key = (compact, dark, accent);
+    if (key == _themeKey) return _themeData!;
+    _themeKey = key;
+    return _themeData = ThemeData(
+      useMaterial3: true,
+      visualDensity: compact ? VisualDensity.compact : VisualDensity.standard,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Color(accent),
+        brightness: dark ? Brightness.dark : Brightness.light,
+      ),
+      inputDecorationTheme: const InputDecorationTheme(
+        border: OutlineInputBorder(),
+      ),
+      cardTheme: const CardThemeData(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(20)),
+        ),
+        elevation: 0,
+        margin: EdgeInsets.symmetric(vertical: 6),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => MaterialApp(
     navigatorKey: noteNavigator,
@@ -1501,7 +1527,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       controller: () => calendarController,
       open: (context, link) => calendarFlows.openLink(context, link),
       child: ChatLinks(
-        joined: (space) => publicChats.joined.contains(space),
+        joined: (space) => publicChats.isJoined(space),
         open: followChatLink,
         child: ObjectLinks(
           joined: (space) => node.subscriptions.contains(space),
@@ -1533,24 +1559,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     debugShowCheckedModeBanner: false,
     scaffoldMessengerKey: messenger,
     title: 'OurNet',
-    theme: ThemeData(
-      useMaterial3: true,
-      visualDensity: compact ? VisualDensity.compact : VisualDensity.standard,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: Color(accent),
-        brightness: dark ? Brightness.dark : Brightness.light,
-      ),
-      inputDecorationTheme: const InputDecorationTheme(
-        border: OutlineInputBorder(),
-      ),
-      cardTheme: const CardThemeData(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(20)),
-        ),
-        elevation: 0,
-        margin: EdgeInsets.symmetric(vertical: 6),
-      ),
-    ),
+    theme: _theme(),
     home: Builder(
       builder: (context) => LayoutBuilder(
         builder: (context, constraints) {
@@ -2169,8 +2178,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     );
     return picked.singleOrNull?.readAsBytes();
   }
-
-  Widget navBadge(String kind) => countBadge(unread(kind));
 
   /// Counts are capped where they are counted (see [Store.unreadIn]).
   Widget countBadge(int count) =>

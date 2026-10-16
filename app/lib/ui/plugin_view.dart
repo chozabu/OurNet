@@ -74,6 +74,7 @@ class _PluginViewState extends State<PluginView> {
   static final _parsed = <String, (int, RemoteWidgetLibrary)>{};
 
   final runtime = Runtime();
+  (String, RemoteWidgetLibrary)? _loaded;
   final content = DynamicContent();
   StreamSubscription<String>? _changes;
   String? _error;
@@ -142,7 +143,11 @@ class _PluginViewState extends State<PluginView> {
           ? cached.$2
           : parseLibraryFile(source);
       _parsed[widget.plugin] = (source.hashCode, library);
-      runtime.update(_library, library);
+      // Updating drops the runtime's widget cache, so only on a real change.
+      if (_loaded?.$1 != widget.plugin || !identical(_loaded?.$2, library)) {
+        runtime.update(_library, library);
+        _loaded = (widget.plugin, library);
+      }
       _error = null;
     } catch (e) {
       _error = 'Its interface does not load: $e';

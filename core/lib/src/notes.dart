@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:math';
 import 'dart:typed_data';
 import 'everyday.dart';
 import 'note_state.dart';
@@ -496,34 +495,34 @@ class Notes {
     // all of them, so a limit here would silently drop whatever was written
     // once and never revised: the title, an early checklist item. It is
     // bounded by the note, not by the profile.
+    // Membership by epoch, and leaves by epoch and author, looked up once
+    // rather than rescanned for every operation.
+    final owner = room.data['owner'];
+    final epochRooms = <Object?, EverydayItem>{};
+    final leaves = <(Object?, String), List<EverydayItem>>{};
+    for (final r in records) {
+      if (r.object.kind == 'room' &&
+          r.object.author == owner &&
+          r.data['room'] == id &&
+          r.data['owner'] == owner) {
+        epochRooms.putIfAbsent(r.data['epoch'], () => r);
+      } else if (r.object.kind == 'room_leave') {
+        (leaves[(r.data['epoch'], r.object.author)] ??= []).add(r);
+      }
+    }
     for (final object in node.store.allOf(kind: 'note_op', space: id)) {
       final data = await node.content(object);
       if (data == null || object.isPublic) continue;
-      final epochRooms = records.where(
-        (r) =>
-            r.object.kind == 'room' &&
-            r.data['epoch'] == data['epoch'] &&
-            r.object.author == room.data['owner'] &&
-            r.data['room'] == id &&
-            r.data['owner'] == room.data['owner'],
-      );
-      final membership = epochRooms.firstOrNull;
-      if (membership == null ||
-          !(membership.data['members'] as List).contains(object.author) ||
-          !object.audience.every(
-            (p) => (membership.data['members'] as List).contains(p),
-          ) ||
-          (data['checkpoint'] == true && object.author != room.data['owner']))
+      final allowed = epochRooms[data['epoch']]?.data['members'] as List?;
+      if (allowed == null ||
+          !allowed.contains(object.author) ||
+          !object.audience.every(allowed.contains) ||
+          (data['checkpoint'] == true && object.author != owner))
         continue;
-      final leaves = records.where(
-        (r) =>
-            r.object.kind == 'room_leave' &&
-            r.data['epoch'] == data['epoch'] &&
-            r.object.author == object.author,
-      );
-      final accepted = leaves.every(
-        (r) => (r.data['noteAccepted'] as List? ?? []).contains(object.id),
-      );
+      final accepted = (leaves[(data['epoch'], object.author)] ?? const [])
+          .every(
+            (r) => (r.data['noteAccepted'] as List? ?? []).contains(object.id),
+          );
       final item = EverydayItem(object, data);
       if (data['epoch'] == room.data['epoch'] && accepted) {
         ops.add(item);
@@ -1056,7 +1055,7 @@ class Notes {
     if (fileId == null && field == 'meta' && before.files.length >= maxFiles) {
       throw StateError('A note holds up to $maxFiles attachments.');
     }
-    final key = List<int>.generate(32, (_) => Random.secure().nextInt(256));
+    final key = randomBytes(32);
     final chunks = <String>[];
     var pending = BytesBuilder(copy: false);
     var size = 0;

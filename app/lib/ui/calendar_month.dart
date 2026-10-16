@@ -444,7 +444,8 @@ class _MonthViewState extends State<MonthView> {
         (byDay[d] ??= []).add(o);
       }
     }
-    final chosen = [...?byDay[selected]]..sort(Calendar.compareOccurrences);
+    // Occurrences come sorted, so each day's list already is.
+    final chosen = byDay[selected] ?? const <Occurrence>[];
     return Column(
       children: [
         _weekdayRow(context, days),
@@ -762,7 +763,7 @@ class _ScheduleViewState extends State<ScheduleView> {
           );
         }
         final day = days[i - 1];
-        final items = byDay[day]!..sort(Calendar.compareOccurrences);
+        final items = byDay[day]!;
         final isToday = day == today;
         final header = i == 1 || days[i - 2].month != day.month
             ? Padding(

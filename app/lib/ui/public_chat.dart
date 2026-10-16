@@ -46,7 +46,7 @@ extension _PublicChatPages on _OurNetAppState {
       throw StateError('Choose a chat name with letters or digits.');
     }
     final known =
-        publicChats.joined.contains(space) ||
+        publicChats.isJoined(space) ||
         listings.found().any((l) => l.space == space);
     var description = '';
     if (!known) {
@@ -76,7 +76,7 @@ extension _PublicChatPages on _OurNetAppState {
   Future<void> followChatLink(String space) async {
     // Links can sit on pages above the app's own, such as a note.
     noteNavigator.currentState?.popUntil((route) => route.isFirst);
-    if (!publicChats.joined.contains(space)) {
+    if (!publicChats.isJoined(space)) {
       try {
         await publicChats.join(space);
       } catch (e) {

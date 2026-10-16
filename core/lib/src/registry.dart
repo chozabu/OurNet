@@ -192,11 +192,13 @@ class PluginListing {
     this.says = 'added something',
   });
 
+  static final _spaces = RegExp(r'\s+');
+
   /// [field] of [payload] as one trimmed line, or null.
   static String? line(Json payload, String? field) {
     final v = field == null ? null : payload[field];
     if (v is! String) return null;
-    final line = v.trim().replaceAll(RegExp(r'\s+'), ' ');
+    final line = v.trim().replaceAll(_spaces, ' ');
     return line.isEmpty ? null : line;
   }
 

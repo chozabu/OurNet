@@ -80,12 +80,11 @@ class _NoteCardState extends State<NoteCard> {
     final checked = p['checkedCount'] as int? ?? 0;
     final people = (p['people'] as List? ?? const []).cast<String>();
     final files = (p['files'] as List? ?? const []).cast<Map>();
-    final picture = files
+    final images = files
         .where((f) => f['kind'] == 'image' || f['kind'] == 'drawing')
-        .firstOrNull;
-    final pictures = files
-        .where((f) => f['kind'] == 'image' || f['kind'] == 'drawing')
-        .length;
+        .toList();
+    final picture = images.firstOrNull;
+    final pictures = images.length;
     final recordings = files.where((f) => f['kind'] == 'audio').toList();
     final object = picture == null
         ? null

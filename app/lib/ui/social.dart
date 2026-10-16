@@ -312,7 +312,7 @@ extension _SocialPages on _OurNetAppState {
   Widget chatDetail(BuildContext context, {VoidCallback? back}) {
     if (listRoom != null) return groupListDetail(context, back: back);
     final chat = publicChat;
-    if (chat != null && publicChats.joined.contains(chat)) {
+    if (chat != null && publicChats.isJoined(chat)) {
       return publicChatView(context, chat, back: back);
     }
     if (scope == ScopeKind.public) {
@@ -521,12 +521,16 @@ extension _SocialPages on _OurNetAppState {
   /// Direct reply counts for every post, computed once per build.
   Map<String, int> replyCounts() => memo('replies', () {
     final counts = <String, int>{};
-    for (final o in node.store.objects(kind: 'post', limit: 10000)) {
+    for (final o in _allPosts()) {
       final parent = o.data['payload']['parent'];
       if (parent is String) counts[parent] = (counts[parent] ?? 0) + 1;
     }
     return counts;
   });
+
+  /// Shared by reply counts and discussions within one build.
+  List<SignedObject> _allPosts() =>
+      memo('posts/10000', () => node.store.objects(kind: 'post', limit: 10000));
 
   List<SignedObject> discussionObjects() =>
       memo('discussion/$space/$selectedThread', _discussionObjects);
@@ -534,8 +538,7 @@ extension _SocialPages on _OurNetAppState {
   List<SignedObject> _discussionObjects() {
     final all = space == _OurNetAppState.allForums;
     final joined = node.subscriptions.toSet();
-    final posts = node.store
-        .objects(kind: 'post', limit: 10000)
+    final posts = _allPosts()
         .where(
           (o) =>
               (all

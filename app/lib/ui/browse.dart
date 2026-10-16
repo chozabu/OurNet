@@ -178,7 +178,7 @@ extension _BrowsePages on _OurNetAppState {
     final isChat = link.type == 'message';
     try {
       if (isChat) {
-        if (!publicChats.joined.contains(link.space)) {
+        if (!publicChats.isJoined(link.space)) {
           await publicChats.join(link.space);
         }
       } else if (!node.subscriptions.contains(link.space)) {

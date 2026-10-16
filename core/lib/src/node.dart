@@ -1081,7 +1081,7 @@ class Node {
     final ids = (theirs['have'] as Map).keys.whereType<String>().toList();
     final reply = {
       'seq': seq,
-      'policy': policyDigest(peerDevice),
+      'policy': request['policy'],
       'changes': changeInventory(peerDevice, changed),
       'view': changeInventory(peerDevice, store.routesOf(ids)),
     };
@@ -1228,6 +1228,15 @@ class Node {
         : peerKeys.contains(sealed);
   }
 
+  /// Kinds that travel whether or not their space is followed.
+  static const _unsubscribedKinds = {
+    'profile',
+    'avatar',
+    'revoke',
+    'device_name',
+    Connections.listKind,
+  };
+
   /// [relay] is set when [peer] is one of this person's devices and said it
   /// takes [relayed] objects (`ownRelay` in its inventory).
   bool _offerable(
@@ -1250,11 +1259,7 @@ class Node {
     // As [receive] accepts them. An own device offered posts from a forum it
     // does not follow drops them, and every later page offered the same ones
     // again, so nothing older than them ever reached it.
-    return o.kind == 'revoke' ||
-        o.kind == 'profile' ||
-        o.kind == 'avatar' ||
-        o.kind == Connections.listKind ||
-        o.kind == 'device_name' ||
+    return _unsubscribedKinds.contains(o.kind) ||
         wanted.contains(o.space) ||
         (peer.person == person && o.author == person);
   }
@@ -1640,13 +1645,7 @@ class Node {
       if (!groups.opens(o)) return 0;
     }
     if (o.isPublic &&
-        ![
-          'profile',
-          'avatar',
-          'revoke',
-          'device_name',
-          Connections.listKind,
-        ].contains(o.kind) &&
+        !_unsubscribedKinds.contains(o.kind) &&
         !subscriptions.contains(o.space) &&
         o.author != person)
       return 0;

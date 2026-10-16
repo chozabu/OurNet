@@ -72,7 +72,11 @@ extension _ConversationPages on _OurNetAppState {
       memo('chatOrder', () {
         final recent = recentChats();
         int latest(String p) => recent[p]?.created ?? 0;
-        bool pinned(String p) => node.store.setting('chatPinned/$p') == true;
+        final pins = {
+          for (final p in people)
+            if (node.store.setting('chatPinned/$p') == true) p,
+        };
+        bool pinned(String p) => pins.contains(p);
         final sorted = people.toList()
           ..sort((a, b) {
             final pin = (pinned(b) ? 1 : 0) - (pinned(a) ? 1 : 0);
@@ -80,15 +84,12 @@ extension _ConversationPages on _OurNetAppState {
             final time = latest(b).compareTo(latest(a));
             return time != 0 ? time : name(a).compareTo(name(b));
           });
-        bool archived(String p) {
+        final active = <String>[], archived = <String>[];
+        for (final p in sorted) {
           final at = node.store.setting('chatArchived/$p');
-          return at is int && latest(p) <= at;
+          (at is int && latest(p) <= at ? archived : active).add(p);
         }
-
-        return (
-          active: sorted.where((p) => !archived(p)).toList(),
-          archived: sorted.where(archived).toList(),
-        );
+        return (active: active, archived: archived);
       });
 
   String chatTime(int created) {

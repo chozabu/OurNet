@@ -107,7 +107,7 @@ class KeepNote {
 
   /// Stable across repeated exports of the same Keep note, so importing again
   /// finds the earlier copy instead of duplicating it.
-  String get stableId =>
+  late final String stableId =
       'keep-${sha256.convert(utf8.encode('$created\n$title')).toString().substring(0, 32)}';
 }
 

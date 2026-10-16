@@ -603,8 +603,9 @@ class PeerNetwork implements PluginLink {
         if (!_backingOff(device) &&
             node.allowedPeer(device) &&
             (changed == null ||
-                _marks[device]?.myPolicy != node.policyDigest(device) ||
-                node.offersAny(device, changed)))
+                _marks[device] == null ||
+                node.offersAny(device, changed) ||
+                _marks[device]!.myPolicy != node.policyDigest(device)))
           device,
     ];
   }
@@ -640,7 +641,7 @@ class PeerNetwork implements PluginLink {
     final self = _endpoint;
     final addresses = <String, String>{};
     for (final wire in node.sharedCertificates(peer)) {
-      final id = DeviceCertificate.fromJson(wire).device;
+      final id = (wire['data'] as Json)['device'] as String;
       final address = id == node.identity.device
           ? (self == null ? null : b64(self.addr.encode()))
           : node.store.setting('address/$id');
@@ -1002,7 +1003,10 @@ class PeerNetwork implements PluginLink {
       if (quick != null) exhausted = !quick;
       // A walk from the newest page notes where both logs stood, which
       // becomes their mark once it reaches the end with nothing changed.
-      final startSeq = node.changeSeq, startPolicy = node.policyDigest(device);
+      final startSeq = node.changeSeq;
+      final startPolicy = quick == null && resume == null
+          ? node.policyDigest(device)
+          : null;
       Json? lastReply;
       for (var page = 0; quick == null && page < 16; page++) {
         final inventory = node.inventoryAfter(
@@ -1624,7 +1628,7 @@ class PeerNetwork implements PluginLink {
         sent = out.length;
         await send.writeAll(out);
       } else {
-        final head = [...bytes(reply), 0x0a];
+        final head = utf8.encode('${canonical(reply)}\n');
         sent = head.length;
         await send.writeAll(head);
         for (final chunk in body) {

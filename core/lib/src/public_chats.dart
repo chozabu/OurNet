@@ -143,6 +143,10 @@ class PublicChats {
       if (isChat(space)) space,
   ]..sort();
 
+  /// Whether this person has joined [space], without listing every chat.
+  bool isJoined(String space) =>
+      node.subscriptions.contains(space) && isChat(space);
+
   /// Starts a chat called [name] and joins it. Returns its address.
   Future<String> create(String name, {String description = ''}) async {
     final title = name.trim();

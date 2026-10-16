@@ -188,14 +188,7 @@ bool _room(Json p) =>
 
 /// A member adding people to a group whose owner lets members do so: see
 /// `Everyday.invite`. Carries their devices and the group's key.
-bool _roomInvite(Json p) =>
-    p['epoch'] is String &&
-    _ids(p['people'], 16) &&
-    (p['people'] as List).isNotEmpty &&
-    p['certificates'] is List &&
-    (p['certificates'] as List).length <= 128 &&
-    (p['certificates'] as List).every((c) => c is Map) &&
-    validGroupKey(p['groupKey']);
+bool _roomInvite(Json p) => _roomAdd(p) && validGroupKey(p['groupKey']);
 
 /// A member asking a group's owner to add people: see `Everyday.askToAdd`.
 bool _roomAdd(Json p) =>
@@ -272,6 +265,9 @@ bool _messageDelete(Json p) => p['object'] is String;
 /// Private drive entries: see `Drive`.
 const driveModule = Module('drive', kinds: {'drive': _drive});
 
+/// Path separators and control characters, which a file name must not hold.
+final _unsafeName = RegExp(r'[/\\\x00-\x1f]');
+
 bool _drive(Json p) =>
     p['entry'] is String &&
     p['revision'] is String &&
@@ -281,7 +277,7 @@ bool _drive(Json p) =>
     p['name'] is String &&
     (p['name'] as String).trim().isNotEmpty &&
     (p['name'] as String).length <= 255 &&
-    !RegExp(r'[/\\\x00-\x1f]').hasMatch(p['name']) &&
+    !_unsafeName.hasMatch(p['name']) &&
     (p['folder'] == null || p['folder'] is String) &&
     p['deleted'] is bool &&
     ['file', 'folder'].contains(p['type']) &&

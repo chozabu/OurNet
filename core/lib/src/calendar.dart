@@ -1214,8 +1214,8 @@ class _Index {
     return version != before;
   }
 
-  Future<String> _roomSignature() async {
-    final rooms = await Everyday(node).rooms();
+  Future<String> _roomSignature([List<EverydayItem>? rooms]) async {
+    rooms ??= await Everyday(node).rooms();
     return '${[
       for (final r in rooms)
         '${r.object.space}|${r.data['generation']}|${r.data['epoch']}|${r.data['owner']}|${(r.data['members'] as List).join(',')}',
@@ -1233,14 +1233,17 @@ class _Index {
       changed = true;
     }
     // Objects that could not be read yet may be readable after a key grant.
+    // Reading one looks at every grant stored, so one retry covers them all.
+    var granted = false;
     while (true) {
       final page = node.store.insertedOfKind(_keysCursor, 'keys');
       if (page.isEmpty) break;
       _keysCursor = page.last.$1;
-      if (_unreadable.isNotEmpty) {
-        for (final o in _unreadable.values.toList()) {
-          if (await _take(o)) changed = true;
-        }
+      granted = true;
+    }
+    if (granted) {
+      for (final o in _unreadable.values.toList()) {
+        if (await _take(o)) changed = true;
       }
     }
     while (true) {
@@ -1261,12 +1264,11 @@ class _Index {
         if (await _take(o)) changed = true;
       }
     }
-    final signature = await _roomSignature();
+    final rooms = await Everyday(node).rooms();
+    final signature = await _roomSignature(rooms);
     if (signature != _rooms) {
       _rooms = signature;
-      _roomMap = {
-        for (final r in await Everyday(node).rooms()) r.object.space: r,
-      };
+      _roomMap = {for (final r in rooms) r.object.space: r};
       changed = true;
     }
     _settled = target;

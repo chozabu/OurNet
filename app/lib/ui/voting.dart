@@ -50,10 +50,18 @@ extension _VotingPages on _OurNetAppState {
         final latest = effectiveVotes(
           o.id,
           o.space,
-          memo(
-            'visibleObjects',
-            () => node.store.objects().where(node.visible).toList(),
-          ),
+          memo('votesBySpace', () {
+            // Only votes and delegations in the post's space count.
+            final bySpace = <String, List<SignedObject>>{};
+            for (final v in node.store.objects()) {
+              if ((v.kind == 'vote' || v.kind == 'delegate') &&
+                  node.visible(v)) {
+                (bySpace[v.space] ??= []).add(v);
+              }
+            }
+            return bySpace;
+          })[o.space] ??
+              const <SignedObject>[],
         );
         final score = latest.values.fold<int>(0, (a, b) => a + b);
         return Card(

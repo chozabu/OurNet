@@ -83,11 +83,6 @@ class PluginPackage {
       ? null
       : utf8.decode(files['ui.rfwtxt']!).replaceAll('\r\n', '\n');
 
-  Map<String, Uint8List> get assets => {
-    for (final MapEntry(:key, :value) in files.entries)
-      if (key.startsWith('assets/')) key.substring(7): value,
-  };
-
   /// Largest package, zipped or not: generous for code, small for a phone.
   static const maxBytes = 32 * 1024 * 1024;
   static const maxEntries = 300;
@@ -336,7 +331,6 @@ class Plugins {
 
   /// Chunk size of files plugins store: the same as a picked file's.
   static const fileChunkBytes = 128 * 1024;
-  static final _random = Random.secure();
 
   /// Largest live message, either way.
   static const maxLiveBytes = 256 * 1024;
@@ -769,7 +763,7 @@ class Plugins {
   ) async {
     final key = people.isEmpty
         ? null
-        : List.generate(32, (_) => Random.secure().nextInt(256));
+        : randomBytes(32);
     final chunks = [
       for (var at = 0; at < package.length; at += chunkBytes)
         await node.blobs.encode(
@@ -832,15 +826,17 @@ class Plugins {
       }
       if (release == null) continue;
       final installed = _installed[release.plugin];
-      final skipped = (_of(release.plugin)['skipped'] as List?) ?? const [];
       final newest = found['${release.publisher} ${release.plugin}'];
-      if (skipped.contains(release.id) ||
-          (installed != null &&
+      // Settings are read last: they are decoded afresh on every call.
+      if ((installed != null &&
               installed.publisher == release.publisher &&
               compareVersions(release.version, installed.manifest.version) <=
                   0) ||
           (newest != null &&
-              compareVersions(release.version, newest.release.version) <= 0)) {
+              compareVersions(release.version, newest.release.version) <= 0) ||
+          ((_of(release.plugin)['skipped'] as List?) ?? const []).contains(
+            release.id,
+          )) {
         continue;
       }
       found['${release.publisher} ${release.plugin}'] = (
@@ -1462,7 +1458,7 @@ class Plugins {
   /// Encrypts [data] into stored chunks, as `Files.store` does a picked
   /// file, and returns the fields that describe it.
   Future<Json> storeFile(String name, Uint8List data) async {
-    final key = List<int>.generate(32, (_) => _random.nextInt(256));
+    final key = randomBytes(32);
     final chunks = <String>[];
     for (var at = 0; at < data.length; at += fileChunkBytes) {
       final end = min(at + fileChunkBytes, data.length);
