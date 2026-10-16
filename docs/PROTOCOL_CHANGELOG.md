@@ -7,6 +7,14 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: wake addresses in quick exchanges
+
+`delta` requests and replies carry `wake` (the address, or null for none),
+learnt like the full exchange's. In 0.2.39 only full exchanges carried it, and
+devices that had synced before use `delta`, so existing friends never learnt
+each other's wake addresses. A `delta` without the field keeps what is stored.
+The minimum peer capability is unchanged.
+
 ## 0.2.39: push wake-up
 
 Pull requests and replies may carry an optional `wake` object

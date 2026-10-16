@@ -414,7 +414,9 @@ differs from their own. They may also carry `wake`, the sender device's wake
 address for the receiving device: `{url, device, token}`, an https push server
 URL, the sender's ID there and a token for this peer alone (see
 [CONNECTIVITY.md](CONNECTIVITY.md), "Push wake-up"). A peer stores it for that
-device and an exchange without one clears it. A device with messages a peer's
+device and an exchange without one clears it. Since 0.2.40 a `delta` request
+and its reply carry `wake` as well, null for none; a `delta` without the field
+(from 0.2.39) leaves the stored address alone. A device with messages a peer's
 device has not acknowledged may post `{device, token}` to `<url>/v1/wake`; the
 server sends that device an empty push message, and it syncs. A failed inbound
 handshake is logged and counted, and the endpoint keeps accepting further

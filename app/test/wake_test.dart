@@ -116,6 +116,50 @@ void main() {
     expect(b.store.setting('wake/${a.identity.device}'), isNull);
   });
 
+  test(
+    'friends that synced before learn wake addresses in quick exchanges',
+    () async {
+      final a = await node('A'), b = await node('B');
+      final na = Network(a), nb = Network(b);
+      addTearDown(() async {
+        await na.stop();
+        await nb.stop();
+        await a.close();
+        await b.close();
+      });
+      await na.start(local: true);
+      await nb.start(local: true);
+      await na.addCard(nb.contactCard());
+      await nb.addCard(na.contactCard());
+      // Agreed once, so later exchanges only list what changed (`delta`).
+      await na.sync(b.identity.device);
+      await na.sync(b.identity.device);
+      expect(a.store.setting('syncMarks'), contains(b.identity.device));
+
+      a.store.set('wakeRegistration', {
+        'url': 'https://push.example',
+        'device': 'aDeviceAtThePushServer',
+        'secret': 'x' * 43,
+        'key': 'k' * 43,
+      });
+      await na.sync(b.identity.device);
+      expect(
+        b.store.setting('wake/${a.identity.device}'),
+        wakeAddressFor(a, b.identity.device),
+      );
+      expect(b.store.setting('wake/${a.identity.device}'), isNotNull);
+
+      // Answering B's quick exchange tells B as well.
+      b.store.set('wake/${a.identity.device}', null);
+      await nb.sync(a.identity.device);
+      expect(b.store.setting('wake/${a.identity.device}'), isNotNull);
+
+      a.store.set('pushWake', false);
+      await nb.sync(a.identity.device);
+      expect(b.store.setting('wake/${a.identity.device}'), isNull);
+    },
+  );
+
   test('a phone grants each friend device its own wake token', () async {
     final server = FakePushServer();
     final phone = await node('Phone');
@@ -216,6 +260,7 @@ void main() {
 
   test('an undelivered message wakes the recipient once', () async {
     final server = FakePushServer();
+    const grace = Duration(milliseconds: 500);
     final alex = await node('Alex'), sam = await node('Sam');
     addTearDown(() async {
       await alex.close();
@@ -239,7 +284,9 @@ void main() {
       alex,
       undelivered,
       client: server.client,
-      grace: const Duration(milliseconds: 50),
+      // Longer than a sync between two nodes takes on a busy machine, for
+      // the delivered case below.
+      grace: grace,
     )..start();
     addTearDown(() async {
       await sender.close();
@@ -253,7 +300,7 @@ void main() {
       audience: [sam.person],
     );
     await pumpEventQueue();
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+    await Future<void>.delayed(grace * 2);
     expect(server.wakes, [registration.registration!['device']]);
 
     // A second message wakes again; the first is not repeated.
@@ -264,7 +311,7 @@ void main() {
       audience: [sam.person],
     );
     await pumpEventQueue();
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+    await Future<void>.delayed(grace * 2);
     expect(server.wakes.length, 2);
 
     // Delivered before the grace period ends: no wake.
@@ -277,7 +324,7 @@ void main() {
     );
     await pumpEventQueue();
     await syncPair(alex, sam);
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+    await Future<void>.delayed(grace * 2);
     expect(server.wakes.length, 2);
 
     // A device gone from the server is forgotten.
@@ -289,7 +336,7 @@ void main() {
       audience: [sam.person],
     );
     await pumpEventQueue();
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+    await Future<void>.delayed(grace * 2);
     expect(alex.store.setting('wake/${sam.identity.device}'), isNull);
   });
 

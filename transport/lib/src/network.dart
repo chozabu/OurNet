@@ -667,6 +667,13 @@ class PeerNetwork implements PluginLink {
     wake is Json && validWake(wake) ? wake : null,
   );
 
+  /// The same for a `delta` exchange, which carries `wake` (null for none)
+  /// since 0.2.40: one from an older build, without the field, keeps what
+  /// a full exchange told.
+  void _learnDeltaWake(String peer, Json exchange) {
+    if (exchange.containsKey('wake')) _learnWake(peer, exchange['wake']);
+  }
+
   /// Stores address hints for admitted devices, from [peer]'s exchange. A
   /// device's own address replaces what is stored, so a device that moves
   /// stays reachable; hints about other devices only fill a gap, so no peer
@@ -1191,6 +1198,7 @@ class PeerNetwork implements PluginLink {
       // Listed after offering, so it includes the handoffs just minted.
       'changes': node.changeInventory(device, mine),
       if (items.isNotEmpty) 'items': items,
+      'wake': _wakeFor(device),
       ..._stamp,
     });
     final theirSeq = reply['seq'], theirPolicy = reply['policy'];
@@ -1204,6 +1212,7 @@ class PeerNetwork implements PluginLink {
       return null;
     }
     _peerHeaders[device] = (policy: theirPolicy, inventory: _header(changes));
+    _learnDeltaWake(device, reply);
     // A peer listing `delta_items` answers with what it knows this device
     // lacks: the items just sent, with its receipts, and its own new ones.
     var received = 0;
@@ -1570,7 +1579,12 @@ class PeerNetwork implements PluginLink {
               );
             }
           case 'delta':
-            reply = {...await node.answerDelta(peer, j), ..._stamp};
+            _learnDeltaWake(peer, j);
+            reply = {
+              ...await node.answerDelta(peer, j),
+              'wake': _wakeFor(peer),
+              ..._stamp,
+            };
           case 'blob':
             final [blob] = await _chunks(peer, j['object'], [j['hash']]);
             reply = {'bytes': blob == null ? null : b64(blob)};

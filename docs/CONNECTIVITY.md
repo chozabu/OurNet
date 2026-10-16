@@ -237,9 +237,10 @@ cannot be handed to friends. The server is OurNetPushServer (PHP and SQLite, at
   server their SHA-256 hashes, replacing the whole list whenever its contacts
   change. Blocking or revoking a device removes its token; the others keep
   working. The server never sees tokens or device IDs, only hashes.
-- **Sharing the address.** Each pull and its reply carries `wake`: the server
-  URL, the phone's ID there, and the token for that peer only. A peer that is
-  not admitted gets none.
+- **Sharing the address.** Each exchange and its reply carries `wake`: the
+  server URL, the phone's ID there, and the token for that peer only. A peer
+  that is not admitted gets none. (0.2.39 left it out of the quick `delta`
+  exchange that friends who synced before use, so they never learnt it.)
 - **Waking.** Four seconds after this person writes a private message, each
   recipient device that has no receipt for it and told this device a wake
   address gets one wake (any platform can send). A later message wakes again;
