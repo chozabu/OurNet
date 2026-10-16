@@ -77,10 +77,16 @@ Plugin device names are maintained through an incremental insertion cursor,
 so repeated contact lookups consume each rename once, including on long histories.
 
 The host supplies CPU usage, physical memory, network receive/send rates,
-uptime and any available temperature sensors. The first CPU/network reading
-is marked as sampling because rates need two samples. GPU utilisation and
-fan speeds are currently unavailable; this is stated in the UI, and absent
-temperature sensors do not appear as zero readings.
+uptime and temperatures. Temperatures come from the ACPI thermal zones
+Windows publishes as performance counters (`\Thermal Zone Information(*)`),
+NVIDIA GPUs through the driver's NVML library (loaded only from the system
+or NVIDIA directory), and any WMI sensors sysinfo can read; none of these
+needs administrator rights except WMI's, which is retried every 30 seconds
+while empty. NVML also gives each NVIDIA GPU's load and dedicated memory,
+shown as a GPU tile. All of it is read on the sensor worker. The first
+CPU/network reading is marked as sampling because rates need two samples.
+Other GPUs' load and fan speeds are unavailable; this is stated in the UI,
+and absent temperature sensors do not appear as zero readings.
 
 Processes are refreshed at most every two seconds. Current controllers ask
 for compact rows (`v: 2`, `processRows`); an older controller still gets

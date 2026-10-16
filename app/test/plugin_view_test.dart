@@ -265,6 +265,24 @@ void main() {
       );
       expect(tester.widget<ButtonStyleButton>(pause).onPressed, isNotNull);
       await rig.shot('device-dashboard-wide');
+      final keys = [
+        for (final t
+            in rig.plugins.surface('device-dashboard', 'Dashboard')['tiles']
+                as List)
+          (t as Map)['key'],
+      ];
+      for (final key in ['temperature', 'gpu']) {
+        if (!keys.contains(key)) continue;
+        rig.plugins.event('device-dashboard', 'Dashboard', 'focus', {
+          'key': key,
+        });
+        await rig.until(
+          () =>
+              rig.plugins.surface('device-dashboard', 'Dashboard')['focus'] ==
+              key,
+        );
+        await rig.shot('device-dashboard-wide-$key');
+      }
       // A process picked in the table asks before it ends.
       rig.plugins.event('device-dashboard', 'Dashboard', 'tab', {
         'value': 'processes',

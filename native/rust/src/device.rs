@@ -65,7 +65,7 @@ impl Monitor {
                 "processCount":counts.map(|c| c.0), "threadCount":counts.map(|c| c.1),
                 "handleCount":counts.map(|c| c.2), "commitUsed":counts.map(|c| c.3),
                 "commitLimit":counts.map(|c| c.4),
-                "gpu":null, "fan":null,
+                "gpu":(!slow.gpus.is_empty()).then_some(&slow.gpus), "fan":null,
             });
             self.sampled = Some(Instant::now());
         }
@@ -167,11 +167,172 @@ fn performance_counts() -> Option<(u32, u32, u32, u64, u64)> {
     ))
 }
 
+/// The ACPI thermal zones Windows publishes as performance counters: read
+/// without administrator rights, unlike the WMI class sysinfo uses.
+#[cfg(windows)]
+struct ThermalZones {
+    query: windows_sys::Win32::System::Performance::PDH_HQUERY,
+    counter: windows_sys::Win32::System::Performance::PDH_HCOUNTER,
+}
+
+#[cfg(windows)]
+impl ThermalZones {
+    fn open() -> Option<ThermalZones> {
+        use windows_sys::Win32::System::Performance::*;
+        let path: Vec<u16> = "\\Thermal Zone Information(*)\\High Precision Temperature\0"
+            .encode_utf16()
+            .collect();
+        let mut query = std::ptr::null_mut();
+        let mut counter = std::ptr::null_mut();
+        unsafe {
+            if PdhOpenQueryW(std::ptr::null(), 0, &mut query) != 0 {
+                return None;
+            }
+            if PdhAddEnglishCounterW(query, path.as_ptr(), 0, &mut counter) != 0 {
+                PdhCloseQuery(query);
+                return None;
+            }
+        }
+        Some(ThermalZones { query, counter })
+    }
+
+    /// Each zone's temperature, from tenths of a kelvin.
+    fn read(&self) -> Vec<Value> {
+        use windows_sys::Win32::System::Performance::*;
+        unsafe {
+            if PdhCollectQueryData(self.query) != 0 {
+                return Vec::new();
+            }
+            let (mut size, mut count) = (0u32, 0u32);
+            let status = PdhGetFormattedCounterArrayW(
+                self.counter,
+                PDH_FMT_DOUBLE,
+                &mut size,
+                &mut count,
+                std::ptr::null_mut(),
+            );
+            if status != PDH_MORE_DATA || size == 0 || size > 1 << 20 {
+                return Vec::new();
+            }
+            // u64 words keep the items' doubles aligned.
+            let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
+            let items = buffer.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W;
+            if PdhGetFormattedCounterArrayW(self.counter, PDH_FMT_DOUBLE, &mut size, &mut count, items) != 0 {
+                return Vec::new();
+            }
+            (0..count.min(32) as usize)
+                .filter_map(|i| {
+                    let item = &*items.add(i);
+                    if item.FmtValue.CStatus != 0 {
+                        return None;
+                    }
+                    let celsius = item.FmtValue.Anonymous.doubleValue / 10.0 - 273.15;
+                    if !(-20.0..=150.0).contains(&celsius) {
+                        return None;
+                    }
+                    let mut len = 0;
+                    while *item.szName.add(len) != 0 && len < 256 {
+                        len += 1;
+                    }
+                    let name = String::from_utf16_lossy(std::slice::from_raw_parts(item.szName, len));
+                    let name = name.trim_start_matches("\\_tz.").trim_start_matches("\\_TZ.");
+                    Some(json!({"name":format!("Thermal zone {name}"),"celsius":(celsius * 10.0).round() / 10.0}))
+                })
+                .collect()
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ThermalZones {
+    fn drop(&mut self) {
+        unsafe { windows_sys::Win32::System::Performance::PdhCloseQuery(self.query) };
+    }
+}
+
+/// NVIDIA GPUs through the driver's NVML library, when it is installed:
+/// load, memory and temperature, without administrator rights. Loaded from
+/// the system directory or the driver's own, never the working directory.
+#[cfg(windows)]
+struct Nvml {
+    count: unsafe extern "C" fn(*mut u32) -> i32,
+    handle: unsafe extern "C" fn(u32, *mut *mut std::ffi::c_void) -> i32,
+    name: unsafe extern "C" fn(*mut std::ffi::c_void, *mut u8, u32) -> i32,
+    temperature: unsafe extern "C" fn(*mut std::ffi::c_void, i32, *mut u32) -> i32,
+    utilization: unsafe extern "C" fn(*mut std::ffi::c_void, *mut [u32; 2]) -> i32,
+    memory: unsafe extern "C" fn(*mut std::ffi::c_void, *mut [u64; 3]) -> i32,
+}
+
+#[cfg(windows)]
+impl Nvml {
+    fn open() -> Option<Nvml> {
+        use windows_sys::Win32::System::LibraryLoader::*;
+        let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        unsafe {
+            let mut module = LoadLibraryExW(wide("nvml.dll").as_ptr(), std::ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32);
+            if module.is_null() {
+                let program_files = std::env::var("ProgramW6432").unwrap_or("C:\\Program Files".into());
+                let path = format!("{program_files}\\NVIDIA Corporation\\NVSMI\\nvml.dll");
+                module = LoadLibraryExW(wide(&path).as_ptr(), std::ptr::null_mut(), 0);
+            }
+            if module.is_null() {
+                return None;
+            }
+            macro_rules! function {
+                ($name:literal) => {
+                    std::mem::transmute(GetProcAddress(module, concat!($name, "\0").as_ptr())?)
+                };
+            }
+            let init: unsafe extern "C" fn() -> i32 = function!("nvmlInit_v2");
+            if init() != 0 {
+                return None;
+            }
+            Some(Nvml {
+                count: function!("nvmlDeviceGetCount_v2"),
+                handle: function!("nvmlDeviceGetHandleByIndex_v2"),
+                name: function!("nvmlDeviceGetName"),
+                temperature: function!("nvmlDeviceGetTemperature"),
+                utilization: function!("nvmlDeviceGetUtilizationRates"),
+                memory: function!("nvmlDeviceGetMemoryInfo"),
+            })
+        }
+    }
+
+    fn read(&self) -> Vec<Value> {
+        let mut count = 0;
+        if unsafe { (self.count)(&mut count) } != 0 {
+            return Vec::new();
+        }
+        (0..count.min(8))
+            .filter_map(|i| unsafe {
+                let mut device = std::ptr::null_mut();
+                if (self.handle)(i, &mut device) != 0 {
+                    return None;
+                }
+                let mut name = [0u8; 96];
+                (self.name)(device, name.as_mut_ptr(), name.len() as u32);
+                let end = name.iter().position(|b| *b == 0).unwrap_or(name.len());
+                let mut celsius = 0;
+                let mut load = [0u32; 2];
+                let mut memory = [0u64; 3];
+                Some(json!({
+                    "name": String::from_utf8_lossy(&name[..end]),
+                    "celsius": ((self.temperature)(device, 0, &mut celsius) == 0).then_some(celsius),
+                    "load": ((self.utilization)(device, &mut load) == 0).then_some(load[0]),
+                    "memoryTotal": ((self.memory)(device, &mut memory) == 0).then_some(memory[0]),
+                    "memoryUsed": (memory[0] > 0).then_some(memory[2]),
+                }))
+            })
+            .collect()
+    }
+}
+
 /// What the sensor worker last read.
 #[cfg(windows)]
 #[derive(Clone, Default)]
 struct Slow {
     temperatures: Vec<Value>,
+    gpus: Vec<Value>,
     disks: Vec<Value>,
     read: Option<f64>,
     write: Option<f64>,
@@ -199,6 +360,9 @@ fn slow_sensors() -> Slow {
             .spawn(move || {
                 use sysinfo::DiskRefreshKind;
                 let mut components = sysinfo::Components::new();
+                let zones = ThermalZones::open();
+                let nvml = Nvml::open();
+                let mut wmi: Vec<Value> = Vec::new();
                 let mut disks = sysinfo::Disks::new();
                 let (mut next_components, mut next_list) = (Instant::now(), Instant::now());
                 let mut disks_at: Option<Instant> = None;
@@ -206,8 +370,10 @@ fn slow_sensors() -> Slow {
                     let now = Instant::now();
                     let mut slow = output.lock().map(|v| v.clone()).unwrap_or_default();
                     if now >= next_components {
+                        // WMI's sensors usually need administrator rights:
+                        // retried rarely while they give nothing.
                         components.refresh(true);
-                        slow.temperatures = components
+                        wmi = components
                             .iter()
                             .filter_map(|c| {
                                 c.temperature()
@@ -216,8 +382,14 @@ fn slow_sensors() -> Slow {
                             .take(32)
                             .collect();
                         next_components = Instant::now()
-                            + Duration::from_secs(if slow.temperatures.is_empty() { 30 } else { 2 });
+                            + Duration::from_secs(if wmi.is_empty() { 30 } else { 2 });
                     }
+                    slow.gpus = nvml.as_ref().map(Nvml::read).unwrap_or_default();
+                    slow.temperatures = wmi.clone();
+                    slow.temperatures.extend(zones.as_ref().map(ThermalZones::read).unwrap_or_default());
+                    slow.temperatures.extend(slow.gpus.iter().filter(|g| g["celsius"].is_number())
+                        .map(|g| json!({"name":g["name"],"celsius":g["celsius"]})));
+                    slow.temperatures.truncate(48);
                     if disks_at.is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1)) {
                         // Volumes come and go: the list is read rarely, each
                         // listed disk's counters every sample.
@@ -444,5 +616,23 @@ mod tests {
         assert_eq!(a, b);
         assert!(monitor.stop(std::process::id(), 0).is_err());
         assert!(monitor.stop(0, 0).is_err());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn temperatures_are_plausible_and_need_no_administrator() {
+        // The worker answers from its cache; give it a moment to fill.
+        let _ = super::slow_sensors();
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let slow = super::slow_sensors();
+        eprintln!("temperatures: {:?}
+gpus: {:?}", slow.temperatures, slow.gpus);
+        for t in &slow.temperatures {
+            let c = t["celsius"].as_f64().unwrap();
+            assert!((-20.0..=150.0).contains(&c));
+        }
+        if let Some(zones) = super::ThermalZones::open() {
+            // A machine without ACPI zones lists none, never a zero.
+            assert!(zones.read().iter().all(|z| z["celsius"].as_f64().unwrap() != 0.0));
+        }
     }
 }

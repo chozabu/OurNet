@@ -25,6 +25,7 @@ const SENT_COLOR: u32 = 0xff2ea89b;
 const DISK_COLOR: u32 = 0xff4caf50;
 const WRITE_COLOR: u32 = 0xffe0607e;
 const HEAT_COLOR: u32 = 0xffe05a47;
+const GPU_COLOR: u32 = 0xff7cb342;
 
 /// A fixed-size rolling series.
 #[derive(Default)]
@@ -88,6 +89,9 @@ struct Dashboard {
     read: Series,
     write: Series,
     disk: Series,
+    /// The hottest sensor, and the first GPU's load.
+    heat: Series,
+    gpu: Series,
 }
 
 fn rate(n: f64) -> String {
@@ -161,10 +165,23 @@ impl Dashboard {
             json!({"key":"disk","label":"Disk","icon":"disk","color":DISK_COLOR,"value":disk_value,
                 "detail":disk_detail,"values":self.disk.json(),"max":self.disk.max().max(1024.0)}),
         ];
+        let gpus: Vec<_> = v["gpu"].as_array().cloned().unwrap_or_default();
+        if let Some(g) = gpus.first() {
+            tiles.push(json!({"key":"gpu","label":"GPU","icon":"speed","color":GPU_COLOR,
+                "value":g["load"].as_f64().map(|l| format!("{l:.0}%")).unwrap_or("—".into()),
+                "detail":match g["celsius"].as_f64() {
+                    Some(c) => format!("{c:.0} °C · {}", g["name"].as_str().unwrap_or("")),
+                    None => g["name"].as_str().unwrap_or("").to_string(),
+                },
+                "values":self.gpu.json(),"max":100}));
+        }
         if !temps.is_empty() {
+            let name = temps.iter().max_by(|a, b| a["celsius"].as_f64().unwrap_or(0.0).total_cmp(&b["celsius"].as_f64().unwrap_or(0.0)))
+                .and_then(|t| t["name"].as_str()).unwrap_or("");
             tiles.push(json!({"key":"temperature","label":"Temperature","icon":"temperature",
                 "color":HEAT_COLOR,"value":format!("{hottest:.0} °C"),
-                "detail":format!("Hottest of {} sensors", temps.len()),"values":[]}));
+                "detail":format!("Hottest: {name} · {} sensors", temps.len()),
+                "values":self.heat.json(),"max":110}));
         }
         let focus = if self.focus.is_empty() { "cpu" } else { self.focus.as_str() };
         let tiles: Vec<_> = tiles
@@ -223,12 +240,31 @@ impl Dashboard {
                     stat("Write", n("diskWritePerSecond").map(rate).unwrap_or("—".into())),
                 ],
             ),
+            "gpu" => {
+                let g = gpus.first().cloned().unwrap_or_default();
+                (
+                    "GPU",
+                    g["name"].as_str().unwrap_or("").to_string(),
+                    vec![json!({"values":self.gpu.json(),"color":GPU_COLOR})],
+                    100.0,
+                    "100%".into(),
+                    vec![
+                        stat("Utilisation", g["load"].as_f64().map(|l| format!("{l:.0}%")).unwrap_or("—".into())),
+                        stat("Temperature", g["celsius"].as_f64().map(|c| format!("{c:.0} °C")).unwrap_or("—".into())),
+                        stat("Dedicated memory", match (g["memoryUsed"].as_f64(), g["memoryTotal"].as_f64()) {
+                            (Some(a), Some(b)) => format!("{} / {}", common::bytes(a), common::bytes(b)),
+                            _ => "—".into(),
+                        }),
+                        stat("GPUs", gpus.len().to_string()),
+                    ],
+                )
+            }
             "temperature" => (
                 "Temperature",
-                "Sensors the system exposes".into(),
-                vec![],
-                100.0,
-                String::new(),
+                "Thermal zones, GPUs and other sensors the system exposes".into(),
+                vec![json!({"values":self.heat.json(),"color":HEAT_COLOR})],
+                110.0,
+                "110 °C".into(),
                 temps
                     .iter()
                     .map(|t| stat(t["name"].as_str().unwrap_or("Sensor"), format!("{:.1} °C", t["celsius"].as_f64().unwrap_or(0.0))))
@@ -331,7 +367,7 @@ impl Dashboard {
             "notice":self.notice,"hasNotice":!self.notice.is_empty(),
             "viewed":!viewers.is_empty(),
             "viewedLabel":if viewers.is_empty() {"Nobody is viewing this device".to_string()} else {format!("Being viewed by {}", viewer_names.join(", "))},
-            "sensorNote":"GPU load and fan speed are unavailable. Temperatures appear only when the system exposes them.",
+            "sensorNote":"Temperatures come from Windows thermal zones, NVIDIA GPUs and any other sensors the system exposes; fan speeds are unavailable.",
             // Earlier interfaces' keys, still read by tests.
             "metrics":tiles_compat(v),"processes":self.processes.iter().take(LEGACY_ROWS).map(|p| json!({"pid":p.pid,"started":p.started,"name":p.name})).collect::<Vec<_>>(),
             }),
@@ -383,6 +419,10 @@ impl Dashboard {
         if let (Some(r), Some(w)) = (v["diskReadPerSecond"].as_f64(), v["diskWritePerSecond"].as_f64()) {
             self.disk.push(Some(r + w));
         }
+        let hottest = v["temperatures"].as_array().into_iter().flatten()
+            .filter_map(|t| t["celsius"].as_f64()).fold(f64::NAN, f64::max);
+        self.heat.push(hottest.is_finite().then_some(hottest));
+        self.gpu.push(v["gpu"][0]["load"].as_f64());
         let parsed: Option<Vec<Process>> = if let Some(rows) = v["processRows"].as_array() {
             Some(rows.iter().filter_map(|r| Some(Process {
                 pid: r[0].as_u64()?, started: r[1].as_u64()?, name: r[2].as_str()?.into(),
@@ -434,7 +474,7 @@ impl Dashboard {
         self.stop_after = None;
         self.stop_request = None;
         self.notice.clear();
-        for s in [&mut self.cpu, &mut self.memory, &mut self.received, &mut self.sent, &mut self.read, &mut self.write, &mut self.disk] {
+        for s in [&mut self.cpu, &mut self.memory, &mut self.received, &mut self.sent, &mut self.read, &mut self.write, &mut self.disk, &mut self.heat, &mut self.gpu] {
             s.0.clear();
         }
         self.cores.clear();
