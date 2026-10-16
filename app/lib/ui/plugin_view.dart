@@ -7,6 +7,8 @@ import 'package:ournet_core/ournet_core.dart';
 import 'package:rfw/formats.dart' show parseLibraryFile;
 import 'package:rfw/rfw.dart';
 
+import 'plugin_widgets.dart';
+
 /// One surface of a plugin: its RFW widget (from the package's `ui.rfwtxt`)
 /// over the data the plugin last sent for it. Events go back to the plugin;
 /// nothing here waits on it, so a slow plugin shows stale data, never a
@@ -260,6 +262,7 @@ LocalWidgetLibrary ournetWidgets({
   Widget Function(String id, double? height)? image,
   Future<Json?> Function(String accept)? pickFile,
 }) => LocalWidgetLibrary(<String, LocalWidgetBuilder>{
+  ...pluginLayoutWidgets(),
   // The picture attached to one of the plugin's objects, by `object` ID;
   // `height` limits it.
   'Picture': (context, source) =>

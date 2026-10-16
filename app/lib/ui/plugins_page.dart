@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:ournet_core/ournet_core.dart';
 
+import 'remote_session_banner.dart' show showRemoteLog;
+
 /// What each grant lets a plugin do, as the install prompt says it.
 const grantMeanings = {
   'system-monitor': 'Read system resource usage and running process names',
@@ -675,6 +677,24 @@ class _PluginsPageState extends State<PluginsPage> {
             style: TextStyle(fontWeight: FontWeight.w600),
           ),
         ),
+        if (installed.any(
+          (p) => p.granted.any(
+            (g) => const {
+              'system-monitor',
+              'process-control',
+              'remote-input',
+              'clipboard-write',
+            }.contains(g),
+          ),
+        ))
+          ListTile(
+            leading: const Icon(Icons.history),
+            title: const Text('Remote sessions'),
+            subtitle: const Text(
+              'Your devices that viewed or controlled this one, since OurNet started',
+            ),
+            onTap: () => showRemoteLog(context, plugins),
+          ),
         if (installed.isEmpty)
           const ListTile(
             leading: Icon(Icons.extension_outlined),

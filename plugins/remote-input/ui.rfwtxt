@@ -5,64 +5,186 @@ import ournet;
 widget RemoteInput = ListView(
   padding: [16.0, 12.0, 16.0, 24.0],
   children: [
-    Text(text: "Remote Input", style: {fontSize: 24.0, fontWeight: "w600"}),
-    Text(text: data.note),
-    OutlinedButton(onPressed: event "receiving" {}, child: Text(text: data.inputLabel)),
-    OutlinedButton(onPressed: event "clipboard" {}, child: Text(text: data.clipboardLabel)),
-    TextButton(onPressed: event "disable" {}, child: Text(text: "Stop all incoming control")),
-    Text(text: data.lastInput),
-    Text(text: "Choose a device", style: {fontSize: 18.0, fontWeight: "w600"}),
-    TextButton(onPressed: event "refresh" {}, child: Text(text: "Refresh devices")),
-    ...for device in data.devices:
-      ListTile(title: Text(text: device.name), subtitle: Text(text: device.state),
-        onTap: event "select" {device: device.id}),
-    Text(text: data.targetName),
-    Text(text: data.status),
-    TextInput(label: "Text to send", hint: "Type, paste or dictate here", lines: 3, maxLength: 16384,
-      value: data.text, onChanged: event "text" {}),
-    Row(children: [
-      TextButton(onPressed: event "type" {}, child: Text(text: "Type")),
-      TextButton(onPressed: event "copy" {}, child: Text(text: "Copy")),
-      TextButton(onPressed: event "paste" {}, child: Text(text: "Paste")),
-    ]),
-    Text(text: "Copy replaces the other device's clipboard. Paste also inserts it into the focused app."),
-    Text(text: "Touchpad · drag to move", style: {fontSize: 18.0, fontWeight: "w600"}),
-    Canvas(width: 300.0, height: 150.0, background: 0xff233340, commands: data.pad,
-      label: "Remote touchpad", onPointer: event "pointer" {}, onDrag: event "padDrag" {}),
-    Row(children: [
-      TextButton(onPressed: event "click" {button: "left"}, child: Text(text: "Left click")),
-      TextButton(onPressed: event "click" {button: "right"}, child: Text(text: "Right click")),
-    ]),
-    Row(children: [
-      TextButton(onPressed: event "scroll" {amount: 3}, child: Text(text: "Scroll up")),
-      TextButton(onPressed: event "scroll" {amount: -3}, child: Text(text: "Scroll down")),
-    ]),
-    Row(children: [
-      TextButton(onPressed: event "key" {key: "enter"}, child: Text(text: "Enter")),
-      TextButton(onPressed: event "key" {key: "backspace"}, child: Text(text: "Backspace")),
-      TextButton(onPressed: event "key" {key: "escape"}, child: Text(text: "Esc")),
-    ]),
-    Row(children: [
-      TextButton(onPressed: event "key" {key: "tab"}, child: Text(text: "Tab")),
-      TextButton(onPressed: event "key" {key: "left"}, child: Text(text: "←")),
-      TextButton(onPressed: event "key" {key: "up"}, child: Text(text: "↑")),
-      TextButton(onPressed: event "key" {key: "right"}, child: Text(text: "→")),
-      TextButton(onPressed: event "key" {key: "down"}, child: Text(text: "↓")),
-    ]),
-    Row(children: [
-      TextButton(onPressed: event "key" {key: "pageup"}, child: Text(text: "Previous slide")),
-      TextButton(onPressed: event "key" {key: "pagedown"}, child: Text(text: "Next slide")),
-    ]),
-    Text(text: "Media", style: {fontSize: 18.0, fontWeight: "w600"}),
-    Row(children: [
-      TextButton(onPressed: event "key" {key: "previous"}, child: Text(text: "Previous")),
-      TextButton(onPressed: event "key" {key: "play"}, child: Text(text: "Play / pause")),
-      TextButton(onPressed: event "key" {key: "next"}, child: Text(text: "Next")),
-    ]),
-    Row(children: [
-      TextButton(onPressed: event "key" {key: "volumedown"}, child: Text(text: "Volume −")),
-      TextButton(onPressed: event "key" {key: "volumeup"}, child: Text(text: "Volume +")),
-      TextButton(onPressed: event "key" {key: "mute"}, child: Text(text: "Mute")),
-    ]),
+    Presence(onShown: event "shown" {}, onHidden: event "hidden" {}),
+    Text(text: "Remote Input", style: {fontSize: 22.0, fontWeight: "w600"}),
+    Text(text: "Use this device as a touchpad and keyboard for your own devices.", style: {fontSize: 12.0}),
+    switch data.controlled {
+      true: Padding(padding: [0.0, 8.0, 0.0, 0.0], child: Row(children: [
+        Pill(label: data.controlledLabel, tone: "active", icon: "mouse"),
+      ])),
+      default: SizedBoxShrink(),
+    },
+    SizedBox(height: 12.0),
+    Target(),
+    SizedBox(height: 12.0),
+    Responsive(
+      breakpoint: 760.0,
+      narrow: Column(crossAxisAlignment: "stretch", children: [
+        Segments(selected: data.tab, onSelected: event "tab" {}, options: [
+          {value: "pad", label: "Touchpad"},
+          {value: "keys", label: "Keys"},
+          {value: "text", label: "Text"},
+          {value: "media", label: "Media"},
+        ]),
+        SizedBox(height: 12.0),
+        switch data.tab {
+          "keys": Column(crossAxisAlignment: "stretch", children: [Keys(), SizedBox(height: 12.0), Slides()]),
+          "text": TextPanel(),
+          "media": Media(),
+          default: Column(crossAxisAlignment: "stretch", children: [
+            Pad(),
+            SizedBox(height: 10.0),
+            QuickKeys(),
+          ]),
+        },
+      ]),
+      wide: Row(crossAxisAlignment: "start", children: [
+        Expanded(flex: 3, child: Column(crossAxisAlignment: "stretch", children: [
+          Panel(title: "Touchpad", icon: "touch", child: Pad()),
+          SizedBox(height: 12.0),
+          TextPanel(),
+        ])),
+        SizedBox(width: 16.0),
+        Expanded(flex: 2, child: Column(crossAxisAlignment: "stretch", children: [
+          Keys(),
+          SizedBox(height: 12.0),
+          Slides(),
+          SizedBox(height: 12.0),
+          Media(),
+        ])),
+      ]),
+    ),
+    SizedBox(height: 16.0),
+    Receive(),
   ],
+);
+
+widget Target = Panel(
+  title: "Control", icon: "devices",
+  subtitle: "Choose one of your devices running Remote Input.",
+  child: Column(crossAxisAlignment: "stretch", children: [
+    Choice(label: data.deviceLabel, detail: data.deviceDetail, icon: "computer",
+      options: data.deviceOptions, onSelected: event "select" {}),
+    SizedBox(height: 10.0),
+    Wrap(spacing: 6.0, runSpacing: 6.0, children: [
+      Pill(label: data.linkLabel, tone: data.linkTone, icon: data.linkIcon),
+      Pill(label: data.remoteInputLabel, tone: data.remoteInputTone, icon: "mouse"),
+      Pill(label: data.remoteClipLabel, tone: data.remoteClipTone, icon: "clipboard"),
+    ]),
+    SizedBox(height: 6.0),
+    Text(text: data.status, style: {fontSize: 12.0}),
+  ]),
+);
+
+widget Pad = Touchpad(
+  enabled: data.hasTarget, hint: data.padHint, height: 300.0,
+  onMove: event "move" {}, onClick: event "click" {}, onScroll: event "scroll" {},
+);
+
+widget QuickKeys = Wrap(spacing: 6.0, runSpacing: 6.0, children: [
+  ActionButton(label: "Esc", icon: "escape", style: "tonal", enabled: data.hasTarget, onPressed: event "key" {key: "escape"}),
+  ActionButton(label: "Enter", icon: "enter", style: "tonal", enabled: data.hasTarget, onPressed: event "key" {key: "enter"}),
+  ActionButton(label: "Back", icon: "backspace", style: "tonal", enabled: data.hasTarget, onPressed: event "key" {key: "backspace"}),
+  ActionButton(label: "Play / pause", icon: "playpause", style: "tonal", enabled: data.hasTarget, onPressed: event "key" {key: "play"}),
+]);
+
+widget Keys = Panel(title: "Keys", icon: "keyboard", child: Column(crossAxisAlignment: "stretch", children: [
+  Row(mainAxisAlignment: "center", children: [
+    ActionButton(icon: "up", style: "icon", tooltip: "Up", enabled: data.hasTarget, onPressed: event "key" {key: "up"}),
+  ]),
+  Row(mainAxisAlignment: "center", children: [
+    ActionButton(icon: "left", style: "icon", tooltip: "Left", enabled: data.hasTarget, onPressed: event "key" {key: "left"}),
+    SizedBox(width: 52.0),
+    ActionButton(icon: "right", style: "icon", tooltip: "Right", enabled: data.hasTarget, onPressed: event "key" {key: "right"}),
+  ]),
+  Row(mainAxisAlignment: "center", children: [
+    ActionButton(icon: "down", style: "icon", tooltip: "Down", enabled: data.hasTarget, onPressed: event "key" {key: "down"}),
+  ]),
+  SizedBox(height: 10.0),
+  Wrap(spacing: 6.0, runSpacing: 6.0, children: [
+    ActionButton(label: "Esc", icon: "escape", style: "outlined", enabled: data.hasTarget, onPressed: event "key" {key: "escape"}),
+    ActionButton(label: "Tab", icon: "tab", style: "outlined", enabled: data.hasTarget, onPressed: event "key" {key: "tab"}),
+    ActionButton(label: "Enter", icon: "enter", style: "outlined", enabled: data.hasTarget, onPressed: event "key" {key: "enter"}),
+    ActionButton(label: "Space", icon: "space", style: "outlined", enabled: data.hasTarget, onPressed: event "key" {key: "space"}),
+    ActionButton(label: "Backspace", icon: "backspace", style: "outlined", enabled: data.hasTarget, onPressed: event "key" {key: "backspace"}),
+    ActionButton(label: "Delete", icon: "delete", style: "outlined", enabled: data.hasTarget, onPressed: event "key" {key: "delete"}),
+    ActionButton(label: "Home", icon: "home", style: "outlined", enabled: data.hasTarget, onPressed: event "key" {key: "home"}),
+    ActionButton(label: "End", icon: "endkey", style: "outlined", enabled: data.hasTarget, onPressed: event "key" {key: "end"}),
+    ActionButton(label: "Page up", icon: "pageup", style: "outlined", enabled: data.hasTarget, onPressed: event "key" {key: "pageup"}),
+    ActionButton(label: "Page down", icon: "pagedown", style: "outlined", enabled: data.hasTarget, onPressed: event "key" {key: "pagedown"}),
+  ]),
+]));
+
+widget Slides = Panel(title: "Presentation", icon: "slides", child: Column(crossAxisAlignment: "stretch", children: [
+  Row(children: [
+    Expanded(child: ActionButton(label: "Previous", icon: "left", style: "tonal", expand: true, enabled: data.hasTarget, onPressed: event "key" {key: "pageup"})),
+    SizedBox(width: 8.0),
+    Expanded(child: ActionButton(label: "Next slide", icon: "right", style: "filled", expand: true, enabled: data.hasTarget, onPressed: event "key" {key: "pagedown"})),
+  ]),
+  SizedBox(height: 8.0),
+  Wrap(spacing: 6.0, runSpacing: 6.0, children: [
+    ActionButton(label: "Start show (F5)", icon: "play", style: "outlined", enabled: data.hasTarget, onPressed: event "key" {key: "f5"}),
+    ActionButton(label: "End show", icon: "escape", style: "outlined", enabled: data.hasTarget, onPressed: event "key" {key: "escape"}),
+    ActionButton(label: "Full screen (F11)", icon: "fullscreen", style: "outlined", enabled: data.hasTarget, onPressed: event "key" {key: "f11"}),
+  ]),
+]));
+
+widget Media = Panel(title: "Media", icon: "playpause", child: Column(crossAxisAlignment: "stretch", children: [
+  Row(mainAxisAlignment: "center", children: [
+    ActionButton(icon: "previous", style: "icon", tooltip: "Previous track", enabled: data.hasTarget, onPressed: event "key" {key: "previous"}),
+    SizedBox(width: 12.0),
+    ActionButton(label: "Play / pause", icon: "playpause", style: "filled", enabled: data.hasTarget, onPressed: event "key" {key: "play"}),
+    SizedBox(width: 12.0),
+    ActionButton(icon: "next", style: "icon", tooltip: "Next track", enabled: data.hasTarget, onPressed: event "key" {key: "next"}),
+  ]),
+  SizedBox(height: 10.0),
+  Row(mainAxisAlignment: "center", children: [
+    ActionButton(icon: "volumedown", style: "icon", tooltip: "Volume down", enabled: data.hasTarget, onPressed: event "key" {key: "volumedown"}),
+    SizedBox(width: 12.0),
+    ActionButton(icon: "mute", style: "icon", tooltip: "Mute", enabled: data.hasTarget, onPressed: event "key" {key: "mute"}),
+    SizedBox(width: 12.0),
+    ActionButton(icon: "volumeup", style: "icon", tooltip: "Volume up", enabled: data.hasTarget, onPressed: event "key" {key: "volumeup"}),
+  ]),
+]));
+
+widget TextPanel = Panel(title: "Text and clipboard", icon: "type", child: Column(crossAxisAlignment: "stretch", children: [
+  TextInput(label: "Text to send", hint: "Type, paste or dictate here", lines: 3, maxLength: 16384,
+    value: data.text, onChanged: event "text" {}),
+  SizedBox(height: 6.0),
+  Wrap(spacing: 6.0, runSpacing: 6.0, children: [
+    ActionButton(label: "Type", icon: "type", style: "filled", enabled: data.hasTarget, onPressed: event "type" {}),
+    ActionButton(label: "Copy", icon: "copy", style: "tonal", enabled: data.hasTarget, onPressed: event "copy" {}),
+    ActionButton(label: "Paste", icon: "paste", style: "tonal", enabled: data.hasTarget, onPressed: event "paste" {}),
+  ]),
+  SizedBox(height: 6.0),
+  Text(text: "Type enters the text as keystrokes. Copy replaces the other device's clipboard; Paste also inserts it into the focused app.", style: {fontSize: 12.0}),
+]));
+
+widget Receive = Panel(
+  title: "Receive on this device", icon: "shield",
+  subtitle: "Switched off whenever the plugin starts. Only your own devices can connect.",
+  child: Column(crossAxisAlignment: "stretch", children: [
+    Toggle(label: "Allow incoming mouse / keyboard", icon: "mouse",
+      detail: "Pointer, clicks, scrolling, named keys and typed text.",
+      value: data.receiving, onChanged: event "receiving" {}),
+    Toggle(label: "Allow incoming clipboard", icon: "clipboard",
+      detail: "Write-only: your other devices can replace the clipboard, never read it.",
+      value: data.clipboard, onChanged: event "clipboard" {}),
+    SizedBox(height: 6.0),
+    Wrap(spacing: 6.0, runSpacing: 6.0, crossAxisAlignment: "center", children: [
+      switch data.controlled {
+        true: Pill(label: data.controlledLabel, tone: "active", icon: "mouse"),
+        default: switch data.receivingAny {
+          true: Pill(label: data.receiveLabel, tone: "warn", icon: "shield"),
+          default: Pill(label: data.receiveLabel, tone: "off", icon: "off"),
+        },
+      },
+      Text(text: data.lastInput, style: {fontSize: 12.0}),
+    ]),
+    SizedBox(height: 8.0),
+    Row(children: [
+      ActionButton(label: "Stop all incoming control", icon: "stop", style: "tonal", danger: true,
+        enabled: data.receivingAny, onPressed: event "disable" {}),
+    ]),
+  ]),
 );

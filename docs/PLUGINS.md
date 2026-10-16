@@ -287,6 +287,19 @@ button that asks for a file, `accept: "image"` or `"any"`, and sends
 `onPicked` with `{file, name, size}`; `file` is a handle for
 `files.publish`). `Picture` and `Markup` show only the plugin's own objects.
 
+For dashboards and controls (`app/lib/ui/plugin_widgets.dart`): `LineChart`
+(series of values, newest at the right, filled under the line), `StatTile`
+(a figure with a sparkline, selectable), `SortTable` (columns and rows
+sorted, searched and selected in the app, so typing and sorting never wait
+for the plugin; sends `onSelect` `{id}`), `Touchpad` (drag to move, tap to
+click, two fingers or the right edge to scroll; sends `onMove` `{dx, dy}` at
+most once a frame, `onClick` `{button}`, `onScroll` `{amount}`), `Toggle`,
+`Pill` (a status label with a tone), `ActionButton` and `Glyph` (icons by
+name), `Choice` (a menu of options), `Segments`, `Panel`, `Tiles` (equal
+columns by minimum width), `Responsive` (`narrow` or `wide` by the space it
+has) and `Presence` (sends `onShown`/`onHidden` as it appears, goes, or the
+app moves to the background: for work that runs only while seen).
+
 ### In search and the activity feed
 
 A manifest may list kinds for the app's search and activity feed. The app

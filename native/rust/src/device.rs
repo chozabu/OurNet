@@ -1,6 +1,13 @@
 //! Permissioned device capabilities. Called on a plugin thread, never a frame.
 use serde_json::{json, Value};
 
+/// Processes one sample lists at most, by CPU then memory.
+pub const PROCESS_LIMIT: usize = 512;
+
+/// Logical CPUs reported per core at most.
+#[cfg(windows)]
+const CORE_LIMIT: usize = 256;
+
 #[cfg(windows)]
 #[derive(Default)]
 pub struct Monitor {
@@ -10,7 +17,9 @@ pub struct Monitor {
     processes_at: Option<std::time::Instant>,
     sample: Value,
     rows: Value,
-    shown: std::collections::HashMap<u32, u64>,
+    /// PID → (start time, name) of every process the last sample listed:
+    /// only those may be ended.
+    shown: std::collections::HashMap<u32, (u64, String)>,
 }
 
 #[cfg(not(windows))]
@@ -29,17 +38,33 @@ impl Monitor {
             let elapsed = self.sampled.map(|at| now.duration_since(at).as_secs_f64());
             self.system.refresh_cpu_usage();
             self.system.refresh_memory();
+            if self.sampled.is_none() {
+                self.system.refresh_cpu_frequency();
+            }
             self.networks.refresh(true);
             let received: u64 = self.networks.values().map(|n| n.received()).sum();
             let sent: u64 = self.networks.values().map(|n| n.transmitted()).sum();
-            let temperatures = temperatures();
+            let slow = slow_sensors();
+            let cpus = self.system.cpus();
+            let counts = performance_counts();
             self.sample = json!({
                 "platform":"windows", "host":sysinfo::System::host_name(),
+                "os":sysinfo::System::long_os_version(),
                 "cpu": elapsed.map(|_| self.system.global_cpu_usage()),
+                "perCore": elapsed.map(|_| cpus.iter().take(CORE_LIMIT).map(|c| c.cpu_usage()).collect::<Vec<_>>()),
+                "cpuBrand": cpus.first().map(|c| c.brand().trim().to_string()),
+                "cpuFrequency": cpus.first().map(|c| c.frequency()),
+                "cores": cpus.len(), "physicalCores": sysinfo::System::physical_core_count(),
                 "memoryUsed":self.system.used_memory(), "memoryTotal":self.system.total_memory(),
+                "memoryAvailable":self.system.available_memory(),
+                "swapUsed":self.system.used_swap(), "swapTotal":self.system.total_swap(),
                 "receivedPerSecond":elapsed.map(|s| received as f64 / s),
                 "sentPerSecond":elapsed.map(|s| sent as f64 / s),
-                "uptime":sysinfo::System::uptime(), "temperatures":temperatures,
+                "uptime":sysinfo::System::uptime(), "temperatures":slow.temperatures,
+                "disks":slow.disks, "diskReadPerSecond":slow.read, "diskWritePerSecond":slow.write,
+                "processCount":counts.map(|c| c.0), "threadCount":counts.map(|c| c.1),
+                "handleCount":counts.map(|c| c.2), "commitUsed":counts.map(|c| c.3),
+                "commitLimit":counts.map(|c| c.4),
                 "gpu":null, "fan":null,
             });
             self.sampled = Some(Instant::now());
@@ -47,14 +72,18 @@ impl Monitor {
         if processes
             && self
                 .processes_at
-                .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(3))
+                .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(2))
         {
+            let elapsed = self
+                .processes_at
+                .map(|at| now.duration_since(at).as_secs_f64().max(0.001));
             self.system.refresh_processes_specifics(
                 sysinfo::ProcessesToUpdate::All,
                 true,
                 sysinfo::ProcessRefreshKind::nothing()
                     .with_cpu()
-                    .with_memory(),
+                    .with_memory()
+                    .with_disk_usage(),
             );
             let mut rows: Vec<_> = self.system.processes().values().collect();
             rows.sort_by(|a, b| {
@@ -65,11 +94,16 @@ impl Monitor {
             self.shown.clear();
             let rows: Vec<_> = rows
                 .into_iter()
-                .take(128)
+                .take(PROCESS_LIMIT)
                 .map(|p| {
-                    self.shown.insert(p.pid().as_u32(), p.start_time());
+                    let name = p.name().to_string_lossy().into_owned();
+                    self.shown
+                        .insert(p.pid().as_u32(), (p.start_time(), name.clone()));
+                    let disk = p.disk_usage();
                     json!({"pid":p.pid().as_u32(), "started":p.start_time(),
-                    "name":p.name().to_string_lossy(), "cpu":p.cpu_usage(), "memory":p.memory()})
+                    "name":name, "cpu":p.cpu_usage(), "memory":p.memory(),
+                    "diskRead":elapsed.map(|s| disk.read_bytes as f64 / s),
+                    "diskWrite":elapsed.map(|s| disk.written_bytes as f64 / s)})
                 })
                 .collect();
             self.rows = json!(rows);
@@ -82,10 +116,15 @@ impl Monitor {
         Ok(result)
     }
 
-    pub fn stop(&mut self, pid: u32, started: u64) -> Result<(), String> {
-        if pid <= 4 || pid == std::process::id() || self.shown.get(&pid) != Some(&started) {
-            return Err("Select a current, non-system process from the dashboard".into());
-        }
+    /// Ends [pid] if it is the process the last sample showed. Returns its
+    /// name, for the receiving device's session log.
+    pub fn stop(&mut self, pid: u32, started: u64) -> Result<String, String> {
+        let name = match self.shown.get(&pid) {
+            Some((at, name)) if *at == started && pid > 4 && pid != std::process::id() => {
+                name.clone()
+            }
+            _ => return Err("Select a current, non-system process from the dashboard".into()),
+        };
         self.system.refresh_processes_specifics(
             sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
             true,
@@ -103,48 +142,125 @@ impl Monitor {
         }
         self.shown.remove(&pid);
         self.processes_at = None;
-        Ok(())
+        Ok(name)
     }
 }
 
-/// WMI providers can wait indefinitely. At most one sensor worker exists for
-/// the process and one refresh may wait behind it; resource requests only
-/// clone its bounded cache. No worker is created until monitoring is used.
+/// System-wide process, thread and handle counts and commit charge in
+/// bytes, from one `GetPerformanceInfo` call.
 #[cfg(windows)]
-fn temperatures() -> Vec<Value> {
+fn performance_counts() -> Option<(u32, u32, u32, u64, u64)> {
+    use windows_sys::Win32::System::ProcessStatus::{GetPerformanceInfo, PERFORMANCE_INFORMATION};
+    let mut info: PERFORMANCE_INFORMATION = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<PERFORMANCE_INFORMATION>() as u32;
+    info.cb = size;
+    if unsafe { GetPerformanceInfo(&mut info, size) } == 0 {
+        return None;
+    }
+    let page = info.PageSize as u64;
+    Some((
+        info.ProcessCount,
+        info.ThreadCount,
+        info.HandleCount,
+        info.CommitTotal as u64 * page,
+        info.CommitLimit as u64 * page,
+    ))
+}
+
+/// What the sensor worker last read.
+#[cfg(windows)]
+#[derive(Clone, Default)]
+struct Slow {
+    temperatures: Vec<Value>,
+    disks: Vec<Value>,
+    read: Option<f64>,
+    write: Option<f64>,
+}
+
+/// WMI providers can wait indefinitely, and a disk may be slow to answer.
+/// At most one sensor worker exists for the process and one refresh may
+/// wait behind it; resource requests only clone its bounded cache. No worker
+/// is created until monitoring is used.
+#[cfg(windows)]
+fn slow_sensors() -> Slow {
     use std::sync::{mpsc, Arc, Mutex, OnceLock};
     use std::time::{Duration, Instant};
     struct Sensors {
         request: mpsc::SyncSender<()>,
-        values: Arc<Mutex<Vec<Value>>>,
+        values: Arc<Mutex<Slow>>,
     }
     static SENSORS: OnceLock<Sensors> = OnceLock::new();
     let sensors = SENSORS.get_or_init(|| {
         let (request, receive) = mpsc::sync_channel(1);
-        let values = Arc::new(Mutex::new(Vec::new()));
+        let values = Arc::new(Mutex::new(Slow::default()));
         let output = values.clone();
         let _ = std::thread::Builder::new()
             .name("ournet-sensors".into())
             .spawn(move || {
+                use sysinfo::DiskRefreshKind;
                 let mut components = sysinfo::Components::new();
-                let mut next = Instant::now();
+                let mut disks = sysinfo::Disks::new();
+                let (mut next_components, mut next_list) = (Instant::now(), Instant::now());
+                let mut disks_at: Option<Instant> = None;
                 while receive.recv().is_ok() {
-                    if Instant::now() < next {
-                        continue;
+                    let now = Instant::now();
+                    let mut slow = output.lock().map(|v| v.clone()).unwrap_or_default();
+                    if now >= next_components {
+                        components.refresh(true);
+                        slow.temperatures = components
+                            .iter()
+                            .filter_map(|c| {
+                                c.temperature()
+                                    .map(|t| json!({"name":c.label(),"celsius":t}))
+                            })
+                            .take(32)
+                            .collect();
+                        next_components = Instant::now()
+                            + Duration::from_secs(if slow.temperatures.is_empty() { 30 } else { 2 });
                     }
-                    components.refresh(true);
-                    let sample: Vec<_> = components
-                        .iter()
-                        .filter_map(|c| {
-                            c.temperature()
-                                .map(|t| json!({"name":c.label(),"celsius":t}))
-                        })
-                        .take(32)
-                        .collect();
-                    next = Instant::now()
-                        + Duration::from_secs(if sample.is_empty() { 30 } else { 2 });
+                    if disks_at.is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1)) {
+                        // Volumes come and go: the list is read rarely, each
+                        // listed disk's counters every sample.
+                        let listed = now >= next_list;
+                        if listed {
+                            disks.refresh_specifics(true, DiskRefreshKind::everything());
+                            next_list = now + Duration::from_secs(30);
+                        } else {
+                            for d in disks.list_mut() {
+                                d.refresh_specifics(DiskRefreshKind::nothing().with_io_usage());
+                            }
+                        }
+                        let elapsed = disks_at
+                            .filter(|_| !listed)
+                            .map(|at| now.duration_since(at).as_secs_f64().max(0.001));
+                        let (mut read, mut write) = (0.0, 0.0);
+                        slow.disks = disks
+                            .list()
+                            .iter()
+                            .take(16)
+                            .map(|d| {
+                                let usage = d.usage();
+                                let r = elapsed.map(|s| usage.read_bytes as f64 / s);
+                                let w = elapsed.map(|s| usage.written_bytes as f64 / s);
+                                read += r.unwrap_or(0.0);
+                                write += w.unwrap_or(0.0);
+                                json!({"name":d.name().to_string_lossy(),
+                                    "mount":d.mount_point().to_string_lossy(),
+                                    "kind":format!("{}", d.kind()),
+                                    "total":d.total_space(), "available":d.available_space(),
+                                    "removable":d.is_removable(),
+                                    "readPerSecond":r, "writePerSecond":w})
+                            })
+                            .collect();
+                        // A fresh list restarts the counters: keep the last rate.
+                        if elapsed.is_some() {
+                            slow.read = Some(read);
+                            slow.write = Some(write);
+                        }
+                        disks_at = Some(now);
+                    }
                     if let Ok(mut cache) = output.lock() {
-                        *cache = sample;
+                        *cache = slow;
                     }
                 }
             });
@@ -159,7 +275,7 @@ impl Monitor {
     pub fn snapshot(&mut self, _: bool) -> Result<Value, String> {
         Err("System monitoring is currently supported on Windows receivers".into())
     }
-    pub fn stop(&mut self, _: u32, _: u64) -> Result<(), String> {
+    pub fn stop(&mut self, _: u32, _: u64) -> Result<String, String> {
         Err("Process control is currently supported on Windows receivers".into())
     }
 }
@@ -270,6 +386,12 @@ fn windows_input(v: &Value) -> Result<(), String> {
                 "volumeup" => VK_VOLUME_UP,
                 "volumedown" => VK_VOLUME_DOWN,
                 "mute" => VK_VOLUME_MUTE,
+                "space" => VK_SPACE,
+                "delete" => VK_DELETE,
+                "home" => VK_HOME,
+                "end" => VK_END,
+                "f5" => VK_F5,
+                "f11" => VK_F11,
                 _ => return Err("Unknown key".into()),
             };
             events.extend([key(vk, 0, 0), key(vk, 0, KEYEVENTF_KEYUP)]);
@@ -307,7 +429,13 @@ mod tests {
         let mut monitor = super::Monitor::default();
         let a = monitor.snapshot(true).unwrap();
         assert!(a["memoryTotal"].as_u64().unwrap() > 0);
-        assert!(a["processes"].as_array().unwrap().len() <= 128);
+        assert!(a["processes"].as_array().unwrap().len() <= super::PROCESS_LIMIT);
+        assert!(a["cores"].as_u64().unwrap() > 0);
+        assert!(a["processCount"].as_u64().unwrap() > 0);
+        assert!(a["handleCount"].as_u64().unwrap() > 0);
+        assert!(a["commitLimit"].as_u64().unwrap() > 0);
+        // Rates need two samples; the first says so with null.
+        assert!(a["cpu"].is_null() && a["perCore"].is_null());
         // Test the cache, independently of how long Windows took to obtain
         // its first process/sensor sample under load.
         monitor.sampled = Some(std::time::Instant::now());

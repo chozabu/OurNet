@@ -1,5 +1,5 @@
 {
-  "id":"remote-input", "name":"Remote Input", "version":"0.1.0", "api":"0.3",
+  "id":"remote-input", "name":"Remote Input", "version":"0.2.0", "api":"0.3",
   "description":"Use your phone as a touchpad, type or dictate text, send clipboard text, and control media on your own devices. Mouse and keyboard receivers currently require Windows; clipboard writes work wherever the app supports them. Receiving starts off each launch.",
   "grants":["identity","live","remote-input","clipboard-write"],
   "sections":[{"name":"input","title":"Remote Input","icon":"devices","surface":"RemoteInput","scopes":["personal"]}]

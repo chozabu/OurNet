@@ -21,8 +21,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [target.'cfg(windows)'.dependencies]
-sysinfo = { version = "=0.39.6", default-features = false, features = ["system", "network", "component"] }
-windows-sys = { version = "0.61.2", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+sysinfo = { version = "=0.39.6", default-features = false, features = ["system", "network", "component", "disk"] }
+windows-sys = { version = "0.61.2", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_ProcessStatus"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

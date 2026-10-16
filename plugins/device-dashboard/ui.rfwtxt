@@ -5,52 +5,220 @@ import ournet;
 widget Dashboard = ListView(
   padding: [16.0, 12.0, 16.0, 24.0],
   children: [
-    Text(text: "Device Dashboard", style: {fontSize: 24.0, fontWeight: "w600"}),
-    Text(text: "Live information between your own devices. Nothing is saved to history."),
-    OutlinedButton(onPressed: event "sharing" {}, child: Text(text: data.shareLabel)),
-    switch data.sharing {
-      true: OutlinedButton(onPressed: event "control" {}, child: Text(text: data.controlLabel)),
+    Presence(onShown: event "shown" {}, onHidden: event "hidden" {}),
+    Header(),
+    SizedBox(height: 8.0),
+    Text(text: data.status, style: {fontSize: 12.0}),
+    SizedBox(height: 8.0),
+    switch data.hasNotice {
+      true: Card(child: Padding(padding: [12.0, 4.0, 4.0, 4.0], child: Row(children: [
+        Expanded(child: Text(text: data.notice)),
+        ActionButton(icon: "close", style: "icon", tooltip: "Dismiss", onPressed: event "dismiss" {}),
+      ]))),
       default: SizedBoxShrink(),
     },
-    Text(text: "Choose a device", style: {fontSize: 18.0, fontWeight: "w600"}),
-    TextButton(onPressed: event "local" {}, child: Text(text: "This device")),
-    ...for device in data.devices:
-      ListTile(title: Text(text: device.name), subtitle: Text(text: device.state),
-        onTap: event "select" {device: device.id}),
-    Text(text: data.targetName),
-    Text(text: data.status),
-    Row(children: [
-      TextButton(onPressed: event "refresh" {}, child: Text(text: "Refresh")),
-      TextButton(onPressed: event "watch" {}, child: Text(text: data.watchLabel)),
+    switch data.confirming {
+      true: Confirm(),
+      default: SizedBoxShrink(),
+    },
+    Segments(selected: data.tab, onSelected: event "tab" {}, options: [
+      {value: "performance", label: "Performance", icon: "speed"},
+      {value: "processes", label: "Processes", icon: "process"},
     ]),
-    ...for metric in data.metrics:
-      ListTile(title: Text(text: metric.name), subtitle: Text(text: metric.value)),
-    switch data.hasReport {
+    SizedBox(height: 12.0),
+    switch data.hasTarget {
+      false: Card(child: Padding(padding: [16.0, 16.0, 16.0, 16.0], child: Column(children: [
+        Glyph(name: "devices", size: 40.0),
+        SizedBox(height: 8.0),
+        Text(text: "Choose a device to watch", style: {fontSize: 16.0, fontWeight: "w600"}),
+        Text(text: "Pick This device, or one of your devices that shares its metrics. Updates stream while this page is open, until you pause them.", textAlign: "center"),
+      ]))),
+      default: switch data.tab {
+        "processes": Processes(),
+        default: Performance(),
+      },
+    },
+    SizedBox(height: 16.0),
+    Sharing(),
+  ],
+);
+
+widget Header = Responsive(
+  breakpoint: 640.0,
+  narrow: Column(crossAxisAlignment: "stretch", children: [
+    Text(text: "Device Dashboard", style: {fontSize: 22.0, fontWeight: "w600"}),
+    Text(text: "Live resources of your own devices. Nothing is saved to history.", style: {fontSize: 12.0}),
+    SizedBox(height: 10.0),
+    DevicePicker(),
+    SizedBox(height: 8.0),
+    Wrap(spacing: 8.0, runSpacing: 8.0, crossAxisAlignment: "center", children: [
+      Pill(label: data.liveLabel, tone: data.liveTone, icon: data.liveIcon),
+      Controls(),
+    ]),
+  ]),
+  wide: Row(children: [
+    Expanded(child: Column(crossAxisAlignment: "start", children: [
+      Text(text: "Device Dashboard", style: {fontSize: 24.0, fontWeight: "w600"}),
+      Text(text: "Live resources of your own devices. Nothing is saved to history.", style: {fontSize: 12.0}),
+    ])),
+    Pill(label: data.liveLabel, tone: data.liveTone, icon: data.liveIcon),
+    SizedBox(width: 12.0),
+    DevicePicker(),
+    SizedBox(width: 8.0),
+    Controls(),
+  ]),
+);
+
+widget DevicePicker = Choice(
+  label: data.deviceLabel, detail: data.deviceDetail, icon: "devices",
+  options: data.deviceOptions, onSelected: event "select" {},
+);
+
+widget Controls = Row(mainAxisSize: "min", children: [
+  ActionButton(label: data.pauseLabel, icon: data.pauseIcon, style: "tonal",
+    enabled: data.hasTarget, onPressed: event "pause" {}),
+  SizedBox(width: 6.0),
+  Choice(label: data.intervalLabel, icon: "timer", onSelected: event "interval" {}, options: [
+    {value: "1000", label: "Every second"},
+    {value: "2000", label: "Every 2 seconds"},
+    {value: "5000", label: "Every 5 seconds"},
+  ]),
+]);
+
+widget Confirm = Card(child: Padding(padding: [16.0, 12.0, 16.0, 12.0], child:
+  Column(crossAxisAlignment: "stretch", children: [
+    Row(children: [
+      Glyph(name: "warning"),
+      SizedBox(width: 8.0),
+      Expanded(child: Text(text: "End this process? Unsaved work may be lost.", style: {fontSize: 16.0, fontWeight: "w600"})),
+    ]),
+    SizedBox(height: 6.0),
+    Text(text: data.confirmText),
+    SizedBox(height: 10.0),
+    Wrap(spacing: 8.0, runSpacing: 8.0, children: [
+      ActionButton(label: "End process", icon: "end", style: "filled", danger: true, onPressed: event "confirm" {}),
+      ActionButton(label: "Cancel", style: "text", onPressed: event "cancel" {}),
+    ]),
+  ])
+));
+
+widget Performance = Responsive(
+  breakpoint: 760.0,
+  narrow: Column(crossAxisAlignment: "stretch", children: [
+    Tiles(minWidth: 150.0, children: [
+      ...for tile in data.tiles:
+        StatTile(label: tile.label, value: tile.value, detail: tile.detail, icon: tile.icon,
+          color: tile.color, values: tile.values, max: tile.max, capacity: 60,
+          selected: tile.selected, onTap: event "focus" {key: tile.key}),
+    ]),
+    SizedBox(height: 12.0),
+    Detail(),
+  ]),
+  wide: Row(crossAxisAlignment: "start", children: [
+    SizedBox(width: 250.0, child: Column(crossAxisAlignment: "stretch", children: [
+      ...for tile in data.tiles:
+        Padding(padding: [0.0, 0.0, 0.0, 8.0], child:
+          StatTile(label: tile.label, value: tile.value, detail: tile.detail, icon: tile.icon,
+            color: tile.color, values: tile.values, max: tile.max, capacity: 60,
+            selected: tile.selected, onTap: event "focus" {key: tile.key})),
+    ])),
+    SizedBox(width: 16.0),
+    Expanded(child: Detail()),
+  ]),
+);
+
+widget Detail = Panel(
+  title: data.focusTitle, subtitle: data.focusSubtitle,
+  child: Column(crossAxisAlignment: "stretch", children: [
+    LineChart(series: data.chart, max: data.chartMax, capacity: 60, height: 180.0,
+      top: data.chartTop, bottom: "Last 60 samples", label: data.focusTitle),
+    SizedBox(height: 12.0),
+    Tiles(minWidth: 130.0, spacing: 12.0, children: [
+      ...for stat in data.stats:
+        Column(crossAxisAlignment: "start", children: [
+          Text(text: stat.label, style: {fontSize: 12.0}),
+          Text(text: stat.value, style: {fontSize: 17.0, fontWeight: "w600"}),
+        ]),
+    ]),
+    switch data.hasCores {
       true: Column(crossAxisAlignment: "stretch", children: [
-        Text(text: data.historyLabel),
-        Canvas(width: 300.0, height: 100.0, background: 0xff15232b, commands: data.graph,
-          label: "CPU usage history"),
+        SizedBox(height: 14.0),
+        Text(text: "Logical processors", style: {fontSize: 14.0, fontWeight: "w600"}),
+        SizedBox(height: 6.0),
+        Tiles(minWidth: 96.0, spacing: 6.0, maxColumns: 8, children: [
+          ...for core in data.cores:
+            Column(crossAxisAlignment: "stretch", children: [
+              Row(children: [
+                Expanded(child: Text(text: core.label, style: {fontSize: 11.0})),
+                Text(text: core.value, style: {fontSize: 11.0}),
+              ]),
+              LineChart(series: [{values: core.values, color: 0xff3f8fd8}], max: 100, capacity: 60, height: 44.0, label: core.label),
+            ]),
+        ]),
       ]),
       default: SizedBoxShrink(),
     },
-    Text(text: data.sensorNote),
-    switch data.confirming {
-      true: Card(child: Padding(padding: [12.0, 12.0, 12.0, 12.0], child:
-        Column(crossAxisAlignment: "stretch", children: [
-          Text(text: "End this process? Unsaved work may be lost."),
-          Text(text: data.confirmName),
-          Row(children: [
-            ElevatedButton(onPressed: event "confirm" {}, child: Text(text: "End process")),
-            TextButton(onPressed: event "cancel" {}, child: Text(text: "Cancel")),
-          ]),
-        ])
-      )),
+    switch data.hasDisks {
+      true: Column(crossAxisAlignment: "stretch", children: [
+        SizedBox(height: 14.0),
+        ...for disk in data.disks:
+          Padding(padding: [0.0, 4.0, 0.0, 6.0], child: Column(crossAxisAlignment: "stretch", children: [
+            Text(text: disk.name, style: {fontWeight: "w600"}),
+            SizedBox(height: 4.0),
+            LinearProgressIndicator(value: disk.used),
+            SizedBox(height: 2.0),
+            Text(text: disk.detail, style: {fontSize: 12.0}),
+          ])),
+      ]),
       default: SizedBoxShrink(),
     },
-    Text(text: "Processes · top 128 by CPU, then memory · refreshed at most every 3 seconds",
-      style: {fontSize: 16.0, fontWeight: "w600"}),
-    ...for process in data.processes:
-      ListTile(title: Text(text: process.name), subtitle: Text(text: process.detail),
-        trailing: TextButton(onPressed: event "stop" {pid: process.pid}, child: Text(text: "End…"))),
+    SizedBox(height: 10.0),
+    Text(text: data.sensorNote, style: {fontSize: 11.0}),
+  ]),
+);
+
+widget Processes = Panel(
+  title: "Processes", subtitle: data.processCount, icon: "process",
+  actions: [
+    ActionButton(label: "End task", icon: "end", style: "tonal", danger: true,
+      enabled: data.hasSelection, onPressed: event "stop" {}),
   ],
+  child: Column(crossAxisAlignment: "stretch", children: [
+    SortTable(
+      label: "Running processes",
+      columns: [
+        {label: "Name", flex: 3},
+        {label: "PID", numeric: true, flex: 1},
+        {label: "CPU", numeric: true, flex: 1, heat: 50},
+        {label: "Memory", numeric: true, flex: 1.4, heat: 2147483648},
+        {label: "Disk", numeric: true, flex: 1.4, heat: 20971520},
+      ],
+      rows: data.rows, sortColumn: 2, ascending: false, selected: data.selectedPid,
+      search: "Search by name or PID", height: 440.0,
+      empty: "Waiting for the process list…", onSelect: event "pick" {},
+    ),
+    SizedBox(height: 6.0),
+    Text(text: data.selectedLabel, style: {fontWeight: "w600"}),
+    Text(text: "CPU is a share of all processors, as in Task Manager. Ending a process needs Allow ending processes on that device, and your confirmation here.", style: {fontSize: 11.0}),
+  ]),
+);
+
+widget Sharing = Panel(
+  title: "Share this device", icon: "share",
+  subtitle: "Whether your other devices may watch this one. Switched off whenever the plugin starts.",
+  child: Column(crossAxisAlignment: "stretch", children: [
+    Toggle(label: "Share this device's metrics", icon: "visible",
+      detail: "Your own devices can read resource use and the process list.",
+      value: data.sharing, onChanged: event "sharing" {}),
+    Toggle(label: "Allow ending processes", icon: "end",
+      detail: "After confirming on that device. Remote use also needs sharing.",
+      value: data.control, onChanged: event "control" {}),
+    SizedBox(height: 6.0),
+    Row(children: [
+      switch data.viewed {
+        true: Pill(label: data.viewedLabel, tone: "active", icon: "visible"),
+        default: Pill(label: data.viewedLabel, tone: "off", icon: "visible"),
+      },
+    ]),
+  ]),
 );

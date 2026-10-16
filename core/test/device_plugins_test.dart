@@ -139,7 +139,7 @@ void main() {
         'op': 'copy',
         'text': 'Hello 👋\nVoice input',
       }),
-      {'ok': true},
+      containsPair('ok', true),
     );
     expect(copied, ['Hello 👋\nVoice input']);
     // Paste checks both permissions before changing the clipboard.
@@ -240,6 +240,20 @@ void main() {
         expect(report['memoryTotal'], greaterThan(0));
         expect(report['processes'], hasLength(lessThanOrEqualTo(128)));
         expect(report['gpu'], isNull);
+        // Current controllers ask for compact rows and the newer figures.
+        final compact = await request('device-dashboard', a, {
+          'op': 'snapshot',
+          'processes': true,
+          'v': 2,
+        });
+        expect(compact['processes'], isNull);
+        final rows = compact['processRows'] as List;
+        expect(rows, hasLength(inInclusiveRange(1, 512)));
+        expect(rows.first, hasLength(7));
+        expect(compact['cores'], greaterThan(0));
+        expect(compact['processCount'], greaterThan(0));
+        expect(compact['handleCount'], greaterThan(0));
+        expect(compact['sharing'], true);
         pb.event('device-dashboard', 'Dashboard', 'control', {});
         await until(
           () => pb.surface('device-dashboard', 'Dashboard')['control'] == true,
@@ -273,6 +287,109 @@ void main() {
       );
     },
   );
+  test('the host refuses device capabilities to devices not certified as '
+      "this person's, whatever the plugin decides", () async {
+    pb.event('device-dashboard', 'Dashboard', 'sharing', {});
+    pb.event('remote-input', 'RemoteInput', 'clipboard', {});
+    pb.event('remote-input', 'RemoteInput', 'receiving', {});
+    await until(
+      () =>
+          pb.surface('device-dashboard', 'Dashboard')['sharing'] == true &&
+          pb.surface('remote-input', 'RemoteInput')['clipboard'] == true &&
+          pb.surface('remote-input', 'RemoteInput')['receiving'] == true,
+    );
+    // The plugins still take a to be one of this person's devices; the
+    // host is told otherwise, and must hold.
+    pb.ownDevice = (device) => false;
+    for (final (plugin, payload) in [
+      ('device-dashboard', {'op': 'snapshot', 'processes': true}),
+      ('remote-input', {'op': 'copy', 'text': 'not yours'}),
+      ('remote-input', {'op': 'key', 'key': 'escape'}),
+    ]) {
+      await expectLater(
+        request(plugin, a, payload),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('only for your own devices'),
+          ),
+        ),
+      );
+    }
+    expect(copied, isEmpty);
+    expect(pb.remoteSessions, isEmpty);
+    // What touches nothing still answers.
+    expect(await request('remote-input', a, {'op': 'status'}), {
+      'receiving': true,
+      'clipboard': true,
+    });
+    pb.ownDevice = b.ownDevice;
+    expect(
+      await request('remote-input', a, {'op': 'copy', 'text': 'mine'}),
+      containsPair('ok', true),
+    );
+    expect(copied, ['mine']);
+    expect(b.ownDevice(a.identity.device), isTrue);
+    expect(b.ownDevice(friend.identity.device), isFalse);
+  });
+
+  test('the receiver shows and logs remote sessions locally, and stops '
+      'them', () async {
+    pb.event('device-dashboard', 'Dashboard', 'sharing', {});
+    pb.event('remote-input', 'RemoteInput', 'clipboard', {});
+    await until(
+      () =>
+          pb.surface('device-dashboard', 'Dashboard')['sharing'] == true &&
+          pb.surface('remote-input', 'RemoteInput')['clipboard'] == true,
+    );
+    final changes = <void>[];
+    final listening = pb.remoteChanges.listen(changes.add);
+    addTearDown(listening.cancel);
+    // Sampling may fail off Windows; the use is reported first.
+    try {
+      await request('device-dashboard', a, {'op': 'snapshot'});
+    } on StateError catch (_) {}
+    await until(() => pb.remoteSessions.isNotEmpty);
+    final viewing = pb.remoteSessions.single;
+    expect(viewing.device, a.identity.device);
+    expect(viewing.plugin, 'device-dashboard');
+    expect(viewing.capabilities, {'system-monitor'});
+    expect(viewing.controlling, isFalse);
+    await request('remote-input', a, {'op': 'copy', 'text': 'hello'});
+    await until(() => pb.remoteSessions.length == 2);
+    expect(
+      pb.remoteSessions.where((s) => s.controlling).single.plugin,
+      'remote-input',
+    );
+    expect(pb.deviceName(a.identity.device), 'Phone');
+    final texts = pb.remoteLog.map((e) => e.text).toList();
+    expect(texts, contains('Session started'));
+    expect(texts, contains('Started viewing resources and processes'));
+    expect(texts, contains('Started sending clipboard text'));
+    // Nothing about it is stored or synced: only the copied text left.
+    expect(texts.join(), isNot(contains('hello')));
+    expect(changes, isNotEmpty);
+    await pb.stopRemoteSessions();
+    expect(pb.remoteSessions, isEmpty);
+    expect(pb.remoteLog.first.text, startsWith('Stopped on this device after'));
+    await until(
+      () =>
+          pb['remote-input']?.status == PluginStatus.running &&
+          pb['device-dashboard']?.status == PluginStatus.running,
+    );
+    // Restarted plugins start with receiving off.
+    await expectLater(
+      request('remote-input', a, {'op': 'copy', 'text': 'again'}),
+      throwsA(anything),
+    );
+    await expectLater(
+      request('device-dashboard', a, {'op': 'snapshot'}),
+      throwsA(anything),
+    );
+    expect(copied, ['hello']);
+    expect(pb.remoteLog.length, lessThanOrEqualTo(Plugins.remoteLogLimit));
+  });
 }
 
 class _Wire implements PluginLink {

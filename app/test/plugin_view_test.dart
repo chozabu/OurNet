@@ -8,6 +8,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ournet/ui/plugin_view.dart';
+import 'package:ournet/ui/remote_session_banner.dart';
 import 'package:ournet_core/ournet_core.dart';
 
 /// The bundled plugins, run by the real native host and drawn by RFW. Set
@@ -70,6 +71,7 @@ class Rig {
     PluginFilePicker? pickFile,
     PluginImage? image,
     String? object,
+    Size size = const Size(800, 600),
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -77,8 +79,8 @@ class Rig {
           body: RepaintBoundary(
             key: shotKey,
             child: SizedBox(
-              width: 800,
-              height: 600,
+              width: size.width,
+              height: size.height,
               child: PluginView(
                 plugins: plugins,
                 plugin: id,
@@ -118,6 +120,14 @@ class Rig {
       );
       await tester.pump();
     }
+    await tester.pump();
+  }
+
+  /// Scrolls the page itself to its end. Dragging would move a touchpad
+  /// or a table instead, as it should.
+  Future<void> toEnd() async {
+    final page = tester.state<ScrollableState>(find.byType(Scrollable).first);
+    page.position.jumpTo(page.position.maxScrollExtent);
     await tester.pump();
   }
 
@@ -168,6 +178,17 @@ void main() {
       if (id == 'device-dashboard' && Platform.isWindows) {
         rig.plugins.event(id, surface, 'local', {});
         await rig.untilText('Memory');
+        expect(tester.takeException(), isNull);
+        await rig.until(
+          () => (rig.plugins.surface(id, surface)['cores'] as List).isNotEmpty,
+        );
+        await rig.shot('$id-performance');
+        rig.plugins.event(id, surface, 'tab', {'value': 'processes'});
+        await rig.until(
+          () => (rig.plugins.surface(id, surface)['rows'] as List).isNotEmpty,
+        );
+        expect(find.text('Search by name or PID'), findsOneWidget);
+        await rig.shot('$id-processes');
         expect(rig.plugins.surface(id, surface)['processes'], isNotEmpty);
         final process =
             (rig.plugins.surface(id, surface)['processes'] as List).first
@@ -187,6 +208,10 @@ void main() {
         );
       }
       if (id == 'remote-input') {
+        expect(find.text('Touchpad'), findsWidgets);
+        await rig.shot('$id-touchpad');
+        rig.plugins.event(id, surface, 'tab', {'value': 'text'});
+        await rig.untilText('Text and clipboard');
         final field = find.byType(TextField);
         await tester.scrollUntilVisible(
           field,
@@ -211,6 +236,164 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('Device Dashboard lays out for a desktop window', (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final rig = await Rig.start(tester, ['device-dashboard']);
+    await rig.show(
+      'device-dashboard',
+      'Dashboard',
+      size: const Size(1280, 900),
+    );
+    await rig.untilText('Device Dashboard');
+    expect(find.text('Choose a device to watch'), findsOneWidget);
+    if (Platform.isWindows) {
+      rig.plugins.event('device-dashboard', 'Dashboard', 'local', {});
+      await rig.until(
+        () =>
+            (rig.plugins.surface('device-dashboard', 'Dashboard')['tiles']
+                    as List)
+                .first['values']
+                .length >=
+            8,
+      );
+      final pause = find.ancestor(
+        of: find.text('Pause'),
+        matching: find.byWidgetPredicate((w) => w is ButtonStyleButton),
+      );
+      expect(tester.widget<ButtonStyleButton>(pause).onPressed, isNotNull);
+      await rig.shot('device-dashboard-wide');
+      // A process picked in the table asks before it ends.
+      rig.plugins.event('device-dashboard', 'Dashboard', 'tab', {
+        'value': 'processes',
+      });
+      await rig.until(
+        () =>
+            (rig.plugins.surface('device-dashboard', 'Dashboard')['rows']
+                    as List)
+                .isNotEmpty,
+      );
+      await rig.toEnd();
+      await rig.shot('device-dashboard-wide-processes');
+      // The top row as the table sorts it now.
+      final row = find.textContaining('.exe').first;
+      await tester.tap(row);
+      await rig.until(
+        () =>
+            rig.plugins.surface(
+              'device-dashboard',
+              'Dashboard',
+            )['hasSelection'] ==
+            true,
+      );
+      await tester.ensureVisible(find.text('End task'));
+      await tester.pump();
+      await tester.tap(find.text('End task'));
+      await rig.untilText('End this process? Unsaved work may be lost.');
+      await rig.shot('device-dashboard-wide-confirm');
+      await tester.ensureVisible(find.text('Cancel'));
+      await tester.pump();
+      await tester.tap(find.text('Cancel'));
+      await rig.until(
+        () =>
+            rig.plugins.surface(
+              'device-dashboard',
+              'Dashboard',
+            )['confirming'] ==
+            false,
+      );
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Remote Input lays out for a desktop window', (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final rig = await Rig.start(tester, ['remote-input']);
+    await rig.show('remote-input', 'RemoteInput', size: const Size(1280, 900));
+    await rig.untilText('Remote Input');
+    // Desktop shows every group at once.
+    expect(find.text('Presentation'), findsOneWidget);
+    expect(find.text('Media'), findsOneWidget);
+    expect(find.text('Text and clipboard'), findsOneWidget);
+    await rig.shot('remote-input-wide');
+    rig.plugins.event('remote-input', 'RemoteInput', 'receiving', {});
+    await rig.until(
+      () =>
+          rig.plugins.surface('remote-input', 'RemoteInput')['receiving'] ==
+          true,
+    );
+    await rig.toEnd();
+    expect(find.text('Receiving mouse and keyboard'), findsOneWidget);
+    await rig.shot('remote-input-wide-receiving');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the receiver shows who is controlling it, and stops them', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final rig = await Rig.start(tester, ['remote-input']);
+    // Another of this person's devices.
+    final phone = (await tester.runAsync(
+      () => LocalIdentity.create(root: rig.node.identity.root, label: 'Phone'),
+    ))!;
+    await tester.runAsync(() => rig.node.addContact(phone.certificate));
+    final copied = <String>[];
+    rig.plugins.writeClipboard = (text) async => copied.add(text);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              RemoteSessionBanner(plugins: rig.plugins),
+              const Expanded(child: SizedBox()),
+            ],
+          ),
+        ),
+      ),
+    );
+    expect(find.textContaining('Being'), findsNothing);
+    rig.plugins.event('remote-input', 'RemoteInput', 'clipboard', {});
+    await rig.until(
+      () =>
+          rig.plugins.surface('remote-input', 'RemoteInput')['clipboard'] ==
+          true,
+    );
+    final reply = await tester.runAsync(
+      () => rig.node.registry.handler(Plugins.liveRequest)!(phone.device, {
+        'type': Plugins.liveRequest,
+        'plugin': 'remote-input',
+        'payload': b64(
+          utf8.encode(jsonEncode({'op': 'copy', 'text': 'from phone'})),
+        ),
+      }),
+    );
+    expect(reply, isNotNull);
+    await rig.untilText('Being controlled by Phone');
+    expect(copied, ['from phone']);
+    await tester.tap(find.text('Log'));
+    await tester.pumpAndSettle();
+    expect(find.text('Started sending clipboard text'), findsOneWidget);
+    expect(find.textContaining('from phone'), findsNothing);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Stop'));
+    await rig.until(() => find.textContaining('Being').evaluate().isEmpty);
+    await rig.until(
+      () => rig.plugins['remote-input']?.status == PluginStatus.running,
+    );
+    expect(
+      rig.plugins.surface('remote-input', 'RemoteInput')['clipboard'],
+      false,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('the wiki writes, links and keeps history', (tester) async {
     tester.view.physicalSize = const Size(800, 600);

@@ -266,6 +266,12 @@ class Node {
     notify();
   }
 
+  /// Whether [device] is this device or one certified to this person and
+  /// not revoked.
+  bool ownDevice(String device) =>
+      device == identity.device ||
+      (contacts[device]?.person == person && !revoked.contains(device));
+
   bool allowedPeer(String device) =>
       contacts.containsKey(device) &&
       !revoked.contains(device) &&

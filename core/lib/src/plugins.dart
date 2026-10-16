@@ -32,6 +32,31 @@ typedef PluginGroup = ({String space, String name, List<String> members});
 
 enum PluginStatus { stopped, starting, running, failed }
 
+/// One of this person's other devices using a device capability here
+/// (watching resources, ending processes, sending input or clipboard text)
+/// through [plugin]. Live only: never stored or synced.
+class RemoteSession {
+  final String plugin, device;
+
+  /// The capabilities it has used: `system-monitor`, `process-control`,
+  /// `remote-input`, `clipboard-write`.
+  final Set<String> capabilities = {};
+  final DateTime started;
+  DateTime last;
+  RemoteSession(this.plugin, this.device, this.started) : last = started;
+
+  /// Whether it acts on this device rather than only reading from it.
+  bool get controlling => capabilities.any((c) => c != 'system-monitor');
+}
+
+/// A line of the local remote-session log: [Plugins.remoteLog].
+typedef RemoteLogEntry = ({
+  DateTime at,
+  String plugin,
+  String device,
+  String text,
+});
+
 /// Something a plugin said that the app may show: a notification, a log
 /// line, or that it stopped.
 typedef PluginNotice = ({
@@ -298,6 +323,13 @@ class Plugins {
   /// `{"memory": true}` (packets come to [tunPackets]). Null: no VPNs here.
   Future<Json> Function(String plugin, Json settings)? openTun;
 
+  /// Whether a live request from [device] may reach device capabilities
+  /// (`system-monitor`, `process-control`, `remote-input`,
+  /// `clipboard-write`): [Node.ownDevice] unless replaced (tests). The native
+  /// host refuses those capabilities to any other device, whatever the
+  /// plugin itself decides.
+  late bool Function(String device) ownDevice = node.ownDevice;
+
   /// Write-only clipboard capability, supplied by the foreground app.
   Future<void> Function(String text)? writeClipboard;
 
@@ -348,6 +380,10 @@ class Plugins {
       StreamController<({String plugin, Uint8List packet})>.broadcast();
   final _notices = StreamController<PluginNotice>.broadcast();
   final _offered = StreamController<PluginOffered>.broadcast();
+  final _remote = StreamController<void>.broadcast();
+  final _sessions = <(String, String), RemoteSession>{};
+  final _remoteLog = <RemoteLogEntry>[];
+  Timer? _sessionExpiry;
   bool _closed = false;
   int _deviceNameCursor = 0;
   final _deviceNameRecords = <String, SignedObject>{};
@@ -414,6 +450,126 @@ class Plugins {
   /// repository's, say): the app asks them, then calls [install] with the
   /// [PluginOffered.source].
   Stream<PluginOffered> get offered => _offered.stream;
+
+  /// How long a remote session lasts after the device last used a
+  /// capability: the host reports use at most once a second, and a
+  /// dashboard may sample every few seconds.
+  static const remoteIdle = Duration(seconds: 12);
+
+  /// Entries [remoteLog] keeps.
+  static const remoteLogLimit = 200;
+
+  /// Devices using device capabilities here now, oldest first.
+  List<RemoteSession> get remoteSessions => List.unmodifiable(_sessions.values);
+
+  /// Remote sessions started and ended and processes ended from other
+  /// devices, newest first: in memory on this device only.
+  List<RemoteLogEntry> get remoteLog => List.unmodifiable(_remoteLog);
+
+  /// Fires when [remoteSessions] or [remoteLog] change.
+  Stream<void> get remoteChanges => _remote.stream;
+
+  /// A device's name as plugins see it.
+  String deviceName(String device) {
+    if (device == node.identity.device) return 'This device';
+    return _deviceNames()[device] ??
+        node.contacts[device]?.label ??
+        device.substring(0, min(12, device.length));
+  }
+
+  void _logRemote(String plugin, String device, String text) {
+    _remoteLog.insert(0, (
+      at: DateTime.now(),
+      plugin: plugin,
+      device: device,
+      text: text,
+    ));
+    if (_remoteLog.length > remoteLogLimit) _remoteLog.removeLast();
+  }
+
+  static String _capabilityText(String capability) => switch (capability) {
+    'system-monitor' => 'viewing resources and processes',
+    'process-control' => 'ending processes',
+    'remote-input' => 'controlling mouse and keyboard',
+    'clipboard-write' => 'sending clipboard text',
+    _ => capability,
+  };
+
+  void _remoteUsed(String plugin, Json h) {
+    final device = '${h['device']}', capability = '${h['capability']}';
+    final now = DateTime.now();
+    final key = (plugin, device);
+    var session = _sessions[key];
+    if (session == null) {
+      _logRemote(plugin, device, 'Session started');
+      session = _sessions[key] = RemoteSession(plugin, device, now);
+    }
+    session.last = now;
+    if (session.capabilities.add(capability)) {
+      _logRemote(plugin, device, 'Started ${_capabilityText(capability)}');
+    }
+    _scheduleExpiry();
+    if (!_remote.isClosed) _remote.add(null);
+  }
+
+  void _remoteAction(String plugin, Json h) {
+    _logRemote(
+      plugin,
+      '${h['device']}',
+      'Ended process ${h['name']} (PID ${h['pid']})',
+    );
+    if (!_remote.isClosed) _remote.add(null);
+  }
+
+  void _scheduleExpiry() {
+    _sessionExpiry?.cancel();
+    if (_sessions.isEmpty || _closed) return;
+    final oldest = _sessions.values
+        .map((s) => s.last)
+        .reduce((a, b) => a.isBefore(b) ? a : b);
+    final wait = oldest.add(remoteIdle).difference(DateTime.now());
+    _sessionExpiry = Timer(
+      wait.isNegative ? Duration.zero : wait,
+      _expireSessions,
+    );
+  }
+
+  void _expireSessions() {
+    final now = DateTime.now();
+    final ended = [
+      for (final s in _sessions.values)
+        if (now.difference(s.last) >= remoteIdle) s,
+    ];
+    for (final s in ended) {
+      _endSession(s, 'Session ended');
+    }
+    _scheduleExpiry();
+    if (ended.isNotEmpty && !_remote.isClosed) _remote.add(null);
+  }
+
+  void _endSession(RemoteSession s, String why) {
+    _sessions.remove((s.plugin, s.device));
+    final seconds = s.last.difference(s.started).inSeconds;
+    final length = seconds < 60
+        ? '$seconds s'
+        : '${seconds ~/ 60} min ${seconds % 60} s';
+    _logRemote(s.plugin, s.device, '$why after $length');
+  }
+
+  /// Ends every remote session here now: restarts each plugin serving one,
+  /// which switches its receiving permissions off.
+  Future<void> stopRemoteSessions() async {
+    final plugins = {for (final s in _sessions.values) s.plugin};
+    for (final s in _sessions.values.toList()) {
+      _endSession(s, 'Stopped on this device');
+    }
+    _scheduleExpiry();
+    if (!_remote.isClosed) _remote.add(null);
+    // Restarting starts the plugin with its receiving switches off.
+    for (final id in plugins) {
+      await restart(id);
+    }
+  }
 
   /// Packets plugins write to memory interfaces (see [openTun]).
   Stream<({String plugin, Uint8List packet})> get tunPackets =>
@@ -1111,6 +1267,8 @@ class Plugins {
       _stop(id);
     }
     node.registry.unhandle(liveRequest, _answerRequest);
+    _sessionExpiry?.cancel();
+    await _remote.close();
     await _changes.close();
     await _statusChanges.close();
     await _tunPackets.close();
@@ -1207,6 +1365,17 @@ class Plugins {
   void _stop(String id) {
     final running = _running.remove(id);
     if (running == null) return;
+    final sessions = [
+      for (final s in _sessions.values)
+        if (s.plugin == id) s,
+    ];
+    for (final s in sessions) {
+      _endSession(s, 'Plugin stopped');
+    }
+    if (sessions.isNotEmpty) {
+      _scheduleExpiry();
+      if (!_remote.isClosed) _remote.add(null);
+    }
     running.changes?.cancel();
     node.registry.withdraw(id);
     if (running.handle != null) host?.stop(running.handle!);
@@ -1345,6 +1514,10 @@ class Plugins {
         _notice(plugin.id, 'notify', '${h['title']}', '${h['body']}');
       case 'log':
         _notice(plugin.id, 'log', '${h['level']}', '${h['message']}');
+      case 'device.session':
+        _remoteUsed(plugin.id, h);
+      case 'device.action':
+        _remoteAction(plugin.id, h);
     }
   }
 
@@ -1850,6 +2023,7 @@ class Plugins {
     final result = await _call(running, {
       'call': 'request',
       'device': device,
+      'own': ownDevice(device),
     }, Uint8List.fromList(unb64(payload))).timeout(const Duration(seconds: 10));
     return {'payload': b64(result.body)};
   }

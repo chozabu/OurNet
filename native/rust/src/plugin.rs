@@ -308,6 +308,41 @@ struct Host {
     grants: Vec<String>,
     package: Option<PathBuf>,
     device: crate::device::Monitor,
+    /// Whom the current call serves.
+    caller: Caller,
+    /// When each remote device was last reported using each capability.
+    sessions: HashMap<(String, &'static str), Instant>,
+}
+
+/// Whom a call into a plugin serves: the person at this device (events,
+/// timers, startup), or the device whose live request it is answering.
+#[derive(Clone, Debug, PartialEq)]
+enum Caller {
+    Local,
+    /// `own`: the device is certified to this device's identity (Dart
+    /// decides, from the certificates it admitted).
+    Remote { device: String, own: bool },
+}
+
+/// Capabilities that act on this device for whoever is asking: a live
+/// request may reach them only from one of this person's own devices.
+const OWN_DEVICE_ONLY: [&str; 4] = ["system-monitor", "process-control", "remote-input", "clipboard-write"];
+
+/// How often an ongoing remote session is reported to Dart, at most.
+const SESSION_REPORT: Duration = Duration::from_secs(1);
+
+/// Whether [caller] may use [capability]; the remote device using it, if any.
+fn admit(caller: &Caller, capability: &str) -> Result<Option<String>, String> {
+    match caller {
+        Caller::Local => Ok(None),
+        Caller::Remote { device, own } => {
+            if *own || !OWN_DEVICE_ONLY.contains(&capability) {
+                Ok(Some(device.clone()))
+            } else {
+                Err(format!("{capability} is only for your own devices"))
+            }
+        }
+    }
 }
 
 /// A token bucket: whether one more may go now.
@@ -372,6 +407,30 @@ impl Host {
         }
     }
 
+    /// Holds a device capability to [admit], and tells Dart (at most each
+    /// [SESSION_REPORT]) which remote device is using it, so the person here
+    /// can see they are being watched or controlled.
+    fn on_behalf(&mut self, capability: &'static str) -> Result<(), String> {
+        let Some(device) = admit(&self.caller, capability)? else {
+            return Ok(());
+        };
+        let now = Instant::now();
+        let key = (device, capability);
+        if self
+            .sessions
+            .get(&key)
+            .is_some_and(|at| now.duration_since(*at) < SESSION_REPORT)
+        {
+            return Ok(());
+        }
+        if self.sessions.len() >= 64 {
+            self.sessions.retain(|_, at| now.duration_since(*at) < SESSION_REPORT);
+        }
+        self.notice("device.session", json!({"device": key.0, "capability": capability}));
+        self.sessions.insert(key, now);
+        Ok(())
+    }
+
     fn notice(&self, kind: &str, fields: Value) {
         let mut header = json!({"type": kind});
         if let (Value::Object(h), Value::Object(f)) = (&mut header, fields) {
@@ -404,6 +463,7 @@ impl types::Host for Host {}
 impl system_monitor::Host for Host {
     fn snapshot(&mut self, processes: bool) -> Result<String, String> {
         self.granted("system-monitor")?;
+        self.on_behalf("system-monitor")?;
         // OS sampling is host work, like an import answered by Dart. In
         // particular Windows' first performance-counter query may wait.
         let began = Instant::now();
@@ -415,18 +475,28 @@ impl system_monitor::Host for Host {
 impl process_control::Host for Host {
     fn stop(&mut self, pid: u32, started: u64) -> Result<(), String> {
         self.granted("process-control")?;
-        self.device.stop(pid, started)
+        self.on_behalf("process-control")?;
+        let name = self.device.stop(pid, started)?;
+        if let Caller::Remote { device, .. } = &self.caller {
+            self.notice(
+                "device.action",
+                json!({"device": device, "capability": "process-control", "pid": pid, "name": name}),
+            );
+        }
+        Ok(())
     }
 }
 impl remote_input::Host for Host {
     fn execute(&mut self, command: String) -> Result<(), String> {
         self.granted("remote-input")?;
+        self.on_behalf("remote-input")?;
         crate::device::input(&command)
     }
 }
 impl clipboard_write::Host for Host {
     fn write(&mut self, text: String) -> Result<(), String> {
         self.granted("clipboard-write")?;
+        self.on_behalf("clipboard-write")?;
         if text.len() > 16384 { return Err("Text exceeds 16 KiB".into()); }
         self.ask("clipboard-write.write", json!({"text": text}))?;
         Ok(())
@@ -936,6 +1006,8 @@ impl Running {
             grants: config.grants.clone(),
             package: config.package,
             device: crate::device::Monitor::default(),
+            caller: Caller::Local,
+            sessions: HashMap::new(),
         };
         let mut store = Store::new(engine, host);
         Self::configure(&mut store);
@@ -1030,7 +1102,11 @@ impl Running {
             }
             Some("request") => {
                 let device = text("device");
-                match self.run(|p, s| p.call_on_request(s, &device, body)) {
+                let own = call.get("own").and_then(Value::as_bool) == Some(true);
+                self.store.data_mut().caller = Caller::Remote { device: device.clone(), own };
+                let answer = self.run(|p, s| p.call_on_request(s, &device, body));
+                self.store.data_mut().caller = Caller::Local;
+                match answer {
                     Ok(Ok(bytes)) => {
                         reply_body = Some(bytes);
                         Ok(())
@@ -1301,5 +1377,23 @@ pub unsafe extern "C" fn ournet_plugin_stop(handle: u64) -> i32 {
             1
         }
         None => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{admit, Caller};
+
+    #[test]
+    fn device_capabilities_serve_only_own_devices() {
+        let friend = Caller::Remote { device: "friend".into(), own: false };
+        let mine = Caller::Remote { device: "laptop".into(), own: true };
+        for capability in ["system-monitor", "process-control", "remote-input", "clipboard-write"] {
+            assert!(admit(&friend, capability).is_err());
+            assert_eq!(admit(&mine, capability), Ok(Some("laptop".into())));
+            assert_eq!(admit(&Caller::Local, capability), Ok(None));
+        }
+        // Other capabilities are the plugin's own business.
+        assert_eq!(admit(&friend, "objects"), Ok(Some("friend".into())));
     }
 }

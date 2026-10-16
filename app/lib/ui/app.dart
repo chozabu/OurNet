@@ -13,6 +13,7 @@ import 'map_page.dart';
 import 'place_links.dart';
 import 'plugin_view.dart';
 import 'plugins_page.dart';
+import 'remote_session_banner.dart';
 import 'storage_page.dart';
 import 'stats_page.dart';
 import '../controllers/notes_home_controller.dart';
@@ -1796,6 +1797,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                             );
                           },
                         ),
+                        if (plugins case final plugins?)
+                          RemoteSessionBanner(plugins: plugins),
                         UpdateBanner(network: network, nameOf: name),
                         StorageBanner(
                           network: network,
