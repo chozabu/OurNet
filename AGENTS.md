@@ -10,6 +10,9 @@ runs. Call it through `core/lib/src/fast_crypto.dart`, keep results
 byte-identical to the Dart implementations (`native/test`,
 `core/test/native_crypto_test.dart`), and let the Dart code decide anything
 the native code rejects.
+Everyday builds use the quick `native-dev` cargo profile; the release and
+performance scripts set `CARGO_OURNET_NATIVE_PROFILE=release` for the fat-LTO
+library, so set it yourself for any hand-run build you ship or time.
 
 ## Plugins
 

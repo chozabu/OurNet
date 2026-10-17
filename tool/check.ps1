@@ -14,7 +14,7 @@ foreach ($taskPackage in @('core', 'transport', 'app')) {
     } else {
       dart analyze
       if ($LASTEXITCODE -ne 0) { throw "$taskPackage analysis failed" }
-      dart test
+      dart test -j ([Environment]::ProcessorCount)
     }
     if ($LASTEXITCODE -ne 0) { throw "$taskPackage tests failed" }
   } finally { Pop-Location }
@@ -22,6 +22,7 @@ foreach ($taskPackage in @('core', 'transport', 'app')) {
 if ($Performance) {
   Push-Location (Join-Path $taskRoot 'app')
   try {
+    $env:CARGO_OURNET_NATIVE_PROFILE = 'release' # fat-LTO native library (native/rust/Cargo.toml)
     # Android profile builds install as org.chozabu.ournet.profile, separate
     # from the everyday app and its data. Each report is kept by name.
     foreach ($taskTarget in @('responsiveness_test', 'photo_scroll_test', 'note_history_test', 'conversation_history_test', 'group_history_test', 'calendar_history_test')) {
@@ -33,5 +34,5 @@ if ($Performance) {
       }
       if ($taskExit -ne 0) { throw "Performance acceptance check failed: $taskTarget" }
     }
-  } finally { Pop-Location }
+  } finally { Pop-Location; Remove-Item Env:CARGO_OURNET_NATIVE_PROFILE -ErrorAction SilentlyContinue }
 }

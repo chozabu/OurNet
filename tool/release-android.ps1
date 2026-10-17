@@ -28,9 +28,10 @@ $taskBuild = Get-Date -Format 'yyyyMMdd-HHmmss'
 # kept whole rather than shaken to the icons the app's own code uses.
 Push-Location (Join-Path $taskRoot 'app')
 try {
+  $env:CARGO_OURNET_NATIVE_PROFILE = 'release' # fat-LTO native library (native/rust/Cargo.toml)
   Invoke-Native { flutter build appbundle --release --no-tree-shake-icons --build-number $taskVersionCode "--dart-define=OURNET_BUILD=$taskBuild" }
   if ($LASTEXITCODE -ne 0) { throw 'Android release build failed.' }
-} finally { Pop-Location }
+} finally { Pop-Location; Remove-Item Env:CARGO_OURNET_NATIVE_PROFILE -ErrorAction SilentlyContinue }
 $taskBundle = Join-Path $taskRoot 'app/build/app/outputs/bundle/release/app-release.aab'
 Write-Host "Built version code $taskVersionCode at $taskBundle"
 if ($SkipUpload) { return }
