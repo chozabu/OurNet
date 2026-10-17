@@ -9,7 +9,7 @@ sudo apt-get install ninja-build libgtk-3-dev liblzma-dev libsecret-1-dev \
   libjsoncpp-dev libayatana-appindicator3-dev libgstreamer1.0-dev \
   libgstreamer-plugins-base1.0-dev libpulse-dev
 tool/setup.sh            # dependencies + the signed iroh library
-cd app && flutter build linux --release --no-tree-shake-icons
+cd app && CARGO_OURNET_NATIVE_PROFILE=release flutter build linux --release --no-tree-shake-icons
 ```
 
 The bundle is `app/build/linux/x64/release/bundle`; run `ournet` in it.
