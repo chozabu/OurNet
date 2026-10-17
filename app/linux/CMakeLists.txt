@@ -7,7 +7,7 @@ project(runner LANGUAGES CXX)
 set(BINARY_NAME "ournet")
 # The unique GTK application identifier for this application. See:
 # https://wiki.gnome.org/HowDoI/ChooseApplicationID
-set(APPLICATION_ID "org.ournet.ournet")
+set(APPLICATION_ID "io.github.chozabu.OurNet")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
@@ -92,6 +92,19 @@ set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib")
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
+# Installed by tool/setup.sh after upstream Ed25519 signature verification.
+# Beside the executable, where iroh_quic looks for it.
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../native/libirohdart_ffi.so")
+  message(FATAL_ERROR "Run tool/setup.sh from the repository root to install the signed iroh library.")
+endif()
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../native/libirohdart_ffi.so"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}" COMPONENT Runtime)
+
+# The icon, for the notification area when run from the bundle.
+install(FILES "icons/${APPLICATION_ID}.png"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/icons/hicolor/256x256/apps"
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"

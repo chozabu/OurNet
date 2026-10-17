@@ -848,7 +848,7 @@ extension _SettingsPages on _OurNetAppState {
           child: const Text('Reconnect'),
         ),
       ),
-    if (Platform.isWindows)
+    if (SystemTray.hosted)
       SwitchListTile(
         title: const Text('Keep running in the notification area'),
         subtitle: const Text(
@@ -861,11 +861,15 @@ extension _SettingsPages on _OurNetAppState {
           refresh();
         }),
       ),
-    if (Platform.isWindows && startsWithWindows != null)
+    if (SystemTray.supported && startsWithWindows != null)
       SwitchListTile(
-        title: const Text('Start with Windows'),
-        subtitle: const Text(
-          'Open OurNet in the notification area when you sign in.',
+        title: Text(
+          Platform.isWindows ? 'Start with Windows' : 'Start when you sign in',
+        ),
+        subtitle: Text(
+          SystemTray.hosted
+              ? 'Open OurNet in the notification area when you sign in.'
+              : 'Start OurNet in the background when you sign in. Open it from your apps.',
         ),
         value: startsWithWindows!,
         onChanged: (v) => act(() async {

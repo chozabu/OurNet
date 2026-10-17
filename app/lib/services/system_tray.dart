@@ -1,11 +1,31 @@
+import 'dart:io';
+
 import 'package:flutter/services.dart';
 
 const _channel = MethodChannel('ournet/tray');
 
-/// Windows' notification area icon; see windows/runner/system_tray.cpp.
+/// The notification area icon and starting on sign in; see
+/// windows/runner/system_tray.cpp and linux/runner/system_tray.cc.
 /// While OurNet is kept there, closing the window hides it and OurNet stays
 /// connected to friends, showing notifications, until quit from the icon.
 abstract final class SystemTray {
+  /// Whether this system can start OurNet on sign in and keep it in a tray.
+  static bool get supported => Platform.isWindows || Platform.isLinux;
+
+  /// Whether an icon would be seen: always on Windows, and on Linux where
+  /// the desktop shows StatusNotifierItems (KDE does; Steam Deck's Game
+  /// Mode and plain GNOME do not). Found by [load].
+  static bool hosted = Platform.isWindows;
+
+  static Future<void> load() async {
+    if (!Platform.isLinux) return;
+    try {
+      hosted = await _channel.invokeMethod<bool>('available') ?? false;
+    } on MissingPluginException {
+      hosted = false;
+    }
+  }
+
   /// Takes [profile] for this window. False when another OurNet window holds
   /// it, which is asked to show itself unless [show] is false.
   static Future<bool> claim(String profile, {bool show = true}) async {

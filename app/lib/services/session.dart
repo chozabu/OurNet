@@ -1,8 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:path_provider/path_provider.dart';
+
+import 'vault.dart';
 
 String activeProfile = 'main';
 RandomAccessFile? _profileLock;
@@ -31,8 +32,7 @@ Future<Node> openNode({String profile = 'main'}) async {
   // Retain the handle for the process lifetime; the OS releases it on exit.
   _profileLock = lock;
   activeProfile = profile;
-  const vault = FlutterSecureStorage();
-  final saved = await vault.read(key: 'ournet/v2/$profile');
+  final saved = await (await Vault.open()).read('ournet/v2/$profile');
   needsSetup = saved == null;
   final store = Store(path: '${directory.path}/ournet-$profile.db');
   // History with no vault entry: the keys that can read it are gone, for
@@ -60,9 +60,9 @@ Future<void> closeProfile() async {
 }
 
 Future<void> saveIdentity(LocalIdentity identity) async {
-  await const FlutterSecureStorage().write(
-    key: 'ournet/v2/$activeProfile',
-    value: canonical(await identity.exportSecrets()),
+  await (await Vault.open()).write(
+    'ournet/v2/$activeProfile',
+    canonical(await identity.exportSecrets()),
   );
 }
 
@@ -84,9 +84,9 @@ Future<Node> applyRestore(StagedRestore staged, Node current) async {
   final profile = activeProfile;
   final directory = await getApplicationSupportDirectory();
   final database = '${directory.path}/ournet-$profile.db';
-  const vault = FlutterSecureStorage();
+  final vault = await Vault.open();
   final key = 'ournet/v2/$profile';
-  final oldSecrets = await vault.read(key: key);
+  final oldSecrets = await vault.read(key);
   const parts = ['', '-wal', '-shm'];
   await current.close();
   await closeProfile();
@@ -98,7 +98,7 @@ Future<Node> applyRestore(StagedRestore staged, Node current) async {
       if (await file.exists()) await file.rename(aside.path);
     }
     await File(staged.database).rename(database);
-    await vault.write(key: key, value: canonical(staged.secrets));
+    await vault.write(key, canonical(staged.secrets));
     final node = await openNode(profile: profile);
     for (final part in parts) {
       final aside = File('$database$part.before-restore');
@@ -114,9 +114,9 @@ Future<Node> applyRestore(StagedRestore staged, Node current) async {
       if (await aside.exists()) await aside.rename(file.path);
     }
     if (oldSecrets == null) {
-      await vault.delete(key: key);
+      await vault.delete(key);
     } else {
-      await vault.write(key: key, value: oldSecrets);
+      await vault.write(key, oldSecrets);
     }
     await staged.discard();
     rethrow;

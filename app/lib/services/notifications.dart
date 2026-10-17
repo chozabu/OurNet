@@ -128,7 +128,7 @@ class Notifications {
   /// and on Windows, where OurNet keeps running in the tray to show them.
   bool get enabled =>
       node.store.setting('notifications') as bool? ??
-      (Platform.isAndroid || Platform.isWindows);
+      (Platform.isAndroid || Platform.isWindows || Platform.isLinux);
 
   /// Whether notifications show what was written, or only who wrote. Chats
   /// are private notifications, so a secure lock screen can hide them too.

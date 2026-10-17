@@ -27,3 +27,9 @@ store/play-demo/
 
 # Third-party source checkouts used for reviews
 .research/
+
+# Flatpak builds (app/linux/flatpak)
+app/linux/flatpak/shared-modules/
+.flatpak-builder/
+flatpak-repo/
+*.flatpak

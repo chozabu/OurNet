@@ -6,24 +6,37 @@
 #endif
 
 #include "flutter/generated_plugin_registrant.h"
+#include "system_tray.h"
 
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  // Started on sign in: stays hidden until opened.
+  gboolean background;
+  GtkWindow* window;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
-  gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+  if (!self->background) {
+    gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+  }
 }
 
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
+  // Opening OurNet again shows the window it already has.
+  if (self->window != nullptr) {
+    self->background = FALSE;
+    system_tray_show();
+    return;
+  }
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
+  self->window = window;
 
   // Use a header bar when running in GNOME as this is the common style used
   // by applications and is the setup most users will be using (e.g. Ubuntu
@@ -45,11 +58,11 @@ static void my_application_activate(GApplication* application) {
   if (use_header_bar) {
     GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
     gtk_widget_show(GTK_WIDGET(header_bar));
-    gtk_header_bar_set_title(header_bar, "ournet");
+    gtk_header_bar_set_title(header_bar, "OurNet");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
   } else {
-    gtk_window_set_title(window, "ournet");
+    gtk_window_set_title(window, "OurNet");
   }
 
   gtk_window_set_default_size(window, 1280, 720);
@@ -74,6 +87,9 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+  system_tray_start(
+      GTK_APPLICATION(application), window,
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)));
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
@@ -86,6 +102,24 @@ static gboolean my_application_local_command_line(GApplication* application,
   // Strip out the first argument as it is the binary name.
   self->dart_entrypoint_arguments = g_strdupv(*arguments + 1);
 
+  // One window per profile, as on Windows: another profile is another
+  // application, so each can be open once.
+  for (char** argument = self->dart_entrypoint_arguments; *argument;
+       argument++) {
+    if (g_strcmp0(*argument, "--background") == 0) self->background = TRUE;
+    if (g_str_has_prefix(*argument, "--profile=")) {
+      g_autofree gchar* profile = g_strdup(*argument + 10);
+      if (g_strcmp0(profile, "main") == 0) continue;
+      g_strcanon(profile,
+                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                 "0123456789_",
+                 '_');
+      g_autofree gchar* id =
+          g_strconcat(APPLICATION_ID, ".profile_", profile, nullptr);
+      g_application_set_application_id(application, id);
+    }
+  }
+
   g_autoptr(GError) error = nullptr;
   if (!g_application_register(application, nullptr, &error)) {
     g_warning("Failed to register: %s", error->message);
@@ -93,7 +127,10 @@ static gboolean my_application_local_command_line(GApplication* application,
     return TRUE;
   }
 
-  g_application_activate(application);
+  // Already running: show it, unless this is the sign-in start again.
+  if (!g_application_get_is_remote(application) || !self->background) {
+    g_application_activate(application);
+  }
   *exit_status = 0;
 
   return TRUE;
@@ -144,5 +181,5 @@ MyApplication* my_application_new() {
 
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_NON_UNIQUE, nullptr));
+                                     G_APPLICATION_DEFAULT_FLAGS, nullptr));
 }

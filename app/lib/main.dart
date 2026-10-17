@@ -27,6 +27,7 @@ Future<void> main(List<String> arguments) async {
         )) {
       exit(0);
     }
+    await SystemTray.load();
     final node = await openNode(profile: profile);
     runApp(needsSetup ? SetupApp(node: node) : OurNetApp(node: node));
   } catch (e) {
