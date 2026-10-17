@@ -165,18 +165,24 @@ void main() {
       throwsA(anything),
     );
     expect(copied, hasLength(1));
-    // Receiving is session-local, including a plugin restart.
+    // Switching the plugin off stops receiving; on again, it keeps its
+    // switches as they were set.
     pb.event('remote-input', 'RemoteInput', 'clipboard', {});
     await until(
       () => pb.surface('remote-input', 'RemoteInput')['clipboard'] == true,
     );
     await pb.setEnabled('remote-input', false);
-    await pb.setEnabled('remote-input', true);
-    await until(() => pb['remote-input']?.status == PluginStatus.running);
     await expectLater(
-      request('remote-input', a, {'op': 'copy', 'text': 'restart'}),
+      request('remote-input', a, {'op': 'copy', 'text': 'switched off'}),
       throwsA(anything),
     );
+    await pb.setEnabled('remote-input', true);
+    await until(() => pb['remote-input']?.status == PluginStatus.running);
+    expect(
+      await request('remote-input', a, {'op': 'copy', 'text': 'on again'}),
+      containsPair('ok', true),
+    );
+    expect(copied, hasLength(2));
   });
 
   test(
@@ -389,6 +395,46 @@ void main() {
     );
     expect(copied, ['hello']);
     expect(pb.remoteLog.length, lessThanOrEqualTo(Plugins.remoteLogLimit));
+  });
+  test('receiving switches stay as set when the app starts again', () async {
+    pb.event('device-dashboard', 'Dashboard', 'sharing', {});
+    pb.event('remote-input', 'RemoteInput', 'clipboard', {});
+    await until(
+      () =>
+          pb.surface('device-dashboard', 'Dashboard')['sharing'] == true &&
+          pb.surface('remote-input', 'RemoteInput')['clipboard'] == true,
+    );
+    await pb.close();
+    pb = Plugins(
+      b,
+      directory: '${temp.path}/b',
+      cache: '${Directory.systemTemp.path}/ournet-plugin-cache',
+    )..writeClipboard = (text) async => copied.add(text);
+    await pb.load();
+    await until(
+      () =>
+          pb.surface('device-dashboard', 'Dashboard')['sharing'] == true &&
+          pb.surface('remote-input', 'RemoteInput')['clipboard'] == true,
+    );
+    expect(pb.surface('remote-input', 'RemoteInput')['receiving'], isFalse);
+    expect(pb.surface('device-dashboard', 'Dashboard')['control'], isFalse);
+    expect(
+      await request('remote-input', a, {'op': 'copy', 'text': 'kept'}),
+      containsPair('ok', true),
+    );
+    expect(copied, ['kept']);
+    // Switching off is kept too.
+    pb.event('remote-input', 'RemoteInput', 'clipboard', {});
+    await until(
+      () => pb.surface('remote-input', 'RemoteInput')['clipboard'] == false,
+    );
+    await pb.restart('remote-input');
+    await until(() => pb['remote-input']?.status == PluginStatus.running);
+    await expectLater(
+      request('remote-input', a, {'op': 'copy', 'text': 'off'}),
+      throwsA(anything),
+    );
+    expect(copied, ['kept']);
   });
 }
 

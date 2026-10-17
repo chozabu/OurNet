@@ -38,8 +38,10 @@ lost when OurNet closes: never stored, synced or added to history, and never
 any typed or clipboard text. Settings → Plugins → **Remote sessions** shows
 it too.
 
-Receiving permissions start off whenever a plugin starts, including a restart
-or update. Installation grants allow the plugin to use the host capability;
+Receiving permissions start off, and once switched on stay on across
+restarts and updates (kept in the plugin's storage on that device) until
+switched off. **Stop** in Remote sessions switches them off too: it sends
+each plugin serving a session a `disable` event, then restarts it. Installation grants allow the plugin to use the host capability;
 the plugin's own controls determine whether another device may use it now.
 Switching off or removing the plugin stops receiving. Receiving requires
 OurNet to remain running and reachable; Android background execution is not
