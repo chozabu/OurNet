@@ -224,6 +224,25 @@ void main() {
     expect((await until(second, (d) => d['starts'] != null))['starts'], 2);
   });
 
+  test('a plugin starts over an instance nobody stopped', () async {
+    // An Android engine destroyed while the process lives on leaves its
+    // plugins running; the app's next engine starts them again.
+    final node = Node(await LocalIdentity.create(), Store());
+    final first = Plugins(node, directory: temp.path, cache: sharedCache);
+    await first.install(PluginPackage.read(package), grants: grants);
+    await running(first);
+    final second = Plugins(node, directory: temp.path, cache: sharedCache);
+    cleanup.add(() async {
+      await second.close();
+      await first.close();
+      await node.close();
+    });
+    await second.load();
+    await running(second);
+    second.event('echo', 'Echo', 'state', {});
+    expect((await until(second, (d) => d['starts'] != null))['starts'], 2);
+  });
+
   test(
     'a component using an interface it was not granted is refused',
     () async {
