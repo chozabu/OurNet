@@ -81,10 +81,11 @@ msix_config:
   capabilities: internetClient,internetClientServer,privateNetworkClientServer,microphone,webcam,location
   build_windows: false
   install_certificate: false
-  # Off until chosen in Settings; SystemTray looks it up by this id.
+  # On from install, as OurNet is meant to stay running; Settings turns it
+  # off. SystemTray looks it up by this id.
   startup_task:
     task_id: OurNetStartup
-    enabled: false
+    enabled: true
     parameters: --background
   # Matches the guid in services/notifications.dart, so clicking a
   # notification opens OurNet when it is not running.

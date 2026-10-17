@@ -853,13 +853,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
             keepInTray,
           ).catchError((Object e) => network.log('Tray unavailable: $e')),
         );
-        if (activeProfile == 'main') {
-          unawaited(
-            SystemTray.startsWithWindows()
-                .then((on) => update(() => startsWithWindows = on))
-                .catchError((Object _) {}),
-          );
-        }
+        if (activeProfile == 'main') unawaited(_loadStartsWithWindows());
       }
       unawaited(
         speech.start().catchError(
@@ -1056,6 +1050,21 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       ownsProfile &&
       node.store.setting('stayConnected') != false &&
       node.store.setting('autoConnect') != false;
+
+  /// OurNet is meant to stay running, so the first launch turns starting
+  /// with Windows on; after that it is whatever the person last chose.
+  Future<void> _loadStartsWithWindows() async {
+    try {
+      if (node.store.setting('startupDefaulted') != true) {
+        node.store.set('startupDefaulted', true);
+        await SystemTray.setStartsWithWindows(
+          true,
+        ).catchError((Object e) => network.log('Start with Windows: $e'));
+      }
+      final on = await SystemTray.startsWithWindows();
+      update(() => startsWithWindows = on);
+    } catch (_) {}
+  }
 
   /// Whether closing the window leaves OurNet running in the notification
   /// area (Windows), online and showing notifications.
