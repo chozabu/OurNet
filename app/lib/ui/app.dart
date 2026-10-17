@@ -844,7 +844,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         undelivered ?? (_wakeUndelivered = Undelivered(node)..start()),
         onError: network.log,
       )..start();
-      if (Platform.isWindows) {
+      if (SystemTray.supported) {
         notifications.onTap = () =>
             unawaited(SystemTray.show().catchError((Object _) {}));
         SystemTray.onClosed = _closedToTray;
@@ -1067,9 +1067,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   }
 
   /// Whether closing the window leaves OurNet running in the notification
-  /// area (Windows), online and showing notifications.
+  /// area (Windows, and Linux desktops that show one), online and showing
+  /// notifications.
   bool get keepInTray =>
-      Platform.isWindows &&
+      SystemTray.hosted &&
       widget.enablePlatform &&
       node.store.setting('keepInTray') != false;
 
@@ -1136,7 +1137,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       if (count != _badgeCount) {
         _badgeCount = count;
         unawaited(AppBadgePlus.updateBadge(count).catchError((Object _) {}));
-        if (Platform.isWindows) {
+        if (SystemTray.supported) {
           unawaited(SystemTray.unread(count).catchError((Object _) {}));
         }
       }
@@ -1359,7 +1360,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     publicComposer.dispose();
     publicFocus.dispose();
     WidgetsBinding.instance.removeObserver(this);
-    if (Platform.isWindows && widget.enablePlatform) SystemTray.onClosed = null;
+    if (SystemTray.supported && widget.enablePlatform) {
+      SystemTray.onClosed = null;
+    }
     if (onBackgroundSync == _backgroundSync) onBackgroundSync = null;
     _pausedStop?.cancel();
     _changes?.cancel();

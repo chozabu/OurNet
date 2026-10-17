@@ -275,19 +275,20 @@ class _RecoveryPhraseCardState extends State<RecoveryPhraseCard> {
               ),
             ),
           ),
-        for (final device in behind)
-          if (change == null || device.device != change.device.device)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.warning_amber_outlined),
-              title: Text(
-                '${widget.deviceLabel(device)} uses a different recovery '
-                'phrase',
-              ),
-              subtitle: const Text(
-                'Confirm the new phrase on that device, or change it there.',
-              ),
+        for (final device in behind.where(
+          (d) => change == null || d.device != change.device.device,
+        ))
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.warning_amber_outlined),
+            title: Text(
+              '${widget.deviceLabel(device)} uses a different recovery '
+              'phrase',
             ),
+            subtitle: const Text(
+              'Confirm the new phrase on that device, or change it there.',
+            ),
+          ),
       ],
     );
   }

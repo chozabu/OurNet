@@ -1,0 +1,43 @@
+# Packages the bundle from `flutter build linux --release` (after
+# tool/setup.sh) as a Flatpak; built by .github/workflows/linux.yml, which
+# also checks out flathub/shared-modules beside this file. See docs/LINUX.md.
+id: io.github.chozabu.OurNet
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: ournet
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --share=network
+  # Calls and voice notes.
+  - --socket=pulseaudio
+  # Cameras for video calls.
+  - --device=all
+  # The notification area icon.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # Sharing a location.
+  - --system-talk-name=org.freedesktop.GeoClue2
+modules:
+  - shared-modules/libayatana-appindicator/libayatana-appindicator-gtk3.json
+  - name: ournet
+    buildsystem: simple
+    sources:
+      - type: dir
+        path: ../../build/linux/x64/release/bundle
+        dest: bundle
+      - type: file
+        path: io.github.chozabu.OurNet.desktop
+      - type: file
+        path: io.github.chozabu.OurNet.metainfo.xml
+      - type: file
+        path: ../icons/io.github.chozabu.OurNet.png
+    build-commands:
+      - cp -r bundle /app/ournet
+      - install -d /app/bin
+      - ln -s /app/ournet/ournet /app/bin/ournet
+      - install -Dm644 io.github.chozabu.OurNet.desktop -t /app/share/applications
+      - install -Dm644 io.github.chozabu.OurNet.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 io.github.chozabu.OurNet.png -t /app/share/icons/hicolor/256x256/apps

@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME}
   "main.cc"
   "my_application.cc"
+  "system_tray.cc"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
 )
 
@@ -22,5 +23,12 @@ add_definitions(-DAPPLICATION_ID="${APPLICATION_ID}")
 # Add dependency libraries. Add any application-specific dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::GTK)
+
+# The notification area icon, where libayatana-appindicator is installed.
+pkg_check_modules(APPINDICATOR IMPORTED_TARGET ayatana-appindicator3-0.1)
+if(APPINDICATOR_FOUND)
+  target_compile_definitions(${BINARY_NAME} PRIVATE HAVE_APPINDICATOR)
+  target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::APPINDICATOR)
+endif()
 
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")

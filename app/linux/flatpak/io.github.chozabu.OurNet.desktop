@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=OurNet
+Comment=Friend-to-friend sharing with persistent identities
+Exec=ournet
+Icon=io.github.chozabu.OurNet
+StartupWMClass=io.github.chozabu.OurNet
+Categories=Network;Chat;InstantMessaging;
+Keywords=chat;notes;calendar;friends;p2p;
+StartupNotify=true

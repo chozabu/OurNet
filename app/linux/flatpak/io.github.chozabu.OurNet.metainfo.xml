@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.chozabu.OurNet</id>
+  <name>OurNet</name>
+  <summary>Friend-to-friend sharing with persistent identities</summary>
+  <developer id="io.github.chozabu">
+    <name>Chozabu</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <description>
+    <p>
+      OurNet connects you directly to your friends' devices: chats, notes,
+      calendars, photos and files are shared between you, signed by who wrote
+      them, with no central server holding your data.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.chozabu.OurNet.desktop</launchable>
+  <url type="homepage">https://github.com/chozabu/OurNet</url>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-audio">intense</content_attribute>
+    <content_attribute id="social-location">intense</content_attribute>
+    <content_attribute id="social-contacts">intense</content_attribute>
+  </content_rating>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+</component>
