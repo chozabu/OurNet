@@ -5,6 +5,11 @@ import 'package:hooks/hooks.dart';
 
 /// Builds `rust/` with cargo for the target being built and bundles it.
 ///
+/// Everyday builds use the `native-dev` profile; shipped and measured builds
+/// set `CARGO_OURNET_NATIVE_PROFILE=release` for fat LTO (see Cargo.toml).
+/// Every package's hook shares `rust/target`, so core, transport and app
+/// compile wasmtime once between them rather than once each.
+///
 /// A target whose Rust standard library is not installed gets no library:
 /// `package:ournet_native` then reports itself unavailable and OurNet uses
 /// its pure-Dart code, which gives the same results more slowly.
@@ -30,7 +35,9 @@ void main(List<String> args) async {
       );
       return;
     }
-    final target = input.outputDirectoryShared.resolve('target/');
+    final target = crate.resolve('target/');
+    final profile =
+        Platform.environment['CARGO_OURNET_NATIVE_PROFILE'] ?? 'native-dev';
     final environment = <String, String>{};
     final prefix = 'CARGO_TARGET_${triple.toUpperCase().replaceAll('-', '_')}';
     if (code.targetOS == OS.android) {
@@ -53,7 +60,8 @@ void main(List<String> args) async {
       'cargo',
       [
         'build',
-        '--release',
+        '--profile',
+        profile,
         '--locked',
         '--target',
         triple,
@@ -73,13 +81,18 @@ void main(List<String> args) async {
         result.exitCode,
       );
     }
+    // Copied out of the shared target so a library loaded by one package's
+    // running tests never blocks another package's build from relinking.
     final name = code.targetOS.dylibFileName('ournet_native');
+    final built = File.fromUri(target.resolve('$triple/$profile/$name'));
+    final bundled = input.outputDirectory.resolve(name);
+    await built.copy(bundled.toFilePath());
     output.assets.code.add(
       CodeAsset(
         package: input.packageName,
         name: 'ournet_native.dart',
         linkMode: DynamicLoadingBundled(),
-        file: target.resolve('$triple/release/$name'),
+        file: bundled,
       ),
     );
   });
