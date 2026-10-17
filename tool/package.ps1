@@ -53,6 +53,7 @@ foreach($taskComponent in @('app','core','transport','native','vendor/iroh_mobil
 }
 Push-Location (Join-Path $taskStage 'app')
 try {
+  $env:CARGO_OURNET_NATIVE_PROFILE = 'release' # fat-LTO native library (native/rust/Cargo.toml)
   flutter build windows --release --no-tree-shake-icons "--dart-define=OURNET_BUILD=$taskBuild"
   if($LASTEXITCODE -ne 0){throw 'Windows build failed; close running release-build windows first'}
   New-Item -ItemType Directory -Force -Path $taskOutput | Out-Null
@@ -107,4 +108,4 @@ Start-Process -FilePath (Join-Path $PSScriptRoot 'ournet.exe') -ArgumentList "--
     "$($_.Hash)  $([IO.Path]::GetFileName($_.Path))" | Set-Content "$($_.Path).sha256"
     $_ | Select-Object Hash,Path
   }
-} finally {Pop-Location}
+} finally {Pop-Location; Remove-Item Env:CARGO_OURNET_NATIVE_PROFILE -ErrorAction SilentlyContinue}

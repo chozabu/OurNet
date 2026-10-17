@@ -28,8 +28,20 @@ windows-sys = { version = "0.61.2", features = ["Win32_UI_Input_KeyboardAndMouse
 libc = "0.2"
 
 
+# Shipped and measured builds: the build hook uses this profile when
+# CARGO_OURNET_NATIVE_PROFILE=release (set by tool/package.ps1,
+# tool/release-android.ps1 and tool/check.ps1 -Performance).
 [profile.release]
 opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
+
+# Everyday builds (dart test, flutter run/test): the same optimisation minus
+# cross-crate LTO, so an edit to src/ relinks in seconds instead of redoing
+# fat LTO over wasmtime (minutes).
+[profile.native-dev]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
