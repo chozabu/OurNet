@@ -556,8 +556,9 @@ class Plugins {
     _logRemote(s.plugin, s.device, '$why after $length');
   }
 
-  /// Ends every remote session here now: restarts each plugin serving one,
-  /// which switches its receiving permissions off.
+  /// Ends every remote session here now: tells each plugin serving one to
+  /// switch its receiving permissions off (a `disable` event, which it
+  /// saves), then restarts it.
   Future<void> stopRemoteSessions() async {
     final plugins = {for (final s in _sessions.values) s.plugin};
     for (final s in _sessions.values.toList()) {
@@ -565,8 +566,19 @@ class Plugins {
     }
     _scheduleExpiry();
     if (!_remote.isClosed) _remote.add(null);
-    // Restarting starts the plugin with its receiving switches off.
     for (final id in plugins) {
+      final running = _running[id];
+      if (running != null) {
+        try {
+          await _call(running, {
+            'call': 'event',
+            'surface': '',
+            'name': 'disable',
+            'args': '{}',
+          });
+        } catch (_) {}
+      }
+      // Ends whatever the plugin still holds for its controllers.
       await restart(id);
     }
   }

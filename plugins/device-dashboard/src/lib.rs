@@ -1,7 +1,7 @@
 #![recursion_limit = "256"]
 use std::collections::{BTreeMap, VecDeque};
 
-use ournet_plugin::{device, json, timer, ui, Context, Plugin, Value};
+use ournet_plugin::{device, json, store, timer, ui, Context, Plugin, Value};
 #[path = "../../device-common.rs"]
 mod common;
 const SURFACE: &str = "Dashboard";
@@ -112,6 +112,10 @@ fn count(v: &Value) -> String {
 }
 
 impl Dashboard {
+    /// Keeps sharing and process control across launches.
+    fn save(&self) {
+        let _ = store::set_json("settings", &json!({"sharing":self.sharing,"control":self.control}));
+    }
     fn interval(&self) -> u64 {
         if self.interval == 0 { 1000 } else { self.interval }
     }
@@ -504,6 +508,9 @@ fn tiles_compat(v: &Value) -> Vec<Value> {
 
 impl Plugin for Dashboard {
     fn init(&mut self) {
+        let saved: Value = store::get_json("settings").unwrap_or_default();
+        self.sharing = saved["sharing"] == true;
+        self.control = saved["control"] == true;
         timer::set(1, 250);
         self.show();
     }
@@ -518,9 +525,17 @@ impl Plugin for Dashboard {
                     self.control = false;
                     self.viewers.clear();
                 }
+                self.save();
             }
             "control" => {
                 self.control = args["value"].as_bool().unwrap_or(!self.control);
+                self.save();
+            }
+            "disable" => {
+                self.sharing = false;
+                self.control = false;
+                self.viewers.clear();
+                self.save();
             }
             "shown" => {
                 self.shown = self.shown.saturating_add(1);

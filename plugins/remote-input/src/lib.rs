@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use ournet_plugin::{device, json, timer, ui, Context, Plugin, Value};
+use ournet_plugin::{device, json, store, timer, ui, Context, Plugin, Value};
 #[path = "../../device-common.rs"]
 mod common;
 
@@ -95,6 +95,10 @@ impl RemoteInput {
         timer::set(1, 33);
         self.show();
     }
+    /// Keeps what this device accepts across launches.
+    fn save(&self) {
+        let _ = store::set_json("settings", &json!({"receiving":self.receiving,"clipboard":self.clipboard}));
+    }
     /// Asks the chosen device what it accepts, between other requests.
     fn ask_status(&mut self) {
         if self.client.target.is_empty() || self.client.pending.is_some() {
@@ -107,6 +111,9 @@ impl RemoteInput {
 }
 impl Plugin for RemoteInput {
     fn init(&mut self) {
+        let saved: Value = store::get_json("settings").unwrap_or_default();
+        self.receiving = saved["receiving"] == true;
+        self.clipboard = saved["clipboard"] == true;
         timer::set(1, 1000);
         self.show();
     }
@@ -120,17 +127,20 @@ impl Plugin for RemoteInput {
                 if !self.receiving && !self.clipboard {
                     self.controllers.clear();
                 }
+                self.save();
             }
             "clipboard" => {
                 self.clipboard = args["value"].as_bool().unwrap_or(!self.clipboard);
                 if !self.receiving && !self.clipboard {
                     self.controllers.clear();
                 }
+                self.save();
             }
             "disable" => {
                 self.receiving = false;
                 self.clipboard = false;
                 self.controllers.clear();
+                self.save();
             }
             "shown" => {
                 self.shown = self.shown.saturating_add(1);
