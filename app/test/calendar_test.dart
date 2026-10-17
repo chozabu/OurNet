@@ -27,6 +27,13 @@ Occurrence occurrence(String title, DateTime start, DateTime end, {bool allDay =
   return Occurrence(event, event, '', start, end);
 }
 
+/// A time tomorrow, so an event made for a test never crosses midnight and
+/// shows under two days, whenever the test runs.
+DateTime tomorrowAt(int hour) {
+  final now = DateTime.now();
+  return DateTime(now.year, now.month, now.day + 1, hour);
+}
+
 class _FakeObject implements SignedObject {
   @override
   String get space => Calendar.personal;
@@ -215,7 +222,7 @@ void main() {
         () => Everyday(node).createRoom('Climbing crew', [friend.person]),
       ))!;
       final c = controllerFor(node)..view = CalendarView.schedule;
-      final soon = DateTime.now().add(const Duration(hours: 2));
+      final soon = tomorrowAt(18);
       await tester.runAsync(() async {
         await c.calendar.create(
           room.object.space,
@@ -251,7 +258,7 @@ void main() {
         () => Everyday(node).createRoom('Climbing crew', [friend.person]),
       ))!;
       final c = controllerFor(node, group: room.object.space)..view = CalendarView.schedule;
-      final soon = DateTime.now().add(const Duration(hours: 2));
+      final soon = tomorrowAt(18);
       await tester.runAsync(() async {
         await c.calendar.create(
           room.object.space,
@@ -336,7 +343,7 @@ void main() {
       wide(tester);
       final (node, _) = await friends(0);
       final c = controllerFor(node);
-      final soon = DateTime.now().add(const Duration(days: 1));
+      final soon = tomorrowAt(18);
       final change = (await tester.runAsync(() async {
         final made = await c.calendar.create(
           Calendar.personal,
@@ -395,7 +402,7 @@ void main() {
     final room = (await tester.runAsync(
       () => Everyday(node).createRoom('Climbing crew', [friend.person]),
     ))!;
-    final soon = DateTime.now().add(const Duration(hours: 2));
+    final soon = tomorrowAt(18);
     await tester.runAsync(() async {
       await Calendar(node, NoteState(node)).create(
         room.object.space,
