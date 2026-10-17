@@ -71,131 +71,159 @@ class ChatComposer extends StatelessWidget {
       child: Column(
         children: [
           ?contextBar,
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              if (onAttach != null)
-                IconButton(
-                  tooltip: 'Attach file',
-                  onPressed: onAttach,
-                  icon: const Icon(Icons.attach_file),
-                ),
-              if (onAttach != null && onPasteButton != null)
-                IconButton(
-                  tooltip: 'Paste image',
-                  onPressed: onPasteButton,
-                  icon: const Icon(Icons.content_paste),
-                ),
-              if (onEvent != null)
-                IconButton(
-                  tooltip: 'Mention a calendar event',
-                  onPressed: onEvent,
-                  icon: const Icon(Icons.event_outlined),
-                ),
-              Expanded(
-                child: Shortcuts(
-                  // The text field consumes Ctrl+V before a Focus ancestor
-                  // sees it, so claim the shortcut nearer to the field.
-                  shortcuts: {
-                    if (onPasteShortcut != null) ...{
-                      const SingleActivator(
-                        LogicalKeyboardKey.keyV,
-                        control: true,
-                      ): const _PasteIntent(),
-                      const SingleActivator(
-                        LogicalKeyboardKey.keyV,
-                        meta: true,
-                      ): const _PasteIntent(),
-                    },
-                  },
-                  child: Actions(
-                    actions: {
-                      _PasteIntent: CallbackAction<_PasteIntent>(
-                        onInvoke: (_) {
-                          onPasteShortcut?.call();
-                          return null;
-                        },
-                      ),
-                    },
-                    child: Focus(
-                      onKeyEvent: (_, event) {
-                        if (event is KeyDownEvent) {
-                          if (event.logicalKey == LogicalKeyboardKey.escape &&
-                              onEscape?.call() == true) {
-                            return KeyEventResult.handled;
-                          }
-                          if (event.logicalKey == LogicalKeyboardKey.arrowUp &&
-                              controller.text.isEmpty &&
-                              onEditLast?.call() == true) {
-                            return KeyEventResult.handled;
-                          }
-                        }
-                        return enterSends(
-                          controller,
-                          event,
-                          onSend == null ? null : send,
-                        );
+          LayoutBuilder(
+            builder: (context, constraints) => Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                ..._extras(constraints.maxWidth),
+                Expanded(
+                  child: Shortcuts(
+                    // The text field consumes Ctrl+V before a Focus ancestor
+                    // sees it, so claim the shortcut nearer to the field.
+                    shortcuts: {
+                      if (onPasteShortcut != null) ...{
+                        const SingleActivator(
+                          LogicalKeyboardKey.keyV,
+                          control: true,
+                        ): const _PasteIntent(),
+                        const SingleActivator(
+                          LogicalKeyboardKey.keyV,
+                          meta: true,
+                        ): const _PasteIntent(),
                       },
-                      child: TextField(
-                        controller: controller,
-                        focusNode: focusNode,
-                        minLines: 1,
-                        maxLines: 5,
-                        contentInsertionConfiguration: onImageInserted != null
-                            ? ContentInsertionConfiguration(
-                                allowedMimeTypes: const [
-                                  'image/png',
-                                  'image/jpeg',
-                                  'image/gif',
-                                  'image/webp',
-                                ],
-                                onContentInserted: (content) {
-                                  final bytes = content.data;
-                                  if (bytes != null) {
-                                    onImageInserted!(bytes, content.mimeType);
-                                  }
-                                },
-                              )
-                            : null,
-                        decoration: InputDecoration(
-                          hintText: hint,
-                          filled: true,
-                          fillColor: Theme.of(context).colorScheme.surface,
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(24),
-                            borderSide: BorderSide.none,
+                    },
+                    child: Actions(
+                      actions: {
+                        _PasteIntent: CallbackAction<_PasteIntent>(
+                          onInvoke: (_) {
+                            onPasteShortcut?.call();
+                            return null;
+                          },
+                        ),
+                      },
+                      child: Focus(
+                        onKeyEvent: (_, event) {
+                          if (event is KeyDownEvent) {
+                            if (event.logicalKey == LogicalKeyboardKey.escape &&
+                                onEscape?.call() == true) {
+                              return KeyEventResult.handled;
+                            }
+                            if (event.logicalKey ==
+                                    LogicalKeyboardKey.arrowUp &&
+                                controller.text.isEmpty &&
+                                onEditLast?.call() == true) {
+                              return KeyEventResult.handled;
+                            }
+                          }
+                          return enterSends(
+                            controller,
+                            event,
+                            onSend == null ? null : send,
+                          );
+                        },
+                        child: TextField(
+                          controller: controller,
+                          focusNode: focusNode,
+                          minLines: 1,
+                          maxLines: 5,
+                          contentInsertionConfiguration: onImageInserted != null
+                              ? ContentInsertionConfiguration(
+                                  allowedMimeTypes: const [
+                                    'image/png',
+                                    'image/jpeg',
+                                    'image/gif',
+                                    'image/webp',
+                                  ],
+                                  onContentInserted: (content) {
+                                    final bytes = content.data;
+                                    if (bytes != null) {
+                                      onImageInserted!(bytes, content.mimeType);
+                                    }
+                                  },
+                                )
+                              : null,
+                          decoration: InputDecoration(
+                            hintText: hint,
+                            filled: true,
+                            fillColor: Theme.of(context).colorScheme.surface,
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(24),
+                              borderSide: BorderSide.none,
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              if (hasVoice) ...[
-                const SizedBox(width: 2),
-                IconButton(
-                  tooltip: 'Record voice message',
-                  onPressed: onVoice,
-                  icon: const Icon(Icons.mic_none),
+                if (hasVoice) ...[
+                  const SizedBox(width: 2),
+                  IconButton(
+                    tooltip: 'Record voice message',
+                    onPressed: onVoice,
+                    icon: const Icon(Icons.mic_none),
+                  ),
+                ],
+                const SizedBox(width: 6),
+                IconButton.filled(
+                  tooltip: desktop ? 'Send · $sendHint' : 'Send',
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size.square(46),
+                  ),
+                  onPressed: onSend == null ? null : send,
+                  icon: const Icon(Icons.send),
                 ),
               ],
-              const SizedBox(width: 6),
-              IconButton.filled(
-                tooltip: desktop ? 'Send · $sendHint' : 'Send',
-                style: IconButton.styleFrom(minimumSize: const Size.square(46)),
-                onPressed: onSend == null ? null : send,
-                icon: const Icon(Icons.send),
-              ),
-            ],
+            ),
           ),
         ],
       ),
     );
+  }
+
+  /// Below this width the buttons left of the field fold into one "+" menu,
+  /// so a narrow phone keeps room to type.
+  static const _foldBelow = 480.0;
+
+  /// The attach, paste-image and event buttons: inline when there is room,
+  /// otherwise a single "+" menu (when more than one would show).
+  List<Widget> _extras(double width) {
+    final actions = <(String, IconData, VoidCallback)>[
+      if (onAttach != null) ('Attach file', Icons.attach_file, onAttach!),
+      if (onAttach != null && onPasteButton != null)
+        ('Paste image', Icons.content_paste, onPasteButton!),
+      if (onEvent != null)
+        ('Mention a calendar event', Icons.event_outlined, onEvent!),
+    ];
+    if (actions.length < 2 || width >= _foldBelow) {
+      return [
+        for (final (label, icon, action) in actions)
+          IconButton(tooltip: label, onPressed: action, icon: Icon(icon)),
+      ];
+    }
+    return [
+      PopupMenuButton<VoidCallback>(
+        tooltip: 'More',
+        icon: const Icon(Icons.add),
+        onSelected: (action) => action(),
+        itemBuilder: (_) => [
+          for (final (label, icon, action) in actions)
+            PopupMenuItem(
+              value: action,
+              child: ListTile(
+                leading: Icon(icon),
+                title: Text(label),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+        ],
+      ),
+    ];
   }
 }
 
