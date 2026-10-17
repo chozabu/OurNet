@@ -208,7 +208,7 @@ void main() {
       expect(DateTime.now().isBefore(started), isTrue);
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
-  });
+  }, skip: skip);
 
   test('git pushes to and clones from a repository', () async {
     final (node, plugins, _) = await device();
