@@ -180,6 +180,12 @@ class PeerNetwork implements PluginLink {
   /// How each device was last reached, from its connections' path events.
   final Map<String, PeerPath> paths = {};
 
+  /// Open connections to each admitted device, either direction.
+  final Map<String, int> _openTo = {};
+
+  /// Whether a connection to [device] is open now; [paths] says how.
+  bool connectedTo(String device) => _openTo.containsKey(device);
+
   final Map<String, DateTime> _heardAt = {};
 
   /// Devices a request failed to reach since they were last heard from.
@@ -709,6 +715,19 @@ class PeerNetwork implements PluginLink {
   /// (iroh closes every path as the connection ends) is taken as the one
   /// used: iroh prefers a direct path whenever one works.
   void _watchPath(iroh.Connection connection, String device) {
+    if (_openTo.update(device, (n) => n + 1, ifAbsent: () => 1) == 1) {
+      notifyListeners();
+    }
+    final ended = connection.closed().then((_) {}, onError: (Object _) {})
+      ..whenComplete(() {
+        final left = (_openTo[device] ?? 1) - 1;
+        if (left > 0) {
+          _openTo[device] = left;
+        } else {
+          _openTo.remove(device);
+          notifyListeners();
+        }
+      });
     var selected = false;
     PeerPath? seen;
     void note(String remoteAddr, {required bool select}) {
@@ -722,7 +741,10 @@ class PeerNetwork implements PluginLink {
       seen = path;
       final last = paths[device];
       paths[device] = path;
-      if (last?.kind != path.kind) notifyListeners();
+      if (last?.kind != path.kind) {
+        // Kept in [events], so diagnostics show upgrades and fallbacks.
+        log('Path to ${device.substring(0, 8)}: ${path.describe()}');
+      }
     }
 
     final StreamSubscription<iroh.PathEvent> events;
@@ -742,9 +764,7 @@ class PeerNetwork implements PluginLink {
     }
     // The last events (paths closing) follow the connection's end.
     unawaited(
-      connection
-          .closed()
-          .then((_) {}, onError: (Object _) {})
+      ended
           .then((_) => Future<void>.delayed(const Duration(seconds: 2)))
           .whenComplete(events.cancel),
     );

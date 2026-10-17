@@ -72,6 +72,13 @@ void main() {
       }
       expect(na.paths[b.identity.device]?.isDirect, isTrue);
       expect(nb.paths[a.identity.device]?.isDirect, isTrue);
+      expect(na.events.any((e) => e.contains('Path to')), isTrue);
+      await na.stop();
+      for (var i = 0; i < 50 && nb.connectedTo(a.identity.device); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      expect(na.connectedTo(b.identity.device), isFalse);
+      expect(nb.connectedTo(a.identity.device), isFalse);
     },
     timeout: const Timeout(Duration(seconds: 60)),
   );

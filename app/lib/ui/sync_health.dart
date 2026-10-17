@@ -71,8 +71,7 @@ Health deviceHealth(PeerNetwork network, String device, {DateTime? now}) {
   final details = <String>[
     if (synced != null) 'Last synced ${_ago(synced, now)}' else 'Never synced',
     if (inbound != null) 'Last reached this device ${_ago(inbound, now)}',
-    if (network.paths[device] case final path?)
-      'Last connection ${path.describe()}',
+    ?connectionNote(network, device, now),
     ?buildNote(network, device),
   ];
   if (!network.running) {
@@ -114,6 +113,39 @@ Health deviceHealth(PeerNetwork network, String device, {DateTime? now}) {
     headline: 'Synced ${_ago(synced, now)}',
     details: details.skip(1).toList(),
   );
+}
+
+/// How this device is linked to [device]: now, or when it last was.
+String? connectionNote(PeerNetwork network, String device, DateTime now) {
+  final path = network.paths[device];
+  if (network.connectedTo(device)) {
+    return path == null ? 'Connected now' : 'Connected ${path.describe()}';
+  }
+  if (path == null) return null;
+  return 'Last connected ${path.describe()}, ${_ago(path.at, now)}';
+}
+
+/// Contact devices connected now, by how: `2 on the local network, 1 through
+/// a relay`. Null when none are.
+String? connectedSummary(PeerNetwork network) {
+  final counts = <PathKind?, int>{};
+  for (final device in network.node.contacts.keys) {
+    if (!network.connectedTo(device)) continue;
+    final kind = network.paths[device]?.kind;
+    counts[kind] = (counts[kind] ?? 0) + 1;
+  }
+  if (counts.isEmpty) return null;
+  final total = counts.values.fold(0, (a, b) => a + b);
+  final parts = [
+    for (final (kind, label) in [
+      (PathKind.lan, 'on the local network'),
+      (PathKind.direct, 'direct over the internet'),
+      (PathKind.relay, 'through a relay'),
+    ])
+      if (counts[kind] case final n?) '$n $label',
+  ];
+  return 'Connected to $total device${total == 1 ? '' : 's'}'
+      '${parts.isEmpty ? '' : ' · ${parts.join(', ')}'}';
 }
 
 /// Compares x.y.z release versions; null when either is not one.
@@ -450,6 +482,7 @@ class ConnectionHealthCard extends StatelessWidget {
           'Internet mode · relay ${connectedRelays > 0 ? 'connected' : 'unavailable'}',
         for (final r in relays)
           if (!r.connected && r.error != null) 'Relay: ${r.error}',
+        if (network.running) ?connectedSummary(network),
         if (network.running && network.acceptFailures > 0)
           '${network.acceptFailures} incoming connection'
               '${network.acceptFailures == 1 ? '' : 's'} failed'
@@ -515,6 +548,7 @@ Map<String, Object?> syncDiagnostics(PeerNetwork network) => {
         'error': network.syncErrors[device],
         'build': network.peerBuilds[device],
         'version': network.peerVersions[device],
+        'connected': network.connectedTo(device),
         'path': network.paths[device]?.toJson(),
       },
   ],
