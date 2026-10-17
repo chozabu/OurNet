@@ -78,8 +78,9 @@ static POSTS: RwLock<Option<HashMap<u64, Post>>> = RwLock::new(None);
 static ENGINE: OnceLock<Result<Engine, String>> = OnceLock::new();
 static PLUGINS: Mutex<Option<HashMap<u64, Handle>>> = Mutex::new(None);
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
-/// The thread of the latest instance started for each plugin directory.
-static INSTANCES: Mutex<Option<HashMap<PathBuf, thread::JoinHandle<()>>>> = Mutex::new(None);
+/// The handle and thread of the latest instance started for each plugin
+/// directory.
+static INSTANCES: Mutex<Option<HashMap<PathBuf, (u64, thread::JoinHandle<()>)>>> = Mutex::new(None);
 
 /// What Dart holds of a running plugin: where its jobs and answers go.
 struct Handle {
@@ -1305,8 +1306,11 @@ pub unsafe extern "C" fn ournet_plugin_load(
         let own_jobs = jobs.clone();
         let (answers, answer_queue) = mpsc::channel();
         let name = format!("ournet-plugin-{}", config.id);
-        // A plugin started again (a restart, the profile opened again) waits
-        // for its previous instance to finish and write its storage.
+        // A plugin started again (a restart, the profile opened again) stops
+        // its previous instance and waits for it to write its storage. The
+        // isolate that started that one may be gone without stopping it (an
+        // Android engine destroyed while the process lives on), and nothing
+        // else would ever stop it.
         let key = config.dir.clone();
         let (previous_tx, previous_rx) = mpsc::channel::<Option<thread::JoinHandle<()>>>();
         let started = thread::Builder::new()
@@ -1325,9 +1329,15 @@ pub unsafe extern "C" fn ournet_plugin_load(
             });
         let Ok(thread) = started else { return 0 };
         let previous = match (key, INSTANCES.lock()) {
-            (Some(dir), Ok(mut instances)) => instances.get_or_insert_with(HashMap::new).insert(dir, thread),
+            (Some(dir), Ok(mut instances)) => {
+                instances.get_or_insert_with(HashMap::new).insert(dir, (handle, thread))
+            }
             _ => None,
         };
+        let previous = previous.map(|(old, thread)| {
+            unsafe { ournet_plugin_stop(old) };
+            thread
+        });
         let _ = previous_tx.send(previous);
         if let Ok(mut plugins) = PLUGINS.lock() {
             plugins
