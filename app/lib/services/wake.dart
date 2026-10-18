@@ -50,6 +50,17 @@ class FcmChannel {
     }
   }
 
+  /// What the person did on the ringing shown by a push for call [session]
+  /// before the app had the offer: `answer`, `decline`, or null.
+  static Future<String?> callAction(String session) async {
+    if (!Platform.isAndroid) return null;
+    try {
+      return await _channel.invokeMethod<String>('callAction', session);
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   /// Calls [onToken] when FCM replaces this device's token.
   static void listen(void Function(String token) onToken) {
     if (!Platform.isAndroid) return;
@@ -409,6 +420,43 @@ class WakeSender {
         onError?.call('Wake for $label: $e');
         _schedule(const Duration(minutes: 1));
       }
+    }
+  }
+
+  /// Asks the push server to wake [device] for a call: `call` rings it for
+  /// [session] straight away, even while asleep, and `cancel` stops that
+  /// ringing when the call ends before the offer reaches it.
+  Future<void> call(String device, String kind, String session) async {
+    final address = node.store.setting('wake/$device');
+    if (address is! Json || !validWake(address)) return;
+    final label = node.contacts[device]?.label ?? 'a device';
+    try {
+      final response = await client
+          .post(
+            Uri.parse('${address['url']}/v1/wake'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'device': address['device'],
+              'token': address['token'],
+              'kind': kind,
+              'call': session,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      switch (response.statusCode) {
+        case 202 || 200:
+          break;
+        case 410:
+          node.store.set('wake/$device', null);
+        default:
+          // An older server, or over the hourly limit: the call still
+          // reaches the phone if it wakes some other way.
+          onError?.call(
+            'Call wake for $label refused (${response.statusCode})',
+          );
+      }
+    } catch (e) {
+      onError?.call('Call wake for $label: $e');
     }
   }
 

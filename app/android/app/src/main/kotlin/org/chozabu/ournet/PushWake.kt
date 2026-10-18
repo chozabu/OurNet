@@ -31,7 +31,8 @@ import java.util.concurrent.TimeUnit
  * OurNet's push server to wake this phone, and the server sends an empty,
  * high-priority data message. Receiving one runs [WakeWorker], which syncs
  * as a background run does (or hands the sync to the app when it is
- * running). See docs/CONNECTIVITY.md.
+ * running). A `call` wake rings for an incoming call instead, see
+ * [IncomingCall]. See docs/CONNECTIVITY.md.
  *
  * Firebase is configured from res/values/firebase.xml. With those values
  * empty Firebase never starts and none of this does anything.
@@ -42,7 +43,13 @@ class PushWake : FirebaseMessagingService() {
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
-        if (message.data["ournet"] == "wake") wake(applicationContext)
+        val call = message.data["call"]
+        when (message.data["ournet"]) {
+            "wake" -> wake(applicationContext)
+            // A friend is calling and could not reach this phone: ring now.
+            "call" -> if (call != null) IncomingCall.ring(applicationContext, call)
+            "cancel" -> if (call != null) IncomingCall.cancel(applicationContext, call)
+        }
     }
 
     companion object {
@@ -81,6 +88,7 @@ class PushWake : FirebaseMessagingService() {
                         }
                         result.success(null)
                     }
+                    "callAction" -> result.success(IncomingCall.takeAction(call.arguments as? String))
                     else -> result.notImplemented()
                 }
             }

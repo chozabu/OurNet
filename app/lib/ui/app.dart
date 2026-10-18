@@ -646,7 +646,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       onUpdate: refresh,
       automatic: widget.enablePlatform,
     );
-    calls = Calls(network)..addListener(refresh);
+    calls = Calls(network)
+      ..addListener(refresh)
+      ..onWake = (device, kind, session) =>
+          unawaited(wakeSender?.call(device, kind, session));
     groupCalls = GroupCalls(
       network,
       members: groupPeople,
@@ -1124,6 +1127,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       _sendCallState();
       if (ringing != _ringing) {
         _ringing = ringing;
+        if (ringing && Platform.isAndroid) unawaited(_takePushCallAction());
         unawaited(
           (ringing
                   ? notifications.incomingCall(
@@ -1142,6 +1146,23 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           unawaited(SystemTray.unread(count).catchError((Object _) {}));
         }
       }
+    }
+  }
+
+  /// Answers or declines a call as the person already did on the ringing a
+  /// push wake showed before the offer arrived (see PushWake.kt).
+  Future<void> _takePushCallAction() async {
+    final session = calls.session;
+    if (session == null) return;
+    final action = await FcmChannel.callAction(
+      session,
+    ).catchError((Object _) => null);
+    if (calls.session != session || calls.phase != 'ringing') return;
+    switch (action) {
+      case 'answer':
+        await callAct(calls.answer);
+      case 'decline':
+        await callAct(calls.hangup);
     }
   }
 

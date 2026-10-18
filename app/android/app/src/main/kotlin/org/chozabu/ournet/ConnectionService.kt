@@ -39,7 +39,7 @@ class ConnectionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // A call keeps the service while it lasts, even with "Stay connected"
         // off, so the microphone and camera keep working with the screen off.
-        if (!enabled(this) && !inCall) {
+        if (!enabled(this) && !inCall && !IncomingCall.pending) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -62,9 +62,14 @@ class ConnectionService : Service() {
             Notification.Builder(this, CHANNEL) else Notification.Builder(this)
         val notification = builder
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(if (inCall) "In an OurNet call" else "Connected to friends")
+            .setContentTitle(
+                if (inCall) "In an OurNet call"
+                else if (!enabled(this)) "Incoming OurNet call"
+                else "Connected to friends"
+            )
             .setContentText(
                 if (inCall) "Tap to return to the call."
+                else if (!enabled(this)) "Connecting to your friend."
                 else "Messages and calls arrive straight away. Turn off in Settings."
             )
             .setContentIntent(open)
@@ -154,6 +159,12 @@ class ConnectionService : Service() {
         private var inCall = false
         private var callVideo = false
 
+        /** The app is ringing for a call. */
+        private var ringing = false
+
+        /** The app rings for a call or is in one, so a push's ringing is not needed. */
+        val callBusy get() = ringing || inCall
+
         /** Whether the running service may use the microphone in the background. */
         private var callType = false
 
@@ -211,7 +222,7 @@ class ConnectionService : Service() {
 
         /** [force] runs the service's start again while it is running, so it can take on a type it could not before (location, once permitted). */
         private fun start(context: Context, force: Boolean = false) {
-            if ((running && !force) || (!enabled(context) && !inCall)) return
+            if ((running && !force) || (!enabled(context) && !inCall && !IncomingCall.pending)) return
             try {
                 val intent = Intent(context, ConnectionService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
@@ -220,6 +231,20 @@ class ConnectionService : Service() {
                 // Android refuses to start it from the background; the next
                 // time OurNet opens starts it instead.
                 Log.w(TAG, "Could not start: $e")
+            }
+        }
+
+        /**
+         * Runs the service, and so the app, for a call ringing from a push
+         * (IncomingCall), so the app can receive it. A high-priority push
+         * lets Android start it from the background.
+         */
+        fun startForCall(context: Context) = start(context)
+
+        /** Stops the service when nothing needs it any more. */
+        fun stopIfIdle(context: Context) {
+            if (!enabled(context) && !callBusy && !IncomingCall.pending) {
+                context.stopService(Intent(context, ConnectionService::class.java))
             }
         }
 
@@ -282,11 +307,17 @@ class ConnectionService : Service() {
                             val ringing = call.argument<Boolean>("ringing") == true
                             val active = call.argument<Boolean>("active") == true
                             val video = call.argument<Boolean>("video") == true
-                            CallScreen.set(show = ringing || active, wake = ringing)
+                            // The app has the call a push was ringing for.
+                            if (ringing) IncomingCall.takeOver()
+                            CallScreen.set(
+                                show = ringing || active || IncomingCall.holdsScreen,
+                                wake = ringing || IncomingCall.ringing != null,
+                            )
                             val changed = active != inCall || (active && video != callVideo)
+                            ConnectionService.ringing = ringing
                             inCall = active
                             callVideo = video
-                            if (!active && !enabled(context)) {
+                            if (!active && !ringing && !enabled(context) && !IncomingCall.pending) {
                                 context.stopService(Intent(context, ConnectionService::class.java))
                             } else if (changed || active != callType) {
                                 // Also asks again for the microphone after

@@ -254,8 +254,22 @@ The push server learns the phone's FCM token, when it is woken, and the IP
 addresses of devices that wake it; Google learns when the phone is woken. Turning
 the setting off unregisters and deletes the FCM token.
 
-Not yet: waking a phone for a call (ringing needs the call to reach a running
-app), and a way to ask a carrier to wake the recipient.
+- **Calls.** A caller wakes each callee device it is not connected to, or
+  cannot reach, with a `call` wake carrying the call's ID, and keeps offering
+  the call for 55 seconds. The phone rings straight from the push
+  (`IncomingCall`: ringtone, full-screen notification, Answer and Decline),
+  before the app runs, and starts the connection service so the app comes up
+  and receives the offer; the app's own incoming-call notification then
+  replaces the push's, and an Answer or Decline already given is carried out.
+  When the call ends unanswered, or another device answers, the caller sends
+  `cancel` to stop the ringing. Call wakes skip the 5-second spacing (the
+  hourly cap still applies), live 30 seconds, and share a collapse key, so a
+  queued call is replaced by its cancel. The push carries no caller, so it
+  rings as "Incoming OurNet call" until the app has the offer. On Android 14
+  and later, full-screen notifications need the person's permission unless
+  the app is classed as a calling app.
+
+Not yet: a way to ask a carrier to wake the recipient.
 
 An earlier UnifiedPush implementation, which pushed the messages themselves, is
 on the `unifiedpush-wakeup` branch.

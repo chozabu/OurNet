@@ -79,6 +79,7 @@ class MainActivity : FlutterActivity() {
         // Before the window shows, so a ringing call opened by its
         // full-screen intent appears over the lock screen.
         CallScreen.attach(this)
+        IncomingCall.opened(applicationContext, intent)
         super.onCreate(savedInstanceState)
     }
 
@@ -154,6 +155,7 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        IncomingCall.opened(applicationContext, intent)
         WidgetStore.receiveLaunch(applicationContext, intent)
         receive(intent)
     }

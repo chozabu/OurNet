@@ -481,6 +481,41 @@ void main() {
     expect(sentTo('hangup'), isEmpty);
   });
 
+  test(
+    'a sleeping phone is woken to ring, and stops when the caller gives up',
+    () async {
+      final wakes = <String>[];
+      calls.onWake = (device, kind, session) =>
+          wakes.add('$kind $device $session');
+      network.unreachable.add(friend.device);
+      await calls.call(friend.device);
+      final session = calls.session;
+      expect(wakes, ['call ${friend.device} $session']);
+      await calls.hangup();
+      expect(wakes, [
+        'call ${friend.device} $session',
+        'cancel ${friend.device} $session',
+      ]);
+    },
+  );
+
+  test('only the devices that did not answer stop ringing', () async {
+    final wakes = <String>[];
+    calls.onWake = (device, kind, _) => wakes.add('$kind $device');
+    await calls.callPerson(friend.person);
+    expect(wakes, hasLength(2));
+    await signal(network, friend.device, {
+      'type': 'answer',
+      'session': network.sent.first['session'],
+      'sdp': 'answer-sdp',
+    });
+    expect(wakes.where((w) => w.startsWith('cancel')), [
+      'cancel ${friendPhone.device}',
+    ]);
+    await calls.hangup();
+    expect(wakes, hasLength(3));
+  });
+
   test('a busy device is not offered the call again', () async {
     calls.reachEvery = const Duration(milliseconds: 20);
     network.onRequest = (payload) async {

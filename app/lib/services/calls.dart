@@ -90,7 +90,15 @@ class Calls extends ChangeNotifier {
 
   /// How often, and for how long, the caller retries devices it cannot reach.
   Duration reachEvery = const Duration(seconds: 3);
-  Duration reachFor = const Duration(seconds: 30);
+  Duration reachFor = const Duration(seconds: 55);
+
+  /// Asks the push server to wake [device]: `call` makes a sleeping phone
+  /// ring for [session] at once, `cancel` stops it. See `WakeSender.call`.
+  void Function(String device, String kind, String session)? onWake;
+
+  /// Caller side: devices sent a `call` wake for this call and not yet a
+  /// `cancel`.
+  final Set<String> _woken = {};
 
   /// Called when a call this side placed ends, to record it in the chat.
   void Function(CallRecord record)? onRecord;
@@ -445,6 +453,19 @@ class Calls extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The current call's ID, shared by both sides.
+  String? get session => _session;
+
+  void _wake(String device, String session) {
+    if (onWake != null && _woken.add(device)) onWake!(device, 'call', session);
+  }
+
+  void _unwake(String device, String? session) {
+    if (_woken.remove(device) && session != null) {
+      onWake?.call(device, 'cancel', session);
+    }
+  }
+
   /// Devices that should receive this call's signalling.
   List<String> get _recipients =>
       _ringing.isNotEmpty ? _ringing.toList() : [?peer];
@@ -486,9 +507,15 @@ class Calls extends ChangeNotifier {
       ..clear()
       ..addAll(devices);
     _unreached.clear();
+    _woken.clear();
     this.video = video;
     _session = randomId();
     final session = _session;
+    // A sleeping phone starts ringing from the wake while the offer is still
+    // on its way; one that is connected rings from the offer itself.
+    for (final device in devices) {
+      if (!network.connectedTo(device)) _wake(device, session!);
+    }
     _signallingReady = false;
     phase = 'calling';
     error = null;
@@ -520,8 +547,10 @@ class Calls extends ChangeNotifier {
                   if (e is StateError && _refusals.contains(e.message)) {
                     refusals.add(e);
                     _ringing.remove(device);
+                    _unwake(device, session);
                   } else {
                     _unreached.add(device);
+                    _wake(device, session!);
                   }
                 },
               ),
@@ -607,6 +636,7 @@ class Calls extends ChangeNotifier {
                   }
                   _unreached.remove(device);
                   _ringing.remove(device);
+                  _unwake(device, session);
                   if (_ringing.isNotEmpty) {
                     _choosePeer();
                     return;
@@ -696,6 +726,10 @@ class Calls extends ChangeNotifier {
             .toList();
         _ringing.clear();
         _unreached.clear();
+        _woken.remove(device);
+        for (final other in _woken.toList()) {
+          _unwake(other, session);
+        }
         // This device took the call; stop the others ringing.
         for (final other in others) {
           unawaited(
@@ -929,6 +963,11 @@ class Calls extends ChangeNotifier {
     _unreached.clear();
     _found.clear();
     final session = _session;
+    // Phones woken for the call that never got the offer stop ringing.
+    _woken.remove(except);
+    for (final device in _woken.toList()) {
+      _unwake(device, session);
+    }
     _session = null;
     peer = null;
     phase = 'ending';
