@@ -240,6 +240,55 @@ void main() {
     }
   });
 
+  test('a newly linked device starts with what the linking one read', () async {
+    final owner = await LocalIdentity.create();
+    final fresh = await LocalIdentity.create();
+    final paired = await fresh.enrol(await owner.authorise(fresh.certificate));
+    final a = Node(owner, Store()),
+        b = Node(paired, Store()),
+        friend = Node(await LocalIdentity.create(), Store());
+    addTearDown(() async {
+      await a.close();
+      await b.close();
+      await friend.close();
+    });
+    await a.addContact(paired.certificate);
+    await b.addContact(owner.certificate);
+    await a.addContact(friend.identity.certificate);
+    await b.addContact(friend.identity.certificate);
+    await friend.addContact(owner.certificate);
+    await friend.addContact(paired.certificate);
+    final sent = [
+      for (var i = 0; i < 3; i++)
+        await friend.publish(
+          'message',
+          {'text': '$i'},
+          space: '_messages',
+          audience: [a.person],
+        ),
+    ];
+    await syncPair(a, friend);
+    await a.markManyRead(sent.take(2).map((o) => o.id));
+    await a.shareReadState(paired.device);
+    await Future<void>.delayed(const Duration(milliseconds: 2));
+    final later = await friend.publish(
+      'message',
+      {'text': 'later'},
+      space: '_messages',
+      audience: [a.person],
+    );
+    await syncPair(a, friend);
+    await syncPair(a, b);
+    expect(b.store.conversationUnread(b.person), 2);
+    expect(b.store.setting('read/${sent[2].id}'), isNot(true));
+    expect(b.store.setting('read/${later.id}'), isNot(true));
+
+    // Reading on one device afterwards reads it on the other.
+    await a.markRead(sent[2].id);
+    await syncPair(a, b);
+    expect(b.store.conversationUnread(b.person), 1);
+  });
+
   test('reactions, edits and deletions reach the other person', () async {
     final a = Node(await LocalIdentity.create(), Store());
     final b = Node(await LocalIdentity.create(), Store());

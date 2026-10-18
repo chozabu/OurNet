@@ -25,6 +25,9 @@ class _AddDevicePageState extends State<AddDevicePage> {
   Timer? timer;
   String status = 'Preparing a secure connection…';
   bool shareHistory = true;
+
+  /// The device approved here, told what this one has read once it joins.
+  String? linked;
   bool shareRoot = true;
   @override
   void initState() {
@@ -86,6 +89,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
           },
         );
         expiry.cancel();
+        if (approved == true) linked = cert.device;
         return approved == true;
       }, root: widget.root);
       pairing.shareRoot = shareRoot;
@@ -123,6 +127,14 @@ class _AddDevicePageState extends State<AddDevicePage> {
           setState(
             () => status = 'Device approved. Your new device is connecting.',
           );
+          // Without this everything earlier arrives unread there.
+          if (!expired && linked != null) {
+            unawaited(
+              widget.network.node
+                  .shareReadState(linked!)
+                  .then<void>((_) {}, onError: (Object _) {}),
+            );
+          }
           if (!expired && shareHistory) {
             try {
               final node = widget.network.node;

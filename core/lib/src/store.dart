@@ -1094,6 +1094,52 @@ class Store {
     [kind, space, person],
   );
 
+  /// Direct messages to [owner] still unread, newest first.
+  List<String> unreadMessageIds(String owner, {int limit = 1000}) => [
+    for (final row in _select(
+      'SELECT u.id FROM message_unread u JOIN objects o ON o.id=u.id '
+      'WHERE u.owner=? ORDER BY o.created DESC LIMIT ?',
+      [owner, limit],
+    ))
+      row['id'] as String,
+  ];
+
+  /// Objects of [kinds] by others not marked seen, newest first, as
+  /// (id, kind, space, created).
+  List<(String, String, String, int)> unseen(
+    List<String> kinds,
+    String person, {
+    int limit = 1000,
+  }) => [
+    for (final row in _select(
+      "SELECT o.id, o.kind, o.space, o.created FROM objects o LEFT JOIN settings s ON s.key='seen/' || o.id "
+      'WHERE o.kind IN (SELECT value FROM json_each(?)) AND o.author!=? '
+      "AND (s.value IS NULL OR s.value!='true') ORDER BY o.created DESC LIMIT ?",
+      [jsonEncode(kinds), person, limit],
+    ))
+      (
+        row['id'] as String,
+        row['kind'] as String,
+        row['space'] as String,
+        row['created'] as int,
+      ),
+  ];
+
+  /// Marks every object of [kinds] by others created up to [upTo] read
+  /// (`read/` for messages, `seen/` otherwise), except [except].
+  void markReadUpTo(
+    Iterable<String> kinds,
+    String person,
+    int upTo,
+    Set<String> except,
+  ) => _execute(
+    "INSERT INTO settings(key, value) SELECT CASE WHEN kind='message' THEN 'read/' ELSE 'seen/' END || id, 'true' FROM objects "
+    'WHERE kind IN (SELECT value FROM json_each(?)) AND author!=? AND created<=? '
+    'AND id NOT IN (SELECT value FROM json_each(?)) AND true '
+    "ON CONFLICT(key) DO UPDATE SET value='true' WHERE settings.value != 'true'",
+    [jsonEncode(kinds.toList()), person, upTo, jsonEncode(except.toList())],
+  );
+
   /// The newest [kind] object in [space] marked seen: where reading had got
   /// to, for a space read before read floors were kept.
   int newestSeen(String kind, String space) =>

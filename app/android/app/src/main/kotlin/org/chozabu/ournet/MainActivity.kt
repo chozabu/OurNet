@@ -27,6 +27,22 @@ class MainActivity : FlutterActivity() {
         else "$maker $model"
     }
 
+    // Many Wi-Fi drivers drop broadcast packets unless an app holds this, so
+    // an open Add device screen would never hear a new device's probe.
+    private var multicast: android.net.wifi.WifiManager.MulticastLock? = null
+    private fun lanDiscovery(on: Boolean) {
+        if (on && multicast == null) {
+            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+            multicast = wifi?.createMulticastLock("ournet-discovery")?.apply {
+                setReferenceCounted(false)
+                runCatching { acquire() }
+            }
+        } else if (!on) {
+            multicast?.let { if (it.isHeld) it.release() }
+            multicast = null
+        }
+    }
+
     // The primary clip's first image, copied to the cache so Dart reads a file
     // rather than receiving the bytes over the channel. Null when it has none.
     private fun clipboardImage(): String? {
@@ -86,6 +102,7 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         CallScreen.detach(this)
         folders?.close()
+        lanDiscovery(false)
         val cache = FlutterEngineCache.getInstance()
         if (isChangingConfigurations) flutterEngine?.let { cache.put(RELAUNCH_ENGINE, it) }
         else if (shouldDestroyEngineWithHost() && cache.get(ConnectionService.ENGINE) === flutterEngine) {
@@ -117,7 +134,14 @@ class MainActivity : FlutterActivity() {
             }
         }
         MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/device").setMethodCallHandler { call, result ->
-            if (call.method == "model") result.success(deviceModel()) else result.notImplemented()
+            when (call.method) {
+                "model" -> result.success(deviceModel())
+                "lanDiscovery" -> {
+                    lanDiscovery(call.arguments == true)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
         }
         channel = MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/share")
         channel!!.setMethodCallHandler { call, result ->

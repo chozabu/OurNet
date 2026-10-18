@@ -1735,6 +1735,9 @@ class Node {
     if (!held && store.storedBytes >= store.storageLimit)
       throw StateError('Storage limit reached');
     await applyRevocation(o);
+    if (o.author != person && _readKinds.contains(o.kind)) {
+      _applyHistoryRead(o);
+    }
     final changed = store.batch(
       () => [
         store.put(o),
@@ -1754,6 +1757,11 @@ class Node {
       };
       for (final id in ids.whereType<String>()) {
         final original = store.get(id);
+        // Read on another of this person's devices: read here too.
+        if (o.author == person) {
+          if (original?.author != person) store.set('read/$id', true);
+          continue;
+        }
         if (original != null &&
             original.author == person &&
             original.audience.contains(o.author)) {
@@ -1767,6 +1775,12 @@ class Node {
       if (payload?['person'] case final String other
           when state != null && other != person) {
         _applyContactState(other, state, o.created);
+      }
+    }
+    if (o.kind == readStateKind && o.author == person) {
+      final payload = await content(o);
+      if (payload != null && payload['device'] == identity.device) {
+        applyReadState(payload);
       }
     }
     if (o.kind == 'room_read' && o.author == person) {
@@ -1791,6 +1805,108 @@ class Node {
       };
     }
     return changed;
+  }
+
+  /// What a device that linked this one had read: see [shareReadState].
+  static const readStateKind = 'read_state';
+
+  /// Kinds whose read marks [shareReadState] carries: direct messages
+  /// (`read/`), and forum posts and group chat (`seen/`).
+  static const _readKinds = {'message', 'post', 'room_post', 'room_item'};
+
+  ({int upTo, Set<String> unread})? _historyRead;
+  bool _historyReadLoaded = false;
+
+  /// What the device that linked this one had read, kept by
+  /// [applyReadState]: everything by others up to `upTo` except `unread`.
+  ({int upTo, Set<String> unread})? get historyRead {
+    if (!_historyReadLoaded) {
+      _historyReadLoaded = true;
+      final kept = store.setting('historyRead');
+      if (kept is Map && kept['upTo'] is int) {
+        _historyRead = (
+          upTo: kept['upTo'] as int,
+          unread: {...?(kept['unread'] as List?)?.whereType<String>()},
+        );
+      }
+    }
+    return _historyRead;
+  }
+
+  /// Marks [o], history arriving from this person's other devices, read
+  /// when the device that linked this one had read it.
+  void _applyHistoryRead(SignedObject o) {
+    final read = historyRead;
+    if (read == null || o.created > read.upTo || read.unread.contains(o.id)) {
+      return;
+    }
+    final key = '${o.kind == 'message' ? 'read' : 'seen'}/${o.id}';
+    if (store.setting(key) != true) store.set(key, true);
+  }
+
+  /// Tells [device], just linked, what this device has read, so earlier
+  /// chats and forums do not all arrive unread there: everything until now
+  /// except what is still unread here, and how far each public chat is read.
+  /// Only [device] applies it; this person's other devices keep their own.
+  Future<void> shareReadState(String device) {
+    final unread = <String>[
+      ...store.unreadMessageIds(person, limit: maxReadStateUnread),
+    ];
+    for (final (id, kind, space, created) in store.unseen(
+      const ['post', 'room_post', 'room_item'],
+      person,
+      limit: maxReadStateUnread,
+    )) {
+      if (unread.length >= maxReadStateUnread) break;
+      // Below a floor counts as read whether or not it was marked.
+      final floor = switch (kind) {
+        'room_item' => roomReadFloor(space),
+        'room_post' => store.setting('floor/room_post/$space') as int? ?? 0,
+        _ => 0,
+      };
+      if (created > floor) unread.add(id);
+    }
+    return publish(
+      readStateKind,
+      {
+        'device': device,
+        'upTo': now(),
+        'unread': unread,
+        'chats': {
+          for (final MapEntry(:key, :value)
+              in store.settingsUnder('chatSeen/').entries.take(500))
+            if (value is int) key: value,
+        },
+      },
+      space: '_inbox',
+      audience: [person],
+    );
+  }
+
+  /// At most this many unread ids travel in [shareReadState]; older unread
+  /// beyond it arrive read.
+  static const maxReadStateUnread = 1500;
+
+  /// Applies another device's [shareReadState] here: to what is already
+  /// held, and through [historyRead] to history still on its way.
+  void applyReadState(Json payload) {
+    final upTo = payload['upTo'];
+    if (upTo is! int) return;
+    final unread = {...?(payload['unread'] as List?)?.whereType<String>()};
+    store.set('historyRead', {'upTo': upTo, 'unread': unread.toList()});
+    _historyRead = (upTo: upTo, unread: unread);
+    _historyReadLoaded = true;
+    store.batch(() {
+      store.markReadUpTo(_readKinds, person, upTo, unread);
+      if (payload['chats'] case final Map chats) {
+        for (final MapEntry(:key, :value) in chats.entries) {
+          if (key is! String || value is! int) continue;
+          final seen = store.setting('chatSeen/$key');
+          if (seen is! int || seen < value) store.set('chatSeen/$key', value);
+        }
+      }
+    });
+    notify();
   }
 
   Future<void> markRead(String objectId) => markManyRead([objectId]);

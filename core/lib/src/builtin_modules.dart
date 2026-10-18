@@ -229,6 +229,7 @@ const messagesModule = Module(
     'file': _file,
     'delivery': _delivery,
     'read': _read,
+    'read_state': _readState,
     'reaction': _reaction,
     'message_edit': _messageEdit,
     'message_delete': _messageDelete,
@@ -252,6 +253,19 @@ bool _read(Json p) =>
         p['objects'] is List &&
             (p['objects'] as List).length <= 200 &&
             (p['objects'] as List).every((v) => v is String));
+
+/// What a linking device had read, for the device it linked: see
+/// `Node.shareReadState`.
+bool _readState(Json p) =>
+    p['device'] is String &&
+    p['upTo'] is int &&
+    p['unread'] is List &&
+    (p['unread'] as List).length <= 1500 &&
+    (p['unread'] as List).every((v) => v is String) &&
+    (p['chats'] == null ||
+        p['chats'] is Map &&
+            (p['chats'] as Map).length <= 500 &&
+            (p['chats'] as Map).values.every((v) => v is int));
 
 /// An empty emoji withdraws the author's reaction.
 bool _reaction(Json p) =>
