@@ -7,6 +7,16 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: round-trip pings
+
+A `ping` request, answered at once with `{}`, measures the round trip to a
+connected device while its row is on screen. Builds that answer it list the
+`ping` capability; a peer that has announced capabilities without it is not
+asked, and an older build that has not said yet refuses it as an unknown
+request, whose reply times the round trip just the same. Pings go only over
+an open (or pooled) connection and never dial a device. Nothing is stored and
+the minimum peer capability is unchanged.
+
 ## 0.2.41: device plugins and folder deletions
 
 Bundled Device Dashboard and Remote Input plugins use additive plugin host API

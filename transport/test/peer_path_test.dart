@@ -44,8 +44,45 @@ void main() {
     expect(network.relayUrls.length, PeerNetwork.n0Relays.length + 1);
   });
 
+  test('devices on one network record a direct path to each other', () async {
+    final a = Node(await LocalIdentity.create(), Store());
+    final b = Node(await LocalIdentity.create(), Store());
+    final na = PeerNetwork(a), nb = PeerNetwork(b);
+    addTearDown(() async {
+      await na.stop();
+      await nb.stop();
+      await a.close();
+      await b.close();
+    });
+    await na.start(local: true, automatic: false);
+    await nb.start(local: true, automatic: false);
+    await na.addCard(nb.contactCard());
+    await nb.addCard(na.contactCard());
+    await na.sync(b.identity.device);
+    expect(na.syncErrors, isEmpty, reason: na.events.join('\n'));
+    // Path events arrive asynchronously, the last as connections close.
+    for (
+      var i = 0;
+      i < 50 &&
+          (na.paths[b.identity.device] == null ||
+              nb.paths[a.identity.device] == null);
+      i++
+    ) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    expect(na.paths[b.identity.device]?.isDirect, isTrue);
+    expect(nb.paths[a.identity.device]?.isDirect, isTrue);
+    expect(na.events.any((e) => e.contains('Path to')), isTrue);
+    await na.stop();
+    for (var i = 0; i < 50 && nb.connectedTo(a.identity.device); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    expect(na.connectedTo(b.identity.device), isFalse);
+    expect(nb.connectedTo(a.identity.device), isFalse);
+  }, timeout: const Timeout(Duration(seconds: 60)));
+
   test(
-    'devices on one network record a direct path to each other',
+    'watched devices report a round trip while connected, never dialled',
     () async {
       final a = Node(await LocalIdentity.create(), Store());
       final b = Node(await LocalIdentity.create(), Store());
@@ -60,25 +97,39 @@ void main() {
       await nb.start(local: true, automatic: false);
       await na.addCard(nb.contactCard());
       await nb.addCard(na.contactCard());
-      await na.sync(b.identity.device);
+      final device = b.identity.device;
+      // Never connected: nothing is dialled to measure it.
+      final before = na.dialed;
+      expect(await na.ping(device), isNull);
+      expect(na.dialed, before);
+
+      await na.sync(device);
       expect(na.syncErrors, isEmpty, reason: na.events.join('\n'));
-      // Path events arrive asynchronously, the last as connections close.
-      for (var i = 0;
-          i < 50 &&
-              (na.paths[b.identity.device] == null ||
-                  nb.paths[a.identity.device] == null);
-          i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(na.peerCaps[device], contains('ping'));
+      final stop = na.watchRtt(device);
+      Future<void> waitFor(bool Function() done) async {
+        for (var i = 0; i < 100 && !done(); i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
       }
-      expect(na.paths[b.identity.device]?.isDirect, isTrue);
-      expect(nb.paths[a.identity.device]?.isDirect, isTrue);
-      expect(na.events.any((e) => e.contains('Path to')), isTrue);
-      await na.stop();
-      for (var i = 0; i < 50 && nb.connectedTo(a.identity.device); i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-      }
-      expect(na.connectedTo(b.identity.device), isFalse);
-      expect(nb.connectedTo(a.identity.device), isFalse);
+
+      await waitFor(() => na.rttTo(device) != null);
+      final rtt = na.rttTo(device);
+      expect(rtt, isNotNull, reason: na.events.join('\n'));
+      expect(rtt!, lessThan(const Duration(seconds: 1)));
+      // Pings keep the one pooled connection open past its idle time.
+      final dialed = na.dialed;
+      await Future<void>.delayed(PeerNetwork.pooledIdle * 2);
+      expect(na.connectedTo(device), isTrue);
+      expect(na.rttTo(device), isNotNull);
+      expect(na.dialed, dialed);
+
+      stop();
+      await waitFor(() => !na.connectedTo(device));
+      expect(na.connectedTo(device), isFalse);
+      expect(na.rttTo(device), isNull);
+      expect(await na.ping(device), isNull);
+      expect(na.dialed, dialed);
     },
     timeout: const Timeout(Duration(seconds: 60)),
   );

@@ -198,6 +198,17 @@ void main() {
     expect(overallHealth(network, now: now).level, HealthLevel.offline);
   });
 
+  test('round trips show only while connected and fresh', () {
+    expect(rttText(const Duration(microseconds: 400)), '<1 ms');
+    expect(rttText(const Duration(microseconds: 23400)), '23 ms');
+    expect(rttText(const Duration(milliseconds: 1250)), '1250 ms');
+    network.rtt[laptop] = (rtt: const Duration(milliseconds: 23), at: now);
+    // A measurement outlives its connection only in [rtt] itself.
+    expect(network.connectedTo(laptop), isFalse);
+    expect(network.rttTo(laptop, now: now), isNull);
+    expect(connectionNote(network, laptop, now), isNull);
+  });
+
   test('friendly errors keep unknown messages short', () {
     expect(friendlySyncError('Bad state: Something odd'), 'Something odd');
     expect(friendlySyncError('x' * 300).length, 118);

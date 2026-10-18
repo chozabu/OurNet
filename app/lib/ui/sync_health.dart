@@ -119,10 +119,18 @@ Health deviceHealth(PeerNetwork network, String device, {DateTime? now}) {
 String? connectionNote(PeerNetwork network, String device, DateTime now) {
   final path = network.paths[device];
   if (network.connectedTo(device)) {
-    return path == null ? 'Connected now' : 'Connected ${path.describe()}';
+    final how = path == null ? 'Connected now' : 'Connected ${path.describe()}';
+    final rtt = network.rttTo(device, now: now);
+    return rtt == null ? how : '$how · ${rttText(rtt)}';
   }
   if (path == null) return null;
   return 'Last connected ${path.describe()}, ${_ago(path.at, now)}';
+}
+
+/// A round trip in whole milliseconds, as a ping tool shows it.
+String rttText(Duration rtt) {
+  final ms = rtt.inMicroseconds / 1000;
+  return ms < 1 ? '<1 ms' : '${ms.round()} ms';
 }
 
 /// Contact devices connected now, by how: `2 on the local network, 1 through
@@ -408,7 +416,9 @@ class SyncHealthLine extends StatelessWidget {
 }
 
 /// Status and details for one device, for use as a list tile subtitle.
-class DeviceHealthText extends StatelessWidget {
+/// While shown, the round trip to the device is measured when it is
+/// connected ([PeerNetwork.watchRtt]).
+class DeviceHealthText extends StatefulWidget {
   final PeerNetwork network;
   final String device;
 
@@ -422,10 +432,40 @@ class DeviceHealthText extends StatelessWidget {
   });
 
   @override
+  State<DeviceHealthText> createState() => _DeviceHealthTextState();
+}
+
+class _DeviceHealthTextState extends State<DeviceHealthText> {
+  void Function()? _unwatch;
+
+  void _watch() => _unwatch = widget.network.watchRtt(widget.device);
+
+  @override
+  void initState() {
+    super.initState();
+    _watch();
+  }
+
+  @override
+  void didUpdateWidget(DeviceHealthText old) {
+    super.didUpdateWidget(old);
+    if (old.network != widget.network || old.device != widget.device) {
+      _unwatch?.call();
+      _watch();
+    }
+  }
+
+  @override
+  void dispose() {
+    _unwatch?.call();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) => NetworkHealthBuilder(
-    network: network,
+    network: widget.network,
     builder: (context) {
-      final health = deviceHealth(network, device);
+      final health = deviceHealth(widget.network, widget.device);
       final colour = healthColor(context, health.level);
       final style = Theme.of(context).textTheme.bodySmall;
       return Column(
@@ -437,7 +477,7 @@ class DeviceHealthText extends StatelessWidget {
               const SizedBox(width: 4),
               Flexible(
                 child: Text(
-                  [?prefix, health.headline].join(' · '),
+                  [?widget.prefix, health.headline].join(' · '),
                   style: style?.copyWith(
                     color: health.level == HealthLevel.ok ? null : colour,
                   ),
@@ -550,6 +590,7 @@ Map<String, Object?> syncDiagnostics(PeerNetwork network) => {
         'version': network.peerVersions[device],
         'connected': network.connectedTo(device),
         'path': network.paths[device]?.toJson(),
+        'rttMs': ?network.rttTo(device)?.inMilliseconds,
       },
   ],
 };
