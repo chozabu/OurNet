@@ -33,3 +33,6 @@ app/linux/flatpak/shared-modules/
 .flatpak-builder/
 flatpak-repo/
 *.flatpak
+
+# Scratch output from Linux build/patch work (format-patch exports)
+.tmp-linux/
