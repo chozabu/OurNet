@@ -157,11 +157,8 @@ class PeerNetwork implements PluginLink {
   /// that answers fastest and moves to another when it fails. Peers reach
   /// a device through the relay its address names, so devices with
   /// different lists still connect.
-  List<String> get relayUrls => {
-    ...extraRelays,
-    ...ourRelays,
-    ...n0Relays,
-  }.toList();
+  List<String> get relayUrls =>
+      {...extraRelays, ...ourRelays, ...n0Relays}.toList();
 
   /// [relayUrls] that parse: one bad entry in settings must not stop the
   /// network.
@@ -185,6 +182,94 @@ class PeerNetwork implements PluginLink {
 
   /// Whether a connection to [device] is open now; [paths] says how.
   bool connectedTo(String device) => _openTo.containsKey(device);
+
+  /// The last round trip measured to each device by [watchRtt], and when.
+  final Map<String, ({Duration rtt, DateTime at})> rtt = {};
+
+  /// [device]'s round trip if one was measured in the last [rttFresh] and a
+  /// connection is open, else null.
+  Duration? rttTo(String device, {DateTime? now}) {
+    final sample = rtt[device];
+    if (sample == null || !connectedTo(device)) return null;
+    return (now ?? DateTime.now()).difference(sample.at) > rttFresh
+        ? null
+        : sample.rtt;
+  }
+
+  /// How often watched devices are pinged: inside [pooledIdle], so the one
+  /// pooled connection carries every ping rather than a dial each time.
+  static const rttInterval = Duration(seconds: 2);
+  static const rttFresh = Duration(seconds: 10);
+
+  final Map<String, int> _rttWatchers = {};
+  final Set<String> _pinging = {};
+  Timer? _rttTimer;
+
+  /// Measures the round trip to [device] every [rttInterval] while it is
+  /// connected, until the returned function is called: for a row on screen.
+  /// A device that is not connected is never dialled for it.
+  void Function() watchRtt(String device) {
+    _rttWatchers.update(device, (n) => n + 1, ifAbsent: () => 1);
+    _rttTimer ??= Timer.periodic(rttInterval, (_) => unawaited(_pingWatched()));
+    unawaited(ping(device));
+    var done = false;
+    return () {
+      if (done) return;
+      done = true;
+      final left = (_rttWatchers[device] ?? 1) - 1;
+      if (left > 0) {
+        _rttWatchers[device] = left;
+      } else {
+        _rttWatchers.remove(device);
+      }
+      if (_rttWatchers.isEmpty) {
+        _rttTimer?.cancel();
+        _rttTimer = null;
+      }
+    };
+  }
+
+  /// Pings every watched device, then tells listeners once for them all.
+  Future<void> _pingWatched() async {
+    final measured = await Future.wait([
+      for (final device in _rttWatchers.keys.toList())
+        ping(device, notify: false),
+    ]);
+    if (measured.any((d) => d != null)) notifyListeners();
+  }
+
+  /// One round trip to [device] over its pooled connection, recorded in
+  /// [rtt]; null when it is not connected, already being pinged, or fails.
+  /// Only the stream's round trip is timed, never a dial. A build without
+  /// `ping` that has said so is not asked; one that has not said yet refuses
+  /// it, and the refusal's round trip counts the same.
+  Future<Duration?> ping(String device, {bool notify = true}) async {
+    if (!running || !node.allowedPeer(device)) return null;
+    // Kept connected by the pings themselves once one has gone through.
+    if (!connectedTo(device) && !_pool.containsKey(device)) return null;
+    if (peerCaps[device] case final caps? when !caps.contains('ping')) {
+      return null;
+    }
+    if (!_pinging.add(device)) return null;
+    _Pooled? pooled;
+    try {
+      pooled = await _pooledFor(device);
+      if (pooled == null) return null;
+      pooled.uses++;
+      final timer = Stopwatch()..start();
+      await _exchange(pooled.connection, {'type': 'ping'}, device);
+      final took = timer.elapsed;
+      rtt[device] = (rtt: took, at: DateTime.now());
+      if (notify) notifyListeners();
+      return took;
+    } catch (_) {
+      if (pooled != null) _drop(device, pooled);
+      return null;
+    } finally {
+      if (pooled != null) _release(device, pooled);
+      _pinging.remove(device);
+    }
+  }
 
   final Map<String, DateTime> _heardAt = {};
 
@@ -286,6 +371,7 @@ class PeerNetwork implements PluginLink {
   /// `concurrent_streams`: answers up to [streamsPerConnection] requests on
   /// one connection at once.
   /// `blob_batch`: answers `blobs`, several file chunks as raw bytes.
+  /// `ping`: answers `ping` at once, for measuring the round trip.
   static const caps = [
     'cursor_paging',
     'blob_inline',
@@ -294,6 +380,7 @@ class PeerNetwork implements PluginLink {
     'delta_items',
     'concurrent_streams',
     'blob_batch',
+    'ping',
   ];
 
   /// [caps], and what modules add (plugins that take live messages). A peer
@@ -380,6 +467,7 @@ class PeerNetwork implements PluginLink {
     'friend',
     'pair',
     'datagrams',
+    'ping',
   };
 
   /// Connections carrying live datagrams, by device: one this device dialled
@@ -1633,6 +1721,8 @@ class PeerNetwork implements PluginLink {
               for (final b in blobs)
                 if (b != null) Uint8List.fromList(b),
             ];
+          case 'ping':
+            reply = {};
           case 'datagrams':
             // Held open while the caller sends datagrams on this connection;
             // the reply goes when it ends.
