@@ -113,6 +113,13 @@ class DevicePositionSource implements PositionSource {
 /// across town does not keep dialling a friend whose phone is off, and a
 /// friend out of signal still hears within minutes of coming back. A device
 /// that syncs with this one is sent the current place at once.
+///
+/// Each friend is sent the position at their [LocationLevel], chosen in this
+/// person's synced state: precise, approximate (an [ApproxGrid] cell centre,
+/// sent only when the cell changes or as a heartbeat) or not at all. Lowering
+/// a friend from precise sends their devices the approximate place at once,
+/// so they are not left holding a precise one; a position cannot be
+/// retracted.
 class LocationShare extends ChangeNotifier {
   final PeerNetwork network;
   final PositionSource source;
@@ -219,7 +226,9 @@ class LocationShare extends ChangeNotifier {
       var id = state.locationPrimary;
       if (id != null && !_mine(id)) id = null;
       if (id == null && await _claim(state)) id = node.identity.device;
+      await _startLevels(state);
       _setPrimary(id);
+      _levelsChanged();
     } catch (_) {
       // The state could not be read: behave as before it existed.
       _setPrimary(_primary);
@@ -239,6 +248,100 @@ class LocationShare extends ChangeNotifier {
     node.store.set('locationAutoPrimary', true);
     await state.setLocationPrimary(node.identity.device);
     return true;
+  }
+
+  /// Sets up per-friend levels once, after hearing from this person's other
+  /// devices (as for [_claim]), so the friends they had keep precise sharing.
+  Future<void> _startLevels(NoteState state) async {
+    if (state.locationLevelsStarted) return;
+    final others = otherDevices;
+    if (others.isNotEmpty &&
+        !others.any((c) => network.lastSync[c.device] != null)) {
+      return;
+    }
+    await state.startLocationLevels(friends, _now());
+  }
+
+  int _now() => DateTime.now().millisecondsSinceEpoch;
+
+  /// Everyone else whose devices this one knows and who is not blocked: the
+  /// people positions may go to.
+  List<String> get friends => {
+    for (final c in node.contacts.values)
+      if (c.person != node.person && !node.blocked.contains(c.person)) c.person,
+  }.toList();
+
+  /// The level [person] is sent now; precise when there is no synced state.
+  LocationLevel levelOf(String person) =>
+      state?.locationLevel(person, _now()) ?? LocationLevel.precise;
+
+  /// [person]'s choice, for showing a temporary one's time left.
+  LocationChoice? choiceOf(String person) => state?.locationChoice(person);
+
+  /// Sets how much of this person's position [person] is sent; with [lasting],
+  /// only for that long, then back to the level in force now.
+  Future<void> setLevel(
+    String person,
+    LocationLevel level, {
+    Duration? lasting,
+  }) async {
+    final state = this.state;
+    if (state == null) return;
+    final now = _now();
+    await state.setLocationLevel(
+      person,
+      level,
+      until: lasting == null ? null : now + lasting.inMilliseconds,
+      now: now,
+    );
+    _levelsChanged();
+    notifyListeners();
+  }
+
+  /// The level each friend was last sent at, to act on changes.
+  final _levels = <String, LocationLevel>{};
+  Timer? _expiry;
+
+  /// Acts on levels that changed (here, on another device, or because a
+  /// temporary one ran out): a friend who may now see more is sent the place
+  /// at once, and one lowered from precise is sent the approximate place, so
+  /// they are not left with a precise one. Off then sends nothing more.
+  void _levelsChanged() {
+    final state = this.state;
+    if (state == null || _disposed) return;
+    final now = _now();
+    _expiry?.cancel();
+    int? next;
+    final fix = own ?? locations.ofDevice(node.identity.device);
+    final changed = <String, LocationLevel>{};
+    var moved = false;
+    for (final person in friends) {
+      final level = state.locationLevel(person, now);
+      final before = _levels[person];
+      _levels[person] = level;
+      if (state.locationChoice(person) case final c? when c.temporaryAt(now)) {
+        if (next == null || c.until! < next) next = c.until;
+      }
+      if (before == null || before == level) continue;
+      moved = true;
+      // Off after approximate: what they have is already approximate.
+      if (level == LocationLevel.off && before != LocationLevel.precise) {
+        continue;
+      }
+      changed[person] = level;
+    }
+    if (fix != null && sendsToFriends && changed.isNotEmpty) {
+      for (final c in node.contacts.values.toList()) {
+        final level = changed[c.person];
+        if (level == null) continue;
+        _cellTo.remove(c.device);
+        _send(c.device, fix, force: true, retract: level == LocationLevel.off);
+      }
+    }
+    if (next != null) {
+      _expiry = Timer(Duration(milliseconds: next - now + 50), _levelsChanged);
+    }
+    if (moved) notifyListeners();
   }
 
   void _setPrimary(String? id) {
@@ -298,6 +401,9 @@ class LocationShare extends ChangeNotifier {
 
   /// When the place each device last received was taken.
   final _delivered = <String, int>{};
+
+  /// The approximate cell each friend's device was last sent.
+  final _cellTo = <String, GridCell>{};
   bool _disposed = false;
 
   /// Opens the system page where location permission is granted.
@@ -372,7 +478,7 @@ class LocationShare extends ChangeNotifier {
     final far = sent == null || fix.distanceTo(sent.lat, sent.lng) >= minMove;
     if (wanted && (far || heartbeat)) {
       _sent = fix;
-      _broadcast(fix);
+      _broadcast(fix, heartbeat: heartbeat);
     }
     // Kept as this device's last known place too, so the next start and this
     // person's other devices' maps have it. Pausing stops only the sending.
@@ -394,11 +500,46 @@ class LocationShare extends ChangeNotifier {
     device: label,
   );
 
-  void _broadcast(Fix fix, {bool force = false}) {
+  void _broadcast(Fix fix, {bool force = false, bool heartbeat = false}) {
     if (!network.running) return;
     for (final device in node.contacts.keys.toList()) {
-      _send(device, fix, force: force);
+      _send(device, fix, force: force, heartbeat: heartbeat);
     }
+  }
+
+  /// What [device] is sent of [fix]: the fix itself for this person's own
+  /// devices and precise friends, an [ApproxGrid] cell centre for approximate
+  /// ones, and nothing for friends who are off; [retract] sends those the
+  /// approximate place once, when lowered from precise. An approximate friend
+  /// is sent nothing while the cell stays the same, unless [always].
+  Fix? _outgoing(
+    String device,
+    Fix fix, {
+    bool retract = false,
+    bool always = false,
+  }) {
+    final contact = node.contacts[device];
+    if (contact == null) return null;
+    if (contact.person == node.person) return fix;
+    final level = levelOf(contact.person);
+    if (level == LocationLevel.precise) return fix;
+    if (level == LocationLevel.off && !retract) return null;
+    final held = _cellTo[device];
+    final cell = ApproxGrid.place(fix, previous: held);
+    if (!always && held == cell) return null;
+    _cellTo[device] = cell;
+    final snapped = ApproxGrid.snap(fix, cell);
+    // Newer than what reached the device, or a precise copy of the same fix
+    // would be kept over it.
+    final delivered = _delivered[device] ?? 0;
+    return snapped.at > delivered
+        ? snapped
+        : Fix(
+            lat: snapped.lat,
+            lng: snapped.lng,
+            at: delivered + 1,
+            accuracy: snapped.accuracy,
+          );
   }
 
   /// Whether this device may tell [device] where it is: this person's own
@@ -409,7 +550,13 @@ class LocationShare extends ChangeNotifier {
     return contact.person == node.person ? sendsToOwnDevices : sendsToFriends;
   }
 
-  void _send(String device, Fix fix, {bool force = false}) {
+  void _send(
+    String device,
+    Fix fix, {
+    bool force = false,
+    bool heartbeat = false,
+    bool retract = false,
+  }) {
     if (device == node.identity.device ||
         _refused.contains(device) ||
         !node.allowedPeer(device) ||
@@ -432,22 +579,31 @@ class LocationShare extends ChangeNotifier {
       });
       return;
     }
+    final out = _outgoing(
+      device,
+      fix,
+      retract: retract,
+      always: force || heartbeat,
+    );
+    if (out == null) return;
     _later.remove(device)?.cancel();
     _retry.remove(device)?.cancel();
     _lastTo[device] = now;
     _inFlight.add(device);
     unawaited(
       network
-          .request(device, {'type': 'position', 'fix': fix.toJson()})
+          .request(device, {'type': 'position', 'fix': out.toJson()})
           .then<void>(
             (_) {
               _inFlight.remove(device);
               _backoff.remove(device);
-              _delivered[device] = fix.at;
+              _delivered[device] = out.at;
               _sendNewer(device);
             },
             onError: (Object e) {
               _inFlight.remove(device);
+              // Not delivered: the cell goes again when it is retried.
+              _cellTo.remove(device);
               if ('$e'.contains('Unknown request')) {
                 _refused.add(device);
                 return;
@@ -521,6 +677,7 @@ class LocationShare extends ChangeNotifier {
     _disposed = true;
     _updates?.cancel();
     _primaryCheck?.cancel();
+    _expiry?.cancel();
     _stream?.cancel();
     _heartbeat?.cancel();
     for (final timer in [..._later.values, ..._retry.values]) {

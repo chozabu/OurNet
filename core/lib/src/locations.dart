@@ -102,6 +102,137 @@ class Fix {
   }
 }
 
+/// How much of this person's position one friend is sent. Chosen per friend
+/// and kept in this person's synced personal state (`NoteState`), never
+/// published and never sent to the friend: the sender enforces it.
+enum LocationLevel {
+  /// The position as the device reads it.
+  precise,
+
+  /// Snapped to the centre of an [ApproxGrid] cell, a few kilometres across.
+  approximate,
+
+  /// Nothing is sent, as when sharing is paused.
+  off,
+}
+
+/// A friend's level as chosen. A temporary choice ("precise for an hour")
+/// holds [level] until [until] and is [then] afterwards, the level it
+/// replaced.
+class LocationChoice {
+  final LocationLevel level;
+  final int? until;
+  final LocationLevel then;
+  const LocationChoice(this.level, {this.until, LocationLevel? then})
+    : then = then ?? level;
+
+  /// The level in force at [now] (milliseconds since the epoch).
+  LocationLevel at(int now) => until != null && now >= until! ? then : level;
+
+  /// Whether this is a temporary choice that has not run out at [now].
+  bool temporaryAt(int now) => until != null && now < until!;
+
+  static LocationLevel? _level(Object? v) => switch (v) {
+    'precise' => LocationLevel.precise,
+    'approximate' => LocationLevel.approximate,
+    'off' => LocationLevel.off,
+    _ => null,
+  };
+
+  /// Reads the stored form, `{level, until?, then?}`; null when malformed.
+  static LocationChoice? parse(Object? v) {
+    if (v is! Map) return null;
+    final level = _level(v['level']);
+    final until = v['until'];
+    final then = v['then'] == null ? level : _level(v['then']);
+    if (level == null || then == null) return null;
+    if (until != null && (until is! int || until < 0)) return null;
+    return LocationChoice(level, until: until as int?, then: then);
+  }
+
+  Map<String, Object> toJson() => {
+    'level': level.name,
+    if (until != null) 'until': until!,
+    if (until != null) 'then': then.name,
+  };
+}
+
+/// A cell of [ApproxGrid]: a row of latitude and a column within it.
+typedef GridCell = ({int row, int col});
+
+/// The fixed grid approximate positions are snapped to. Rows are
+/// [latStep] degrees of latitude (about 5.6 km); each row is cut into a whole
+/// number of columns about as wide as the row is tall, so cells are near
+/// square everywhere. A position becomes its cell's centre: it is the same
+/// for every fix inside the cell, so averaging many reveals nothing more.
+class ApproxGrid {
+  static const latStep = 0.05;
+  static const rows = 3600;
+  static const _metresPerDegree = 111195.0;
+
+  /// How far past its edge a position must go before it leaves the cell it
+  /// was last shown in, so walking along a boundary does not flip between
+  /// two cells and show where the boundary is.
+  static const margin = 500.0;
+
+  static double _rad(double d) => d * math.pi / 180;
+
+  static double centreLat(int row) => -90 + (row + 0.5) * latStep;
+
+  static int columns(int row) => math.max(
+    1,
+    (360 * math.cos(_rad(centreLat(row))) / latStep).floor(),
+  );
+
+  static double lngStep(int row) => 360 / columns(row);
+
+  static double centreLng(GridCell cell) =>
+      -180 + (cell.col + 0.5) * lngStep(cell.row);
+
+  static GridCell cellOf(double lat, double lng) {
+    final row = ((lat + 90) / latStep).floor().clamp(0, rows - 1);
+    final cols = columns(row);
+    final col = ((lng + 180) / lngStep(row)).floor() % cols;
+    return (row: row, col: col);
+  }
+
+  /// Whether ([lat], [lng]) lies inside [cell] or within [margin] of it.
+  static bool near(GridCell cell, double lat, double lng) {
+    final lo = -90 + cell.row * latStep, hi = lo + latStep;
+    final mLat = margin / _metresPerDegree;
+    if (lat < lo - mLat || lat > hi + mLat) return false;
+    final cos = math.max(0.01, math.cos(_rad(lat)));
+    final mLng = margin / (_metresPerDegree * cos);
+    var d = (lng - centreLng(cell)) % 360;
+    if (d > 180) d -= 360;
+    return d.abs() <= lngStep(cell.row) / 2 + mLng;
+  }
+
+  /// The cell [fix] is shown in: [previous] while the fix is still near it,
+  /// otherwise the one it is in.
+  static GridCell place(Fix fix, {GridCell? previous}) =>
+      previous != null && near(previous, fix.lat, fix.lng)
+      ? previous
+      : cellOf(fix.lat, fix.lng);
+
+  /// [fix] as an approximate position: [cell]'s centre, with an accuracy
+  /// that covers the cell, and no heading or speed.
+  static Fix snap(Fix fix, GridCell cell) {
+    final lat = centreLat(cell.row);
+    final halfHeight = latStep / 2 * _metresPerDegree;
+    final halfWidth =
+        lngStep(cell.row) / 2 * _metresPerDegree * math.cos(_rad(lat));
+    final cover = math.sqrt(halfHeight * halfHeight + halfWidth * halfWidth);
+    return Fix(
+      lat: lat,
+      lng: centreLng(cell),
+      at: fix.at,
+      accuracy: math.max(cover, fix.accuracy ?? 0).ceilToDouble(),
+      device: fix.device,
+    );
+  }
+}
+
 /// The last known place of each person, kept as one row per person and
 /// replaced in place. A position is not a record: nothing here grows with
 /// time, nothing is signed or forwarded, and a person's row is never expired,

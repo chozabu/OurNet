@@ -1,4 +1,5 @@
 import 'everyday.dart';
+import 'locations.dart';
 import 'model.dart';
 import 'node.dart';
 import 'notes.dart' show orderBetween;
@@ -192,6 +193,64 @@ class NoteState {
 
   Future<void> setLocationPrimary(String? device) =>
       set('locationPrimary', 'self', device ?? '');
+
+  /// How much of this person's position [person] is sent, as chosen. Null
+  /// when nothing was chosen for them: see [locationLevel] for the default.
+  LocationChoice? locationChoice(String person) =>
+      LocationChoice.parse(value('locationLevel', person));
+
+  /// Whether per-friend levels have been set up for this person: every
+  /// friend they had then was recorded as precise (sharing as before), so a
+  /// friend with no choice was added since.
+  bool get locationLevelsStarted => value('locationLevelsFrom', 'self') is int;
+
+  /// The level [person] is sent at [now]. Friends with no choice are
+  /// approximate once levels are set up, and precise before then.
+  LocationLevel locationLevel(String person, int now) =>
+      locationChoice(person)?.at(now) ??
+      (locationLevelsStarted
+          ? LocationLevel.approximate
+          : LocationLevel.precise);
+
+  /// Sets [person]'s level. With [until], [level] holds until then and the
+  /// level in force now comes back afterwards.
+  Future<void> setLocationLevel(
+    String person,
+    LocationLevel level, {
+    int? until,
+    required int now,
+  }) async {
+    await refresh();
+    final previous = locationChoice(person);
+    final back = previous != null && previous.temporaryAt(now)
+        ? previous.then
+        : locationLevel(person, now);
+    await _setAll([
+      (
+        'locationLevel',
+        person,
+        LocationChoice(level, until: until, then: back).toJson(),
+      ),
+    ]);
+  }
+
+  /// Sets up per-friend levels: each of [friends] without a choice keeps
+  /// precise sharing, and friends added after this default to approximate.
+  /// Runs once for this person, on whichever device gets there first.
+  Future<void> startLocationLevels(Iterable<String> friends, int now) async {
+    await refresh();
+    if (locationLevelsStarted) return;
+    await _setAll([
+      for (final person in {...friends})
+        if (locationChoice(person) == null)
+          (
+            'locationLevel',
+            person,
+            const LocationChoice(LocationLevel.precise).toJson(),
+          ),
+      ('locationLevelsFrom', 'self', now),
+    ]);
+  }
 
   bool pinned(String note) => value('pin', note) == true;
   bool archived(String note) => value('archive', note) == true;

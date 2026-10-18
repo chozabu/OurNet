@@ -548,6 +548,19 @@ extension _ContactDetails on _OurNetAppState {
     if (network.running) unawaited(network.syncAll());
     notice('Connected with ${name(request.from)}');
     refresh();
+    // Asked once, when they are added; approximate when dismissed.
+    final context = noteNavigator.currentContext;
+    if (context != null && context.mounted && locationShare.state != null) {
+      unawaited(
+        chooseLocationLevel(
+          context,
+          locationShare,
+          request.from,
+          name(request.from),
+          adding: true,
+        ).catchError((Object _) {}),
+      );
+    }
   }
 
   Future<void> showDeviceDetails(

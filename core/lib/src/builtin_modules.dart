@@ -3,6 +3,7 @@
 /// at run time: see [Registry] and docs/PLUGINS.md.
 library;
 
+import 'locations.dart' show LocationChoice;
 import 'model.dart';
 import 'recurrence.dart' show Repeat;
 import 'registry.dart';
@@ -557,6 +558,10 @@ bool _selfValue(String field, Object? v) => switch (field) {
   'purged' => v is String && v.length <= 128,
   // The device that shares this person's position with friends ('' for none).
   'locationPrimary' => v is String && v.length <= 128,
+  // How much of this person's position one friend is sent, and when
+  // per-friend levels were set up.
+  'locationLevel' => LocationChoice.parse(v) != null,
+  'locationLevelsFrom' => v is int && v >= 0,
   'order' || 'rank' => v is String && _orderKey.hasMatch(v),
   'labelName' => v is String && v.trim().isNotEmpty && v.length <= 50,
   'labels' =>

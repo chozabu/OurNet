@@ -166,13 +166,69 @@ void main() {
       ),
     );
     expect(find.text('Bob'), findsOneWidget);
-    expect(find.text('Not sharing with you yet'), findsOneWidget);
+    expect(find.textContaining('Not sharing with you yet'), findsOneWidget);
     expect(me.locations.sharing, isTrue);
     // The first switch is the pause for friends; the last is for own devices.
     await tester.tap(find.byType(Switch).first);
     await tester.pump();
     expect(me.locations.sharing, isFalse);
-    expect(find.textContaining('Paused'), findsOneWidget);
+    expect(find.textContaining('Paused for everyone'), findsOneWidget);
+  });
+
+  testWidgets('a friend row opens their level, and shows the choice', (
+    tester,
+  ) async {
+    late Node me, bob;
+    late LocationShare share;
+    await tester.runAsync(() async {
+      me = Node(await LocalIdentity.create(), Store());
+      bob = Node(await LocalIdentity.create(label: 'Bobs phone'), Store());
+      await me.addContact(bob.identity.certificate);
+      share = LocationShare(
+        Network(me),
+        source: _NoGps(),
+        state: NoteState(me),
+      );
+      await share.refreshPrimary();
+    });
+    addTearDown(() async {
+      await me.close();
+      await bob.close();
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LocationSharingPage(
+          node: me,
+          share: share,
+          nameOf: (p) => p == bob.person ? 'Bob' : 'You',
+        ),
+      ),
+    );
+    // Bob was a friend before levels: precise, as before.
+    expect(find.textContaining('Sees exactly where you are'), findsOneWidget);
+    await tester.tap(find.text('Bob'));
+    await tester.pumpAndSettle();
+    expect(find.text('Precise for 1 hour'), findsNothing);
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Approximate'));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    });
+    await tester.pumpAndSettle();
+    expect(share.levelOf(bob.person), LocationLevel.approximate);
+    expect(find.textContaining('within a few km'), findsOneWidget);
+
+    await tester.tap(find.text('Bob'));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Precise for 1 hour'));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    });
+    await tester.pumpAndSettle();
+    expect(share.levelOf(bob.person), LocationLevel.precise);
+    expect(find.textContaining('more min, then approximate'), findsOneWidget);
+    // Its expiry timer goes with it.
+    await tester.pumpWidget(const SizedBox());
+    share.dispose();
   });
 
   testWidgets('the first visit explains sharing and asks once', (tester) async {

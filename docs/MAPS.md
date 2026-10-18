@@ -38,13 +38,43 @@ is deliberately not there yet.
   keeps it until deleted; a city is a few megabytes. Interrupted downloads
   resume. *Use the internet for maps* off means nothing is fetched.
 - **Location sharing** (menu, or the people icon in the search bar): see who
-  can see you, pause, and grant permission.
+  can see you and how much, choose each friend's level, pause, and grant
+  permission.
 
 ## Location sharing: the rules
 
-- On by default for every friend you have added, and your other devices. One
-  switch pauses it. No per-friend settings yet; removing or blocking a friend
-  stops it for them.
+- **Per-friend levels.** Each friend is *Precise* (where you are, as you
+  move), *Approximate* (your area, to within a few kilometres) or *Off*
+  (nothing, exactly as when paused), and can be made *Precise for 1 hour*,
+  after which they go back to the level they had. Tap a friend in *Location
+  sharing* to choose. Accepting a friend request asks once, with Approximate
+  chosen; dismissing it leaves Approximate. Friends you had before levels
+  existed stay Precise, so upgrading changes nothing; friends added since
+  (including through a request they accepted, or on an older build) are
+  Approximate until you choose. A request you sent is not asked about when it
+  is accepted: there is no point in the app where that is seen happening.
+- **Where levels live.** In your personal state (`note_self` registers, see
+  [PROTOCOL.md](PROTOCOL.md#locations)), synced between your own devices and
+  readable by nobody else. A friend is never told their level, and nothing on
+  the wire marks a position as approximate beyond its large accuracy circle.
+- **The sender enforces it.** Your primary device applies each friend's level
+  as it sends; your own devices always get the precise position. Approximate
+  is the centre of a fixed grid cell (rows of 0.05° latitude, about 5.6 km,
+  cut into near-square columns), with an accuracy that covers the cell and no
+  heading or speed. Every fix inside a cell gives the same point, so averaging
+  many reveals nothing; a friend is sent a new one only when you change cell
+  (after going 500 m past its edge, so walking along a boundary does not flip
+  between two cells) or as the quarter-hourly heartbeat.
+- **Lowering a level.** Making a Precise friend Approximate sends their
+  devices the approximate place at once, replacing the precise one they held.
+  Making a Precise friend Off does the same, once, and then sends nothing; this
+  is the one way Off differs from a pause, which leaves the last precise place
+  where it was. A position cannot be recalled: a device that was offline keeps
+  the precise place it had until it next hears from you, and anything a friend
+  saw or copied before is theirs.
+- The global *Share my location with friends* switch pauses everyone and keeps
+  each friend's level for when you share again. Removing or blocking a friend
+  stops it for them too.
 - **Live, not logged.** A position is sent over the encrypted connection to a
   device that is online. Each device keeps one row per person and replaces it.
   There is no trail, no history, and nothing is stored on anyone else's
@@ -77,11 +107,10 @@ is deliberately not there yet.
 
 ### What this does not do yet
 
-- **Safety.** Always-on sharing with everyone you add is a sharp tool. Pausing
-  tells friends nothing (they simply stop seeing updates), which is deliberate,
-  because being asked "why did you stop sharing?" is how it gets used to
-  control people. Per-friend levels, "share for an hour", and fuzzed (city
-  level) sharing are the obvious next controls.
+- **Safety.** Pausing or turning a friend Off tells them nothing (they simply
+  stop seeing updates), which is deliberate, because being asked "why did you
+  stop sharing?" is how it gets used to control people. Not built yet: levels
+  for a whole group at once, and a reminder of who can see you precisely.
 - **Accountability link.** Using the shared position to back trust (for
   example, only people you share with can vouch for others) is a design
   question, not code.
@@ -152,8 +181,8 @@ In order of how much each depends on the one before it.
    possible from open data. Traffic has no open source of equivalent quality.
 4. **Calendar/place links.** Saved places and group lists now exist. Events
    can already hold a place name; connecting them to saved pins is next.
-5. **Per-friend sharing controls**, then group maps (a group's members, trip
-   plans, meeting points).
+5. **Group maps** (a group's members, trip plans, meeting points), building
+   on the per-friend levels.
 6. **Pack sharing between friends** over the file transfer, so one person
    downloads a region for everyone.
 7. **Google Maps fidelity.** The first pass matches the layout (floating
@@ -164,8 +193,9 @@ In order of how much each depends on the one before it.
 ## Working on it
 
 - `core/lib/src/locations.dart` (positions), `core/lib/src/map_tiles.dart`
-  (tile store, regions); tests in `core/test/locations_test.dart` and
-  `map_tiles_test.dart`.
+  (tile store, regions); tests in `core/test/locations_test.dart`,
+  `location_levels_test.dart` (levels, the hour's expiry, the grid) and
+  `map_tiles_test.dart`. Levels are stored by `NoteState.locationLevel`.
 - `transport/lib/src/network.dart`: the `position` request and `peerSeen`.
 - `app/lib/services/location_share.dart` (reading, sending, receiving),
   `map_tiles.dart` (tile source, styles, downloads), `app/lib/ui/map_page.dart`

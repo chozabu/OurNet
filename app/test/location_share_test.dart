@@ -35,7 +35,7 @@ void main() {
   late FakeSource source;
   late LocationShare sa, sb;
 
-  Future<void> pair() async {
+  Future<void> pair({bool withState = false}) async {
     a = Node(await LocalIdentity.create(label: 'Pixel'), Store());
     b = Node(await LocalIdentity.create(label: 'Desk'), Store());
     na = Network(a);
@@ -45,6 +45,7 @@ void main() {
       na,
       source: source,
       minGap: const Duration(milliseconds: 300),
+      state: withState ? NoteState(a) : null,
     );
     sb = LocationShare(nb, source: FakeSource(LocationAccess.unsupported));
     addTearDown(() async {
@@ -368,4 +369,70 @@ void main() {
     expect(denied.active, isFalse);
     expect(denied.access, LocationAccess.deniedForever);
   });
+
+  test(
+    'each friend is sent the place at their level',
+    () async {
+      await pair(withState: true);
+      await na.sync(b.identity.device);
+      await sa.refreshPrimary();
+      // A friend from before levels existed keeps precise sharing.
+      expect(sa.levelOf(b.person), LocationLevel.precise);
+      await sa.start();
+      source.controller.add(at(51.5012, -0.1234));
+      await until(() => b.locations.of(a.person) != null);
+      expect(b.locations.of(a.person)!.lat, 51.5012);
+
+      // Lowered to approximate: the precise place is replaced at once.
+      await sa.setLevel(b.person, LocationLevel.approximate);
+      final cell = ApproxGrid.cellOf(51.5012, -0.1234);
+      final centre = ApproxGrid.centreLat(cell.row);
+      await until(() => (b.locations.of(a.person)!.lat - centre).abs() < 1e-6);
+      final coarse = b.locations.of(a.person)!;
+      expect(coarse.lat, closeTo(centre, 1e-6));
+      expect(coarse.accuracy, greaterThan(3000));
+
+      // Moving inside the cell tells them nothing new.
+      source.controller.add(at(51.5101, -0.1301, now() + 1000));
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      expect(b.locations.of(a.person)!.at, coarse.at);
+      expect(a.locations.of(a.person)!.lat, 51.5101);
+
+      // Off: nothing more is sent.
+      await sa.setLevel(b.person, LocationLevel.off);
+      source.controller.add(at(48.85, 2.35, now() + 2000));
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      expect(b.locations.of(a.person)!.lat, closeTo(centre, 1e-6));
+
+      // Precise for an hour sends the exact place again.
+      await sa.setLevel(
+        b.person,
+        LocationLevel.precise,
+        lasting: const Duration(hours: 1),
+      );
+      await until(() => b.locations.of(a.person)!.lat == 48.85);
+      expect(b.locations.of(a.person)!.lng, 2.35);
+      expect(sa.choiceOf(b.person)!.then, LocationLevel.off);
+    },
+    timeout: const Timeout(Duration(seconds: 60)),
+  );
+
+  test(
+    'a friend lowered from precise to off keeps only an approximate place',
+    () async {
+      await pair(withState: true);
+      await na.sync(b.identity.device);
+      await sa.refreshPrimary();
+      await sa.start();
+      source.controller.add(at(40.4168, -3.7038));
+      await until(() => b.locations.of(a.person) != null);
+      await sa.setLevel(b.person, LocationLevel.off);
+      final centre = ApproxGrid.centreLat(
+        ApproxGrid.cellOf(40.4168, -3.7038).row,
+      );
+      await until(() => (b.locations.of(a.person)!.lat - centre).abs() < 1e-6);
+      expect(b.locations.of(a.person)!.lat, closeTo(centre, 1e-6));
+    },
+    timeout: const Timeout(Duration(seconds: 60)),
+  );
 }

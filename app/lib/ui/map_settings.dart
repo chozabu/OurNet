@@ -363,27 +363,49 @@ class _LocationSharingPageState extends State<LocationSharingPage> {
               subtitle: Text('Friends you connect with are added here.'),
             ),
           for (final person in friends)
-            ListTile(
-              leading: _Avatar(
-                name: widget.nameOf(person),
-                color: personColor(person, dark: Theme.of(context).brightness == Brightness.dark),
-                size: 36,
-              ),
-              title: Text(widget.nameOf(person)),
-              subtitle: Text(
-                node.locations.of(person) == null
-                    ? 'Not sharing with you yet'
-                    : 'Sharing with you · ${ago(node.locations.of(person)!.at)}',
-              ),
-              trailing: Icon(
-                share.sharing ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+            Opacity(
+              opacity: share.sharing ? 1 : .5,
+              child: ListTile(
+                leading: _Avatar(
+                  name: widget.nameOf(person),
+                  color: personColor(person, dark: Theme.of(context).brightness == Brightness.dark),
+                  size: 36,
+                ),
+                title: Text(widget.nameOf(person)),
+                subtitle: Text(
+                  [
+                    locationLevelText(share, person),
+                    node.locations.of(person) == null
+                        ? 'Not sharing with you yet'
+                        : 'Sharing with you · ${ago(node.locations.of(person)!.at)}',
+                  ].join('\n'),
+                ),
+                isThreeLine: true,
+                trailing: Icon(
+                  !share.sharing
+                      ? Icons.visibility_off_outlined
+                      : locationLevelIcon(share.levelOf(person)),
+                ),
+                onTap: share.state == null
+                    ? null
+                    : () => chooseLocationLevel(
+                        context,
+                        share,
+                        person,
+                        widget.nameOf(person),
+                      ),
               ),
             ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: Text(
-              'Everyone you have added can see you. To stop sharing with '
-              'someone, remove them as a friend or block them on this device.',
+              share.sharing
+                  ? 'Tap someone to choose how much they see: your exact '
+                        'place, your area to within a few kilometres, or '
+                        'nothing. They are not told which you chose. New '
+                        'friends start at approximate.'
+                  : 'Paused for everyone. Each person’s choice is kept for '
+                        'when you share again.',
             ),
           ),
           ..._devices(context),
@@ -637,4 +659,132 @@ class _AddRegionDialogState extends State<_AddRegionDialog> {
       ],
     );
   }
+}
+
+/// The icon for how much of this person's position a friend is sent.
+IconData locationLevelIcon(LocationLevel level) => switch (level) {
+  LocationLevel.precise => Icons.my_location,
+  LocationLevel.approximate => Icons.location_searching,
+  LocationLevel.off => Icons.location_disabled_outlined,
+};
+
+String _levelName(LocationLevel level) => switch (level) {
+  LocationLevel.precise => 'Precise',
+  LocationLevel.approximate => 'Approximate',
+  LocationLevel.off => 'Off',
+};
+
+/// [person]'s level as a line of text, with the time left on a temporary one.
+String locationLevelText(LocationShare share, String person) {
+  final now = DateTime.now().millisecondsSinceEpoch;
+  final choice = share.choiceOf(person);
+  final level = share.levelOf(person);
+  if (choice != null && choice.temporaryAt(now)) {
+    final minutes = (choice.until! - now) ~/ 60000 + 1;
+    return '${_levelName(level)} for $minutes more min, then '
+        '${_levelName(choice.then).toLowerCase()}';
+  }
+  return switch (level) {
+    LocationLevel.precise => 'Sees exactly where you are',
+    LocationLevel.approximate => 'Sees your area, within a few km',
+    LocationLevel.off => 'Does not see where you are',
+  };
+}
+
+/// Asks how much of this person's position [person] is sent, and sets it.
+/// [adding] is the one-time question when a friend is added: no temporary
+/// option, and approximate when it is dismissed.
+Future<void> chooseLocationLevel(
+  BuildContext context,
+  LocationShare share,
+  String person,
+  String name, {
+  bool adding = false,
+}) async {
+  final current = adding ? LocationLevel.approximate : share.levelOf(person);
+  final now = DateTime.now().millisecondsSinceEpoch;
+  final temporary =
+      !adding && (share.choiceOf(person)?.temporaryAt(now) ?? false);
+  Widget option(
+    BuildContext sheet,
+    LocationLevel level,
+    String title,
+    String subtitle, {
+    Duration? lasting,
+  }) {
+    final chosen = lasting == null ? level == current && !temporary : temporary;
+    return ListTile(
+      leading: Icon(locationLevelIcon(level)),
+      title: Text(title),
+      subtitle: Text(subtitle),
+      trailing: chosen ? const Icon(Icons.check) : null,
+      selected: chosen,
+      onTap: () => Navigator.pop(sheet, (level: level, lasting: lasting)),
+    );
+  }
+
+  final choice =
+      await showModalBottomSheet<({LocationLevel level, Duration? lasting})>(
+        context: context,
+        showDragHandle: true,
+        isScrollControlled: true,
+        builder: (sheet) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text(
+                  adding
+                      ? 'How much of your location should $name see?'
+                      : 'What $name sees of your location',
+                  style: Theme.of(sheet).textTheme.titleMedium,
+                ),
+              ),
+              option(
+                sheet,
+                LocationLevel.precise,
+                'Precise',
+                'Exactly where you are, as you move',
+              ),
+              option(
+                sheet,
+                LocationLevel.approximate,
+                'Approximate',
+                'Your area, to within a few kilometres',
+              ),
+              if (!adding && (current != LocationLevel.precise || temporary))
+                option(
+                  sheet,
+                  LocationLevel.precise,
+                  'Precise for 1 hour',
+                  temporary
+                      ? locationLevelText(share, person)
+                      : 'Then back to ${_levelName(current).toLowerCase()}',
+                  lasting: const Duration(hours: 1),
+                ),
+              option(
+                sheet,
+                LocationLevel.off,
+                'Off',
+                'Nothing, as if sharing were paused',
+              ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: Text(
+                  'They are not told which you chose. You can change it any '
+                  'time in Location sharing.',
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+  if (choice == null && !adding) return;
+  await share.setLevel(
+    person,
+    choice?.level ?? LocationLevel.approximate,
+    lasting: choice?.lasting,
+  );
 }

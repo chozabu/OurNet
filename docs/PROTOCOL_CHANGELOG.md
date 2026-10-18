@@ -7,6 +7,20 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: per-friend location levels
+
+Additive. No new request, kind or wire field: the `position` request is
+unchanged, and approximate positions are ordinary fixes at a grid cell's
+centre. Two new personal-state registers sync between a person's own devices.
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `locationLevel` | `note_self` register, target a friend's person ID, value `{level, until?, then?}` | How much of this person's position that friend is sent: `precise`, `approximate` or `off`; temporary until `until`, then `then`. | Stored and ignored: an older primary device sends every friend the precise position. |
+| `locationLevelsFrom` | `note_self` register, target `self`, value a time | When levels were set up; friends then were written as `precise`, later ones default to approximate. | Stored and ignored. |
+
+An older build that is the primary device ignores levels, so mixed devices
+share precisely until the primary one is updated.
+
 ## Unreleased: round-trip pings
 
 A `ping` request, answered at once with `{}`, measures the round trip to a

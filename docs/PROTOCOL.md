@@ -316,7 +316,16 @@ setting, per device). Only the person's primary device sends to friends: it is
 a personal-state register (`note_self` field `locationPrimary`, target `self`,
 value a device ID, `''` for none) that syncs between the person's own devices.
 While none is chosen every device sends to friends, as builds before it did;
-builds that predate the register store it and ignore it. Sending to the
+builds that predate the register store it and ignore it. How much each
+friend is sent is a register too (`note_self` field `locationLevel`, target the
+friend's person ID, value `{level, until?, then?}` with level `precise`,
+`approximate` or `off`; a temporary level holds until `until` and is `then`
+afterwards). `locationLevelsFrom` (target `self`, a time) records when levels
+were set up, with every friend at that time written as `precise`; a friend
+with no register is approximate after it and precise before. The sender
+applies the level: an approximate fix is an ordinary `position` whose
+coordinates are a grid cell's centre (docs/MAPS.md). Nothing about levels goes
+on the wire. Sending to the
 person's own devices is separate and on unless switched off on that device
 (`shareOwnDevices` setting).
 The map's tiles are public data and live in a separate file (`-tiles.db`).
