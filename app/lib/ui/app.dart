@@ -5,6 +5,7 @@ import 'conversation_history.dart';
 import 'conversation_search.dart';
 import 'chat_bubble.dart';
 import 'message_text.dart';
+import '../services/noise_suppression.dart';
 import '../services/typing.dart';
 import '../services/windows_tun.dart';
 import '../services/location_share.dart';

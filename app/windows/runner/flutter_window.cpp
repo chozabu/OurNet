@@ -28,6 +28,8 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   speech_ = std::make_unique<SystemSpeech>(
       flutter_controller_->engine()->messenger(), GetHandle());
+  noise_suppression_ = std::make_unique<NoiseSuppression>(
+      flutter_controller_->engine()->messenger());
   tray_ = std::make_unique<SystemTray>(
       flutter_controller_->engine()->messenger(), GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
@@ -49,6 +51,7 @@ bool FlutterWindow::OnCreate() {
 
 void FlutterWindow::OnDestroy() {
   speech_ = nullptr;
+  noise_suppression_ = nullptr;
   tray_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;

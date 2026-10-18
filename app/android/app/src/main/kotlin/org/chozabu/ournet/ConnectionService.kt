@@ -247,6 +247,9 @@ class ConnectionService : Service() {
         fun attach(context: Context, engine: FlutterEngine) {
             val connection = MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/connection")
             channel = connection
+            // Here rather than in MainActivity so a call answered before the
+            // activity opens has it too.
+            NoiseSuppressor.attach(MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/denoise"))
             watchNetwork(context)
             connection
                 .setMethodCallHandler { call, result ->

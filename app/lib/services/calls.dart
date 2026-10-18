@@ -4,6 +4,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'messaging.dart' show profileName;
 import 'network.dart';
+import 'noise_suppression.dart';
 
 /// Used until the user configures ICE servers. STUN only reveals the public
 /// address to the server operator; media still flows directly between devices.
@@ -61,6 +62,7 @@ class Calls extends ChangeNotifier {
   final Network network;
   Calls(this.network) {
     network.handle('signal', _onSignal);
+    CallNoiseSuppression.load(network.node.store);
   }
   RTCPeerConnection? _pc;
   MediaStream? _media;
@@ -284,6 +286,7 @@ class Calls extends ChangeNotifier {
         if (generation == _generation) error = 'Audio devices: $e';
       }
     }
+    await CallNoiseSuppression.prepare();
     if (generation != _generation) throw StateError('Call cancelled');
     final media = await navigator.mediaDevices.getUserMedia({
       'audio': audioInput == null
