@@ -35,6 +35,8 @@ $taskBuild=Get-Date -Format 'yyyyMMdd-HHmmss'
 $taskVersion=(Select-String -Path (Join-Path $taskRoot 'app/pubspec.yaml') -Pattern '^version:\s*(\d+\.\d+\.\d+)').Matches[0].Groups[1].Value
 $taskOutput=Join-Path $taskRoot "dist/OurNet-$taskVersion-$taskBuild"
 $taskStage=Join-Path $taskRoot 'build/package-source'
+# Bundle our iroh binding (app/native), built from vendor/iroh_mobile.
+& (Join-Path $PSScriptRoot 'build-iroh.ps1')
 # Build a source snapshot so running app binaries are never overwritten.
 foreach($taskComponent in @('app','core','transport','native','vendor/iroh_mobile')) {
   $taskSource=Join-Path $taskRoot $taskComponent

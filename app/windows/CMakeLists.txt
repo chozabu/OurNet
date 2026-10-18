@@ -91,9 +91,9 @@ set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 
-# Installed by tool/setup.ps1 after upstream Ed25519 signature verification.
+# Built from vendor/iroh_mobile by tool/build-iroh.ps1 (run by tool/setup.ps1).
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../native/irohdart_ffi.dll")
-  message(FATAL_ERROR "Run tool/setup.ps1 from the repository root to install the signed iroh library.")
+  message(FATAL_ERROR "Run tool/build-iroh.ps1 from the repository root to build the iroh library.")
 endif()
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../native/irohdart_ffi.dll"
   DESTINATION "${CMAKE_INSTALL_PREFIX}" COMPONENT Runtime)

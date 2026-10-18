@@ -65,9 +65,10 @@ impl AddressLookup for DartAddressLookup {
     }
 }
 
-/// Binds an endpoint that uses a **Dart-implemented** address lookup (only): the n0 default DNS/pkarr
-/// lookup is cleared and replaced by `resolve`, so `connect`ing to a peer known only by its
-/// `EndpointId` calls back into Dart to discover its addresses. Otherwise identical to
+/// Binds an endpoint that adds a **Dart-implemented** address lookup to the n0 preset's DNS/pkarr
+/// lookup (OurNet change: upstream cleared n0 and used `resolve` alone). iroh queries every lookup
+/// and merges what they find, so `connect`ing to a peer known only by its `EndpointId` also calls
+/// back into Dart, which should answer from memory without network I/O. Otherwise identical to
 /// `endpoint_bind`.
 #[frb]
 pub async fn endpoint_bind_with_address_lookup(
@@ -90,7 +91,6 @@ pub async fn endpoint_bind_with_address_lookup(
             let mut builder = IrohEndpoint::builder(presets::N0)
                 .relay_mode(relay_mode)
                 .alpns(alpns)
-                .clear_address_lookup()
                 .address_lookup(lookup);
             if let Some(sk) = sk {
                 builder = builder.secret_key(sk);
@@ -101,4 +101,12 @@ pub async fn endpoint_bind_with_address_lookup(
         .await
         .map_err(|e| anyhow!("endpoint bind task panicked: {e}"))??;
     Ok(Endpoint { inner })
+}
+
+/// Present only in libraries built with the change above: OurNet looks this symbol up before
+/// calling [`endpoint_bind_with_address_lookup`], so that an upstream prebuilt library (which
+/// would drop the n0 lookup) is never asked to.
+#[no_mangle]
+pub extern "C" fn ournet_address_lookup_keeps_n0() -> u32 {
+    1
 }

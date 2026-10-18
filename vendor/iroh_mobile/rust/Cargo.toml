@@ -23,8 +23,10 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
 flutter_rust_bridge = "=2.12.0"
 # Own the `iroh` crate directly. default-features = false drops `fast-apple-datapath`
 # (private Apple API -> App Store risk) and `metrics`; `tls-ring` installs the rustls
-# CryptoProvider so we never expose it to Dart.
-iroh = { version = "1.0", default-features = false, features = ["tls-ring"] }
+# CryptoProvider so we never expose it to Dart. `portmapper` (a default we keep) asks the
+# router for a port mapping (UPnP, NAT-PMP, PCP), so more connections go direct instead of
+# through a relay.
+iroh = { version = "1.0", default-features = false, features = ["tls-ring", "portmapper"] }
 iroh-base = "1.0"
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
 # Stream bridging for Watcher / path_events / accept loop.

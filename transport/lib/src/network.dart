@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' show DynamicLibrary;
+import 'dart:io' show Platform;
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -176,6 +178,11 @@ class PeerNetwork implements PluginLink {
 
   /// How each device was last reached, from its connections' path events.
   final Map<String, PeerPath> paths = {};
+
+  /// Connections to each device since this network was created, by the path
+  /// each ended on, and the same for all devices together.
+  final Map<String, PathCounts> pathCounts = {};
+  final PathCounts allPathCounts = PathCounts();
 
   /// Open connections to each admitted device, either direction.
   final Map<String, int> _openTo = {};
@@ -599,15 +606,28 @@ class PeerNetwork implements PluginLink {
     if (running) return;
     try {
       await iroh.Iroh.init();
-      _endpoint = await iroh.Endpoint.bind(
-        secretKey: iroh.SecretKey.fromBytes(
-          await node.identity.deviceKey.extractPrivateKeyBytes(),
-        ),
-        alpns: [_alpn],
-        relayMode: local
-            ? iroh.RelayMode.disabled
-            : iroh.RelayMode.custom(_relayMap()),
+      final secretKey = iroh.SecretKey.fromBytes(
+        await node.identity.deviceKey.extractPrivateKeyBytes(),
       );
+      final relayMode = local
+          ? iroh.RelayMode.disabled
+          : iroh.RelayMode.custom(_relayMap());
+      // Beside n0's DNS lookup, iroh asks [_addressHint], so a device stays
+      // findable from the addresses friends gossiped when n0's is stale or
+      // unreachable. Only a library built from vendor/iroh_mobile keeps n0's
+      // lookup alongside; an upstream one would replace it, so it gets none.
+      _endpoint = !local && lookupKeepsN0
+          ? await iroh.Endpoint.bindWithAddressLookup(
+              resolve: _addressHint,
+              secretKey: secretKey,
+              alpns: [_alpn],
+              relayMode: relayMode,
+            )
+          : await iroh.Endpoint.bind(
+              secretKey: secretKey,
+              alpns: [_alpn],
+              relayMode: relayMode,
+            );
       error = null;
       this.local = local;
       _automatic = automatic;
@@ -794,6 +814,39 @@ class PeerNetwork implements PluginLink {
     }
   }
 
+  /// The stored address of an admitted device, for iroh's address lookup.
+  /// Answers from the store alone: iroh waits on it while dialling.
+  iroh.EndpointAddr? _addressHint(iroh.EndpointId id) {
+    try {
+      final device = b64(id.asBytes());
+      if (!node.contacts.containsKey(device)) return null;
+      final encoded = node.store.setting('address/$device');
+      if (encoded is! String) return null;
+      final address = iroh.EndpointAddr.decode(unb64(encoded));
+      return b64(address.id.asBytes()) == device ? address : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Whether the loaded iroh library adds a custom address lookup to n0's
+  /// rather than replacing it: true for ours (vendor/iroh_mobile), which
+  /// exports a marker symbol, false for an upstream prebuilt one or when the
+  /// library cannot be found by name (Linux, loaded by path).
+  static bool get lookupKeepsN0 => _lookupKeepsN0 ??= () {
+    try {
+      final library = Platform.isIOS || Platform.isMacOS
+          ? DynamicLibrary.process()
+          : DynamicLibrary.open(
+              Platform.isWindows ? 'irohdart_ffi.dll' : 'libirohdart_ffi.so',
+            );
+      return library.providesSymbol('ournet_address_lookup_keeps_n0');
+    } catch (_) {
+      return false;
+    }
+  }();
+  static bool? _lookupKeepsN0;
+
   /// Outgoing connections opened since this network was created.
   int dialed = 0;
 
@@ -817,7 +870,7 @@ class PeerNetwork implements PluginLink {
         }
       });
     var selected = false;
-    PeerPath? seen;
+    PeerPath? first, seen;
     void note(String remoteAddr, {required bool select}) {
       final path = PeerPath.parse(remoteAddr, DateTime.now());
       if (path == null) return;
@@ -826,6 +879,7 @@ class PeerNetwork implements PluginLink {
       } else if (selected || (seen?.isDirect ?? false) && !path.isDirect) {
         return;
       }
+      first ??= path;
       seen = path;
       final last = paths[device];
       paths[device] = path;
@@ -854,7 +908,11 @@ class PeerNetwork implements PluginLink {
     unawaited(
       ended
           .then((_) => Future<void>.delayed(const Duration(seconds: 2)))
-          .whenComplete(events.cancel),
+          .whenComplete(() {
+            unawaited(events.cancel());
+            pathCounts.putIfAbsent(device, PathCounts.new).add(first, seen);
+            allPathCounts.add(first, seen);
+          }),
     );
   }
 

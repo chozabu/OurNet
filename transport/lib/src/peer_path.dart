@@ -22,6 +22,9 @@ class PeerPath {
 
   bool get isDirect => kind != PathKind.relay;
 
+  /// Whether a direct path uses IPv6 (its socket address is bracketed).
+  bool get isIpv6 => isDirect && address.startsWith('[');
+
   /// Reads iroh's debug rendering of a transport address: `Relay(<url>)`
   /// or `Ip(<socket address>)`. Null for anything else.
   static final _relay = RegExp(r'^Relay\((.+)\)$'), _ip = RegExp(r'^Ip\((.+)\)$');
@@ -72,5 +75,47 @@ class PeerPath {
     'kind': kind.name,
     'address': address,
     'at': at.toIso8601String(),
+  };
+}
+
+/// Connections counted by the path each ended on, added to as they close
+/// (never by scanning), for diagnostics: how often devices reach each other
+/// directly, and how.
+class PathCounts {
+  int lan4 = 0, lan6 = 0, direct4 = 0, direct6 = 0, relay = 0;
+
+  /// Connections whose path was never seen.
+  int unknown = 0;
+
+  /// Connections that began through a relay and ended direct.
+  int upgraded = 0;
+
+  int get total => lan4 + lan6 + direct4 + direct6 + relay + unknown;
+
+  /// Counts one connection that was first seen on [first] and ended on
+  /// [last].
+  void add(PeerPath? first, PeerPath? last) {
+    switch (last?.kind) {
+      case null:
+        unknown++;
+      case PathKind.relay:
+        relay++;
+      case PathKind.lan:
+        last!.isIpv6 ? lan6++ : lan4++;
+      case PathKind.direct:
+        last!.isIpv6 ? direct6++ : direct4++;
+    }
+    if (first?.kind == PathKind.relay && (last?.isDirect ?? false)) upgraded++;
+  }
+
+  Map<String, int> toJson() => {
+    'total': total,
+    'lan4': lan4,
+    'lan6': lan6,
+    'direct4': direct4,
+    'direct6': direct6,
+    'relay': relay,
+    'unknown': unknown,
+    'upgraded': upgraded,
   };
 }

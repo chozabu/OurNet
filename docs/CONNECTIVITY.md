@@ -89,7 +89,7 @@ fact of friendship.
 | 4c | Windows notification area | The same on a desktop: closing the window no longer disconnects | Implemented |
 | 4b | Push wake-up (FCM through a push server) | The same with less battery | Implemented; needs a Firebase project and the server deployed |
 | 5 | Own relays, shared in contact cards | Dependence on number0's relays | Relay list implemented; no OurNet relay deployed yet |
-| 6 | Call media over iroh when ICE fails | Calls behind carrier-grade NAT without TURN | Planned |
+| 6 | Call media over iroh when ICE fails | Calls behind carrier-grade NAT without TURN | Spiked, not shipped (below) |
 | 7 | Packaged friend node (relay, carrier, push) | Making 3–5 one command to offer | Planned |
 
 ### Relay list (implemented)
@@ -107,13 +107,66 @@ network, direct over the internet, or through which relay. This comes from
 iroh's path events on every admitted connection (`PeerNetwork.paths`, also in
 diagnostics).
 
+### More direct paths (implemented)
+
+Every connection that goes direct instead of through a relay is faster and
+leaves the relay operator out of it. Three changes from October 2026 aim at
+more of them, with no new infrastructure:
+
+- **Port mapping.** Our iroh binding (`vendor/iroh_mobile/rust`) had been
+  built without iroh's `portmapper` feature, and the upstream prebuilt
+  Windows library the same. iroh now asks the router for a port mapping
+  (UPnP, NAT-PMP or PCP) and announces the mapped address, so a device
+  behind a home router that allows it becomes directly reachable even from
+  networks where hole punching fails. Windows builds now use our own build
+  of the binding (`tool/build-iroh.ps1`, run by `tool/setup.ps1` and
+  `tool/package.ps1`), as Android already did; Linux still uses the
+  upstream library (see `tool/setup.sh`).
+- **Friends' address hints in the lookup.** Devices already gossip each
+  other's addresses (`address/<device>`, learned in every exchange). iroh's
+  address lookup now asks those stored hints as well as number0's DNS
+  lookup, rather than only when a dial starts, so a device stays findable
+  when number0's record is stale or unreachable. The hint is answered from
+  the store, never from the network. Our binding exports a marker symbol
+  (`ournet_address_lookup_keeps_n0`) because upstream's would drop number0's
+  lookup for ours; without it OurNet binds as before. No DHT and no mDNS.
+- **Measuring it.** Diagnostics count connections since the network started,
+  for each device and in total (`connectionPaths`), by the path each ended
+  on: local network or internet, IPv4 or IPv6, or relay, and how many began
+  on a relay and moved to a direct path. The counts are kept as connections
+  close, never by scanning.
+
+### Call media over iroh (spiked, not shipped)
+
+The idea: when ICE fails, carry WebRTC's packets as QUIC datagrams on the
+iroh connection the call's signalling already uses, which reaches through a
+relay where nothing else does. Each side runs a local UDP shim and offers it
+to its own WebRTC as an extra candidate; ICE, DTLS and SRTP run through it
+unchanged. The spike (`app/integration_test/call_iroh_spike_test.dart`,
+October 2026, Windows) found:
+
+- libwebrtc never sends to a loopback candidate (127.0.0.1): no packet
+  reached the shim and the link failed. The planned loopback shim does not
+  work.
+- A shim on the device's own network address does connect, through iroh
+  datagrams alone (ICE and DTLS, packets up to 628 bytes). Not tried: media
+  (RTP packets near 1,200 bytes, which may exceed what a datagram carries
+  over a relay), Android, two devices on different networks, and the cost of
+  passing every packet through Dart.
+
+So nothing ships; calls keep ICE with STUN as before. Continuing would mean
+the own-address shim, a fallback for packets too large for a datagram, and
+moving the packet pump out of the UI isolate (or into native code), then
+checking it between a phone and a desktop on separate networks.
+
 ### Default STUN (implemented)
 
 Calls previously used no ICE servers unless configured, so they could not
 connect across two NATs. With no configuration, calls now use public STUN
 servers (Google, Cloudflare); local mode uses none. STUN operators learn the
 caller's IP address, not the call. TURN is still needed on networks where a
-direct path is impossible; piece 6 aims to remove that need.
+direct path is impossible; piece 6 aimed to remove that need, and is not
+shipped (above).
 
 ### Android background sync (implemented)
 

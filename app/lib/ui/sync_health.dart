@@ -574,6 +574,9 @@ Map<String, Object?> syncDiagnostics(PeerNetwork network) => {
   'acceptFailures': network.acceptFailures,
   'lastAcceptError': network.lastAcceptError,
   'dialed': network.dialed,
+  // Connections since the network started, by the path each ended on
+  // (lan/direct split by IPv4 and IPv6), and how many moved off a relay.
+  'connectionPaths': network.allPathCounts.toJson(),
   // Newest first: relay losses, restarts and failed handshakes, with times,
   // so a report shows what happened around the problem.
   'events': network.events,
@@ -590,6 +593,7 @@ Map<String, Object?> syncDiagnostics(PeerNetwork network) => {
         'version': network.peerVersions[device],
         'connected': network.connectedTo(device),
         'path': network.paths[device]?.toJson(),
+        'connectionPaths': ?network.pathCounts[device]?.toJson(),
         'rttMs': ?network.rttTo(device)?.inMilliseconds,
       },
   ],

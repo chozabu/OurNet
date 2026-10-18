@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Linux counterpart of tool/setup.ps1: fetches dependencies and installs the
 # signed iroh library (verified by iroh_quic:setup) where the Linux build
-# bundles it.
+# bundles it. That upstream library maps no router ports and is not given the
+# app's address lookup (PeerNetwork.lookupKeepsN0); building
+# vendor/iroh_mobile/rust with cargo and copying its .so to app/native gets
+# both, as tool/build-iroh.ps1 does on Windows.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root/app"

@@ -27,6 +27,29 @@ void main() {
     expect(kind('Custom(x)'), isNull);
   });
 
+  test('counts connections by the path each ended on', () {
+    PeerPath path(String s) => PeerPath.parse(s, at)!;
+    final relay = path('Relay(https://euc1-1.relay.n0.iroh.link./)');
+    final counts = PathCounts()
+      ..add(relay, relay)
+      ..add(relay, path('Ip(81.2.3.4:5)'))
+      ..add(null, path('Ip([2001:db8::1]:5)'))
+      ..add(null, path('Ip(192.168.1.20:41641)'))
+      ..add(null, path('Ip([fe80::1%3]:1)'))
+      ..add(null, null);
+    expect(counts.toJson(), {
+      'total': 6,
+      'lan4': 1,
+      'lan6': 1,
+      'direct4': 1,
+      'direct6': 1,
+      'relay': 1,
+      'unknown': 1,
+      'upgraded': 1,
+    });
+    expect(relay.isIpv6, isFalse);
+  });
+
   test('relays added in settings come first, n0 always follows', () async {
     final a = Node(await LocalIdentity.create(), Store());
     addTearDown(a.close);
@@ -79,6 +102,14 @@ void main() {
     }
     expect(na.connectedTo(b.identity.device), isFalse);
     expect(nb.connectedTo(a.identity.device), isFalse);
+    // Each closed connection is counted once its last path events are in.
+    for (var i = 0; i < 50 && nb.allPathCounts.total == 0; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    final counts = nb.pathCounts[a.identity.device]!;
+    expect(counts.total, greaterThan(0));
+    expect(counts.lan4 + counts.lan6, counts.total);
+    expect(nb.allPathCounts.total, counts.total);
   }, timeout: const Timeout(Duration(seconds: 60)));
 
   test(

@@ -456,8 +456,11 @@ garbage collection, retention controls and resumable large-file UX remain work.
 ## Infrastructure and media
 
 Local mode disables iroh relays. Internet mode uses iroh's default address
-lookup and a relay list: relays added in Settings, OurNet's own when deployed,
-then number0's public relays.
+lookup, together with the address hints devices exchange (stored, never
+fetched; builds from 0.2.44 with OurNet's iroh binding), and a relay list:
+relays added in Settings, OurNet's own when deployed, then number0's public
+relays. iroh maps a router port (UPnP, NAT-PMP, PCP) where the router allows
+it. Nothing on the wire changed.
 There is no application account server. Media uses WebRTC, with signalling over
 admitted iroh connections. Media uses the user's configured
 STUN/TURN servers, or public STUN servers (Google, Cloudflare) when none are
