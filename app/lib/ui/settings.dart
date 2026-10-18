@@ -663,6 +663,19 @@ extension _SettingsPages on _OurNetAppState {
       value: typing.enabled,
       onChanged: (v) => update(() => node.store.set('typingIndicator', v)),
     ),
+    if (CallNoiseSuppression.supported)
+      SwitchListTile(
+        title: const Text('Noise suppression in calls'),
+        subtitle: const Text(
+          'Filters background noise such as fans, traffic and typing out of '
+          'your microphone, on this device. Takes effect straight away.',
+        ),
+        value: CallNoiseSuppression.enabled,
+        onChanged: (v) => act(() async {
+          await CallNoiseSuppression.set(node.store, v);
+          refresh();
+        }),
+      ),
     SwitchListTile(
       title: const Text('Show public forums and chats to friends'),
       subtitle: const Text(

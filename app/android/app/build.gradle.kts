@@ -84,4 +84,8 @@ dependencies {
     // rather than the google-services plugin, so builds without it work.
     implementation("com.google.firebase:firebase-messaging:25.0.0")
     implementation("androidx.work:work-runtime:2.11.2")
+    // NoiseSuppressor.kt implements flutter_webrtc's capture hook, whose
+    // interface comes from the WebRTC SDK; keep this equal to the version in
+    // flutter_webrtc's android/build.gradle.
+    compileOnly("io.github.webrtc-sdk:android:150.7871.01")
 }

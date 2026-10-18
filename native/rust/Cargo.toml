@@ -19,10 +19,15 @@ jpeg-encoder = { version = "0.6", default-features = false, features = ["std"] }
 wasmtime = { version = "=48.0.6", default-features = false, features = ["runtime", "cranelift", "component-model", "std", "anyhow"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Call noise suppression (src/denoise.rs): RNNoise in pure Rust, BSD-3-Clause.
+nnnoiseless = { version = "=0.5.2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 sysinfo = { version = "=0.39.6", default-features = false, features = ["system", "network", "component", "disk"] }
 windows-sys = { version = "0.61.2", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_ProcessStatus", "Win32_System_Performance", "Win32_System_LibraryLoader"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni-sys = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

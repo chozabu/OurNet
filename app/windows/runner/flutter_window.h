@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "noise_suppression.h"
 #include "system_speech.h"
 #include "system_tray.h"
 #include "win32_window.h"
@@ -33,6 +34,9 @@ class FlutterWindow : public Win32Window {
 
   // Live dictation for voice notes.
   std::unique_ptr<SystemSpeech> speech_;
+
+  // RNNoise in the call microphone hook.
+  std::unique_ptr<NoiseSuppression> noise_suppression_;
 
   // The notification area icon, and closing into it.
   std::unique_ptr<SystemTray> tray_;

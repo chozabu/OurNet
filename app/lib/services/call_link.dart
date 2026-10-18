@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'calls.dart' show androidRemoteStreams;
+import 'noise_suppression.dart';
 
 /// How one media link to another device is doing.
 enum LinkState { connecting, connected, reconnecting, failed, closed }
@@ -387,6 +388,7 @@ class DeviceMedia implements LocalMedia {
 
   @override
   Future<void> start() async {
+    await CallNoiseSuppression.prepare();
     final media = await navigator.mediaDevices.getUserMedia({
       'audio': audioInput == null
           ? true

@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
+  "noise_suppression.cpp"
   "system_speech.cpp"
   "system_tray.cpp"
   "voice_capture.cpp"
@@ -40,6 +41,11 @@ target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib" "WindowsApp.lib" "mfpl
 # C++/WinRT (Windows speech recognition) needs C++20 coroutine support.
 target_compile_features(${BINARY_NAME} PRIVATE cxx_std_20)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
+
+# noise_suppression.cpp reaches into flutter_webrtc (its include directories
+# come with the flutter_webrtc_plugin target linked in generated_plugins.cmake).
+set_source_files_properties("noise_suppression.cpp" PROPERTIES
+  COMPILE_DEFINITIONS "LIB_WEBRTC_API_DLL;RTC_DESKTOP_DEVICE")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
