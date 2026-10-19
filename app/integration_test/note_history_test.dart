@@ -217,6 +217,7 @@ void main() {
         audience: [phone.person],
         name: 'downloaded.jpg',
         drive: {
+          'type': 'file',
           'entry': randomId(),
           'folder': driveRoot,
           'revision': randomId(),

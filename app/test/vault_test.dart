@@ -22,7 +22,7 @@ void main() {
     await vault.delete('ournet/v2/main');
     expect(await vault.read('ournet/v2/main'), isNull);
     await vault.delete('ournet/v2/main');
-  });
+  }, skip: Platform.isWindows); // FileVault is Linux-only and requires chmod.
 
   test('file vault secrets are readable only by their owner', () async {
     final vault = FileVault(directory.path);
