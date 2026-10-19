@@ -33,8 +33,18 @@ abstract class FolderBackend {
   Stream<void> get changes => const Stream.empty();
   Future<Map<String, FolderItem>> scan();
   Future<FolderItem?> stat(String path);
-  Future<void> readTo(String path, String destination, String expected);
-  Future<FolderItem> put(String path, String source, String? expected);
+
+  /// The bytes of file [path], checking before and after reading that its
+  /// token is still [expected]: an edit during the read fails it.
+  Stream<List<int>> read(String path, String expected);
+
+  /// Writes [data] to a temporary file beside [path], then replaces [path]
+  /// with it only if [path]'s token is still [expected] (null: absent).
+  Future<FolderItem> write(
+    String path,
+    Stream<List<int>> data,
+    String? expected,
+  );
   Future<void> mkdir(String path);
   Future<void> move(String source, String destination, String expected);
   Future<void> remove(String path, String expected);
@@ -78,25 +88,6 @@ String? _drivePath(
 int _byDepth(String a, String b) {
   final d = a.split('/').length.compareTo(b.split('/').length);
   return d == 0 ? a.compareTo(b) : d;
-}
-
-/// Whether two staged files hold the same bytes.
-Future<bool> _sameBytes(String first, String second) async {
-  final a = await File(first).open(), b = await File(second).open();
-  try {
-    while (true) {
-      final x = await a.read(Files.chunkSize);
-      final y = await b.read(Files.chunkSize);
-      if (x.length != y.length) return false;
-      if (x.isEmpty) return true;
-      for (var i = 0; i < x.length; i++) {
-        if (x[i] != y[i]) return false;
-      }
-    }
-  } finally {
-    await a.close();
-    await b.close();
-  }
 }
 
 bool safeFolderPath(String path) =>
@@ -211,30 +202,27 @@ class DiskFolderBackend extends FolderBackend {
   }
 
   @override
-  Future<void> readTo(String path, String destination, String expected) async {
+  Stream<List<int>> read(String path, String expected) async* {
     await _check(path, expected);
-    final output = File(destination).openWrite();
-    var total = 0;
-    try {
-      await for (final bytes in File(await _path(path)).openRead()) {
-        total += bytes.length;
-        if (total > Files.maxSize)
-          throw StateError('$path exceeds the 64 MiB file limit');
-        output.add(bytes);
-        await output.flush();
-      }
-    } finally {
-      await output.close();
-    }
+    yield* File(await _path(path)).openRead();
     await _check(path, expected);
   }
 
   @override
-  Future<FolderItem> put(String path, String source, String? expected) async {
+  Future<FolderItem> write(
+    String path,
+    Stream<List<int>> data,
+    String? expected,
+  ) async {
     final target = await _path(path);
     final temp = File('${File(target).parent.path}/.ournet-${randomId()}.part');
     try {
-      await File(source).copy(temp.path);
+      final output = temp.openWrite();
+      try {
+        await output.addStream(data);
+      } finally {
+        await output.close();
+      }
       await _check(path, expected);
       await temp.rename(target);
       return (await stat(path))!;
@@ -672,7 +660,6 @@ class FolderSync {
     if (local.keys.any((p) => !localFolded.add(p.toLowerCase())))
       throw StateError('Local names differ only by case');
     var conflicts = 0;
-    final stage = await Directory.systemTemp.createTemp('ournet-folder-');
     void persist(String id) {
       node.store.set('folder-sync/item/$root/$id', state[id]);
     }
@@ -712,10 +699,11 @@ class FolderSync {
       } else {
         if (item.size > Files.maxSize)
           throw StateError('$path exceeds the 64 MiB file limit');
-        final input = '${stage.path}/input';
-        await fs.readTo(path, input, item.token);
-        object = await files.publish(
-          input,
+        // Encrypted straight from the folder; the read fails if the file
+        // changes meanwhile.
+        object = await files.publishFrom(
+          fs.read(path, item.token),
+          size: item.size,
           audience: [node.person],
           name: data['name'],
           drive: {
@@ -729,21 +717,13 @@ class FolderSync {
     }
 
     // Whether the local file at [path] holds exactly the bytes of the drive
-    // file [v]. Sizes are compared first; equal sizes compare the contents.
-    // Reading checks [item]'s token before and after, so an edit made during
-    // the comparison fails this pass rather than being adopted unseen. The
-    // local copy is read once per path and reused for further comparisons.
-    String? staged;
+    // file [v]. Sizes are compared first; equal sizes compare the contents,
+    // streamed side by side. Reading checks [item]'s token before and after,
+    // so an edit made during the comparison fails this pass rather than
+    // being adopted unseen.
     Future<bool> sameFile(String path, FolderItem item, DriveVersion v) async {
       if (v.deleted || v.isFolder || v.data['size'] != item.size) return false;
-      final mine = '${stage.path}/local', theirs = '${stage.path}/remote';
-      await files.save(v.object, theirs);
-      if (staged != path) {
-        staged = null;
-        await fs.readTo(path, mine, item.token);
-        staged = path;
-      }
-      return _sameBytes(mine, theirs);
+      return sameBytes(fs.read(path, item.token), files.open(v.object));
     }
 
     // An earlier revision of [entry] the local file matches byte for byte:
@@ -808,9 +788,8 @@ class FolderSync {
         await fs.mkdir(path);
         written = const FolderItem(true, 'directory');
       } else {
-        final output = '${stage.path}/output';
-        await files.save(v.object, output);
-        written = await fs.put(path, output, item?.token);
+        // Decrypted straight into a temporary file beside [path].
+        written = await fs.write(path, files.open(v.object), item?.token);
       }
       record(v.entry, path, revision, v.isFolder, written);
     }
@@ -845,528 +824,522 @@ class FolderSync {
 
     var setAside = 0;
     String? asideIn;
-    try {
-      // First-sync choices for the drive's copy: local entries it lacks (or
-      // has as the other kind) move aside, parent-first. A folder moves whole
-      // only when everything in it goes too.
-      if (first.isNotEmpty) {
-        bool goes(String path) {
-          final chosen = first[path], item = local[path];
-          return chosen != null &&
-              item != null &&
-              chosen['keep'] == FirstSyncChoice.drive.name &&
-              chosen['token'] == item.token &&
-              !synced.contains(path);
-        }
+    // First-sync choices for the drive's copy: local entries it lacks (or
+    // has as the other kind) move aside, parent-first. A folder moves whole
+    // only when everything in it goes too.
+    if (first.isNotEmpty) {
+      bool goes(String path) {
+        final chosen = first[path], item = local[path];
+        return chosen != null &&
+            item != null &&
+            chosen['keep'] == FirstSyncChoice.drive.name &&
+            chosen['token'] == item.token &&
+            !synced.contains(path);
+      }
 
-        final moved = <String>[];
-        for (final path in local.keys.toList()..sort(_byDepth)) {
-          if (!goes(path) || moved.any((m) => path.startsWith('$m/'))) continue;
-          final item = local[path]!, entry = remote[path];
-          final clash =
-              entry != null &&
-              !entry.current.deleted &&
-              entry.current.isFolder != item.directory;
-          if (entry != null && !clash) continue;
-          if (item.directory &&
-              !clash &&
-              local.keys.any((p) => p.startsWith('$path/') && !goes(p)))
-            continue;
-          try {
-            asideIn = await fs.setAside(path, item.token);
-            moved.add(path);
-            setAside++;
-          } catch (e) {
-            retry.add(path);
-            report('$path: $e');
-          }
-        }
-        if (moved.isNotEmpty)
-          local = {
-            for (final e in (await fs.scan()).entries)
-              if (local.containsKey(e.key)) e.key: e.value,
-          };
-      }
-      // Apply drive moves parent-first. Moving a directory carries unknown
-      // local children too; their edits retain their original baseline tokens.
-      final relocated =
-          remote.entries
-              .where(
-                (e) =>
-                    state[e.value.current.entry] != null &&
-                    state[e.value.current.entry]['path'] != e.key,
-              )
-              .toList()
-            ..sort(
-              (a, b) =>
-                  a.key.split('/').length.compareTo(b.key.split('/').length),
-            );
-      for (final moved in relocated) {
-        final entry = moved.value, base = state[moved.value.current.entry];
-        if (entry.conflicted || base['path'] == moved.key) continue;
-        final oldPath = base['path'] as String;
-        final old = local[oldPath];
-        if (old?.token != base['token'] || old == null) continue;
-        try {
-          await fs.move(oldPath, moved.key, old.token);
-          final after = await fs.scan();
-          for (final id in state.keys.toList()) {
-            final item = state[id];
-            final path = item['path'] as String;
-            if (path != oldPath &&
-                !(old.directory && path.startsWith('$oldPath/')))
-              continue;
-            final next = '${moved.key}${path.substring(oldPath.length)}';
-            final unchanged = local[path]?.token == item['token'];
-            state[id] = {
-              ...item,
-              'path': next,
-              if (unchanged &&
-                  path == oldPath &&
-                  after[next] != null &&
-                  (old.directory ||
-                      (old.contentStamp ?? old.token) ==
-                          (after[next]!.contentStamp ?? after[next]!.token)))
-                'token': after[next]!.token,
-            };
-            persist(id);
-          }
-          local = after;
-        } catch (e) {
-          report('$oldPath → ${moved.key}: $e');
-        }
-      }
-      final mappedPaths = {
-        for (final value in state.values) value['path'] as String,
-      };
-      // A folder deletion concurrent with an added/edited descendant is a
-      // folder conflict, not permission to hide or remove the descendant.
-      final baselineByPath = {
-        for (final item in state.values) item['path'] as String: item,
-      };
-      // A folder deleted elsewhere lists the entries deleted with it
-      // ('removed'). Records travel in pages, newest first, so the folder's
-      // deletion can arrive before its children's: an unchanged child it
-      // lists is on its way out, not a concurrent addition.
-      final departing = <String>{};
+      final moved = <String>[];
       for (final path in local.keys.toList()..sort(_byDepth)) {
-        final entry = remote[path], base = baselineByPath[path];
-        if (!path.contains('/') ||
-            entry == null ||
-            base == null ||
-            entry.conflicted ||
-            entry.current.deleted ||
-            base['token'] != local[path]!.token ||
-            base['revision'] != entry.current.data['revision'])
+        if (!goes(path) || moved.any((m) => path.startsWith('$m/'))) continue;
+        final item = local[path]!, entry = remote[path];
+        final clash =
+            entry != null &&
+            !entry.current.deleted &&
+            entry.current.isFolder != item.directory;
+        if (entry != null && !clash) continue;
+        if (item.directory &&
+            !clash &&
+            local.keys.any((p) => p.startsWith('$path/') && !goes(p)))
           continue;
-        final parentPath = path.substring(0, path.lastIndexOf('/'));
-        final parent = remote[parentPath];
-        if (departing.contains(parentPath) ||
-            (parent != null &&
-                !parent.conflicted &&
-                parent.current.deleted &&
-                (parent.current.data['removed'] as List?)?.contains(
-                      entry.current.entry,
-                    ) ==
-                    true))
-          departing.add(path);
-      }
-      final waiting = {
-        for (final path in departing) path.substring(0, path.lastIndexOf('/')),
-      };
-      final dirtyParents = <String>{};
-      for (final item in local.entries) {
-        if (departing.contains(item.key)) continue;
-        final liveRemoteChild =
-            remote[item.key]?.heads.any((v) => !v.deleted) ?? false;
-        if (baselineByPath[item.key]?['token'] == item.value.token &&
-            !liveRemoteChild)
-          continue;
-        var parent = item.key;
-        while (parent.contains('/')) {
-          parent = parent.substring(0, parent.lastIndexOf('/'));
-          dirtyParents.add(parent);
+        try {
+          asideIn = await fs.setAside(path, item.token);
+          moved.add(path);
+          setAside++;
+        } catch (e) {
+          retry.add(path);
+          report('$path: $e');
         }
       }
-      for (final path in dirtyParents) {
-        final entry = remote[path];
-        if (entry == null ||
-            entry.conflicted ||
-            !entry.current.deleted ||
-            !entry.current.isFolder ||
-            local[path]?.directory != true)
-          continue;
-        final base = state[entry.current.entry];
-        if (base == null) continue;
-        final object = await drive.write(
-          {...entry.current.data, 'deleted': false},
-          parents: [base['revision'] as String],
-        );
-        final version = DriveVersion(object, (await node.content(object))!);
-        state[version.entry] = {
-          ...base,
-          'revision': version.data['revision'],
-          'token': local[path]!.token,
+      if (moved.isNotEmpty)
+        local = {
+          for (final e in (await fs.scan()).entries)
+            if (local.containsKey(e.key)) e.key: e.value,
         };
-        persist(version.entry);
-        remote[path] = DriveEntry(entry.history, [version, ...entry.heads]);
-      }
-      // Local additions are processed parent-first, including empty directories.
-      final paths = {...local.keys, ...remote.keys}.toList()..sort(_byDepth);
-      // Entries deleted here this pass, by parent path, so a folder deleted
-      // with them can list them.
-      final removedUnder = <String, List<String>>{};
-      for (final e in remote.entries) {
-        final base = state[e.value.current.entry];
-        if (!e.key.contains('/') ||
-            local.containsKey(e.key) ||
-            base == null ||
-            base['path'] != e.key ||
-            base['token'] == null)
-          continue;
-        (removedUnder[e.key.substring(0, e.key.lastIndexOf('/'))] ??= []).add(
-          e.value.current.entry,
-        );
-      }
-      final folderIds = <String, String>{
-        '': root,
-        // A concurrent new child follows its parent's stable identity even
-        // when that parent has moved outside this device's connected subtree.
-        for (final item in state.entries)
-          if (item.value['directory'] == true &&
-              byId[item.key]?.current.isFolder == true &&
-              byId[item.key]?.current.deleted == false)
-            item.value['path'] as String: item.key,
-      };
-      // First-sync choices for this folder's copy: drive entries it lacks are
-      // deleted from the drive, a folder only when everything in it goes too.
-      // Files go in this loop; folders after it, deepest first.
-      final deleting = <String>{};
-      for (final path in remote.keys.toList()..sort((a, b) => _byDepth(b, a))) {
-        final entry = remote[path]!, v = entry.current;
-        if (local.containsKey(path) ||
-            entry.conflicted ||
-            v.deleted ||
-            state[v.entry] != null ||
-            keep(path, null, v) != FirstSyncChoice.here)
-          continue;
-        if (v.isFolder &&
-            remote.entries.any(
+    }
+    // Apply drive moves parent-first. Moving a directory carries unknown
+    // local children too; their edits retain their original baseline tokens.
+    final relocated =
+        remote.entries
+            .where(
               (e) =>
-                  e.key.startsWith('$path/') &&
-                  !e.value.current.deleted &&
-                  !deleting.contains(e.key),
-            ))
-          continue;
-        deleting.add(path);
-      }
-      for (final path in paths) {
-        if (_closed) return;
-        try {
-          final existing = remote[path];
-          if (existing?.current.isFolder == true)
-            folderIds[path] = existing!.current.entry;
-          final item = local[path];
-          if (existing == null && item != null) {
-            // A remote rename/move must not cause an old mapped path to be
-            // imported as a new unrelated entry.
-            if (mappedPaths.contains(path)) {
-              conflicts++;
-              continue;
-            }
-            final parentPath = path.contains('/')
-                ? path.substring(0, path.lastIndexOf('/'))
-                : '';
-            final parent = folderIds[parentPath];
-            if (parent == null) {
-              conflicts++;
-              continue;
-            }
-            final data = <String, dynamic>{
-              'entry': randomId(),
-              'folder': parent,
-              'name': path.split('/').last,
-              'type': item.directory ? 'folder' : 'file',
-              'deleted': false,
-            };
-            // Preserve the snapshot token, not a newer edit made during import.
-            record(
-              data['entry'],
-              path,
-              await revise(data, const [], path, item),
-              item.directory,
-              item,
-            );
-            if (item.directory) folderIds[path] = data['entry'];
+                  state[e.value.current.entry] != null &&
+                  state[e.value.current.entry]['path'] != e.key,
+            )
+            .toList()
+          ..sort(
+            (a, b) =>
+                a.key.split('/').length.compareTo(b.key.split('/').length),
+          );
+    for (final moved in relocated) {
+      final entry = moved.value, base = state[moved.value.current.entry];
+      if (entry.conflicted || base['path'] == moved.key) continue;
+      final oldPath = base['path'] as String;
+      final old = local[oldPath];
+      if (old?.token != base['token'] || old == null) continue;
+      try {
+        await fs.move(oldPath, moved.key, old.token);
+        final after = await fs.scan();
+        for (final id in state.keys.toList()) {
+          final item = state[id];
+          final path = item['path'] as String;
+          if (path != oldPath &&
+              !(old.directory && path.startsWith('$oldPath/')))
             continue;
-          }
-          if (existing == null) continue;
-          final v = existing.current;
-          final base = state[v.entry];
-          if (base != null && base['path'] != path) {
-            // A local edit/deletion concurrent with a move gets its own branch,
-            // based on the revision/path actually present on this device.
-            final oldPath = base['path'] as String;
-            final old = local[oldPath];
-            if (old?.token != base['token']) {
-              final ancestor = existing.history
-                  .where((h) => h.data['revision'] == base['revision'])
-                  .firstOrNull;
-              if (ancestor == null)
-                throw StateError('Local revision is unavailable');
-              state[v.entry] = {
-                ...base,
-                'revision': await revise(
-                  {...ancestor.data, 'deleted': old == null},
-                  [base['revision'] as String],
-                  oldPath,
-                  old,
-                ),
-                'token': old?.token,
-              };
-              persist(v.entry);
-            }
+          final next = '${moved.key}${path.substring(oldPath.length)}';
+          final unchanged = local[path]?.token == item['token'];
+          state[id] = {
+            ...item,
+            'path': next,
+            if (unchanged &&
+                path == oldPath &&
+                after[next] != null &&
+                (old.directory ||
+                    (old.contentStamp ?? old.token) ==
+                        (after[next]!.contentStamp ?? after[next]!.token)))
+              'token': after[next]!.token,
+          };
+          persist(id);
+        }
+        local = after;
+      } catch (e) {
+        report('$oldPath → ${moved.key}: $e');
+      }
+    }
+    final mappedPaths = {
+      for (final value in state.values) value['path'] as String,
+    };
+    // A folder deletion concurrent with an added/edited descendant is a
+    // folder conflict, not permission to hide or remove the descendant.
+    final baselineByPath = {
+      for (final item in state.values) item['path'] as String: item,
+    };
+    // A folder deleted elsewhere lists the entries deleted with it
+    // ('removed'). Records travel in pages, newest first, so the folder's
+    // deletion can arrive before its children's: an unchanged child it
+    // lists is on its way out, not a concurrent addition.
+    final departing = <String>{};
+    for (final path in local.keys.toList()..sort(_byDepth)) {
+      final entry = remote[path], base = baselineByPath[path];
+      if (!path.contains('/') ||
+          entry == null ||
+          base == null ||
+          entry.conflicted ||
+          entry.current.deleted ||
+          base['token'] != local[path]!.token ||
+          base['revision'] != entry.current.data['revision'])
+        continue;
+      final parentPath = path.substring(0, path.lastIndexOf('/'));
+      final parent = remote[parentPath];
+      if (departing.contains(parentPath) ||
+          (parent != null &&
+              !parent.conflicted &&
+              parent.current.deleted &&
+              (parent.current.data['removed'] as List?)?.contains(
+                    entry.current.entry,
+                  ) ==
+                  true))
+        departing.add(path);
+    }
+    final waiting = {
+      for (final path in departing) path.substring(0, path.lastIndexOf('/')),
+    };
+    final dirtyParents = <String>{};
+    for (final item in local.entries) {
+      if (departing.contains(item.key)) continue;
+      final liveRemoteChild =
+          remote[item.key]?.heads.any((v) => !v.deleted) ?? false;
+      if (baselineByPath[item.key]?['token'] == item.value.token &&
+          !liveRemoteChild)
+        continue;
+      var parent = item.key;
+      while (parent.contains('/')) {
+        parent = parent.substring(0, parent.lastIndexOf('/'));
+        dirtyParents.add(parent);
+      }
+    }
+    for (final path in dirtyParents) {
+      final entry = remote[path];
+      if (entry == null ||
+          entry.conflicted ||
+          !entry.current.deleted ||
+          !entry.current.isFolder ||
+          local[path]?.directory != true)
+        continue;
+      final base = state[entry.current.entry];
+      if (base == null) continue;
+      final object = await drive.write(
+        {...entry.current.data, 'deleted': false},
+        parents: [base['revision'] as String],
+      );
+      final version = DriveVersion(object, (await node.content(object))!);
+      state[version.entry] = {
+        ...base,
+        'revision': version.data['revision'],
+        'token': local[path]!.token,
+      };
+      persist(version.entry);
+      remote[path] = DriveEntry(entry.history, [version, ...entry.heads]);
+    }
+    // Local additions are processed parent-first, including empty directories.
+    final paths = {...local.keys, ...remote.keys}.toList()..sort(_byDepth);
+    // Entries deleted here this pass, by parent path, so a folder deleted
+    // with them can list them.
+    final removedUnder = <String, List<String>>{};
+    for (final e in remote.entries) {
+      final base = state[e.value.current.entry];
+      if (!e.key.contains('/') ||
+          local.containsKey(e.key) ||
+          base == null ||
+          base['path'] != e.key ||
+          base['token'] == null)
+        continue;
+      (removedUnder[e.key.substring(0, e.key.lastIndexOf('/'))] ??= []).add(
+        e.value.current.entry,
+      );
+    }
+    final folderIds = <String, String>{
+      '': root,
+      // A concurrent new child follows its parent's stable identity even
+      // when that parent has moved outside this device's connected subtree.
+      for (final item in state.entries)
+        if (item.value['directory'] == true &&
+            byId[item.key]?.current.isFolder == true &&
+            byId[item.key]?.current.deleted == false)
+          item.value['path'] as String: item.key,
+    };
+    // First-sync choices for this folder's copy: drive entries it lacks are
+    // deleted from the drive, a folder only when everything in it goes too.
+    // Files go in this loop; folders after it, deepest first.
+    final deleting = <String>{};
+    for (final path in remote.keys.toList()..sort((a, b) => _byDepth(b, a))) {
+      final entry = remote[path]!, v = entry.current;
+      if (local.containsKey(path) ||
+          entry.conflicted ||
+          v.deleted ||
+          state[v.entry] != null ||
+          keep(path, null, v) != FirstSyncChoice.here)
+        continue;
+      if (v.isFolder &&
+          remote.entries.any(
+            (e) =>
+                e.key.startsWith('$path/') &&
+                !e.value.current.deleted &&
+                !deleting.contains(e.key),
+          ))
+        continue;
+      deleting.add(path);
+    }
+    for (final path in paths) {
+      if (_closed) return;
+      try {
+        final existing = remote[path];
+        if (existing?.current.isFolder == true)
+          folderIds[path] = existing!.current.entry;
+        final item = local[path];
+        if (existing == null && item != null) {
+          // A remote rename/move must not cause an old mapped path to be
+          // imported as a new unrelated entry.
+          if (mappedPaths.contains(path)) {
             conflicts++;
             continue;
           }
-          final changed = base != null && item?.token != base['token'];
-          if (changed) {
-            if (item != null && item.directory != v.isFolder) {
-              conflicts++;
-              continue;
-            }
-            final baseRevision = base['revision'] as String;
-            final removed = removedUnder[path];
+          final parentPath = path.contains('/')
+              ? path.substring(0, path.lastIndexOf('/'))
+              : '';
+          final parent = folderIds[parentPath];
+          if (parent == null) {
+            conflicts++;
+            continue;
+          }
+          final data = <String, dynamic>{
+            'entry': randomId(),
+            'folder': parent,
+            'name': path.split('/').last,
+            'type': item.directory ? 'folder' : 'file',
+            'deleted': false,
+          };
+          // Preserve the snapshot token, not a newer edit made during import.
+          record(
+            data['entry'],
+            path,
+            await revise(data, const [], path, item),
+            item.directory,
+            item,
+          );
+          if (item.directory) folderIds[path] = data['entry'];
+          continue;
+        }
+        if (existing == null) continue;
+        final v = existing.current;
+        final base = state[v.entry];
+        if (base != null && base['path'] != path) {
+          // A local edit/deletion concurrent with a move gets its own branch,
+          // based on the revision/path actually present on this device.
+          final oldPath = base['path'] as String;
+          final old = local[oldPath];
+          if (old?.token != base['token']) {
+            final ancestor = existing.history
+                .where((h) => h.data['revision'] == base['revision'])
+                .firstOrNull;
+            if (ancestor == null)
+              throw StateError('Local revision is unavailable');
             state[v.entry] = {
-              'path': path,
+              ...base,
               'revision': await revise(
-                {
-                  ...v.data,
-                  'deleted': item == null,
-                  // Bounded: a longer list only costs the early arrival case.
-                  if (item == null &&
-                      v.isFolder &&
-                      removed != null &&
-                      removed.length <= 1000)
-                    'removed': removed,
-                },
-                [baseRevision],
-                path,
-                item,
+                {...ancestor.data, 'deleted': old == null},
+                [base['revision'] as String],
+                oldPath,
+                old,
               ),
-              'token': item?.token,
-              'directory': v.isFolder,
+              'token': old?.token,
             };
             persist(v.entry);
-            if (existing.conflicted || v.data['revision'] != baseRevision)
-              conflicts++;
-            continue;
           }
-          if (existing.conflicted) {
-            conflicts++;
-            continue;
-          }
-          if (base?['revision'] == v.data['revision']) continue;
-          if (deleting.contains(path)) {
-            if (!v.isFolder) await deleteFromDrive(path, v);
-            continue;
-          }
-          if (base == null && item != null && !(item.directory && v.isFolder)) {
-            // Initial nonempty destination: retain its contents as a concurrent
-            // revision. No timestamp winner and no first-sync overwrite.
-            if (item.directory != v.isFolder) {
-              conflicts++;
-              continue;
-            }
-            staged = null;
-            // An identical file adopts the drive's revision instead: no
-            // rival head and no upload.
-            if (!v.deleted && await sameFile(path, item, v)) {
-              record(v.entry, path, v.data['revision'], false, item);
-              continue;
-            }
-            final choice = keep(path, item, v);
-            if (!v.deleted && choice == FirstSyncChoice.here) {
-              // Chosen: the local copy, as a normal edit of the drive's.
-              record(
-                v.entry,
-                path,
-                await revise(
-                  {...v.data, 'deleted': false},
-                  [v.data['revision'] as String],
-                  path,
-                  item,
-                ),
-                false,
-                item,
-              );
-              continue;
-            }
-            final earlier = v.deleted
-                ? null
-                : await earlierFile(path, item, existing);
-            if (earlier != null) {
-              record(v.entry, path, earlier, false, item);
-              await fetch(path, v, item, v.data['revision']);
-              continue;
-            }
-            if (!v.deleted && choice == FirstSyncChoice.drive) {
-              // Chosen: the drive's copy. The local one joins drive history
-              // as a concurrent revision, merged at once in the drive's
-              // favour, then the drive's copy replaces it here.
-              final kept = await revise(
-                {...v.data, 'deleted': false},
-                const [],
-                path,
-                item,
-              );
-              record(v.entry, path, kept, false, item);
-              final merged = await drive.write(
-                {...v.data},
-                parents: [v.data['revision'] as String, kept],
-              );
-              await fetch(
-                path,
-                v,
-                item,
-                (await node.content(merged))!['revision'],
-              );
-              continue;
-            }
-            record(
-              v.entry,
-              path,
-              await revise({...v.data, 'deleted': false}, const [], path, item),
-              false,
-              item,
-            );
-            conflicts++;
-            continue;
-          }
-          if (v.deleted) continue; // Delete leaves last, after children.
-          await fetch(path, v, item, v.data['revision']);
-        } catch (e) {
-          retry.add(path);
-          report('$path: $e');
-        }
-      }
-      for (final path in deleting.toList()..sort((a, b) => _byDepth(b, a))) {
-        final v = remote[path]!.current;
-        if (!v.isFolder) continue;
-        try {
-          await deleteFromDrive(path, v);
-        } catch (e) {
-          retry.add(path);
-          report('$path: $e');
-        }
-      }
-      for (final path in paths.reversed) {
-        try {
-          final entry = remote[path];
-          if (entry == null || entry.conflicted || !entry.current.deleted)
-            continue;
-          final v = entry.current, base = state[v.entry];
-          if (base == null ||
-              base['revision'] == v.data['revision'] ||
-              base['path'] != path)
-            continue;
-          final item = local[path];
-          if (item?.token != base['token']) continue;
-          // Its children's deletions have not arrived yet.
-          if (waiting.contains(path)) continue;
-          if (item != null) await fs.remove(path, item.token);
-          state[v.entry] = {
-            'path': path,
-            'revision': v.data['revision'],
-            'token': null,
-            'directory': v.isFolder,
-          };
-          persist(v.entry);
-        } catch (e) {
-          report('$path: $e');
-        }
-      }
-      final remoteIds = {for (final e in remote.values) e.current.entry};
-      final departed =
-          state.keys
-              .where((id) => !remoteIds.contains(id) && byId.containsKey(id))
-              .toList()
-            ..sort(
-              (a, b) => (state[b]['path'] as String).length.compareTo(
-                (state[a]['path'] as String).length,
-              ),
-            );
-      for (final id in departed) {
-        final entry = byId[id]!;
-        if (entry.conflicted) {
           conflicts++;
           continue;
         }
-        final base = state[id], path = state[id]['path'] as String;
-        final item = local[path];
-        if (item?.token != base['token']) {
-          // Do not discard edits when a file was moved out of this subtree.
-          // The user can resolve the location/content conflict in drive history.
-          final ancestor = entry.history
-              .where((h) => h.data['revision'] == base['revision'])
-              .firstOrNull;
-          if (ancestor == null) {
+        final changed = base != null && item?.token != base['token'];
+        if (changed) {
+          if (item != null && item.directory != v.isFolder) {
             conflicts++;
             continue;
           }
-          try {
-            state[id] = {
-              ...base,
-              'revision': await revise(
-                {...ancestor.data, 'deleted': item == null},
-                [base['revision'] as String],
+          final baseRevision = base['revision'] as String;
+          final removed = removedUnder[path];
+          state[v.entry] = {
+            'path': path,
+            'revision': await revise(
+              {
+                ...v.data,
+                'deleted': item == null,
+                // Bounded: a longer list only costs the early arrival case.
+                if (item == null &&
+                    v.isFolder &&
+                    removed != null &&
+                    removed.length <= 1000)
+                  'removed': removed,
+              },
+              [baseRevision],
+              path,
+              item,
+            ),
+            'token': item?.token,
+            'directory': v.isFolder,
+          };
+          persist(v.entry);
+          if (existing.conflicted || v.data['revision'] != baseRevision)
+            conflicts++;
+          continue;
+        }
+        if (existing.conflicted) {
+          conflicts++;
+          continue;
+        }
+        if (base?['revision'] == v.data['revision']) continue;
+        if (deleting.contains(path)) {
+          if (!v.isFolder) await deleteFromDrive(path, v);
+          continue;
+        }
+        if (base == null && item != null && !(item.directory && v.isFolder)) {
+          // Initial nonempty destination: retain its contents as a concurrent
+          // revision. No timestamp winner and no first-sync overwrite.
+          if (item.directory != v.isFolder) {
+            conflicts++;
+            continue;
+          }
+          // An identical file adopts the drive's revision instead: no
+          // rival head and no upload.
+          if (!v.deleted && await sameFile(path, item, v)) {
+            record(v.entry, path, v.data['revision'], false, item);
+            continue;
+          }
+          final choice = keep(path, item, v);
+          if (!v.deleted && choice == FirstSyncChoice.here) {
+            // Chosen: the local copy, as a normal edit of the drive's.
+            record(
+              v.entry,
+              path,
+              await revise(
+                {...v.data, 'deleted': false},
+                [v.data['revision'] as String],
                 path,
                 item,
               ),
-              'token': item?.token,
-            };
-            persist(id);
-            conflicts++;
-          } catch (e) {
-            report('$path: $e');
+              false,
+              item,
+            );
+            continue;
           }
+          final earlier = v.deleted
+              ? null
+              : await earlierFile(path, item, existing);
+          if (earlier != null) {
+            record(v.entry, path, earlier, false, item);
+            await fetch(path, v, item, v.data['revision']);
+            continue;
+          }
+          if (!v.deleted && choice == FirstSyncChoice.drive) {
+            // Chosen: the drive's copy. The local one joins drive history
+            // as a concurrent revision, merged at once in the drive's
+            // favour, then the drive's copy replaces it here.
+            final kept = await revise(
+              {...v.data, 'deleted': false},
+              const [],
+              path,
+              item,
+            );
+            record(v.entry, path, kept, false, item);
+            final merged = await drive.write(
+              {...v.data},
+              parents: [v.data['revision'] as String, kept],
+            );
+            await fetch(
+              path,
+              v,
+              item,
+              (await node.content(merged))!['revision'],
+            );
+            continue;
+          }
+          record(
+            v.entry,
+            path,
+            await revise({...v.data, 'deleted': false}, const [], path, item),
+            false,
+            item,
+          );
+          conflicts++;
+          continue;
+        }
+        if (v.deleted) continue; // Delete leaves last, after children.
+        await fetch(path, v, item, v.data['revision']);
+      } catch (e) {
+        retry.add(path);
+        report('$path: $e');
+      }
+    }
+    for (final path in deleting.toList()..sort((a, b) => _byDepth(b, a))) {
+      final v = remote[path]!.current;
+      if (!v.isFolder) continue;
+      try {
+        await deleteFromDrive(path, v);
+      } catch (e) {
+        retry.add(path);
+        report('$path: $e');
+      }
+    }
+    for (final path in paths.reversed) {
+      try {
+        final entry = remote[path];
+        if (entry == null || entry.conflicted || !entry.current.deleted)
+          continue;
+        final v = entry.current, base = state[v.entry];
+        if (base == null ||
+            base['revision'] == v.data['revision'] ||
+            base['path'] != path)
+          continue;
+        final item = local[path];
+        if (item?.token != base['token']) continue;
+        // Its children's deletions have not arrived yet.
+        if (waiting.contains(path)) continue;
+        if (item != null) await fs.remove(path, item.token);
+        state[v.entry] = {
+          'path': path,
+          'revision': v.data['revision'],
+          'token': null,
+          'directory': v.isFolder,
+        };
+        persist(v.entry);
+      } catch (e) {
+        report('$path: $e');
+      }
+    }
+    final remoteIds = {for (final e in remote.values) e.current.entry};
+    final departed =
+        state.keys
+            .where((id) => !remoteIds.contains(id) && byId.containsKey(id))
+            .toList()
+          ..sort(
+            (a, b) => (state[b]['path'] as String).length.compareTo(
+              (state[a]['path'] as String).length,
+            ),
+          );
+    for (final id in departed) {
+      final entry = byId[id]!;
+      if (entry.conflicted) {
+        conflicts++;
+        continue;
+      }
+      final base = state[id], path = state[id]['path'] as String;
+      final item = local[path];
+      if (item?.token != base['token']) {
+        // Do not discard edits when a file was moved out of this subtree.
+        // The user can resolve the location/content conflict in drive history.
+        final ancestor = entry.history
+            .where((h) => h.data['revision'] == base['revision'])
+            .firstOrNull;
+        if (ancestor == null) {
+          conflicts++;
           continue;
         }
         try {
-          if (item != null) await fs.remove(path, item.token);
-          state[id] = {...base, 'token': null};
+          state[id] = {
+            ...base,
+            'revision': await revise(
+              {...ancestor.data, 'deleted': item == null},
+              [base['revision'] as String],
+              path,
+              item,
+            ),
+            'token': item?.token,
+          };
           persist(id);
+          conflicts++;
         } catch (e) {
           report('$path: $e');
         }
+        continue;
       }
-      // A completed pass has applied the first-sync choices it could; only
-      // those that failed are tried again.
-      if (first.isNotEmpty) {
-        final configs = connections;
-        if (configs[root] is Map) {
-          final remaining = {
-            for (final path in retry)
-              if (first[path] != null) path: first[path],
-          };
-          configs[root] = {...configs[root] as Map}..remove('firstSync');
-          if (remaining.isNotEmpty) configs[root]['firstSync'] = remaining;
-          node.store.set('folder-sync/connections', configs);
-        }
+      try {
+        if (item != null) await fs.remove(path, item.token);
+        state[id] = {...base, 'token': null};
+        persist(id);
+      } catch (e) {
+        report('$path: $e');
       }
-      final aside = setAside == 0
-          ? ''
-          : '$setAside not-synced ${setAside == 1 ? 'item' : 'items'} '
-                'moved to $asideIn\n';
-      status[root] = errors.isNotEmpty
-          ? aside + errors.join('\n')
-          : conflicts == 0
-          ? '${aside}Local folder up to date · peer delivery depends on connection'
-          : '$aside$conflicts conflicts · local files preserved; resolve in drive history';
-    } finally {
-      // Only this newly created staging directory is ever recursively removed.
-      await stage.delete(recursive: true);
     }
+    // A completed pass has applied the first-sync choices it could; only
+    // those that failed are tried again.
+    if (first.isNotEmpty) {
+      final configs = connections;
+      if (configs[root] is Map) {
+        final remaining = {
+          for (final path in retry)
+            if (first[path] != null) path: first[path],
+        };
+        configs[root] = {...configs[root] as Map}..remove('firstSync');
+        if (remaining.isNotEmpty) configs[root]['firstSync'] = remaining;
+        node.store.set('folder-sync/connections', configs);
+      }
+    }
+    final aside = setAside == 0
+        ? ''
+        : '$setAside not-synced ${setAside == 1 ? 'item' : 'items'} '
+              'moved to $asideIn\n';
+    status[root] = errors.isNotEmpty
+        ? aside + errors.join('\n')
+        : conflicts == 0
+        ? '${aside}Local folder up to date · peer delivery depends on connection'
+        : '$aside$conflicts conflicts · local files preserved; resolve in drive history';
   }
 
   Future<void> close() async {

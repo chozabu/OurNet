@@ -43,12 +43,57 @@ class Files {
     Json? extra,
     List<String> via = const [],
     void Function(int completed, int total)? onProgress,
-  }) async {
-    final stored = await store(
-      path,
+  }) async => _publish(
+    await store(path, encrypt: audience.isNotEmpty, onProgress: onProgress),
+    audience: audience,
+    text: text,
+    name: name,
+    drive: drive,
+    everyday: everyday,
+    room: room,
+    postSpace: postSpace,
+    post: post,
+    kind: kind,
+    extra: extra,
+    via: via,
+  );
+
+  /// Publishes a file read from [source] as it is encrypted, with no copy
+  /// on disk: a folder sync file, say. [size] must be its exact length.
+  Future<SignedObject> publishFrom(
+    Stream<List<int>> source, {
+    required int size,
+    required String name,
+    List<String> audience = const [],
+    Json? drive,
+    void Function(int completed, int total)? onProgress,
+  }) async => _publish(
+    await storeFrom(
+      source,
+      size: size,
+      name: name,
       encrypt: audience.isNotEmpty,
       onProgress: onProgress,
-    );
+    ),
+    audience: audience,
+    name: name,
+    drive: drive,
+  );
+
+  Future<SignedObject> _publish(
+    Json stored, {
+    required List<String> audience,
+    String text = '',
+    String? name,
+    Json? drive,
+    Json? everyday,
+    String? room,
+    String? postSpace,
+    Json? post,
+    String? kind,
+    Json? extra,
+    List<String> via = const [],
+  }) async {
     return await node.publish(
       kind ??
           (postSpace != null
@@ -100,11 +145,29 @@ class Files {
     bool encrypt = true,
     void Function(int completed, int total)? onProgress,
   }) async {
+    final file = File(path);
+    final size = await file.length();
+    if (size > maxSize) throw StateError('Prototype file limit is 64 MiB');
+    return storeFrom(
+      file.openRead(),
+      size: size,
+      name: file.uri.pathSegments.last,
+      encrypt: encrypt,
+      onProgress: onProgress,
+    );
+  }
+
+  /// [store] for a file read from [source] as it is encrypted, a chunk at a
+  /// time. [size] must be its exact length, or the import fails as changed.
+  Future<Json> storeFrom(
+    Stream<List<int>> source, {
+    required int size,
+    required String name,
+    bool encrypt = true,
+    void Function(int completed, int total)? onProgress,
+  }) async {
     final trace = TimelineTask()..start('attachment.import');
     try {
-      final file = File(path);
-      final size = await file.length();
-      if (size > maxSize) throw StateError('Prototype file limit is 64 MiB');
       final key = await Chacha20.poly1305Aead().newSecretKey();
       final keyBytes = encrypt ? await key.extractBytes() : null;
       final bytes = newChunkBytes;
@@ -114,24 +177,15 @@ class Files {
       );
       var completed = 0;
       onProgress?.call(0, size);
-      final handle = await file.open();
-      try {
-        while (true) {
-          final data = await handle.read(bytes);
-          if (data.isEmpty) break;
-          completed += data.length;
-          if (completed > size) {
-            throw StateError('File changed during import');
-          }
-          await listing.add(await node.blobs.encode(data, keyBytes));
-          onProgress?.call(completed, size);
-        }
-      } finally {
-        await handle.close();
+      await for (final data in rechunk(source, bytes)) {
+        completed += data.length;
+        if (completed > size) throw StateError('File changed during import');
+        await listing.add(await node.blobs.encode(data, keyBytes));
+        onProgress?.call(completed, size);
       }
       if (completed != size) throw StateError('File changed during import');
       final stored = {
-        'name': file.uri.pathSegments.last,
+        'name': name,
         'size': size,
         ...await listing.finish(),
         'chunkBytes': bytes,
@@ -274,6 +328,13 @@ class Files {
     await indexTree(payload);
   }
 
+  /// The plaintext of [object]'s file, fetched and decrypted a chunk at a
+  /// time as it is read: for writing straight to where it is wanted.
+  Stream<List<int>> open(
+    SignedObject object, {
+    void Function(int, int)? onProgress,
+  }) => _plain(object, onProgress: onProgress);
+
   /// Decode only into memory; the durable cache retains encrypted chunks.
   Future<Uint8List> readBytes(
     SignedObject object, {
@@ -345,6 +406,48 @@ class Files {
       if (await target.exists()) await target.delete();
     }
   });
+}
+
+/// [source] in pieces of exactly [size] bytes, the last one shorter.
+Stream<Uint8List> rechunk(Stream<List<int>> source, int size) async* {
+  var buffer = Uint8List(size);
+  var filled = 0;
+  await for (final data in source) {
+    var at = 0;
+    while (at < data.length) {
+      final n = min(size - filled, data.length - at);
+      buffer.setRange(filled, filled + n, data, at);
+      filled += n;
+      at += n;
+      if (filled == size) {
+        yield buffer;
+        buffer = Uint8List(size);
+        filled = 0;
+      }
+    }
+  }
+  if (filled > 0) yield Uint8List.sublistView(buffer, 0, filled);
+}
+
+/// Whether two byte streams hold the same bytes, however they are split.
+Future<bool> sameBytes(Stream<List<int>> a, Stream<List<int>> b) async {
+  final left = StreamIterator(rechunk(a, Files.chunkSize));
+  final right = StreamIterator(rechunk(b, Files.chunkSize));
+  try {
+    while (true) {
+      final more = await left.moveNext();
+      if (more != await right.moveNext()) return false;
+      if (!more) return true;
+      final x = left.current, y = right.current;
+      if (x.length != y.length) return false;
+      for (var i = 0; i < x.length; i++) {
+        if (x[i] != y[i]) return false;
+      }
+    }
+  } finally {
+    await left.cancel();
+    await right.cancel();
+  }
 }
 
 class _Missing {

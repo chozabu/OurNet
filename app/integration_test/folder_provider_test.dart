@@ -48,7 +48,7 @@ void main() {
         await sync.connect(root, location);
         final source = File('${directory.path}/source');
         await source.writeAsString('Created on phone');
-        await fs.put('phone.txt', source.path, null);
+        await fs.write('phone.txt', source.openRead(), null);
         await sync.sync();
         expect(sync.status[root], contains('up to date'));
         var entry = (await Drive(
@@ -64,7 +64,7 @@ void main() {
         final reopened = folderBackend(location);
         final token = (await reopened.stat('phone.txt'))!.token;
         await source.writeAsString('Edited on phone, different size');
-        await reopened.put('phone.txt', source.path, token);
+        await reopened.write('phone.txt', source.openRead(), token);
         await sync.sync();
         entry = (await Drive(
           node,
@@ -74,7 +74,7 @@ void main() {
         expect(await reopened.stat('phone.txt'), isNull);
         expect(sync.status[root], contains('up to date'));
         await reopened.mkdir('nested');
-        await reopened.put('nested/new.txt', source.path, null);
+        await reopened.write('nested/new.txt', source.openRead(), null);
         await sync.sync();
         expect(
           (await Drive(

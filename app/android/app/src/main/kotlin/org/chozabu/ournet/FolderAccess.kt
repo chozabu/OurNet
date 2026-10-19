@@ -5,7 +5,8 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract as Docs
 import io.flutter.plugin.common.MethodChannel
-import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.UUID
 import java.util.concurrent.Executors
 
@@ -31,6 +32,36 @@ class FolderAccess(private val activity: Activity, channel: MethodChannel) {
                 return@setMethodCallHandler
             }
             worker.execute {
+                // Chunks of an open read or write: no tree lookups per chunk.
+                if (call.method in setOf("readNext", "readClose", "writeNext", "writeAbort")) {
+                    try {
+                        val handle = requireNotNull(call.argument<Int>("handle"))
+                        val value: Any? = when (call.method) {
+                            "readNext" -> {
+                                val input = requireNotNull(readers[handle]) { "Read closed" }.input
+                                val buffer = ByteArray(131072)
+                                var n = 0
+                                while (n < buffer.size) {
+                                    val got = input.read(buffer, n, buffer.size - n)
+                                    if (got < 0) break
+                                    n += got
+                                }
+                                if (n == 0) null else buffer.copyOf(n)
+                            }
+                            "readClose" -> { readers.remove(handle)?.input?.close(); null }
+                            "writeNext" -> {
+                                val writer = requireNotNull(writers[handle]) { "Write closed" }
+                                writer.output.write(requireNotNull(call.argument<ByteArray>("bytes")))
+                                null
+                            }
+                            else -> { writers.remove(handle)?.abort(); null }
+                        }
+                        activity.runOnUiThread { result.success(value) }
+                    } catch (e: Exception) {
+                        activity.runOnUiThread { result.error("folder", e.message ?: "Folder unavailable", null) }
+                    }
+                    return@execute
+                }
                 try {
                     val tree = Uri.parse(requireNotNull(call.argument<String>("tree")))
                     require(tree.scheme == "content") { "Invalid document tree" }
@@ -56,21 +87,17 @@ class FolderAccess(private val activity: Activity, channel: MethodChannel) {
                             visit(root, "", 0); found
                         }
                         "stat" -> resolve(tree, root, path)?.map()
-                        "read" -> {
+                        "readOpen" -> {
                             val doc = check(tree, root, path, expected) ?: error("File missing")
-                            require(!doc.directory && doc.size <= LIMIT) { "File exceeds 64 MiB" }
-                            val destination = File(requireNotNull(call.argument<String>("destination")))
-                            resolver.openInputStream(doc.uri).use { input ->
-                                requireNotNull(input) { "Cannot open file" }
-                                destination.outputStream().use { output ->
-                                    val buffer = ByteArray(131072); var total = 0L
-                                    while (true) {
-                                        val n = input.read(buffer); if (n < 0) break
-                                        total += n; require(total <= LIMIT) { "File exceeds 64 MiB" }
-                                        output.write(buffer, 0, n)
-                                    }
-                                }
-                            }
+                            require(!doc.directory) { "Folder is not a file: $path" }
+                            val input = requireNotNull(resolver.openInputStream(doc.uri)) { "Cannot open file" }
+                            val handle = nextHandle++
+                            readers[handle] = Reader(input)
+                            handle
+                        }
+                        "readEnd" -> {
+                            // The token is checked again once read: an edit meanwhile fails it.
+                            readers.remove(requireNotNull(call.argument<Int>("handle")))?.input?.close()
                             check(tree, root, path, expected); null
                         }
                         "mkdir" -> {
@@ -81,18 +108,30 @@ class FolderAccess(private val activity: Activity, channel: MethodChannel) {
                                 requireNotNull(Docs.createDocument(resolver, parent, Docs.Document.MIME_TYPE_DIR, name))
                             }; null
                         }
-                        "put" -> {
-                            val (parent, name) = parent(tree, root, path)
-                            val tempName = ".ournet-${UUID.randomUUID()}.part"
-                            var temp: Uri? = requireNotNull(Docs.createDocument(resolver, parent, "application/octet-stream", tempName))
+                        "writeOpen" -> {
+                            val (parent, _) = parent(tree, root, path)
+                            val temp = requireNotNull(Docs.createDocument(resolver, parent, "application/octet-stream",
+                                ".ournet-${UUID.randomUUID()}.part"))
+                            val output = try {
+                                requireNotNull(resolver.openOutputStream(temp, "w")) { "Cannot write file" }
+                            } catch (e: Exception) {
+                                try { Docs.deleteDocument(resolver, temp) } catch (_: Exception) {}
+                                throw e
+                            }
+                            val handle = nextHandle++
+                            writers[handle] = Writer(temp, output)
+                            handle
+                        }
+                        "writeCommit" -> {
+                            val writer = requireNotNull(writers.remove(requireNotNull(call.argument<Int>("handle")))) {
+                                "Write closed"
+                            }
+                            var temp: Uri? = writer.temp
                             var backup: Uri? = null
                             var written: Map<String, Any>? = null
+                            val (_, name) = parent(tree, root, path)
                             try {
-                                val source = File(requireNotNull(call.argument<String>("source")))
-                                require(source.length() <= LIMIT) { "File exceeds 64 MiB" }
-                                resolver.openOutputStream(temp!!, "w").use { output ->
-                                    requireNotNull(output); source.inputStream().use { it.copyTo(output, 131072) }
-                                }
+                                writer.output.close()
                                 val old = check(tree, root, path, expected)
                                 require(old?.directory != true) { "Folder blocks file: $path" }
                                 if (old != null) backup = requireNotNull(Docs.renameDocument(resolver, old.uri,
@@ -198,6 +237,18 @@ class FolderAccess(private val activity: Activity, channel: MethodChannel) {
             }
         }
     }
+    /** Open streamed reads and writes, by handle; touched only on [worker]. */
+    private class Reader(val input: InputStream)
+    private inner class Writer(val temp: Uri, val output: OutputStream) {
+        fun abort() {
+            try { output.close() } catch (_: Exception) {}
+            try { Docs.deleteDocument(resolver, temp) } catch (_: Exception) {}
+        }
+    }
+    private val readers = HashMap<Int, Reader>()
+    private val writers = HashMap<Int, Writer>()
+    private var nextHandle = 1
+
     fun close() {
         picker?.error("closed", "Folder picker activity closed; retry", null)
         picker = null

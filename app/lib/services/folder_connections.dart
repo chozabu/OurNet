@@ -45,26 +45,66 @@ class AndroidFolderBackend extends FolderBackend {
     return value == null ? null : item(value);
   }
 
+  /// Read through a handle a chunk at a time; the provider checks the
+  /// token when the read opens and again once it has ended.
   @override
-  Future<void> readTo(String path, String destination, String expected) async {
-    await call('read', {
+  Stream<List<int>> read(String path, String expected) async* {
+    final handle = await call<int>('readOpen', {
       'path': path,
-      'destination': destination,
       'expected': expected,
     });
+    var ended = false;
+    try {
+      while (true) {
+        final bytes = await call<Uint8List>('readNext', {'handle': handle});
+        if (bytes == null) break;
+        yield bytes;
+      }
+      ended = true;
+      await call('readEnd', {
+        'handle': handle,
+        'path': path,
+        'expected': expected,
+      });
+    } finally {
+      if (!ended) {
+        await call('readClose', {'handle': handle}).catchError((_) => null);
+      }
+    }
   }
 
+  /// Written a chunk at a time into a temporary document beside [path],
+  /// which replaces it on commit only if its token is still [expected].
   @override
-  Future<FolderItem> put(String path, String source, String? expected) async {
-    final value = await call<Map>('put', {
-      'path': path,
-      'source': source,
-      'expected': expected,
-    });
-    if (value == null) {
-      throw StateError('Provider did not confirm the written file');
+  Future<FolderItem> write(
+    String path,
+    Stream<List<int>> data,
+    String? expected,
+  ) async {
+    final handle = await call<int>('writeOpen', {'path': path});
+    var committed = false;
+    try {
+      await for (final bytes in data) {
+        await call('writeNext', {
+          'handle': handle,
+          'bytes': bytes is Uint8List ? bytes : Uint8List.fromList(bytes),
+        });
+      }
+      final value = await call<Map>('writeCommit', {
+        'handle': handle,
+        'path': path,
+        'expected': expected,
+      });
+      committed = true;
+      if (value == null) {
+        throw StateError('Provider did not confirm the written file');
+      }
+      return item(value);
+    } finally {
+      if (!committed) {
+        await call('writeAbort', {'handle': handle}).catchError((_) => null);
+      }
     }
-    return item(value);
   }
 
   @override

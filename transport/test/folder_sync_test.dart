@@ -9,8 +9,12 @@ class EditingBackend extends DiskFolderBackend {
   bool editAfterPut = false;
   bool editAfterMove = false;
   @override
-  Future<FolderItem> put(String path, String source, String? expected) async {
-    final written = await super.put(path, source, expected);
+  Future<FolderItem> write(
+    String path,
+    Stream<List<int>> data,
+    String? expected,
+  ) async {
+    final written = await super.write(path, data, expected);
     if (editAfterPut) {
       editAfterPut = false;
       await File(
@@ -522,16 +526,61 @@ void main() {
     await Future<void>.delayed(const Duration(seconds: 2));
     expect(updates, idle); // Nothing connected: nothing to redraw.
   });
+  test(
+    'a tree-listed file syncs both ways, streamed without staging copies',
+    () async {
+      Files.newChunkBytes = 1024; // 700 chunks: a chunk tree.
+      addTearDown(() => Files.newChunkBytes = Files.chunkSize);
+      final bytes = List.generate(700 * 1024 + 3, (i) => (i * 13) & 255);
+      await File('${desktop.path}/big.bin').writeAsBytes(bytes);
+      final before = Directory.systemTemp
+          .listSync()
+          .where((e) => e.path.contains('ournet-folder-'))
+          .length;
+      await settle();
+      expect(await File('${phone.path}/big.bin').readAsBytes(), bytes);
+      final entry = (await Drive(
+        a,
+      ).entries()).singleWhere((e) => e.current.data['name'] == 'big.bin');
+      expect(entry.current.data['chunkTree'], isNotEmpty);
+      // An edit on the phone comes back the same way.
+      final edited = [...bytes.reversed, 1, 2, 3];
+      await File('${phone.path}/big.bin').writeAsBytes(edited);
+      await settle();
+      expect(await File('${desktop.path}/big.bin').readAsBytes(), edited);
+      expect(
+        Directory.systemTemp
+            .listSync()
+            .where((e) => e.path.contains('ournet-folder-'))
+            .length,
+        before,
+      );
+      for (final dir in [desktop, phone]) {
+        expect(
+          dir.listSync().map((e) => e.uri.pathSegments.last),
+          ['big.bin'],
+        );
+      }
+    },
+  );
   test('backend compare-before-write preserves a newer local edit', () async {
     final file = File('${desktop.path}/race.txt');
     await file.writeAsString('before');
     final fs = DiskFolderBackend(desktop.path);
     final old = (await fs.stat('race.txt'))!.token;
     await file.writeAsString('edited while downloading');
-    final stage = File('${temp.path}/stage');
-    await stage.writeAsString('remote');
-    await expectLater(fs.put('race.txt', stage.path, old), throwsStateError);
+    await expectLater(
+      fs.write('race.txt', Stream.value(utf8.encode('remote')), old),
+      throwsStateError,
+    );
     expect(await file.readAsString(), 'edited while downloading');
+    // Reading checks the token before and after.
+    await expectLater(fs.read('race.txt', old).drain<void>(), throwsStateError);
+    // No temporary file is left beside it either way.
+    expect(
+      desktop.listSync().map((e) => e.uri.pathSegments.last),
+      ['race.txt'],
+    );
   });
   group('first sync', () {
     late Directory fresh;
