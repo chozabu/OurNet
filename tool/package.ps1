@@ -75,9 +75,9 @@ try {
       Copy-Item -LiteralPath (Join-Path $taskRoot "docs/$taskGuide") -Destination $taskOutput
     }
     @'
-  param([ValidatePattern('^[a-zA-Z0-9_-]{1,40}$')][string]$Profile='main')
-  Start-Process -FilePath (Join-Path $PSScriptRoot 'ournet.exe') -ArgumentList "--profile=$Profile" -WorkingDirectory $PSScriptRoot -WindowStyle Normal
-  '@ | Set-Content (Join-Path $taskOutput 'Launch.ps1')
+param([ValidatePattern('^[a-zA-Z0-9_-]{1,40}$')][string]$Profile='main')
+Start-Process -FilePath (Join-Path $PSScriptRoot 'ournet.exe') -ArgumentList "--profile=$Profile" -WorkingDirectory $PSScriptRoot -WindowStyle Normal
+'@ | Set-Content (Join-Path $taskOutput 'Launch.ps1')
     'Unzip the entire folder. Double-click ournet.exe, or run .\Launch.ps1 -Profile alice. Use a fresh profile for device enrolment. Your identity and database remain in your Windows user profile when you replace this application folder.' | Set-Content (Join-Path $taskOutput 'START-HERE.txt')
     Compress-Archive -Path "$taskOutput/*" -DestinationPath "$taskOutput-windows.zip"
     "dist/OurNet-$taskVersion-$taskBuild" | Set-Content (Join-Path $taskRoot 'dist/latest-windows.txt')
@@ -96,15 +96,15 @@ try {
       $taskManifest=Join-Path (Get-Location) 'build/windows/x64/runner/Release/AppxManifest.xml'
       $taskXml=[IO.File]::ReadAllText($taskManifest)
       $taskFirewall=@'
-      <Extensions>
-        <desktop2:Extension Category="windows.firewallRules">
-          <desktop2:FirewallRules Executable="ournet.exe">
-            <desktop2:Rule Direction="in" IPProtocol="UDP" Profile="all" />
-          </desktop2:FirewallRules>
-        </desktop2:Extension>
-      </Extensions>
-    </Package>
-  '@
+    <Extensions>
+      <desktop2:Extension Category="windows.firewallRules">
+        <desktop2:FirewallRules Executable="ournet.exe">
+          <desktop2:Rule Direction="in" IPProtocol="UDP" Profile="all" />
+        </desktop2:FirewallRules>
+      </desktop2:Extension>
+    </Extensions>
+  </Package>
+'@
       $taskXml=$taskXml -replace '</Package>\s*$',$taskFirewall
       [IO.File]::WriteAllText($taskManifest,$taskXml,(New-Object Text.UTF8Encoding $false))
       dart run msix:pack @taskMsixArgs
