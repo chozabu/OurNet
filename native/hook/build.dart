@@ -6,7 +6,7 @@ import 'package:hooks/hooks.dart';
 /// Builds `rust/` with cargo for the target being built and bundles it.
 ///
 /// Everyday builds use the `native-dev` profile; shipped and measured builds
-/// set `CARGO_OURNET_NATIVE_PROFILE=release` for fat LTO (see Cargo.toml).
+/// use tool/with-native-profile.ps1 for fat LTO (see Cargo.toml).
 /// Every package's hook shares `rust/target`, so core, transport and app
 /// compile wasmtime once between them rather than once each.
 ///
@@ -19,7 +19,9 @@ void main(List<String> args) async {
     final code = input.config.code;
     final triple = _triple(code.targetOS, code.targetArchitecture);
     final crate = input.packageRoot.resolve('rust/');
+    final profileFile = input.packageRoot.resolve('build-profile.txt');
     output.dependencies.addAll([
+      profileFile,
       crate.resolve('Cargo.toml'),
       crate.resolve('Cargo.lock'),
       crate.resolve('src/lib.rs'),
@@ -37,8 +39,10 @@ void main(List<String> args) async {
       return;
     }
     final target = crate.resolve('target/');
-    final profile =
-        Platform.environment['CARGO_OURNET_NATIVE_PROFILE'] ?? 'native-dev';
+    final profile = (await File.fromUri(profileFile).readAsString()).trim();
+    if (profile != 'release' && profile != 'native-dev') {
+      throw StateError('Unsupported native build profile: $profile');
+    }
     final environment = <String, String>{};
     final prefix = 'CARGO_TARGET_${triple.toUpperCase().replaceAll('-', '_')}';
     if (code.targetOS == OS.android) {

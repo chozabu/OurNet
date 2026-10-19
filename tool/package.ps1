@@ -63,62 +63,63 @@ foreach($taskComponent in @('app','core','transport','native','vendor/iroh_mobil
 }
 Push-Location (Join-Path $taskStage 'app')
 try {
-  $env:CARGO_OURNET_NATIVE_PROFILE = 'release' # fat-LTO native library (native/rust/Cargo.toml)
-  Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Building Windows application"
-  flutter build windows --release --no-tree-shake-icons "--dart-define=OURNET_BUILD=$taskBuild"
-  if($LASTEXITCODE -ne 0){throw 'Windows build failed; close running release-build windows first'}
-  Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Creating portable Windows package"
-  New-Item -ItemType Directory -Force -Path $taskOutput | Out-Null
-  Copy-Item -Path 'build/windows/x64/runner/Release/*' -Destination $taskOutput -Recurse
-  Get-VcRuntime | Copy-Item -Destination $taskOutput
-  foreach($taskGuide in @('TRY_IT.md','PRIVATE_DRIVE.md','PERFORMANCE.md','PARITY.md')) {
-    Copy-Item -LiteralPath (Join-Path $taskRoot "docs/$taskGuide") -Destination $taskOutput
+  & (Join-Path $PSScriptRoot 'with-native-profile.ps1') -Root $taskStage -Command {
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Building Windows application"
+    flutter build windows --release --no-tree-shake-icons "--dart-define=OURNET_BUILD=$taskBuild"
+    if($LASTEXITCODE -ne 0){throw 'Windows build failed; close running release-build windows first'}
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Creating portable Windows package"
+    New-Item -ItemType Directory -Force -Path $taskOutput | Out-Null
+    Copy-Item -Path 'build/windows/x64/runner/Release/*' -Destination $taskOutput -Recurse
+    Get-VcRuntime | Copy-Item -Destination $taskOutput
+    foreach($taskGuide in @('TRY_IT.md','PRIVATE_DRIVE.md','PERFORMANCE.md','PARITY.md')) {
+      Copy-Item -LiteralPath (Join-Path $taskRoot "docs/$taskGuide") -Destination $taskOutput
+    }
+    @'
+  param([ValidatePattern('^[a-zA-Z0-9_-]{1,40}$')][string]$Profile='main')
+  Start-Process -FilePath (Join-Path $PSScriptRoot 'ournet.exe') -ArgumentList "--profile=$Profile" -WorkingDirectory $PSScriptRoot -WindowStyle Normal
+  '@ | Set-Content (Join-Path $taskOutput 'Launch.ps1')
+    'Unzip the entire folder. Double-click ournet.exe, or run .\Launch.ps1 -Profile alice. Use a fresh profile for device enrolment. Your identity and database remain in your Windows user profile when you replace this application folder.' | Set-Content (Join-Path $taskOutput 'START-HERE.txt')
+    Compress-Archive -Path "$taskOutput/*" -DestinationPath "$taskOutput-windows.zip"
+    "dist/OurNet-$taskVersion-$taskBuild" | Set-Content (Join-Path $taskRoot 'dist/latest-windows.txt')
+    if($Msix){
+      Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Creating MSIX package"
+      $taskMsixArgs=@(
+        '--logo-path',(Join-Path $taskRoot 'store/ournet-icon-512.png'),
+        '--output-path',(Join-Path $taskRoot 'dist'),
+        '--output-name',"OurNet-$taskVersion-$taskBuild-windows"
+      )
+      if($Store){$taskMsixArgs+=@('--store','--identity-name',$IdentityName,'--publisher',$Publisher,'--publisher-display-name',$PublisherDisplayName)}
+      dart run msix:build @taskMsixArgs
+      if($LASTEXITCODE -ne 0){throw 'MSIX build failed'}
+      # Let peers reach OurNet directly without Windows asking to allow it:
+      # QUIC and calls are UDP. package:msix cannot declare firewall rules.
+      $taskManifest=Join-Path (Get-Location) 'build/windows/x64/runner/Release/AppxManifest.xml'
+      $taskXml=[IO.File]::ReadAllText($taskManifest)
+      $taskFirewall=@'
+      <Extensions>
+        <desktop2:Extension Category="windows.firewallRules">
+          <desktop2:FirewallRules Executable="ournet.exe">
+            <desktop2:Rule Direction="in" IPProtocol="UDP" Profile="all" />
+          </desktop2:FirewallRules>
+        </desktop2:Extension>
+      </Extensions>
+    </Package>
+  '@
+      $taskXml=$taskXml -replace '</Package>\s*$',$taskFirewall
+      [IO.File]::WriteAllText($taskManifest,$taskXml,(New-Object Text.UTF8Encoding $false))
+      dart run msix:pack @taskMsixArgs
+      if($LASTEXITCODE -ne 0){throw 'MSIX pack failed'}
+    }
+    if($Android){
+      Pop-Location
+      Push-Location (Join-Path $taskRoot 'app')
+      flutter build apk --debug --target-platform android-arm64 "--dart-define=OURNET_BUILD=$taskBuild"
+      if($LASTEXITCODE -ne 0){throw 'Android build failed'}
+      Copy-Item -LiteralPath 'build/app/outputs/flutter-apk/app-debug.apk' -Destination "$taskOutput-android-debug.apk"
+    }
+    Get-ChildItem -Path "$taskOutput-*" -File | Get-FileHash -Algorithm SHA256 | ForEach-Object {
+      "$($_.Hash)  $([IO.Path]::GetFileName($_.Path))" | Set-Content "$($_.Path).sha256"
+      $_ | Select-Object Hash,Path
+    }
   }
-  @'
-param([ValidatePattern('^[a-zA-Z0-9_-]{1,40}$')][string]$Profile='main')
-Start-Process -FilePath (Join-Path $PSScriptRoot 'ournet.exe') -ArgumentList "--profile=$Profile" -WorkingDirectory $PSScriptRoot -WindowStyle Normal
-'@ | Set-Content (Join-Path $taskOutput 'Launch.ps1')
-  'Unzip the entire folder. Double-click ournet.exe, or run .\Launch.ps1 -Profile alice. Use a fresh profile for device enrolment. Your identity and database remain in your Windows user profile when you replace this application folder.' | Set-Content (Join-Path $taskOutput 'START-HERE.txt')
-  Compress-Archive -Path "$taskOutput/*" -DestinationPath "$taskOutput-windows.zip"
-  "dist/OurNet-$taskVersion-$taskBuild" | Set-Content (Join-Path $taskRoot 'dist/latest-windows.txt')
-  if($Msix){
-    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Creating MSIX package"
-    $taskMsixArgs=@(
-      '--logo-path',(Join-Path $taskRoot 'store/ournet-icon-512.png'),
-      '--output-path',(Join-Path $taskRoot 'dist'),
-      '--output-name',"OurNet-$taskVersion-$taskBuild-windows"
-    )
-    if($Store){$taskMsixArgs+=@('--store','--identity-name',$IdentityName,'--publisher',$Publisher,'--publisher-display-name',$PublisherDisplayName)}
-    dart run msix:build @taskMsixArgs
-    if($LASTEXITCODE -ne 0){throw 'MSIX build failed'}
-    # Let peers reach OurNet directly without Windows asking to allow it:
-    # QUIC and calls are UDP. package:msix cannot declare firewall rules.
-    $taskManifest=Join-Path (Get-Location) 'build/windows/x64/runner/Release/AppxManifest.xml'
-    $taskXml=[IO.File]::ReadAllText($taskManifest)
-    $taskFirewall=@'
-    <Extensions>
-      <desktop2:Extension Category="windows.firewallRules">
-        <desktop2:FirewallRules Executable="ournet.exe">
-          <desktop2:Rule Direction="in" IPProtocol="UDP" Profile="all" />
-        </desktop2:FirewallRules>
-      </desktop2:Extension>
-    </Extensions>
-  </Package>
-'@
-    $taskXml=$taskXml -replace '</Package>\s*$',$taskFirewall
-    [IO.File]::WriteAllText($taskManifest,$taskXml,(New-Object Text.UTF8Encoding $false))
-    dart run msix:pack @taskMsixArgs
-    if($LASTEXITCODE -ne 0){throw 'MSIX pack failed'}
-  }
-  if($Android){
-    Pop-Location
-    Push-Location (Join-Path $taskRoot 'app')
-    flutter build apk --debug --target-platform android-arm64 "--dart-define=OURNET_BUILD=$taskBuild"
-    if($LASTEXITCODE -ne 0){throw 'Android build failed'}
-    Copy-Item -LiteralPath 'build/app/outputs/flutter-apk/app-debug.apk' -Destination "$taskOutput-android-debug.apk"
-  }
-  Get-ChildItem -Path "$taskOutput-*" -File | Get-FileHash -Algorithm SHA256 | ForEach-Object {
-    "$($_.Hash)  $([IO.Path]::GetFileName($_.Path))" | Set-Content "$($_.Path).sha256"
-    $_ | Select-Object Hash,Path
-  }
-} finally {Pop-Location; Remove-Item Env:CARGO_OURNET_NATIVE_PROFILE -ErrorAction SilentlyContinue}
+} finally {Pop-Location}

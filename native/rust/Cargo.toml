@@ -34,7 +34,7 @@ libc = "0.2"
 
 
 # Shipped and measured builds: the build hook uses this profile when
-# CARGO_OURNET_NATIVE_PROFILE=release (set by tool/package.ps1,
+# native/build-profile.txt is release (set by tool/package.ps1,
 # tool/release-android.ps1 and tool/check.ps1 -Performance).
 [profile.release]
 opt-level = 3
