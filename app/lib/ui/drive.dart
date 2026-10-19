@@ -43,6 +43,33 @@ extension _DrivePages on _OurNetAppState {
                   ).uri.pathSegments.where((p) => p.isNotEmpty).last,
           );
       if (name == null || name.trim().isEmpty || !mounted) return;
+      // Both sides have files: the person chooses which copies to keep
+      // before anything syncs.
+      final plan = folder == null
+          ? null
+          : await folderSync.plan(folder.current.entry, location);
+      if (!mounted) return;
+      if (plan != null && plan.needsReview) {
+        final decisions = await Navigator.push<Map<String, Json>>(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FirstSyncReview(plan: plan, name: name),
+          ),
+        );
+        if (decisions == null || !mounted) return;
+        await folderSync.connect(
+          folder!.current.entry,
+          location,
+          decisions: decisions,
+        );
+        if (mounted) {
+          setState(() {
+            driveFolder = folder.current.entry;
+            driveView = null;
+          });
+        }
+        return;
+      }
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(

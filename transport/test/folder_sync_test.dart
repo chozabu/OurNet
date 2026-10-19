@@ -533,4 +533,255 @@ void main() {
     await expectLater(fs.put('race.txt', stage.path, old), throwsStateError);
     expect(await file.readAsString(), 'edited while downloading');
   });
+  group('first sync', () {
+    late Directory fresh;
+    Future<DriveEntry> entry(String name) async => (await Drive(
+      a,
+    ).entries()).singleWhere((e) => e.current.data['name'] == name);
+    Future<String> text(DriveVersion v) async {
+      final out = '${temp.path}/check-${randomId()}';
+      await left.files.save(v.object, out);
+      return File(out).readAsString();
+    }
+
+    String read(String path) => File('${fresh.path}/$path').readAsStringSync();
+    bool exists(String path) =>
+        FileSystemEntity.typeSync('${fresh.path}/$path') !=
+        FileSystemEntityType.notFound;
+
+    // The drive holds same, differ, stale (edited since "v1"), drive-only,
+    // gone (deleted), folder dir/ and folder clash/. The phone's connection
+    // is replaced by one to a fresh folder holding [files].
+    Future<FirstSyncPlan> prepare(Map<String, String> files) async {
+      await File('${desktop.path}/same.txt').writeAsString('same');
+      await File('${desktop.path}/differ.txt').writeAsString('drive copy');
+      await File('${desktop.path}/stale.txt').writeAsString('v1');
+      await File('${desktop.path}/drive-only.txt').writeAsString('drive');
+      await File('${desktop.path}/gone.txt').writeAsString('gone');
+      await Directory('${desktop.path}/dir').create();
+      await File('${desktop.path}/dir/in.txt').writeAsString('in');
+      await Directory('${desktop.path}/clash').create();
+      await File('${desktop.path}/clash/child.txt').writeAsString('child');
+      await settle();
+      await File('${desktop.path}/stale.txt').writeAsString('version two');
+      await File('${desktop.path}/gone.txt').delete();
+      await settle();
+      await right.disconnect(root);
+      fresh = await Directory('${temp.path}/fresh').create();
+      for (final e in files.entries) {
+        final file = File('${fresh.path}/${e.key}');
+        await file.parent.create(recursive: true);
+        await file.writeAsString(e.value);
+      }
+      return right.plan(root, fresh.path);
+    }
+
+    const existing = {
+      'same.txt': 'same',
+      'differ.txt': 'local copy, longer',
+      'stale.txt': 'v1',
+      'gone.txt': 'gone',
+      'clash': 'a file here',
+      'here.txt': 'local only',
+      'dir/in.txt': 'in',
+    };
+
+    // Returns the status after the first pass.
+    Future<String?> connect(
+      FirstSyncPlan plan,
+      FirstSyncChoice preset, {
+      Map<String, FirstSyncChoice> overrides = const {},
+      bool suggestions = false,
+    }) async {
+      await right.connect(
+        root,
+        fresh.path,
+        decisions: plan.decisions(
+          plan.resolve(preset, overrides, suggestions: suggestions),
+        ),
+      );
+      await right.sync();
+      final status = right.status[root];
+      await exchange();
+      await settle();
+      return status;
+    }
+
+    test('plan sorts every path into its kind without writing', () async {
+      final plan = await prepare(existing);
+      final kinds = {for (final i in plan.items) i.path: i.kind};
+      expect(kinds, {
+        'clash': FirstSyncKind.clash,
+        'dir': FirstSyncKind.identical,
+        'differ.txt': FirstSyncKind.differs,
+        'drive-only.txt': FirstSyncKind.onlyDrive,
+        'gone.txt': FirstSyncKind.deletedElsewhere,
+        'here.txt': FirstSyncKind.onlyHere,
+        'same.txt': FirstSyncKind.identical,
+        'stale.txt': FirstSyncKind.staleHere,
+        'clash/child.txt': FirstSyncKind.onlyDrive,
+        'dir/in.txt': FirstSyncKind.identical,
+      });
+      expect(plan.needsReview, true);
+      final suggested = plan.resolve(
+        FirstSyncChoice.both,
+        const {},
+        suggestions: true,
+      );
+      expect(suggested['stale.txt'], FirstSyncChoice.drive);
+      expect(suggested['gone.txt'], FirstSyncChoice.drive);
+      expect(suggested['differ.txt'], FirstSyncChoice.both);
+      // A clash cannot be won by this folder; it keeps both.
+      expect(
+        plan.resolve(FirstSyncChoice.here, const {})['clash'],
+        FirstSyncChoice.both,
+      );
+      expect(right.connections.containsKey(root), false);
+      expect(exists('here.txt'), true);
+    });
+
+    test('no review when one side is empty or everything matches', () async {
+      expect((await prepare(const {})).needsReview, false);
+      await File('${fresh.path}/same.txt').writeAsString('same');
+      await Directory('${fresh.path}/dir').create();
+      await File('${fresh.path}/dir/in.txt').writeAsString('in');
+      final partial = await right.plan(root, fresh.path);
+      // The drive's other files are only there: someone should choose.
+      expect(partial.needsReview, true);
+      final emptyDrive = await Drive(a).folder('Empty');
+      final empty = (await a.content(emptyDrive))!['entry'] as String;
+      await exchange();
+      expect((await right.plan(empty, fresh.path)).needsReview, false);
+    });
+
+    test('keep both merges as before, fast-forwarding a stale copy', () async {
+      final plan = await prepare(existing);
+      final before = (await entry('same.txt')).history.length;
+      await connect(plan, FirstSyncChoice.both);
+      expect((await entry('same.txt')).history.length, before);
+      expect((await entry('differ.txt')).conflicted, true);
+      expect(read('differ.txt'), 'local copy, longer');
+      // Matching an earlier revision byte for byte is not a conflict.
+      expect((await entry('stale.txt')).conflicted, false);
+      expect(read('stale.txt'), 'version two');
+      expect(read('drive-only.txt'), 'drive');
+      expect(
+        await File('${desktop.path}/here.txt').readAsString(),
+        'local only',
+      );
+      expect(read('clash'), 'a file here');
+      expect(right.connections[root]['firstSync'], isNull);
+    });
+
+    test('this folder wins: edits and deletions, no conflicts', () async {
+      final plan = await prepare(existing);
+      final status = await connect(plan, FirstSyncChoice.here);
+      final differ = await entry('differ.txt');
+      expect(differ.conflicted, false);
+      expect(await text(differ.current), 'local copy, longer');
+      expect(
+        await File('${desktop.path}/differ.txt').readAsString(),
+        'local copy, longer',
+      );
+      final only = await entry('drive-only.txt');
+      expect(only.current.deleted, true);
+      expect(await File('${desktop.path}/drive-only.txt').exists(), false);
+      // Deleted from the drive, still restorable from its history.
+      expect(await text(only.history.firstWhere((v) => !v.deleted)), 'drive');
+      expect(exists('drive-only.txt'), false);
+      expect(read('stale.txt'), 'v1');
+      expect((await entry('stale.txt')).conflicted, false);
+      // Only the clash, which this folder cannot win.
+      expect(status, contains('1 conflicts'));
+    });
+
+    test('this folder wins deletes a drive-only folder whole', () async {
+      final plan = await prepare(const {'here.txt': 'local only'});
+      await connect(plan, FirstSyncChoice.here);
+      expect((await entry('clash')).current.deleted, true);
+      expect((await entry('child.txt')).current.deleted, true);
+      expect(
+        (await entry('clash')).current.data['removed'],
+        contains((await entry('child.txt')).current.entry),
+      );
+      expect(await Directory('${desktop.path}/clash').exists(), false);
+    });
+
+    test(
+      'drive wins: local copies kept in history or moved aside, never lost',
+      () async {
+        final plan = await prepare(existing);
+        final status = await connect(plan, FirstSyncChoice.drive);
+        final differ = await entry('differ.txt');
+        expect(differ.conflicted, false);
+        expect(read('differ.txt'), 'drive copy');
+        expect(await text(differ.current), 'drive copy');
+        final copies = [for (final v in differ.history) await text(v)];
+        expect(copies, contains('local copy, longer'));
+        final aside = '${fresh.path} (not synced)';
+        expect(await File('$aside/here.txt').readAsString(), 'local only');
+        expect(await File('$aside/gone.txt').readAsString(), 'gone');
+        expect(await File('$aside/clash').readAsString(), 'a file here');
+        expect(read('clash/child.txt'), 'child');
+        expect(exists('here.txt'), false);
+        expect(exists('gone.txt'), false);
+        expect(await File('${desktop.path}/here.txt').exists(), false);
+        expect((await entry('gone.txt')).current.deleted, true);
+        expect(status, contains('3 not-synced items moved to $aside'));
+        expect(status, isNot(contains('conflicts')));
+      },
+    );
+
+    test('folder overrides apply to everything inside them', () async {
+      final plan = await prepare(const {
+        'keep/a.txt': 'a',
+        'keep/deeper/b.txt': 'b',
+        'drop/c.txt': 'c',
+        'drop/d.txt': 'd',
+        'same.txt': 'same',
+      });
+      final choices = plan.resolve(FirstSyncChoice.drive, const {
+        'keep': FirstSyncChoice.both,
+        'drop/d.txt': FirstSyncChoice.here,
+      });
+      expect(choices['keep/deeper/b.txt'], FirstSyncChoice.both);
+      expect(choices['drop/c.txt'], FirstSyncChoice.drive);
+      expect(choices['drop/d.txt'], FirstSyncChoice.here);
+      await connect(
+        plan,
+        FirstSyncChoice.drive,
+        overrides: const {
+          'keep': FirstSyncChoice.both,
+          'drop/d.txt': FirstSyncChoice.here,
+        },
+      );
+      expect(
+        await File('${desktop.path}/keep/deeper/b.txt').readAsString(),
+        'b',
+      );
+      // drop/ stays for d.txt, so only c.txt moves aside.
+      expect(
+        await File('${fresh.path} (not synced)/drop/c.txt').readAsString(),
+        'c',
+      );
+      expect(await File('${desktop.path}/drop/d.txt').readAsString(), 'd');
+      expect(await File('${desktop.path}/drop/c.txt').exists(), false);
+    });
+
+    test('a choice is dropped when its file changes after planning', () async {
+      final plan = await prepare(existing);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await File('${fresh.path}/here.txt').writeAsString('edited later');
+      await File('${fresh.path}/differ.txt').writeAsString('edited too');
+      await connect(plan, FirstSyncChoice.drive);
+      expect(read('here.txt'), 'edited later');
+      expect(
+        await File('${desktop.path}/here.txt').readAsString(),
+        'edited later',
+      );
+      expect(read('differ.txt'), 'edited too');
+      expect((await entry('differ.txt')).conflicted, true);
+      expect(right.connections[root]['firstSync'], isNull);
+    });
+  });
 }

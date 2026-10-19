@@ -21,6 +21,13 @@ class AndroidFolderBackend extends FolderBackend {
     value['directory'] as bool,
     value['token'] as String,
     (value['size'] as num?)?.toInt() ?? 0,
+    null,
+    switch (value['modified']) {
+      final num ms when ms > 0 => DateTime.fromMillisecondsSinceEpoch(
+        ms.toInt(),
+      ),
+      _ => null,
+    },
   );
   @override
   Future<Map<String, FolderItem>> scan() async {
@@ -73,6 +80,11 @@ class AndroidFolderBackend extends FolderBackend {
       'expected': expected,
     });
   }
+
+  @override
+  Future<String> setAside(String path, String expected) async =>
+      await call<String>('aside', {'path': path, 'expected': expected}) ??
+      'the synced folder';
 
   @override
   Future<void> remove(String path, String expected) async {

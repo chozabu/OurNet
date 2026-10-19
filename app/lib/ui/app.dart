@@ -39,7 +39,13 @@ import 'package:flutter/services.dart';
 import 'package:app_badge_plus/app_badge_plus.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart'
-    show DriveSync, FolderSync;
+    show
+        DriveSync,
+        FirstSyncChoice,
+        FirstSyncItem,
+        FirstSyncKind,
+        FirstSyncPlan,
+        FolderSync;
 import '../services/network.dart';
 import '../services/files.dart';
 import '../services/calls.dart';
@@ -99,6 +105,7 @@ import 'package:image_picker/image_picker.dart';
 export '../controllers/notes_home_controller.dart' show notesPage, NotesView;
 
 part 'home.dart';
+part 'first_sync_review.dart';
 part 'everyday.dart';
 part 'group_chat.dart';
 part 'group_forum.dart';

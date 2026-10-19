@@ -146,6 +146,44 @@ class FolderAccess(private val activity: Activity, channel: MethodChannel) {
                             }
                             null
                         }
+                        "aside" -> {
+                            // Out of the synced tree, which a document tree cannot leave: into
+                            // NOT_SYNCED inside it, which scans skip, keeping the path below it.
+                            val doc = check(tree, root, path, expected) ?: error("File missing")
+                            val parts = path.split('/')
+                            var folder = info(root)
+                            for (name in listOf(NOT_SYNCED) + parts.dropLast(1)) {
+                                val existing = children(tree, folder.uri).filter { it.name == name }
+                                require(existing.size <= 1) { "Duplicate filename: $name" }
+                                folder = existing.singleOrNull()?.also { require(it.directory) { "File blocks folder: $name" } }
+                                    ?: info(requireNotNull(Docs.createDocument(resolver, folder.uri, Docs.Document.MIME_TYPE_DIR, name)))
+                            }
+                            val taken = children(tree, folder.uri).map { it.name }.toSet()
+                            var name = parts.last()
+                            var n = 2
+                            while (name in taken) {
+                                val dot = parts.last().lastIndexOf('.')
+                                name = if (dot > 0) "${parts.last().substring(0, dot)} ($n)${parts.last().substring(dot)}"
+                                    else "${parts.last()} ($n)"
+                                n++
+                            }
+                            val (oldParent, oldName) = parent(tree, root, path)
+                            // A unique name first, so the move cannot meet an existing one.
+                            var moved = requireNotNull(Docs.renameDocument(resolver, doc.uri, ".ournet-${UUID.randomUUID()}.aside")) {
+                                "Provider does not support renaming this document"
+                            }
+                            try {
+                                moved = requireNotNull(Docs.moveDocument(resolver, moved, oldParent, folder.uri)) {
+                                    "Provider does not support moving this document"
+                                }
+                            } catch (e: Exception) {
+                                try { Docs.renameDocument(resolver, moved, oldName) } catch (_: Exception) {}
+                                throw e
+                            }
+                            // Kept under its temporary name if the provider refuses the last rename.
+                            Docs.renameDocument(resolver, moved, name)
+                            "$NOT_SYNCED in the synced folder"
+                        }
                         "remove" -> {
                             val doc = check(tree, root, path, expected)
                             if (doc != null) {
@@ -182,7 +220,7 @@ class FolderAccess(private val activity: Activity, channel: MethodChannel) {
         val token get() = if (directory) "directory" else "$modified/$size"
         fun map(): Map<String, Any> {
             require(directory || modified > 0) { "Provider does not expose reliable modification times: $name" }
-            return mapOf("directory" to directory, "size" to size, "token" to token)
+            return mapOf("directory" to directory, "size" to size, "token" to token, "modified" to modified)
         }
     }
     private val projection = arrayOf(Docs.Document.COLUMN_DOCUMENT_ID, Docs.Document.COLUMN_DISPLAY_NAME,
@@ -232,5 +270,8 @@ class FolderAccess(private val activity: Activity, channel: MethodChannel) {
         require(doc?.token == expected) { "File changed during sync: $path; local edit preserved" }
         return doc
     }
-    companion object { private const val LIMIT = 64L * 1024 * 1024 }
+    companion object {
+        private const val LIMIT = 64L * 1024 * 1024
+        private const val NOT_SYNCED = ".ournet-not-synced"
+    }
 }

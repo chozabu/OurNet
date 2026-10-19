@@ -66,8 +66,22 @@ is local to this device and never dictates another device's location.
 * Concurrent edits, including delete-versus-edit, retain separate revisions.
   Local contents are preserved while conflicted; **Version history → Use this
   version** resolves content conflicts and the chosen version is then applied.
-* Connecting a nonempty destination preserves matching local files as concurrent
-  revisions, even if their contents happen to match. There is no timestamp winner.
+* Connecting a folder to a drive folder when both have files first shows a
+  review: what is only on this device, only in the drive, the same, different,
+  a file against a folder, an older copy of a drive file, or a file deleted from
+  the drive elsewhere (worked out from sizes and drive history; nothing is
+  downloaded). Choose **Keep both**, **This device wins** or **Drive wins** for
+  everything, then per folder or file. Keeping both is the merge: differing
+  files become concurrent revisions, with no timestamp winner. The losing copy
+  is never lost: a replaced local file is kept in drive history, a drive entry
+  this device wins over is deleted there (restorable from history), and a local
+  entry the drive wins over moves to a sibling `<folder> (not synced)` folder
+  (on Android, `.ournet-not-synced` inside the folder, since a document tree
+  cannot reach outside itself). A choice applies only while the entry is as it
+  was in the review, and only until the first pass completes. With one side
+  empty, or only identical entries, there is no review.
+* A local file byte-identical to the drive's copy adopts its revision, and one
+  identical to an earlier revision is brought up to date, without a conflict.
 * **Sync now** checks a connection immediately. Desktop filesystem notifications
   trigger debounced checks; a 15-second reconciliation catches missed events and
   changes to Android document trees (every 5 minutes while the app is in the
