@@ -12,9 +12,14 @@ class CountingBlobWorker extends BlobWorker {
   CountingBlobWorker(super.store);
   int chunkReads = 0;
   @override
-  Future<Uint8List?> decode(String hash, List<int>? key, {List<int>? bytes}) {
+  Future<Uint8List?> decode(
+    String hash,
+    List<int>? key, {
+    List<int>? bytes,
+    bool asFile = false,
+  }) {
     if (bytes == null) chunkReads++;
-    return super.decode(hash, key, bytes: bytes);
+    return super.decode(hash, key, bytes: bytes, asFile: asFile);
   }
 
   @override

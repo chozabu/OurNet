@@ -97,6 +97,13 @@ Future<Node> applyRestore(StagedRestore staged, Node current) async {
       final file = File('$database$part');
       if (await file.exists()) await file.rename(aside.path);
     }
+    // Chunks kept as files move with their database.
+    final chunks = Directory('$database.chunks');
+    final chunksAside = Directory('$database.chunks.before-restore');
+    if (await chunksAside.exists()) await chunksAside.delete(recursive: true);
+    if (await chunks.exists()) await chunks.rename(chunksAside.path);
+    final stagedChunks = Directory('${staged.database}.chunks');
+    if (await stagedChunks.exists()) await stagedChunks.rename(chunks.path);
     await File(staged.database).rename(database);
     await vault.write(key, canonical(staged.secrets));
     final node = await openNode(profile: profile);
@@ -104,6 +111,7 @@ Future<Node> applyRestore(StagedRestore staged, Node current) async {
       final aside = File('$database$part.before-restore');
       if (await aside.exists()) await aside.delete();
     }
+    if (await chunksAside.exists()) await chunksAside.delete(recursive: true);
     return node;
   } catch (_) {
     await closeProfile();
@@ -112,6 +120,12 @@ Future<Node> applyRestore(StagedRestore staged, Node current) async {
       if (await file.exists()) await file.delete();
       final aside = File('$database$part.before-restore');
       if (await aside.exists()) await aside.rename(file.path);
+    }
+    final chunks = Directory('$database.chunks');
+    final chunksAside = Directory('$database.chunks.before-restore');
+    if (await chunksAside.exists()) {
+      if (await chunks.exists()) await chunks.delete(recursive: true);
+      await chunksAside.rename(chunks.path);
     }
     if (oldSecrets == null) {
       await vault.delete(key);

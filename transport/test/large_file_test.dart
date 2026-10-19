@@ -59,6 +59,16 @@ void main() {
     expect(payload['chunks'], isEmpty);
     expect(payload['chunkDepth'], 1);
     expect(files.cached(payload), isTrue);
+    // Its chunks are files beside the database, not rows in it.
+    expect(
+      node.store.db.select('SELECT COUNT(*) AS n FROM blob_files').first['n'],
+      greaterThan(560),
+    );
+    expect(
+      node.store.db.select('SELECT COUNT(*) AS n FROM blobs').first['n'],
+      0,
+    );
+    expect(Directory(node.store.chunkDirectory!).existsSync(), isTrue);
     final back = File('${directory.path}/back.bin');
     await files.save(object, back.path);
     expect(await sameFiles(source, back), isTrue);

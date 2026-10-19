@@ -1059,7 +1059,7 @@ class Notes {
     // Listed inline up to 512 chunks, in a chunk tree beyond: no size limit.
     final listing = ChunkTreeBuilder(
       listFanOut(chunkSize),
-      (plain) => node.blobs.encode(plain, key),
+      (plain) => node.blobs.encode(plain, key, asFile: true),
     );
     var pending = BytesBuilder(copy: false);
     var size = 0;
@@ -1068,10 +1068,12 @@ class Notes {
       pending.add(part);
       while (pending.length >= chunkSize) {
         final all = pending.takeBytes();
+        // Past the inline list, chunks are kept as files.
         await listing.add(
           await node.blobs.encode(
             Uint8List.sublistView(all, 0, chunkSize),
             key,
+            asFile: listing.count >= inlineChunks,
           ),
         );
         pending = BytesBuilder(copy: false)
@@ -1079,7 +1081,13 @@ class Notes {
       }
     }
     if (pending.length > 0) {
-      await listing.add(await node.blobs.encode(pending.takeBytes(), key));
+      await listing.add(
+        await node.blobs.encode(
+          pending.takeBytes(),
+          key,
+          asFile: listing.count >= inlineChunks,
+        ),
+      );
     }
     final listed = await listing.finish();
     await indexChunkTree(node, {

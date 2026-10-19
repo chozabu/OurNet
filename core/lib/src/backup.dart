@@ -78,6 +78,8 @@ class StagedRestore {
   Future<void> discard() async {
     final file = File(database);
     if (await file.exists()) await file.delete();
+    final chunks = Directory('$database.chunks');
+    if (await chunks.exists()) await chunks.delete(recursive: true);
   }
 }
 
@@ -85,7 +87,9 @@ class StagedRestore {
 /// (every note, message, file and contact) and the identity keys, which are
 /// encrypted under a passphrase chosen for the backup.
 ///
-/// Layout: `manifest.json` (plain), `identity.json` (sealed), `ournet.db`.
+/// Layout: `manifest.json` (plain), `identity.json` (sealed), `ournet.db`,
+/// and `chunks/<hash>` for each chunk the profile keeps as a file (those of
+/// large files; see [Store.chunkDirectory]), already encrypted.
 /// The database holds what the app already keeps on disk: signed objects whose
 /// content is encrypted for their audience. The keys that open them are what
 /// the passphrase protects.
@@ -230,8 +234,41 @@ class Backup {
       zip.addArchiveFile(ArchiveFile.bytes('identity.json', identity));
       // Mostly ciphertext, which does not compress: store it as it is.
       await zip.addFile(File(snapshot), _database, 0);
+      // Chunks kept as files, as the snapshot indexes them.
+      final copy = sqlite3.open(snapshot, mode: OpenMode.readOnly);
+      try {
+        for (final row in copy.select('SELECT id FROM blob_files')) {
+          final id = row['id'] as String;
+          final file = File(Store.chunkFile('$source.chunks', id));
+          if (file.existsSync()) await zip.addFile(file, 'chunks/$id', 0);
+        }
+      } on SqliteException {
+        /* A database from before chunk files has none. */
+      } finally {
+        copy.close();
+      }
     } finally {
       await zip.close();
+    }
+  }
+
+  /// Unpacks the chunks kept as files, each checked against its hash, and
+  /// forgets in the database any that did not arrive whole.
+  static void _unpackChunks(String path, String directory) {
+    final chunk = RegExp(r'^chunks/([0-9a-f]{64})$');
+    final input = InputFileStream(path);
+    try {
+      for (final file in ZipDecoder().decodeStream(input).files) {
+        final id = chunk.firstMatch(file.name)?.group(1);
+        if (id == null || !file.isFile || file.size > 128 * 1024 + 64) continue;
+        final bytes = file.readBytes();
+        if (bytes == null || blobHash(bytes) != id) continue;
+        final target = File(Store.chunkFile(directory, id));
+        target.parent.createSync(recursive: true);
+        target.writeAsBytesSync(bytes);
+      }
+    } finally {
+      input.closeSync();
     }
   }
 
@@ -271,6 +308,7 @@ class Backup {
     } finally {
       input.closeSync();
     }
+    _unpackChunks(path, '$database.chunks');
     // A damaged copy must fail now, not after it has replaced a good one.
     final db = sqlite3.open(database, mode: OpenMode.readOnly);
     try {
@@ -283,6 +321,24 @@ class Backup {
       }
     } finally {
       db.close();
+    }
+    // Chunk files that did not arrive are fetched again from other devices.
+    final chunks = sqlite3.open(database);
+    try {
+      final missing = [
+        for (final row in chunks.select('SELECT id FROM blob_files'))
+          if (!File(
+            Store.chunkFile('$database.chunks', row['id'] as String),
+          ).existsSync())
+            row['id'] as String,
+      ];
+      for (final id in missing) {
+        chunks.execute('DELETE FROM blob_files WHERE id=?', [id]);
+      }
+    } on SqliteException {
+      /* A backup from before chunk files has none. */
+    } finally {
+      chunks.close();
     }
   }
 

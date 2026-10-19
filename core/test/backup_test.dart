@@ -62,6 +62,41 @@ void main() {
     expect(found.text, 'Keep this');
   });
 
+  test('a backup carries the chunks a profile keeps as files', () async {
+    final node = await profile();
+    final kept = [1, 2, 3], lost = [4, 5, 6];
+    node.store.putBlob(blobHash(kept), kept, asFile: true);
+    node.store.putBlob(blobHash(lost), lost, asFile: true);
+    final zip = '${temp.path}/backup.zip';
+    // One chunk file goes missing before the backup: it is not claimed.
+    File(
+      Store.chunkFile(node.store.chunkDirectory!, blobHash(lost)),
+    ).deleteSync();
+    await Backup.create(
+      node,
+      zip,
+      passphrase,
+      memory: memory,
+      iterations: iterations,
+    );
+    final staged = await Backup.stage(
+      zip,
+      passphrase,
+      '${temp.path}/restored.db',
+    );
+    final store = Store(path: staged.database);
+    addTearDown(store.close);
+    expect(store.blob(blobHash(kept)), kept);
+    expect(store.hasBlob(blobHash(lost)), isFalse);
+    expect(
+      File(Store.chunkFile(store.chunkDirectory!, blobHash(kept))).existsSync(),
+      isTrue,
+    );
+    store.close();
+    await staged.discard();
+    expect(Directory('${staged.database}.chunks').existsSync(), isFalse);
+  });
+
   test('the wrong passphrase opens nothing and leaves nothing behind', () async {
     final node = await profile();
     final zip = '${temp.path}/backup.zip';

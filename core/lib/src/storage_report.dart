@@ -123,7 +123,9 @@ class StorageReport {
 
     final evidence = db.select('SELECT COUNT(*) AS n, COALESCE(SUM(length(wire)),0) AS b FROM evidence').first;
     await breathe();
-    final files = db.select('SELECT COUNT(*) AS n FROM blobs').first;
+    final files = db.select(
+      'SELECT (SELECT COUNT(*) FROM blobs)+(SELECT COUNT(*) FROM blob_files) AS n',
+    ).first;
     final previews = db.select('SELECT COUNT(*) AS n, COALESCE(SUM(size),0) AS b FROM previews').first;
 
     int pragma(String name) {

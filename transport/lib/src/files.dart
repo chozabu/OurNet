@@ -177,16 +177,20 @@ class Files {
       final key = await Chacha20.poly1305Aead().newSecretKey();
       final keyBytes = encrypt ? await key.extractBytes() : null;
       final bytes = newChunkBytes;
+      // A file that will be listed in a tree keeps its chunks as files.
+      final asFile = size > inlineChunks * bytes;
       final listing = ChunkTreeBuilder(
         listFanOut(bytes),
-        (plain) => node.blobs.encode(plain, keyBytes),
+        (plain) => node.blobs.encode(plain, keyBytes, asFile: asFile),
       );
       var completed = 0;
       onProgress?.call(0, size);
       await for (final data in rechunk(source, bytes)) {
         completed += data.length;
         if (completed > size) throw StateError('File changed during import');
-        await listing.add(await node.blobs.encode(data, keyBytes));
+        await listing.add(
+          await node.blobs.encode(data, keyBytes, asFile: asFile),
+        );
         onProgress?.call(completed, size);
       }
       if (completed != size) throw StateError('File changed during import');
@@ -348,9 +352,15 @@ class Files {
     // List chunks of a tree are fetched as they are reached, one at a time;
     // data chunks a list chunk at a time, in batches as before.
     Future<Uint8List> open(String hash) =>
-        _Fetch(this, object, key, [hash]).chunk(0);
+        _Fetch(this, object, key, [hash], asFile: true).chunk(0);
     await for (final chunks in chunkSegments(payload, open)) {
-      final fetch = _Fetch(this, object, key, chunks);
+      final fetch = _Fetch(
+        this,
+        object,
+        key,
+        chunks,
+        asFile: hasChunkTree(payload),
+      );
       for (var i = 0; i < chunks.length; i++) {
         final plain = await fetch.chunk(i);
         size += plain.length;
@@ -541,7 +551,13 @@ class _BoundedQueue<T> {
 /// of the reader. A batch goes to one source; chunks it lacks are asked of
 /// the next. Each chunk is verified and stored as it arrives.
 class _Fetch {
-  _Fetch(this.files, this.object, this.key, this.chunks) {
+  _Fetch(
+    this.files,
+    this.object,
+    this.key,
+    this.chunks, {
+    this.asFile = false,
+  }) {
     final held = files.node.store.heldBlobs(chunks);
     final missing = [
       for (var i = 0; i < chunks.length; i++)
@@ -563,6 +579,9 @@ class _Fetch {
   final SignedObject object;
   final List<int>? key;
   final List<String> chunks;
+
+  /// Whether fetched chunks are kept as files: those of tree-listed files.
+  final bool asFile;
   final _batches = <List<int>>[];
   final _batchOf = <int, int>{};
   final _results = <int, Future<Map<int, Uint8List>>>{};
@@ -640,7 +659,12 @@ class _Fetch {
         for (final (k, bytes) in fetched.indexed) {
           if (bytes == null || bytes.length > Files.chunkSize + 64) continue;
           final i = wanted[k];
-          final plain = await node.blobs.decode(chunks[i], key, bytes: bytes);
+          final plain = await node.blobs.decode(
+            chunks[i],
+            key,
+            bytes: bytes,
+            asFile: asFile,
+          );
           if (plain != null) got[i] = plain;
         }
       } catch (_) {

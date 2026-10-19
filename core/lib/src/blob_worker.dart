@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
@@ -82,11 +83,18 @@ class BlobWorker {
     return result.future;
   }
 
-  Future<String> encode(Uint8List bytes, List<int>? key) async {
+  /// [asFile] stores the chunk as a file beside the database (see
+  /// [Store.putBlob]), for chunks of large files.
+  Future<String> encode(
+    Uint8List bytes,
+    List<int>? key, {
+    bool asFile = false,
+  }) async {
     final result = await _request({
       'op': 'encode',
       'bytes': bytes,
       'key': key,
+      'asFile': asFile,
       // Read here: static state does not reach the worker isolate.
       'versioned': WireFormat.versionedBlobs,
     });
@@ -101,11 +109,13 @@ class BlobWorker {
     String hash,
     List<int>? key, {
     List<int>? bytes,
+    bool asFile = false,
   }) async {
     final result = await _request({
       'op': 'decode',
       'hash': hash,
       'key': key,
+      'asFile': asFile,
       'bytes': bytes ?? (store.path == null ? store.blob(hash) : null),
     });
     if (store.path == null && bytes != null && result['bytes'] != null) {
@@ -261,14 +271,23 @@ Future<TransferableTypedData?> _readLocal(
   try {
     db.execute('PRAGMA busy_timeout=5000');
     final statement = db.prepare('SELECT bytes FROM blobs WHERE id=?');
+    final asFile = db.prepare('SELECT 1 FROM blob_files WHERE id=?');
     final key = keyBytes == null ? null : SecretKey(keyBytes);
     final chunks = <Uint8List>[];
     var size = 0;
     try {
       for (final hash in hashes) {
         final rows = statement.select([hash]);
-        if (rows.isEmpty) return null;
-        final bytes = rows.first['bytes'] as Uint8List;
+        final Uint8List bytes;
+        if (rows.isNotEmpty) {
+          bytes = rows.first['bytes'] as Uint8List;
+        } else if (asFile.select([hash]).isNotEmpty) {
+          final file = File(Store.chunkFile('$path.chunks', hash));
+          if (!file.existsSync()) return null;
+          bytes = file.readAsBytesSync();
+        } else {
+          return null;
+        }
         // Same checks as the worker's decode: bounded, content-addressed,
         // authenticated before any plaintext is returned.
         if (bytes.length > 128 * 1024 + 64 || blobHash(bytes) != hash) {
@@ -283,6 +302,7 @@ Future<TransferableTypedData?> _readLocal(
       }
     } finally {
       statement.close();
+      asFile.close();
     }
     if (expectedSize != null && size != expectedSize) {
       throw StateError('File size mismatch');
@@ -322,7 +342,7 @@ Future<void> _run(({SendPort port, String? path}) initial) async {
                   versioned: command['versioned'] == true,
                 );
           final hash = blobHash(bytes);
-          store?.putBlob(hash, bytes);
+          store?.putBlob(hash, bytes, asFile: command['asFile'] == true);
           initial.port.send({
             'id': id,
             'hash': hash,
@@ -340,7 +360,9 @@ Future<void> _run(({SendPort port, String? path}) initial) async {
             throw StateError('Invalid file chunk');
           }
           final plain = key == null ? bytes : await openBlob(bytes, key);
-          if (supplied != null) store?.putBlob(hash, bytes);
+          if (supplied != null) {
+            store?.putBlob(hash, bytes, asFile: command['asFile'] == true);
+          }
           initial.port.send({'id': id, 'bytes': Uint8List.fromList(plain)});
         } else if (command['op'] == 'preview_get' ||
             command['op'] == 'preview_open') {

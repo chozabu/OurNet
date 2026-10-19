@@ -1,5 +1,6 @@
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:sqlite3/sqlite3.dart';
 import 'model.dart';
@@ -300,6 +301,23 @@ class Store {
       CREATE INDEX IF NOT EXISTS tree_chunks_hash ON tree_chunks(hash);
       CREATE TABLE IF NOT EXISTS tree_roots(root TEXT PRIMARY KEY) WITHOUT ROWID;
     ''');
+    // Chunks of large files live as files in [chunkDirectory], named by
+    // hash; this indexes them and counts them towards the storage limit.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS blob_files(id TEXT PRIMARY KEY, size INTEGER NOT NULL) WITHOUT ROWID;
+      CREATE TRIGGER IF NOT EXISTS blob_file_added AFTER INSERT ON blob_files
+      BEGIN UPDATE blob_usage SET bytes=bytes+NEW.size WHERE id=1; END;
+      CREATE TRIGGER IF NOT EXISTS blob_file_removed AFTER DELETE ON blob_files
+      BEGIN UPDATE blob_usage SET bytes=bytes-OLD.size WHERE id=1; END;
+    ''');
+    // A database restored or copied without its chunk folder cannot claim
+    // the chunks: they are fetched again from devices that hold them.
+    final chunks = chunkDirectory;
+    if (chunks != null &&
+        !Directory(chunks).existsSync() &&
+        db.select('SELECT 1 FROM blob_files LIMIT 1').isNotEmpty) {
+      db.execute('DELETE FROM blob_files');
+    }
     // Maintain the quota across connections without scanning every blob for
     // every chunk. Triggers also cover direct deletes and transaction rollback.
     db.execute('''
@@ -1374,22 +1392,83 @@ class Store {
     return rows.isEmpty ? null : jsonDecode(rows.first['value']);
   }
 
-  void putBlob(String id, List<int> bytes) {
+  /// Where chunks stored [asFile] live: beside the database, one file per
+  /// chunk named by its hash. Null for a store in memory.
+  String? get chunkDirectory => path == null ? null : '$path.chunks';
+
+  /// The file chunk [id] is stored in under [directory].
+  static String chunkFile(String directory, String id) =>
+      '$directory/${id.substring(0, 2)}/$id';
+
+  /// Stores chunk [id]. [asFile] keeps it as a file in [chunkDirectory]
+  /// rather than in the database: for large files, whose chunks would make
+  /// the database unwieldy. A store in memory keeps every chunk in it.
+  void putBlob(String id, List<int> bytes, {bool asFile = false}) {
     if (bytes.length > 128 * 1024 + 64 || blobHash(bytes) != id)
       throw StateError('Invalid blob');
     if (hasBlob(id)) return;
     if (storedBytes + bytes.length > storageLimit)
       throw StateError('Storage limit reached');
-    _execute('INSERT INTO blobs VALUES (?,?)', [id, Uint8List.fromList(bytes)]);
+    final directory = chunkDirectory;
+    if (!asFile || directory == null) {
+      _execute('INSERT INTO blobs VALUES (?,?)', [
+        id,
+        Uint8List.fromList(bytes),
+      ]);
+      return;
+    }
+    // Written whole under a temporary name, then indexed: an interrupted
+    // write leaves at most a stray temporary file, never a claimed chunk.
+    final file = File(chunkFile(directory, id));
+    file.parent.createSync(recursive: true);
+    final temp = File('${file.path}.${DateTime.now().microsecondsSinceEpoch}.part');
+    temp.writeAsBytesSync(bytes, flush: false);
+    temp.renameSync(file.path);
+    _execute('INSERT OR IGNORE INTO blob_files VALUES (?,?)', [
+      id,
+      bytes.length,
+    ]);
   }
 
   List<int>? blob(String id) {
     final rows = _select('SELECT bytes FROM blobs WHERE id=?', [id]);
-    return rows.isEmpty ? null : rows.first['bytes'] as Uint8List;
+    if (rows.isNotEmpty) return rows.first['bytes'] as Uint8List;
+    final directory = chunkDirectory;
+    if (directory == null ||
+        _select('SELECT 1 FROM blob_files WHERE id=?', [id]).isEmpty) {
+      return null;
+    }
+    try {
+      return File(chunkFile(directory, id)).readAsBytesSync();
+    } on FileSystemException {
+      // Removed from outside: no longer held.
+      _execute('DELETE FROM blob_files WHERE id=?', [id]);
+      return null;
+    }
+  }
+
+  /// Removes chunk [id], wherever it is stored. Returns whether it was here.
+  bool removeBlob(String id) {
+    _execute('DELETE FROM blobs WHERE id=?', [id]);
+    final inDatabase = db.updatedRows > 0;
+    _execute('DELETE FROM blob_files WHERE id=?', [id]);
+    final asFile = db.updatedRows > 0;
+    final directory = chunkDirectory;
+    if (asFile && directory != null) {
+      try {
+        File(chunkFile(directory, id)).deleteSync();
+      } on FileSystemException {
+        /* Already gone. */
+      }
+    }
+    return inDatabase || asFile;
   }
 
   bool hasBlob(String id) =>
-      _select('SELECT 1 FROM blobs WHERE id=?', [id]).isNotEmpty;
+      _select(
+        'SELECT 1 FROM blobs WHERE id=? UNION ALL SELECT 1 FROM blob_files WHERE id=?',
+        [id, id],
+      ).isNotEmpty;
 
   /// Those of the object [ids] stored here, in one query.
   Set<String> heldObjects(Iterable<String> ids) => {
@@ -1403,7 +1482,8 @@ class Store {
   /// Those of [ids] stored here, in one query.
   Set<String> heldBlobs(List<String> ids) => {
     for (final row in _select(
-      'SELECT id FROM blobs WHERE id IN (SELECT DISTINCT value FROM json_each(?))',
+      'SELECT id FROM blobs WHERE id IN (SELECT DISTINCT value FROM json_each(?1)) '
+      'UNION SELECT id FROM blob_files WHERE id IN (SELECT DISTINCT value FROM json_each(?1))',
       [jsonEncode(ids)],
     ))
       row['id'] as String,
@@ -1458,7 +1538,8 @@ class Store {
       hasBlobs(roots) &&
       _select(
         'SELECT 1 FROM tree_chunks t WHERE t.root IN (SELECT value FROM json_each(?)) '
-        'AND NOT EXISTS (SELECT 1 FROM blobs b WHERE b.id=t.hash) LIMIT 1',
+        'AND NOT EXISTS (SELECT 1 FROM blobs b WHERE b.id=t.hash) '
+        'AND NOT EXISTS (SELECT 1 FROM blob_files f WHERE f.id=t.hash) LIMIT 1',
         [jsonEncode(roots)],
       ).isEmpty;
 
@@ -1466,7 +1547,8 @@ class Store {
   bool hasBlobs(List<String> ids) =>
       ids.isEmpty ||
       _select(
-            'SELECT COUNT(*) AS n FROM blobs WHERE id IN (SELECT DISTINCT value FROM json_each(?))',
+            'SELECT COUNT(*) AS n FROM (SELECT id FROM blobs WHERE id IN (SELECT DISTINCT value FROM json_each(?1)) '
+            'UNION SELECT id FROM blob_files WHERE id IN (SELECT DISTINCT value FROM json_each(?1)))',
             [jsonEncode(ids)],
           ).first['n'] ==
           ids.toSet().length;

@@ -53,6 +53,11 @@ void main() {
           row['bytes'],
         ]);
       }
+      // Chunks of large files are kept as files.
+      for (final row in source.store.db.select('SELECT id FROM blob_files')) {
+        final id = row['id'] as String;
+        target.store.putBlob(id, source.store.blob(id)!, asFile: true);
+      }
     }
   }
 
