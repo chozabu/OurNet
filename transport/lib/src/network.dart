@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' show DynamicLibrary;
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -13,6 +13,20 @@ import 'peer_path.dart';
 
 part 'pairing.dart';
 part 'friend_invitation.dart';
+
+// iroh_quic probes its per-user library cache before the copy bundled beside
+// the executable, so a packaged Windows app would load (and lock) the cache
+// that tool/build-iroh.ps1 refreshes. Prefer the bundled library; `dart test`
+// has none beside dart.exe and falls back to the cache.
+Future<void> _initIroh() {
+  if (!Platform.isWindows) return iroh.Iroh.init();
+  final bundled = File(
+    '${File(Platform.resolvedExecutable).parent.path}\\irohdart_ffi.dll',
+  );
+  return iroh.Iroh.init(
+    libraryPath: bundled.existsSync() ? bundled.path : null,
+  );
+}
 
 /// The only application module that knows the iroh API. Protocol and policy
 /// remain in the Dart core. Connections authenticate independent device keys.
@@ -605,7 +619,7 @@ class PeerNetwork implements PluginLink {
   Future<void> _start({required bool local, required bool automatic}) async {
     if (running) return;
     try {
-      await iroh.Iroh.init();
+      await _initIroh();
       final secretKey = iroh.SecretKey.fromBytes(
         await node.identity.deviceKey.extractPrivateKeyBytes(),
       );
@@ -735,7 +749,7 @@ class PeerNetwork implements PluginLink {
     if (j['version'] != 2) throw StateError('Unsupported contact card');
     final certificate = DeviceCertificate.fromJson(j['certificate']);
     if (j['address'] != null) {
-      await iroh.Iroh.init();
+      await _initIroh();
       final address = iroh.EndpointAddr.decode(unb64(j['address']));
       if (b64(address.id.asBytes()) != certificate.device) {
         throw StateError('Address does not match device');

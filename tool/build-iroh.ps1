@@ -12,9 +12,14 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'iroh binding build failed' }
   $taskLibrary = (Resolve-Path 'target/release/irohdart_ffi.dll').Path
 } finally { Pop-Location }
-$taskNative = Join-Path $taskRoot 'app/native'
-New-Item -ItemType Directory -Force -Path $taskNative | Out-Null
-Copy-Item -LiteralPath $taskLibrary -Destination (Join-Path $taskNative 'irohdart_ffi.dll')
-$taskCache = Join-Path $env:LOCALAPPDATA 'iroh_quic/v1.0.3/x86_64-pc-windows-msvc'
-New-Item -ItemType Directory -Force -Path $taskCache | Out-Null
-Copy-Item -LiteralPath $taskLibrary -Destination (Join-Path $taskCache 'irohdart_ffi.dll')
+# Skip unchanged copies: a running `dart test` (or an older app build) holds
+# the cache's library open, and a no-op build should not fail on it.
+function Install-IrohLibrary([string]$Directory) {
+  New-Item -ItemType Directory -Force -Path $Directory | Out-Null
+  $taskTarget = Join-Path $Directory 'irohdart_ffi.dll'
+  if ((Test-Path -LiteralPath $taskTarget) -and
+      (Get-FileHash -LiteralPath $taskTarget).Hash -eq (Get-FileHash -LiteralPath $taskLibrary).Hash) { return }
+  Copy-Item -LiteralPath $taskLibrary -Destination $taskTarget
+}
+Install-IrohLibrary (Join-Path $taskRoot 'app/native')
+Install-IrohLibrary (Join-Path $env:LOCALAPPDATA 'iroh_quic/v1.0.3/x86_64-pc-windows-msvc')
