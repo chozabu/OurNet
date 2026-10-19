@@ -101,6 +101,11 @@ String? _drivePath(
   return prefix.isEmpty ? name : '$prefix/$name';
 }
 
+/// [error] as a person reads it: a refusal's own message, without the
+/// "Bad state:" a [StateError] prints with.
+String plainError(Object error) =>
+    error is StateError ? error.message : '$error';
+
 /// Parents before children, then by name.
 int _byDepth(String a, String b) {
   final d = a.split('/').length.compareTo(b.split('/').length);
@@ -672,7 +677,7 @@ class FolderSync {
         }
         await _syncRoot(root);
       } catch (e) {
-        status[root] = '$e';
+        status[root] = plainError(e);
       }
     }
   }
@@ -1017,7 +1022,7 @@ class FolderSync {
           setAside++;
         } catch (e) {
           retry.add(path);
-          report('$path: $e');
+          report('$path: ${plainError(e)}');
         }
       }
       if (moved.isNotEmpty)
@@ -1073,7 +1078,7 @@ class FolderSync {
         }
         local = after;
       } catch (e) {
-        report('$oldPath → ${moved.key}: $e');
+        report('$oldPath → ${moved.key}: ${plainError(e)}');
       }
     }
     final mappedPaths = {
@@ -1324,7 +1329,7 @@ class FolderSync {
               );
             } catch (e) {
               retry.add(path);
-              report('$path: $e');
+              report('$path: ${plainError(e)}');
             }
           }());
           if (adding.length >= concurrentAdds) await adding.removeAt(0);
@@ -1492,7 +1497,7 @@ class FolderSync {
         await fetch(path, v, item, v.data['revision']);
       } catch (e) {
         retry.add(path);
-        report('$path: $e');
+        report('$path: ${plainError(e)}');
       }
     }
     await Future.wait(adding);
@@ -1503,7 +1508,7 @@ class FolderSync {
         await deleteFromDrive(path, v);
       } catch (e) {
         retry.add(path);
-        report('$path: $e');
+        report('$path: ${plainError(e)}');
       }
     }
     for (final path in paths.reversed) {
@@ -1532,7 +1537,7 @@ class FolderSync {
         };
         persist(v.entry);
       } catch (e) {
-        report('$path: $e');
+        report('$path: ${plainError(e)}');
       }
     }
     final remoteIds = {for (final e in remote.values) e.current.entry};
@@ -1578,7 +1583,7 @@ class FolderSync {
           persist(id);
           conflicts++;
         } catch (e) {
-          report('$path: $e');
+          report('$path: ${plainError(e)}');
         }
         continue;
       }
@@ -1590,7 +1595,7 @@ class FolderSync {
         state[id] = {...base, 'token': null};
         persist(id);
       } catch (e) {
-        report('$path: $e');
+        report('$path: ${plainError(e)}');
       }
     }
     // Synced files whose chunks this device has not yet traced to the
@@ -1649,7 +1654,7 @@ class FolderSync {
         state[id] = {...base, 'sourced': true};
         persist(id);
       } catch (e) {
-        report('$path: $e');
+        report('$path: ${plainError(e)}');
       }
     }
     // A completed pass has applied the first-sync choices it could; only

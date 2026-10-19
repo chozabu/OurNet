@@ -46,7 +46,8 @@ import 'package:ournet_transport/ournet_transport.dart'
         FirstSyncItem,
         FirstSyncKind,
         FirstSyncPlan,
-        FolderSync;
+        FolderSync,
+        plainError;
 import '../services/network.dart';
 import '../services/files.dart';
 import '../services/calls.dart';
@@ -1217,7 +1218,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     try {
       await action();
     } catch (e) {
-      notice('$e');
+      notice(plainError(e));
     } finally {
       if (mounted) setState(() => busy = false);
     }

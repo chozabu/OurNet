@@ -456,7 +456,7 @@ extension _DrivePages on _OurNetAppState {
                         PopupMenuItem(value: 'sync', child: Text('Sync now')),
                         PopupMenuItem(
                           value: 'disconnect',
-                          child: Text('Disconnect (keep files)'),
+                          child: Text('Stop syncing here (keep files)'),
                         ),
                       ],
                     ),
@@ -647,15 +647,60 @@ extension _DrivePages on _OurNetAppState {
                 }
               }
               if (action == 'delete') {
-                if (v.isFolder &&
-                    entries.any(
-                      (e) =>
-                          e.current.data['folder'] == v.entry &&
-                          !e.current.deleted,
-                    )) {
-                  throw StateError(
-                    'Move or delete the folder’s contents first',
+                final (files, folders) = v.isFolder
+                    ? Drive.treeSize(entry, entries)
+                    : (0, 0);
+                if (files + folders > 0) {
+                  // A folder with things in it: delete it all everywhere,
+                  // or (where this device syncs it) only stop syncing here.
+                  final connection = folderSync.connections[v.entry];
+                  if (!context.mounted) return;
+                  final choice = await showDialog<String>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: Text('Remove “${p['name']}” from the drive?'),
+                      content: SingleChildScrollView(
+                        child: Text(
+                          'It holds $files ${files == 1 ? 'file' : 'files'} '
+                          'and $folders ${folders == 1 ? 'folder' : 'folders'}.'
+                          '${connection == null ? '' : ' This device syncs it with ${connection['location']}.'}'
+                          '\n\nDelete everything removes it and all it holds '
+                          'from your drive on every device. Devices that sync '
+                          'a folder containing it remove their unchanged '
+                          'copies; edited copies are kept as conflicts. A '
+                          'device that syncs this folder itself stops syncing '
+                          'it and keeps its files. Deletions stay in version '
+                          'history.',
+                        ),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel'),
+                        ),
+                        if (connection != null)
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, 'stop'),
+                            child: const Text('Stop syncing here (keep files)'),
+                          ),
+                        FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: Theme.of(context).colorScheme.error,
+                            foregroundColor: Theme.of(context).colorScheme.onError,
+                          ),
+                          onPressed: () => Navigator.pop(context, 'delete'),
+                          child: const Text('Delete everything'),
+                        ),
+                      ],
+                    ),
                   );
+                  if (choice == 'stop') {
+                    await folderSync.disconnect(v.entry);
+                  } else if (choice == 'delete') {
+                    final count = await Drive(node).deleteTree(entry, entries);
+                    notice('Deleted ${count - 1} items and the folder');
+                  }
+                  return;
                 }
                 await Drive(node).revise(entry, {'deleted': true});
               }

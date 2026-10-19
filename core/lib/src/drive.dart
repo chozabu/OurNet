@@ -59,6 +59,66 @@ class Drive {
     ...changes,
   }, parents: entry.heads.map((v) => v.data['revision'] as String).toList());
 
+  /// What deleting [folder] with everything in it would remove, from
+  /// [entries]: (files, folders) below it, the folder itself not counted.
+  static (int, int) treeSize(DriveEntry folder, List<DriveEntry> entries) {
+    final below = _below(folder, entries);
+    final folders = below.where((e) => e.current.isFolder).length;
+    return (below.length - folders, folders);
+  }
+
+  static List<DriveEntry> _below(DriveEntry folder, List<DriveEntry> entries) {
+    final children = <String, List<DriveEntry>>{};
+    for (final e in entries) {
+      if (e.current.deleted) continue;
+      final parent = e.current.data['folder'];
+      if (parent is String) (children[parent] ??= []).add(e);
+    }
+    final out = <DriveEntry>[];
+    final seen = {folder.current.entry};
+    void visit(String id) {
+      for (final child in children[id] ?? const <DriveEntry>[]) {
+        if (!seen.add(child.current.entry)) continue;
+        out.add(child);
+        if (child.current.isFolder) visit(child.current.entry);
+      }
+    }
+
+    visit(folder.current.entry);
+    return out;
+  }
+
+  /// Deletes [folder] and everything below it, from [entries]: deepest
+  /// first, each folder's deletion listing the entries deleted with it
+  /// (`removed`), as a folder deleted on a synced device does. Devices that
+  /// sync a folder holding it then remove their unchanged copies, and one
+  /// with an edited copy keeps it as a conflict. Every deletion stays in
+  /// history. Returns how many entries were deleted.
+  Future<int> deleteTree(DriveEntry folder, List<DriveEntry> entries) async {
+    final below = _below(folder, entries);
+    final byParent = <String, List<DriveEntry>>{};
+    for (final e in below) {
+      (byParent[e.current.data['folder'] as String] ??= []).add(e);
+    }
+    var count = 0;
+    Future<void> delete(DriveEntry entry) async {
+      final removed = <String>[];
+      for (final child
+          in byParent[entry.current.entry] ?? const <DriveEntry>[]) {
+        await delete(child);
+        removed.add(child.current.entry);
+      }
+      await revise(entry, {
+        'deleted': true,
+        if (removed.isNotEmpty && removed.length <= 1000) 'removed': removed,
+      });
+      count++;
+    }
+
+    await delete(folder);
+    return count;
+  }
+
   /// Republish every readable revision with its original ancestry for newly
   /// enrolled devices. Equivalent copies are deduplicated in entries().
   /// Republishing is deliberately a pass over everything, so it reads in

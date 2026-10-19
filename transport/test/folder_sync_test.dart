@@ -679,14 +679,64 @@ void main() {
       expect(a.store.chunkSourcesOf(root, 'kept.bin'), unorderedEquals(leaves));
       expect(a.store.count, before);
       expect(
-      (await Drive(a).entries())
-          .singleWhere((e) => e.current.data['name'] == 'kept.bin')
-          .history,
-      hasLength(1),
-    );
+        (await Drive(a).entries())
+            .singleWhere((e) => e.current.data['name'] == 'kept.bin')
+            .history,
+        hasLength(1),
+      );
       // Still served to the phone, from the folder.
       await settle();
       expect(await File('${phone.path}/kept.bin').readAsBytes(), bytes);
+    },
+  );
+  test('deleting a folder with everything in it reaches a synced device '
+      'without conflicts', () async {
+    await Directory('${desktop.path}/sub/inner').create(recursive: true);
+    await File('${desktop.path}/sub/a.txt').writeAsString('a');
+    await File('${desktop.path}/sub/inner/c.txt').writeAsString('c');
+    await File('${desktop.path}/keep.txt').writeAsString('keep');
+    await settle();
+    expect(await File('${phone.path}/sub/inner/c.txt').exists(), true);
+    final entries = await Drive(b).entries();
+    final sub = entries.singleWhere((e) => e.current.data['name'] == 'sub');
+    expect(Drive.treeSize(sub, entries), (2, 1));
+    expect(await Drive(b).deleteTree(sub, entries), 4);
+    await exchange();
+    await settle();
+    for (final dir in [desktop, phone]) {
+      expect(await Directory('${dir.path}/sub').exists(), false);
+      expect(await File('${dir.path}/keep.txt').readAsString(), 'keep');
+    }
+    expect(left.status[root], isNot(contains('conflicts')));
+    expect(right.status[root], isNot(contains('conflicts')));
+  });
+  test(
+    'deleting a folder everywhere keeps an edited copy as a conflict',
+    () async {
+      await Directory('${desktop.path}/sub').create();
+      await File('${desktop.path}/sub/a.txt').writeAsString('a');
+      await File('${desktop.path}/sub/b.txt').writeAsString('b');
+      await settle();
+      // The phone edits b before it hears of the deletion.
+      await File(
+        '${phone.path}/sub/b.txt',
+      ).writeAsString('edited on the phone');
+      final entries = await Drive(a).entries();
+      final sub = entries.singleWhere((e) => e.current.data['name'] == 'sub');
+      await Drive(a).deleteTree(sub, entries);
+      await right.sync();
+      await exchange();
+      await settle();
+      expect(await File('${phone.path}/sub/a.txt').exists(), false);
+      expect(
+        await File('${phone.path}/sub/b.txt').readAsString(),
+        'edited on the phone',
+      );
+      final edited = (await Drive(
+        a,
+      ).entries()).singleWhere((e) => e.current.data['name'] == 'b.txt');
+      expect(edited.conflicted, true);
+      expect(edited.heads.any((v) => v.deleted), true);
     },
   );
   test('backend compare-before-write preserves a newer local edit', () async {

@@ -92,7 +92,7 @@ is local to this device and never dictates another device's location.
   1,000). Records arrive in pages, newest first, so another device may get the
   folder's deletion before its children's; it then waits for those instead of
   restoring the folder as a conflict.
-* **Disconnect (keep files)** stops synchronization without deleting either copy.
+* **Stop syncing here (keep files)** stops synchronization without deleting either copy.
   Missing roots, revoked permissions, incomplete provider listings, unsupported
   names and case collisions fail safely instead of looking like mass deletions.
 * Each device persists per-entry revision/token baselines separately from drive

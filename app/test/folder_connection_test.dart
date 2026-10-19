@@ -64,7 +64,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Disconnect (keep files)'));
+      await tester.tap(find.text('Stop syncing here (keep files)'));
       await tester.pumpAndSettle();
       expect(node.store.setting('folder-sync/connections'), isEmpty);
       expect((await Drive(node).entries()).single.current.deleted, false);
@@ -176,6 +176,105 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await settle();
       expect(node.store.setting('folder-sync/connections'), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(node.close);
+    },
+  );
+  testWidgets(
+    'removing a folder with files asks: stop syncing here, or delete it all',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final node = Node(await LocalIdentity.create(), Store());
+      final docs = (await tester.runAsync(() async {
+        final id =
+            (await node.content(await Drive(node).folder('Docs')))!['entry']
+                as String;
+        await Drive(node).write({
+          'entry': randomId(),
+          'folder': id,
+          'name': 'a.txt',
+          'type': 'file',
+          'deleted': false,
+          'size': 3,
+          'chunks': const [],
+        });
+        return id;
+      }))!;
+      node.store.set('folder-sync/connections', {
+        docs: {'location': 'content://tree/Docs'},
+      });
+      await tester.pumpWidget(
+        OurNetApp(
+          node: node,
+          enablePlatform: false,
+          initialTab: Destination.files,
+        ),
+      );
+      Future<void> settle() async {
+        for (var i = 0; i < 3; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 100)),
+          );
+          await tester.pumpAndSettle();
+        }
+      }
+
+      final list = find
+          .descendant(
+            of: find.byType(CustomScrollView),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      Future<void> openDelete() async {
+        await settle();
+        await tester.scrollUntilVisible(
+          find.text('Docs'),
+          200,
+          scrollable: list,
+        );
+        await tester.drag(list, const Offset(0, -300));
+        await tester.pumpAndSettle();
+        final row = find.ancestor(
+          of: find.text('Docs'),
+          matching: find.byType(ListTile),
+        );
+        await tester.tap(
+          find.descendant(
+            of: row,
+            matching: find.byType(PopupMenuButton<String>),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Delete from drive'));
+        // The page shows its busy bar under the dialog: pump, not settle.
+        for (var i = 0; i < 5; i++) {
+          await tester.pump(const Duration(milliseconds: 200));
+        }
+      }
+
+      await openDelete();
+      expect(find.text('Remove “Docs” from the drive?'), findsOneWidget);
+      expect(
+        find.textContaining('It holds 1 file and 0 folders.'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.text('Stop syncing here (keep files)'));
+      await settle();
+      expect(node.store.setting('folder-sync/connections'), isEmpty);
+      var entries = (await tester.runAsync(() => Drive(node).entries()))!;
+      expect(entries.every((e) => !e.current.deleted), isTrue);
+
+      await openDelete();
+      expect(find.text('Stop syncing here (keep files)'), findsNothing);
+      await tester.tap(find.text('Delete everything'));
+      await settle();
+      entries = (await tester.runAsync(() => Drive(node).entries()))!;
+      expect(entries.every((e) => e.current.deleted), isTrue);
+      expect(find.textContaining('Bad state'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(node.close);
     },
