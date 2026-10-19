@@ -66,6 +66,12 @@ their packages (test fixtures in `core/test/fixtures`) need no build.
   releases to Play and the Microsoft Store together (checks both stores'
   credentials before building). The upload keystore and Play service
   account key live in `%USERPROFILE%\.ournet-signing`, never in the repo.
+- Release from the main checkout, never a fresh worktree: its build caches
+  make a release take minutes, where a new worktree recompiles the native
+  library from scratch. Before building, check `git status` and unpushed
+  commits. Uncommitted or unpushed work is either confirmed correct and
+  included (tests pass, committed, pushed to main) or raised with Alex; it is
+  never silently left out or shipped. Keep local main in sync with GitHub.
 - Follow `docs/PERFORMANCE.md` for measurement boundaries, profile-mode runs and
   baselines. Do not compare debug timings to profile/release timings or collect
   benchmark results while other builds or test suites are running.
