@@ -13,6 +13,7 @@ import '../services/map_tiles.dart';
 import 'map_page.dart';
 import 'place_links.dart';
 import 'plugin_view.dart';
+import 'transfers_view.dart';
 import 'plugins_page.dart';
 import 'remote_session_banner.dart';
 import 'storage_page.dart';
@@ -657,6 +658,13 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       onUpdate: refresh,
       automatic: widget.enablePlatform,
     );
+    // A phone syncs large files by itself only with OurNet open and
+    // charging, unless the person allows it always.
+    if (widget.enablePlatform && Platform.isAndroid) {
+      Files.largeTransfersAllowed = () async =>
+          node.store.setting('files/largeAlways') == true ||
+          (!folderSync.background && await isCharging());
+    }
     calls = Calls(network)
       ..addListener(refresh)
       ..onWake = (device, kind, session) =>

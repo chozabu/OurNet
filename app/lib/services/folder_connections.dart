@@ -48,10 +48,15 @@ class AndroidFolderBackend extends FolderBackend {
   /// Read through a handle a chunk at a time; the provider checks the
   /// token when the read opens and again once it has ended.
   @override
-  Stream<List<int>> read(String path, String expected) async* {
+  Stream<List<int>> read(
+    String path,
+    String expected, {
+    int offset = 0,
+  }) async* {
     final handle = await call<int>('readOpen', {
       'path': path,
       'expected': expected,
+      'offset': offset,
     });
     var ended = false;
     try {

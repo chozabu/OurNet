@@ -117,6 +117,27 @@ class ChunkTreeBuilder {
   /// Data chunks added so far.
   int get count => _count;
 
+  /// Where the listing has got to, for picking an interrupted import up
+  /// again with [ChunkTreeBuilder.resume]: a few list chunks' worth of
+  /// hashes per level, whatever the file's size.
+  Json get state => {
+    'count': _count,
+    'first': List<String>.of(_first),
+    'levels': [for (final level in _levels) List<String>.of(level)],
+  };
+
+  /// A builder carrying on from [state].
+  ChunkTreeBuilder.resume(this.fanOut, this.store, Json state) {
+    _count = state['count'] as int;
+    _first.addAll((state['first'] as List).cast<String>());
+    _levels
+      ..clear()
+      ..addAll([
+        for (final level in state['levels'] as List)
+          (level as List).cast<String>().toList(),
+      ]);
+  }
+
   Future<void> add(String hash) async {
     if (_first.length <= inlineChunks) _first.add(hash);
     _count++;

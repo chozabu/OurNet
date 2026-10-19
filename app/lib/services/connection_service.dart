@@ -45,6 +45,15 @@ Future<ConnectionStatus?> connectionStatus() async {
   );
 }
 
+/// Whether the phone is charging (true where that cannot be told).
+Future<bool> isCharging() async {
+  try {
+    return await _channel.invokeMethod<bool>('charging') ?? true;
+  } catch (_) {
+    return true;
+  }
+}
+
 /// Opens OurNet's page in Android's settings, where battery use can be made
 /// unrestricted. False when the page could not be opened.
 Future<bool> openBatterySettings() async =>

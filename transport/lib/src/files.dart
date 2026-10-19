@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'network.dart';
+import 'transfers.dart';
 
 class Files {
   static final _previews = Expando<_BoundedQueue<Uint8List>>();
@@ -30,6 +31,23 @@ class Files {
   /// The chunk size new files use; tests set a small one to build deep chunk
   /// trees from small files.
   static int newChunkBytes = chunkSize;
+
+  static final _transfersOf = Expando<Transfers>();
+
+  /// Large files being stored or fetched, shared by every [Files] of a node.
+  Transfers get transfers => _transfersOf[node] ??= Transfers();
+
+  /// Whether a large file may be synced now, without someone asking for it:
+  /// the app says no on a phone in the background or on battery, unless
+  /// the person allows it. Null allows it always.
+  static Future<bool> Function()? largeTransfersAllowed;
+
+  /// Whether [size] bytes is a large file: one listed in a chunk tree.
+  static bool isLarge(int size) => size > inlineChunks * newChunkBytes;
+
+  /// Whether automatic sync may move a file of [size] bytes now.
+  static Future<bool> mayTransfer(int size) async =>
+      !isLarge(size) || await (largeTransfersAllowed?.call() ?? true);
   Future<SignedObject> publish(
     String path, {
     List<String> audience = const [],
@@ -66,23 +84,39 @@ class Files {
 
   /// Publishes a file read from [source] as it is encrypted, with no copy
   /// on disk: a folder sync file, say. [size] must be its exact length.
+  ///
+  /// With [journal] and [fingerprint], [open] reads it from an offset and an
+  /// interrupted import carries on (see [storeResumable]).
   Future<SignedObject> publishFrom(
-    Stream<List<int>> source, {
+    Stream<List<int>> Function(int offset) open, {
     required int size,
     required String name,
     List<String> audience = const [],
     Json? drive,
     void Function(int completed, int total)? onProgress,
     ChunkSeen? onChunk,
+    String? journal,
+    String? fingerprint,
   }) async => _publish(
-    await storeFrom(
-      source,
-      size: size,
-      name: name,
-      encrypt: audience.isNotEmpty,
-      onProgress: onProgress,
-      onChunk: onChunk,
-    ),
+    journal != null && fingerprint != null
+        ? await storeResumable(
+            journal: journal,
+            fingerprint: fingerprint,
+            open: open,
+            size: size,
+            name: name,
+            encrypt: audience.isNotEmpty,
+            onProgress: onProgress,
+            onChunk: onChunk,
+          )
+        : await storeFrom(
+            open(0),
+            size: size,
+            name: name,
+            encrypt: audience.isNotEmpty,
+            onProgress: onProgress,
+            onChunk: onChunk,
+          ),
     audience: audience,
     name: name,
     drive: drive,
@@ -154,41 +188,117 @@ class Files {
     void Function(int completed, int total)? onProgress,
   }) async {
     final file = File(path);
-    final size = await file.length();
-    return storeFrom(
-      file.openRead(),
-      size: size,
+    final stat = await file.stat();
+    return storeResumable(
+      journal: 'path:${file.absolute.path}',
+      fingerprint: '${stat.size}/${stat.modified.microsecondsSinceEpoch}',
+      open: (offset) => file.openRead(offset),
+      size: stat.size,
       name: file.uri.pathSegments.last,
       encrypt: encrypt,
       onProgress: onProgress,
     );
   }
 
-  /// [store] for a file read from [source] as it is encrypted, a chunk at a
-  /// time. [size] must be its exact length, or the import fails as changed.
-  Future<Json> storeFrom(
-    Stream<List<int>> source, {
+  /// How far apart, in chunks, an import records where it has got to.
+  static const checkpointChunks = 256;
+
+  /// Imports older than this that were never finished are forgotten.
+  static const journalAge = Duration(days: 7);
+
+  /// [storeFrom] for a file that can be read again from any [open]ed offset,
+  /// such as a file on disk: an import interrupted (or cancelled) part of the
+  /// way through a large file carries on from its last checkpoint when it
+  /// is started again, keeping its key and the chunks it stored. It does so
+  /// only while [fingerprint] (the file's size and modification time, or
+  /// its token) is unchanged; otherwise it starts again from the beginning,
+  /// so an edited file never mixes old and new chunks. [journal] names the
+  /// import, by where the file is.
+  Future<Json> storeResumable({
+    required String journal,
+    required String fingerprint,
+    required Stream<List<int>> Function(int offset) open,
     required int size,
     required String name,
     bool encrypt = true,
     void Function(int completed, int total)? onProgress,
     ChunkSeen? onChunk,
   }) async {
+    final key = 'imports/$journal';
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final e in node.store.settingsUnder('imports/').entries) {
+      if (e.value is! Map || (e.value['at'] as int? ?? 0) < now - journalAge.inMilliseconds) {
+        node.store.removeSetting('imports/${e.key}');
+      }
+    }
+    final saved = node.store.setting(key);
+    final resume =
+        saved is Map &&
+        saved['fingerprint'] == fingerprint &&
+        saved['size'] == size &&
+        saved['encrypt'] == encrypt &&
+        saved['chunkBytes'] == newChunkBytes;
+    if (saved != null && !resume) node.store.removeSetting(key);
+    return storeFrom(
+      null,
+      open: open,
+      size: size,
+      name: name,
+      encrypt: encrypt,
+      onProgress: onProgress,
+      onChunk: onChunk,
+      resume: resume ? Json.from(saved) : null,
+      checkpoint: (state) => node.store.set(key, {
+        ...state,
+        'fingerprint': fingerprint,
+        'size': size,
+        'encrypt': encrypt,
+        'at': now,
+      }),
+      done: () => node.store.removeSetting(key),
+    );
+  }
+
+  /// [store] for a file read from [source] as it is encrypted, a chunk at a
+  /// time. [size] must be its exact length, or the import fails as changed.
+  /// A large one shows in [transfers], where it can be cancelled.
+  Future<Json> storeFrom(
+    Stream<List<int>>? source, {
+    required int size,
+    required String name,
+    bool encrypt = true,
+    void Function(int completed, int total)? onProgress,
+    ChunkSeen? onChunk,
+    Stream<List<int>> Function(int offset)? open,
+    Json? resume,
+    void Function(Json state)? checkpoint,
+    void Function()? done,
+  }) async {
     checkRoom(size, name: name);
     final trace = TimelineTask()..start('attachment.import');
+    final transfer = transfers.start(name, size, upload: true);
     try {
-      final key = await Chacha20.poly1305Aead().newSecretKey();
-      final keyBytes = encrypt ? await key.extractBytes() : null;
       final bytes = newChunkBytes;
+      final List<int>? keyBytes;
+      if (resume != null) {
+        keyBytes = resume['key'] == null ? null : unb64(resume['key']);
+      } else {
+        final key = await Chacha20.poly1305Aead().newSecretKey();
+        keyBytes = encrypt ? await key.extractBytes() : null;
+      }
       // A file that will be listed in a tree keeps its chunks as files.
       final asFile = size > inlineChunks * bytes;
-      final listing = ChunkTreeBuilder(
-        listFanOut(bytes),
-        (plain) => node.blobs.encode(plain, keyBytes, asFile: asFile),
-      );
-      var completed = 0;
-      onProgress?.call(0, size);
-      await for (final data in rechunk(source, bytes)) {
+      Future<String> list(Uint8List plain) =>
+          node.blobs.encode(plain, keyBytes, asFile: asFile);
+      final listing = resume == null
+          ? ChunkTreeBuilder(listFanOut(bytes), list)
+          : ChunkTreeBuilder.resume(listFanOut(bytes), list, resume['tree']);
+      var completed = resume == null ? 0 : resume['offset'] as int;
+      onProgress?.call(completed, size);
+      transfer.progress(completed);
+      final input = source ?? open!(completed);
+      await for (final data in rechunk(input, bytes)) {
+        transfer.check();
         final offset = completed;
         completed += data.length;
         if (completed > size) throw StateError('File changed during import');
@@ -196,6 +306,19 @@ class Files {
         await listing.add(hash);
         onChunk?.call(hash, offset, data.length);
         onProgress?.call(completed, size);
+        transfer.progress(completed);
+        // Only whole chunks are recorded, so carrying on starts on one.
+        if (checkpoint != null &&
+            asFile &&
+            listing.count % checkpointChunks == 0 &&
+            data.length == bytes) {
+          checkpoint({
+            'key': keyBytes == null ? null : b64(keyBytes),
+            'chunkBytes': bytes,
+            'offset': completed,
+            'tree': listing.state,
+          });
+        }
       }
       if (completed != size) throw StateError('File changed during import');
       final stored = {
@@ -206,8 +329,10 @@ class Files {
         'key': keyBytes == null ? null : b64(keyBytes),
       };
       await indexTree(stored);
+      done?.call();
       return stored;
     } finally {
+      transfer.finish();
       trace.finish();
     }
   }
@@ -347,10 +472,32 @@ class Files {
     SignedObject object, {
     void Function(int, int)? onProgress,
     ChunkSeen? onChunk,
+    bool shown = false,
   }) async* {
     final payload = await node.content(object);
     if (payload == null || payload['chunks'] is! List)
       throw StateError('File is not readable by this device');
+    final transfer = shown
+        ? transfers.start(
+            '${payload['name']}',
+            payload['size'] as int,
+            upload: false,
+          )
+        : null;
+    try {
+      yield* _read(object, payload, onProgress, onChunk, transfer);
+    } finally {
+      transfer?.finish();
+    }
+  }
+
+  Stream<List<int>> _read(
+    SignedObject object,
+    Json payload,
+    void Function(int, int)? onProgress,
+    ChunkSeen? onChunk,
+    Transfer? transfer,
+  ) async* {
     var size = 0;
     onProgress?.call(0, payload['size'] as int);
     final key = payload['key'] == null ? null : unb64(payload['key']);
@@ -367,11 +514,13 @@ class Files {
         asFile: hasChunkTree(payload),
       );
       for (var i = 0; i < chunks.length; i++) {
+        transfer?.check();
         final plain = await fetch.chunk(i);
         onChunk?.call(chunks[i], size, plain.length);
         size += plain.length;
         if (size > payload['size']) throw StateError('File size exceeded');
         onProgress?.call(size, payload['size'] as int);
+        transfer?.progress(size);
         yield plain;
       }
     }
@@ -386,7 +535,7 @@ class Files {
     SignedObject object, {
     void Function(int, int)? onProgress,
     ChunkSeen? onChunk,
-  }) => _plain(object, onProgress: onProgress, onChunk: onChunk);
+  }) => _plain(object, onProgress: onProgress, onChunk: onChunk, shown: true);
 
   /// Whether this device keeps its own encrypted copy of a large file (over
   /// 64 MiB, listed in a chunk tree) it also holds as plaintext in a synced
@@ -494,7 +643,11 @@ class Files {
     SignedObject object, {
     void Function(int, int)? onProgress,
   }) => _transferQueue.run('cache/${object.id}', () async {
-    await for (final _ in _plain(object, onProgress: onProgress)) {}
+    await for (final _ in _plain(
+      object,
+      onProgress: onProgress,
+      shown: true,
+    )) {}
   });
 
   /// Verified encrypted chunks remain cached after interruption, including
@@ -513,7 +666,11 @@ class Files {
     final output = await target.open(mode: FileMode.write);
     var closed = false;
     try {
-      await for (final data in _plain(object, onProgress: onProgress)) {
+      await for (final data in _plain(
+        object,
+        onProgress: onProgress,
+        shown: true,
+      )) {
         await output.writeFrom(data);
       }
       await output.close();

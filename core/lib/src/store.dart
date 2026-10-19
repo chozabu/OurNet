@@ -1391,6 +1391,9 @@ class Store {
       ),
   };
 
+  void removeSetting(String key) =>
+      _execute('DELETE FROM settings WHERE key=?', [key]);
+
   void removeSettingsUnder(String prefix) => _execute(
     'DELETE FROM settings WHERE key>=? AND key<?',
     [prefix, '$prefix\u{10FFFF}'],

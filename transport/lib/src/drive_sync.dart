@@ -61,7 +61,8 @@ class DriveSync {
           if (_closed || !enabled || !network.running) return;
           if (!version.deleted &&
               !version.isFolder &&
-              !files.cached(version.data))
+              !files.cached(version.data) &&
+              await Files.mayTransfer(version.data['size'] as int? ?? 0))
             await files.cache(version.object);
         }
       }

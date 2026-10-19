@@ -431,6 +431,23 @@ extension _DrivePages on _OurNetAppState {
                   onChanged: (value) =>
                       update(() => files.keepLargeCopies = value),
                 ),
+                if (Platform.isAndroid)
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Sync large files on battery'),
+                    subtitle: const Text(
+                      'Off: files over 64 MiB sync by themselves only while '
+                      'charging with OurNet open. Adding or saving one '
+                      'yourself always goes ahead.',
+                    ),
+                    value: node.store.setting('files/largeAlways') == true,
+                    onChanged: (value) {
+                      update(() => node.store.set('files/largeAlways', value));
+                      folderSync.schedule();
+                      driveSync.schedule();
+                    },
+                  ),
+                TransfersView(transfers: files.transfers),
                 if (connection != null)
                   ListTile(
                     contentPadding: EdgeInsets.zero,

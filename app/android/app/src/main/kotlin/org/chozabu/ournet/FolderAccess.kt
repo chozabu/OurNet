@@ -91,6 +91,14 @@ class FolderAccess(private val activity: Activity, channel: MethodChannel) {
                             val doc = check(tree, root, path, expected) ?: error("File missing")
                             require(!doc.directory) { "Folder is not a file: $path" }
                             val input = requireNotNull(resolver.openInputStream(doc.uri)) { "Cannot open file" }
+                            // An import carrying on from where it stopped.
+                            val offset = call.argument<Number>("offset")?.toLong() ?: 0L
+                            var skipped = 0L
+                            while (skipped < offset) {
+                                val n = input.skip(offset - skipped)
+                                if (n <= 0) { input.close(); error("File changed: $path") }
+                                skipped += n
+                            }
                             val handle = nextHandle++
                             readers[handle] = Reader(input)
                             handle

@@ -35,9 +35,10 @@ abstract class FolderBackend {
   Future<Map<String, FolderItem>> scan();
   Future<FolderItem?> stat(String path);
 
-  /// The bytes of file [path], checking before and after reading that its
-  /// token is still [expected]: an edit during the read fails it.
-  Stream<List<int>> read(String path, String expected);
+  /// The bytes of file [path] from [offset], checking before and after
+  /// reading that its token is still [expected]: an edit during the read
+  /// fails it.
+  Stream<List<int>> read(String path, String expected, {int offset = 0});
 
   /// Writes [data] to a temporary file beside [path], then replaces [path]
   /// with it only if [path]'s token is still [expected] (null: absent).
@@ -63,6 +64,11 @@ abstract class FolderBackend {
   /// went. Moved entries never sync again.
   Future<String> setAside(String path, String expected);
 }
+
+/// Why a large file waits: the app allows large transfers only in the
+/// foreground and while charging, unless the person allows them always.
+const waitingForPower =
+    'Large file waits for charging with OurNet open (allow it in Files)';
 
 /// The name of the folder, inside a synced folder, that holds entries set
 /// aside where its parent cannot be reached. Names starting `.ournet-` are
@@ -212,9 +218,13 @@ class DiskFolderBackend extends FolderBackend {
   }
 
   @override
-  Stream<List<int>> read(String path, String expected) async* {
+  Stream<List<int>> read(
+    String path,
+    String expected, {
+    int offset = 0,
+  }) async* {
     await _check(path, expected);
-    yield* File(await _path(path)).openRead();
+    yield* File(await _path(path)).openRead(offset);
     await _check(path, expected);
   }
 
@@ -414,6 +424,7 @@ class FolderSync {
       _background ? const Duration(minutes: 5) : const Duration(seconds: 15);
 
   /// Whether the app is in the background.
+  bool get background => _background;
   set background(bool value) {
     if (value == _background) return;
     _background = value;
@@ -789,8 +800,15 @@ class FolderSync {
         // Encrypted straight from the folder; the read fails if the file
         // changes meanwhile.
         final seen = <(String, int, int)>[];
+        if (!await Files.mayTransfer(item.size)) {
+          throw StateError(waitingForPower);
+        }
         object = await files.publishFrom(
-          fs.read(path, item.token),
+          (offset) => fs.read(path, item.token, offset: offset),
+          // An interrupted import of a large file carries on while the
+          // file is unchanged.
+          journal: 'folder:$root/$path',
+          fingerprint: item.token,
           size: item.size,
           audience: [node.person],
           name: data['name'],
@@ -884,6 +902,9 @@ class FolderSync {
           v.data,
           destination: fs.location.startsWith('content:') ? null : fs.location,
         );
+        if (!await Files.mayTransfer(v.data['size'] as int)) {
+          throw StateError(waitingForPower);
+        }
         final seen = <(String, int, int)>[];
         written = await fs.write(
           path,

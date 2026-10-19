@@ -12,6 +12,7 @@ import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -338,6 +339,11 @@ class ConnectionService : Service() {
                             } catch (e: Exception) {
                                 result.success(false)
                             }
+                        }
+                        // Whether the phone is charging: large files sync only then.
+                        "charging" -> {
+                            val battery = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+                            result.success(battery?.isCharging ?: true)
                         }
                         // The app's own settings page, where Battery is set to
                         // Unrestricted; asking directly needs a permission Play
