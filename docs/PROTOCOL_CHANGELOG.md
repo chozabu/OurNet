@@ -7,7 +7,7 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
-## Unreleased: chunk-list trees for files over 64 MiB
+## 0.2.47: chunk-list trees for files over 64 MiB
 
 Additive. A file of more than 512 chunks (over 64 MiB at 128 KiB chunks) lists
 its chunks in a tree instead of inline, so files have no fixed size limit.
