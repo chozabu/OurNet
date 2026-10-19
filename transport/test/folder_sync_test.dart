@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
@@ -57,6 +59,34 @@ void main() {
       for (final row in source.store.db.select('SELECT id FROM blob_files')) {
         final id = row['id'] as String;
         target.store.putBlob(id, source.store.blob(id)!, asFile: true);
+      }
+      // A synced folder's files keep no chunks: they are made from the
+      // folder on request, as another device's fetch would have them.
+      final serve = (identical(source, a) ? left : right).files.network;
+      for (final entry in await Drive(source).entries()) {
+        for (final v in entry.heads) {
+          final p = v.data;
+          if (v.deleted || v.isFolder || p['chunks'] is! List) continue;
+          final key = p['key'] == null ? null : unb64(p['key']);
+          try {
+            await for (final segment in chunkSegments(
+              p,
+              (h) async => (await source.blobs.decode(h, key))!,
+            )) {
+              for (final h in segment) {
+                if (target.store.hasBlob(h)) continue;
+                final bytes =
+                    source.store.blob(h) ??
+                    await serve.chunkSource?.call(v.object, h);
+                if (bytes != null) {
+                  target.store.putBlob(h, bytes, asFile: hasChunkTree(p));
+                }
+              }
+            }
+          } catch (_) {
+            /* Not available from this device now. */
+          }
+        }
       }
     }
   }
@@ -505,6 +535,25 @@ void main() {
       isNot(contains('secret.txt')),
     );
   });
+  test(
+    'an ancestor swapped for a junction is refused on the next pass',
+    () async {
+      final real = await Directory(
+        '${temp.path}/real/inner',
+      ).create(recursive: true);
+      await File('${real.path}/f.txt').writeAsString('x');
+      await Directory('${temp.path}/via/inner').create(recursive: true);
+      final fs = DiskFolderBackend('${temp.path}/via/inner');
+      expect(await fs.scan(), isEmpty);
+      // The ancestor becomes a junction to another tree.
+      await Directory('${temp.path}/via').delete(recursive: true);
+      await Link('${temp.path}/via').create('${temp.path}/real');
+      final next = DiskFolderBackend('${temp.path}/via/inner');
+      await expectLater(next.stat('f.txt'), throwsStateError);
+      await expectLater(next.scan(), throwsStateError);
+      await Link('${temp.path}/via').delete();
+    },
+  );
   test('background passes redraw only when the status changes', () async {
     var updates = 0;
     final watcher = FolderSync(
@@ -561,11 +610,83 @@ void main() {
         before,
       );
       for (final dir in [desktop, phone]) {
-        expect(
-          dir.listSync().map((e) => e.uri.pathSegments.last),
-          ['big.bin'],
-        );
+        expect(dir.listSync().map((e) => e.uri.pathSegments.last), ['big.bin']);
       }
+    },
+  );
+  test('a device joining with identical files fetches nothing', () async {
+    final same = List.generate(300 * 1024 + 5, (i) => (i * 11) & 255);
+    final other = List.generate(300 * 1024 + 5, (i) => (i * 13) & 255);
+    await File('${desktop.path}/same.bin').writeAsBytes(same);
+    await File('${desktop.path}/differs.bin').writeAsBytes(same);
+    await left.sync();
+    await syncPair(a, b); // Records only: no chunk reaches the phone.
+    await File('${phone.path}/same.bin').writeAsBytes(same);
+    await File('${phone.path}/differs.bin').writeAsBytes(other);
+    await right.sync();
+    // Told apart by sealing with the drive file's key: no fetch, which
+    // would fail here with no source.
+    expect(right.status[root], isNot(contains('Bad state')));
+    expect(right.status[root], contains('1 conflicts'));
+    final entries = await Drive(b).entries();
+    expect(
+      entries.singleWhere((e) => e.current.data['name'] == 'same.bin').heads,
+      hasLength(1),
+    );
+    expect(
+      entries
+          .singleWhere((e) => e.current.data['name'] == 'differs.bin')
+          .conflicted,
+      isTrue,
+    );
+    expect(await File('${phone.path}/differs.bin').readAsBytes(), other);
+  });
+  test(
+    'an upgrade frees copies earlier builds kept, publishing nothing',
+    () async {
+      final bytes = List.generate(200 * 1024 + 3, (i) => (i * 5) & 255);
+      await File('${desktop.path}/kept.bin').writeAsBytes(bytes);
+      await left.sync();
+      // As 0.2.47 left it: every chunk stored, nothing traced to the folder.
+      final entry = (await Drive(
+        a,
+      ).entries()).singleWhere((e) => e.current.data['name'] == 'kept.bin');
+      final p = entry.current.data;
+      final key = unb64(p['key']);
+      final leaves = (p['chunks'] as List).cast<String>();
+      final file = File('${desktop.path}/kept.bin').readAsBytesSync();
+      for (var i = 0; i < leaves.length; i++) {
+        final at = i * Files.chunkSize;
+        final plain = Uint8List.fromList(
+          file.sublist(at, min(at + Files.chunkSize, file.length)),
+        );
+        expect(await a.blobs.encode(plain, key), leaves[i]);
+      }
+      a.store.forgetFolderSources(root);
+      final id = entry.current.entry;
+      final base = Map<String, dynamic>.from(
+        a.store.setting('folder-sync/item/$root/$id') as Map,
+      )..remove('sourced');
+      a.store.set('folder-sync/item/$root/$id', base);
+      expect(a.store.hasBlob(leaves.first), isTrue);
+      final before = a.store.count;
+
+      await left.sync();
+      expect(left.status[root], contains('up to date'));
+      for (final leaf in leaves) {
+        expect(a.store.hasBlob(leaf), isFalse);
+      }
+      expect(a.store.chunkSourcesOf(root, 'kept.bin'), unorderedEquals(leaves));
+      expect(a.store.count, before);
+      expect(
+      (await Drive(a).entries())
+          .singleWhere((e) => e.current.data['name'] == 'kept.bin')
+          .history,
+      hasLength(1),
+    );
+      // Still served to the phone, from the folder.
+      await settle();
+      expect(await File('${phone.path}/kept.bin').readAsBytes(), bytes);
     },
   );
   test('backend compare-before-write preserves a newer local edit', () async {
@@ -582,10 +703,9 @@ void main() {
     // Reading checks the token before and after.
     await expectLater(fs.read('race.txt', old).drain<void>(), throwsStateError);
     // No temporary file is left beside it either way.
-    expect(
-      desktop.listSync().map((e) => e.uri.pathSegments.last),
-      ['race.txt'],
-    );
+    expect(desktop.listSync().map((e) => e.uri.pathSegments.last), [
+      'race.txt',
+    ]);
   });
   group('first sync', () {
     late Directory fresh;

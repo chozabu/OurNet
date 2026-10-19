@@ -1691,6 +1691,7 @@ class Plugins {
         'chunks',
         'chunkTree',
         'chunkDepth',
+        'nonces',
         'chunkBytes',
         'key',
       ])

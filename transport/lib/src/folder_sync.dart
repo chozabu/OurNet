@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:ournet_core/ournet_core.dart';
@@ -133,23 +134,34 @@ class DiskFolderBackend extends FolderBackend {
   @override
   Stream<void> get changes =>
       Directory(location).watch(recursive: true).map((_) {});
+
+  /// When the selected root and its ancestors were last checked. They are
+  /// checked again a little later, not for every file: a sync pass touches
+  /// thousands of files, and each check is several system calls.
+  DateTime? _rootChecked;
+  static const _rootRecheck = Duration(seconds: 2);
+
   Future<String> _path(String path) async {
     if (path.isNotEmpty && !safeFolderPath(path))
       throw StateError('Unsupported filename: $path');
     var current = Directory(location).absolute.path;
-    // Check every ancestor as well as descendants: an existing parent junction
-    // must not redirect an operation outside the selected tree.
-    var ancestor = Directory(current);
-    while (true) {
-      if (await FileSystemEntity.type(ancestor.path, followLinks: false) ==
-          FileSystemEntityType.link) {
-        throw StateError('Linked folders are not supported');
+    final checked = _rootChecked;
+    if (checked == null || DateTime.now().difference(checked) > _rootRecheck) {
+      // Check every ancestor as well as descendants: an existing parent
+      // junction must not redirect an operation outside the selected tree.
+      var ancestor = Directory(current);
+      while (true) {
+        if (await FileSystemEntity.type(ancestor.path, followLinks: false) ==
+            FileSystemEntityType.link) {
+          throw StateError('Linked folders are not supported');
+        }
+        if (ancestor.parent.path == ancestor.path) break;
+        ancestor = ancestor.parent;
       }
-      if (ancestor.parent.path == ancestor.path) break;
-      ancestor = ancestor.parent;
+      if (!await Directory(current).exists())
+        throw StateError('Folder unavailable: $location');
+      _rootChecked = DateTime.now();
     }
-    if (!await Directory(current).exists())
-      throw StateError('Folder unavailable: $location');
     for (final part in path.isEmpty ? <String>[] : path.split('/')) {
       current = '$current${Platform.pathSeparator}$part';
       if (await FileSystemEntity.type(current, followLinks: false) ==
@@ -188,6 +200,8 @@ class DiskFolderBackend extends FolderBackend {
 
   @override
   Future<Map<String, FolderItem>> scan() async {
+    // A pass starts with a scan: the root is checked afresh for it.
+    _rootChecked = null;
     final result = <String, FolderItem>{};
     // The root and its ancestors are checked once. Below it, the listing
     // itself reports links without following them, so entries need no
@@ -223,9 +237,18 @@ class DiskFolderBackend extends FolderBackend {
     String expected, {
     int offset = 0,
   }) async* {
-    await _check(path, expected);
-    yield* File(await _path(path)).openRead(offset);
-    await _check(path, expected);
+    // Resolved and checked once; the token is compared before and after.
+    final target = await _path(path);
+    Future<void> check() async {
+      if (_item(await FileStat.stat(target), path)?.token != expected)
+        throw StateError(
+          'File changed during sync: $path; retrying preserves your edit',
+        );
+    }
+
+    await check();
+    yield* File(target).openRead(offset);
+    await check();
   }
 
   @override
@@ -424,6 +447,9 @@ class FolderSync {
       _background ? const Duration(minutes: 5) : const Duration(seconds: 15);
 
   /// Whether the app is in the background.
+  /// Files added to the drive at once in a pass.
+  static const concurrentAdds = 4;
+
   bool get background => _background;
   set background(bool value) {
     if (value == _background) return;
@@ -656,6 +682,7 @@ class FolderSync {
     ..remove('chunkTree')
     ..remove('chunkDepth')
     ..remove('chunkBytes')
+    ..remove('nonces')
     ..remove('key')
     ..remove('size');
 
@@ -752,43 +779,33 @@ class FolderSync {
       persist(id);
     }
 
-    // A large file's chunks can be made again from its plaintext here:
-    // recorded, and with keepLargeCopies off this device's own copy of them
-    // goes once the folder is shown to make the first one again (a file
-    // whose chunks another build sealed with random nonces cannot).
-    Future<void> sourced(
-      String path,
-      FolderItem item,
-      SignedObject object,
-      List<(String, int, int)> seen,
-    ) async {
-      final payload = await node.content(object);
-      if (payload == null || !hasChunkTree(payload) || seen.isEmpty) return;
+    // A synced file's chunks are made again from the folder when asked for,
+    // so this device keeps no copy of them: where each lies is recorded.
+    void sourced(String path, FolderItem item, List<(String, int, int)> seen) {
+      if (seen.isEmpty) return;
       node.store.recordChunkSources(
         root,
         path,
         item.contentStamp ?? item.token,
         seen,
       );
-      if (!files.releasesCopies) return;
-      if (await _chunkFromFolder(object, seen.first.$1) == null) {
-        node.store.forgetChunkSources(root, path);
-        return;
-      }
-      for (final hash in {for (final (h, _, _) in seen) h}) {
-        node.store.removeBlob(hash);
-      }
     }
 
     final drive = Drive(node);
     // Publishes [data] after [parents]: the local file at [path] for files,
     // a metadata-only revision for folders and deletions. Returns its revision.
+    //
+    // A synced file keeps no copy of its chunks here: they are made again
+    // from the folder. [keepData] keeps them for a copy the folder may not
+    // hold for long: a conflicting revision, or a local file about to be
+    // replaced by the drive's.
     Future<String> revise(
       Json data,
       List<String> parents,
       String path,
-      FolderItem? item,
-    ) async {
+      FolderItem? item, {
+      bool keepData = false,
+    }) async {
       // A folder's list of entries deleted with it belongs to that deletion.
       data = {...data};
       if (data['deleted'] != true || data['removed'] is! List)
@@ -818,8 +835,9 @@ class FolderSync {
             'parents': parents,
           },
           onChunk: (hash, offset, length) => seen.add((hash, offset, length)),
+          keepData: keepData,
         );
-        await sourced(path, item, object, seen);
+        sourced(path, item, seen);
       }
       return (await node.content(object))!['revision'];
     }
@@ -829,8 +847,24 @@ class FolderSync {
     // streamed side by side. Reading checks [item]'s token before and after,
     // so an edit made during the comparison fails this pass rather than
     // being adopted unseen.
-    Future<bool> sameFile(String path, FolderItem item, DriveVersion v) async {
+    // A drive file whose chunk nonces come from its key and plaintext is
+    // compared by sealing the local file with that key: the same chunk
+    // names mean the same bytes, and nothing is fetched. Older ones are
+    // fetched and compared byte for byte.
+    Future<bool> sameFile(
+      String path,
+      FolderItem item,
+      DriveVersion v, {
+      ChunkSeen? onChunk,
+    }) async {
       if (v.deleted || v.isFolder || v.data['size'] != item.size) return false;
+      if (v.data['nonces'] == 'derived') {
+        return files.sealsTo(
+          fs.read(path, item.token),
+          v.object,
+          onChunk: onChunk,
+        );
+      }
       return sameBytes(fs.read(path, item.token), files.open(v.object));
     }
 
@@ -911,10 +945,11 @@ class FolderSync {
           files.open(
             v.object,
             onChunk: (hash, offset, length) => seen.add((hash, offset, length)),
+            keepData: false,
           ),
           item?.token,
         );
-        await sourced(path, written, v.object, seen);
+        sourced(path, written, seen);
       }
       record(v.entry, path, revision, v.isFolder, written);
     }
@@ -1165,8 +1200,76 @@ class FolderSync {
         continue;
       deleting.add(path);
     }
+    // What the pass is doing, shown a few times a second at most: every
+    // update redraws the app.
+    var shownAt = DateTime.fromMillisecondsSinceEpoch(0);
+    void progress(String text) {
+      status[root] = text;
+      final now = DateTime.now();
+      if (now.difference(shownAt) < const Duration(milliseconds: 250)) return;
+      shownAt = now;
+      _show();
+    }
+
+    // Files on both sides that have never synced: those the drive copy
+    // matches, found a few at once (by sealing, for most, so nothing is
+    // fetched), with where each chunk lies in the folder.
+    final identicals = <String, List<(String, int, int)>>{};
+    final checked = <String>{};
+    final candidates = [
+      for (final path in paths)
+        if (local[path] case final item?
+            when !item.directory &&
+                remote[path] != null &&
+                !remote[path]!.conflicted &&
+                !remote[path]!.current.deleted &&
+                !remote[path]!.current.isFolder &&
+                remote[path]!.current.data['size'] == item.size &&
+                state[remote[path]!.current.entry] == null)
+          path,
+    ];
+    final checking = <Future<void>>[];
+    for (final (i, path) in candidates.indexed) {
+      if (_closed) break;
+      checking.add(() async {
+        final item = local[path]!, v = remote[path]!.current;
+        final seen = <(String, int, int)>[];
+        try {
+          progress('Comparing $path · ${i + 1} of ${candidates.length}');
+          if (await sameFile(
+            path,
+            item,
+            v,
+            onChunk: (hash, offset, length) => seen.add((hash, offset, length)),
+          )) {
+            identicals[path] = seen;
+          }
+          checked.add(path);
+        } catch (_) {
+          /* Checked again, alone, in the pass below. */
+        }
+      }());
+      if (checking.length >= concurrentAdds) await checking.removeAt(0);
+    }
+    await Future.wait(checking);
+
+    // Files only here, added a few at once with their progress shown.
+    final adding = <Future<void>>[];
+    var added = 0;
+    final toAdd = paths
+        .where(
+          (p) =>
+              remote[p] == null &&
+              local[p] != null &&
+              !local[p]!.directory &&
+              !mappedPaths.contains(p),
+        )
+        .length;
     for (final path in paths) {
-      if (_closed) return;
+      if (_closed) {
+        await Future.wait(adding);
+        return;
+      }
       try {
         final existing = remote[path];
         if (existing?.current.isFolder == true)
@@ -1194,15 +1297,37 @@ class FolderSync {
             'type': item.directory ? 'folder' : 'file',
             'deleted': false,
           };
-          // Preserve the snapshot token, not a newer edit made during import.
-          record(
-            data['entry'],
-            path,
-            await revise(data, const [], path, item),
-            item.directory,
-            item,
-          );
-          if (item.directory) folderIds[path] = data['entry'];
+          if (item.directory) {
+            record(
+              data['entry'],
+              path,
+              await revise(data, const [], path, item),
+              true,
+              item,
+            );
+            folderIds[path] = data['entry'];
+            continue;
+          }
+          // Files are added a few at once; their folders already exist.
+          final number = ++added;
+          adding.add(() async {
+            try {
+              progress('Adding $path · $number of $toAdd');
+              // Preserve the snapshot token, not a newer edit made during
+              // import.
+              record(
+                data['entry'],
+                path,
+                await revise(data, const [], path, item),
+                false,
+                item,
+              );
+            } catch (e) {
+              retry.add(path);
+              report('$path: $e');
+            }
+          }());
+          if (adding.length >= concurrentAdds) await adding.removeAt(0);
           continue;
         }
         if (existing == null) continue;
@@ -1226,6 +1351,7 @@ class FolderSync {
                 [base['revision'] as String],
                 oldPath,
                 old,
+                keepData: true,
               ),
               'token': old?.token,
             };
@@ -1241,6 +1367,8 @@ class FolderSync {
             continue;
           }
           final baseRevision = base['revision'] as String;
+          final rival =
+              existing.conflicted || v.data['revision'] != baseRevision;
           final removed = removedUnder[path];
           state[v.entry] = {
             'path': path,
@@ -1258,13 +1386,13 @@ class FolderSync {
               [baseRevision],
               path,
               item,
+              keepData: rival,
             ),
             'token': item?.token,
             'directory': v.isFolder,
           };
           persist(v.entry);
-          if (existing.conflicted || v.data['revision'] != baseRevision)
-            conflicts++;
+          if (rival) conflicts++;
           continue;
         }
         if (existing.conflicted) {
@@ -1284,9 +1412,15 @@ class FolderSync {
             continue;
           }
           // An identical file adopts the drive's revision instead: no
-          // rival head and no upload.
-          if (!v.deleted && await sameFile(path, item, v)) {
+          // rival head and no upload. Most were checked a few at once
+          // before this loop.
+          final seen = identicals[path];
+          if (seen != null ||
+              (!checked.contains(path) &&
+                  !v.deleted &&
+                  await sameFile(path, item, v))) {
             record(v.entry, path, v.data['revision'], false, item);
+            if (seen != null) sourced(path, item, seen);
             continue;
           }
           final choice = keep(path, item, v);
@@ -1323,6 +1457,7 @@ class FolderSync {
               const [],
               path,
               item,
+              keepData: true,
             );
             record(v.entry, path, kept, false, item);
             final merged = await drive.write(
@@ -1340,7 +1475,13 @@ class FolderSync {
           record(
             v.entry,
             path,
-            await revise({...v.data, 'deleted': false}, const [], path, item),
+            await revise(
+              {...v.data, 'deleted': false},
+              const [],
+              path,
+              item,
+              keepData: true,
+            ),
             false,
             item,
           );
@@ -1354,6 +1495,7 @@ class FolderSync {
         report('$path: $e');
       }
     }
+    await Future.wait(adding);
     for (final path in deleting.toList()..sort((a, b) => _byDepth(b, a))) {
       final v = remote[path]!.current;
       if (!v.isFolder) continue;
@@ -1429,6 +1571,7 @@ class FolderSync {
               [base['revision'] as String],
               path,
               item,
+              keepData: true,
             ),
             'token': item?.token,
           };
@@ -1445,6 +1588,65 @@ class FolderSync {
           node.store.forgetChunkSources(root, path);
         }
         state[id] = {...base, 'token': null};
+        persist(id);
+      } catch (e) {
+        report('$path: $e');
+      }
+    }
+    // Synced files whose chunks this device has not yet traced to the
+    // folder: added by earlier builds, which kept a copy of every chunk, or
+    // found identical. Each chunk's place in the file is recorded, and the
+    // copy is freed once the folder is shown to make the first chunk again
+    // (chunks an earlier build sealed with random nonces it cannot, so
+    // those stay). Nothing is published.
+    for (final id in state.keys.toList()) {
+      if (_closed) return;
+      final base = state[id];
+      if (base['sourced'] == true ||
+          base['directory'] == true ||
+          base['token'] == null)
+        continue;
+      final path = base['path'] as String;
+      final item = local[path];
+      final entry = byId[id];
+      if (item == null ||
+          item.token != base['token'] ||
+          entry == null ||
+          entry.conflicted ||
+          entry.current.deleted ||
+          entry.current.data['revision'] != base['revision'])
+        continue;
+      try {
+        if (node.store.chunkSourcesOf(root, path).isEmpty) {
+          final v = entry.current;
+          final payload = v.data;
+          final size = payload['size'] as int, bytes = payload['chunkBytes'];
+          if (bytes is! int) continue;
+          final key = payload['key'] == null ? null : unb64(payload['key']);
+          final leaves = <String>[];
+          await for (final segment in chunkSegments(
+            payload,
+            (hash) async =>
+                (await node.blobs.decode(hash, key)) ??
+                (throw StateError('List chunk not here')),
+          )) {
+            leaves.addAll(segment);
+          }
+          node.store
+              .recordChunkSources(root, path, item.contentStamp ?? item.token, [
+                for (final (i, hash) in leaves.indexed)
+                  (hash, i * bytes, min(bytes, size - i * bytes)),
+              ]);
+          if (leaves.isNotEmpty &&
+              await _chunkFromFolder(v.object, leaves.first) != null) {
+            for (final hash in leaves.toSet()) {
+              node.store.removeBlob(hash);
+            }
+          } else {
+            node.store.forgetChunkSources(root, path);
+          }
+        }
+        state[id] = {...base, 'sourced': true};
         persist(id);
       } catch (e) {
         report('$path: $e');

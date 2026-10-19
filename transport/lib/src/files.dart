@@ -97,6 +97,7 @@ class Files {
     ChunkSeen? onChunk,
     String? journal,
     String? fingerprint,
+    bool keepData = true,
   }) async => _publish(
     journal != null && fingerprint != null
         ? await storeResumable(
@@ -108,6 +109,7 @@ class Files {
             encrypt: audience.isNotEmpty,
             onProgress: onProgress,
             onChunk: onChunk,
+            keepData: keepData,
           )
         : await storeFrom(
             open(0),
@@ -116,6 +118,7 @@ class Files {
             encrypt: audience.isNotEmpty,
             onProgress: onProgress,
             onChunk: onChunk,
+            keepData: keepData,
           ),
     audience: audience,
     name: name,
@@ -158,6 +161,7 @@ class Files {
         },
         'chunkBytes': stored['chunkBytes'],
         'key': stored['key'],
+        if (stored['nonces'] != null) 'nonces': stored['nonces'],
         if (drive != null) ...drive,
         if (everyday != null) ...everyday,
         if (post != null) ...post,
@@ -200,6 +204,9 @@ class Files {
     );
   }
 
+  /// Chunks sealed at once during an import.
+  static const sealAhead = 8;
+
   /// How far apart, in chunks, an import records where it has got to.
   static const checkpointChunks = 256;
 
@@ -223,6 +230,7 @@ class Files {
     bool encrypt = true,
     void Function(int completed, int total)? onProgress,
     ChunkSeen? onChunk,
+    bool keepData = true,
   }) async {
     final key = 'imports/$journal';
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -247,6 +255,7 @@ class Files {
       encrypt: encrypt,
       onProgress: onProgress,
       onChunk: onChunk,
+      keepData: keepData,
       resume: resume ? Json.from(saved) : null,
       checkpoint: (state) => node.store.set(key, {
         ...state,
@@ -273,8 +282,10 @@ class Files {
     Json? resume,
     void Function(Json state)? checkpoint,
     void Function()? done,
+    bool keepData = true,
   }) async {
-    checkRoom(size, name: name);
+    // Unkept data chunks take no room here: only the few list chunks do.
+    checkRoom(size, name: name, stored: keepData);
     final trace = TimelineTask()..start('attachment.import');
     final transfer = transfers.start(name, size, upload: true);
     try {
@@ -297,28 +308,57 @@ class Files {
       onProgress?.call(completed, size);
       transfer.progress(completed);
       final input = source ?? open!(completed);
-      await for (final data in rechunk(input, bytes)) {
-        transfer.check();
-        final offset = completed;
-        completed += data.length;
-        if (completed > size) throw StateError('File changed during import');
-        final hash = await node.blobs.encode(data, keyBytes, asFile: asFile);
-        await listing.add(hash);
-        onChunk?.call(hash, offset, data.length);
-        onProgress?.call(completed, size);
-        transfer.progress(completed);
+      // Several chunks seal at once; they are listed in order as each is
+      // done. Chunks not kept are only sealed for their hash, on the pool.
+      final pending = <(Future<String>, int, int)>[];
+      var listed = completed;
+      Future<void> next() async {
+        final (hash, offset, length) = pending.removeAt(0);
+        final name = await hash;
+        await listing.add(name);
+        listed = offset + length;
+        onChunk?.call(name, offset, length);
+        onProgress?.call(listed, size);
+        transfer.progress(listed);
         // Only whole chunks are recorded, so carrying on starts on one.
         if (checkpoint != null &&
             asFile &&
             listing.count % checkpointChunks == 0 &&
-            data.length == bytes) {
+            length == bytes) {
           checkpoint({
             'key': keyBytes == null ? null : b64(keyBytes),
             'chunkBytes': bytes,
-            'offset': completed,
+            'offset': listed,
             'tree': listing.state,
           });
         }
+      }
+
+      try {
+        await for (final data in rechunk(input, bytes)) {
+          transfer.check();
+          final offset = completed;
+          completed += data.length;
+          if (completed > size) {
+            throw StateError('File changed during import');
+          }
+          pending.add((
+            keepData
+                ? node.blobs.encode(data, keyBytes, asFile: asFile)
+                : node.blobs.sealedHash(data, keyBytes),
+            offset,
+            data.length,
+          ));
+          if (pending.length >= sealAhead) await next();
+        }
+        while (pending.isNotEmpty) {
+          await next();
+        }
+      } catch (_) {
+        for (final (hash, _, _) in pending) {
+          hash.ignore();
+        }
+        rethrow;
       }
       if (completed != size) throw StateError('File changed during import');
       final stored = {
@@ -327,6 +367,9 @@ class Files {
         ...await listing.finish(),
         'chunkBytes': bytes,
         'key': keyBytes == null ? null : b64(keyBytes),
+        // Chunk nonces come from the key and plaintext: a device holding the
+        // same plaintext can tell it is the same file without fetching it.
+        'nonces': 'derived',
       };
       await indexTree(stored);
       done?.call();
@@ -360,9 +403,9 @@ class Files {
       final left = node.store.storageLimit - node.store.storedBytes;
       if (needed > left) {
         throw StateError(
-          '$name needs ${_sizeText(needed)}, but the storage limit leaves '
-          '${_sizeText(max(0, left))}. Raise the limit in Settings → Storage, '
-          'or remove files.',
+          'Storing $name here takes ${_sizeText(needed)}, but OurNet has '
+          '${_sizeText(max(0, left))} left of the storage you allowed it. '
+          'Allow more in Settings → Storage, or remove files.',
         );
       }
       final path = node.store.path;
@@ -404,6 +447,8 @@ class Files {
 
   /// Whether every original chunk is local. Chunks are content-addressed and
   /// retained, so positive answers are remembered; others use one query.
+  /// A chunk a synced folder holds counts as here: it is made from the
+  /// folder when wanted.
   bool cached(Json payload) {
     if (hasChunkTree(payload)) {
       return node.store.treeStored(
@@ -473,6 +518,7 @@ class Files {
     void Function(int, int)? onProgress,
     ChunkSeen? onChunk,
     bool shown = false,
+    bool keepData = true,
   }) async* {
     final payload = await node.content(object);
     if (payload == null || payload['chunks'] is! List)
@@ -485,7 +531,7 @@ class Files {
           )
         : null;
     try {
-      yield* _read(object, payload, onProgress, onChunk, transfer);
+      yield* _read(object, payload, onProgress, onChunk, transfer, keepData);
     } finally {
       transfer?.finish();
     }
@@ -497,6 +543,7 @@ class Files {
     void Function(int, int)? onProgress,
     ChunkSeen? onChunk,
     Transfer? transfer,
+    bool keepData,
   ) async* {
     var size = 0;
     onProgress?.call(0, payload['size'] as int);
@@ -512,6 +559,7 @@ class Files {
         key,
         chunks,
         asFile: hasChunkTree(payload),
+        keep: keepData,
       );
       for (var i = 0; i < chunks.length; i++) {
         transfer?.check();
@@ -531,25 +579,21 @@ class Files {
   /// The plaintext of [object]'s file, fetched and decrypted a chunk at a
   /// time as it is read: for writing straight to where it is wanted.
   /// [onChunk] sees each data chunk's hash and where it is in the file.
+  ///
+  /// [keepData] false keeps none of the fetched data chunks here: for a file
+  /// written to a synced folder, from which they can be made again.
   Stream<List<int>> open(
     SignedObject object, {
     void Function(int, int)? onProgress,
     ChunkSeen? onChunk,
-  }) => _plain(object, onProgress: onProgress, onChunk: onChunk, shown: true);
-
-  /// Whether this device keeps its own encrypted copy of a large file (over
-  /// 64 MiB, listed in a chunk tree) it also holds as plaintext in a synced
-  /// folder, or that another of the person's devices holds. Off saves the
-  /// space: chunks are made again from the folder, or fetched again.
-  bool get keepLargeCopies =>
-      node.store.setting('files/keepLargeCopies') != false;
-  set keepLargeCopies(bool value) =>
-      node.store.set('files/keepLargeCopies', value);
-
-  /// Whether released copies stay released: not while the drive keeps every
-  /// file offline, which would fetch them straight back.
-  bool get releasesCopies =>
-      !keepLargeCopies && node.store.setting('drive/offline') != true;
+    bool keepData = true,
+  }) => _plain(
+    object,
+    onProgress: onProgress,
+    onChunk: onChunk,
+    shown: true,
+    keepData: keepData,
+  );
 
   /// Drops this device's copy of the data chunks of tree-listed [object]
   /// once another device has shown it holds them, by sending a sample of
@@ -596,6 +640,64 @@ class Files {
       }
     }
     return 0;
+  }
+
+  /// Whether [source] holds exactly the file of [object]: its chunks, sealed
+  /// with the file's key, have the file's chunk names. Only for a file whose
+  /// nonces come from its key and plaintext (`nonces: derived`); of a tree
+  /// file only the list chunks are fetched, never its data.
+  ///
+  /// [onChunk] sees each chunk that matches, with where it lies.
+  Future<bool> sealsTo(
+    Stream<List<int>> source,
+    SignedObject object, {
+    ChunkSeen? onChunk,
+  }) async {
+    final payload = await node.content(object);
+    if (payload == null ||
+        payload['nonces'] != 'derived' ||
+        payload['chunkBytes'] is! int) {
+      return false;
+    }
+    final key = payload['key'] == null ? null : unb64(payload['key']);
+    final local = StreamIterator(rechunk(source, payload['chunkBytes'] as int));
+    final pending = <(Future<String>, String, int, int)>[];
+    var offset = 0;
+    Future<Uint8List> open(String hash) =>
+        _Fetch(this, object, key, [hash], asFile: true).chunk(0);
+    Future<bool> next() async {
+      final (hash, name, at, length) = pending.removeAt(0);
+      if (await hash != name) return false;
+      onChunk?.call(name, at, length);
+      return true;
+    }
+
+    try {
+      await for (final segment in chunkSegments(payload, open)) {
+        for (final expected in segment) {
+          if (!await local.moveNext()) return false;
+          final chunk = local.current;
+          pending.add((
+            node.blobs.sealedHash(chunk, key),
+            expected,
+            offset,
+            chunk.length,
+          ));
+          offset += chunk.length;
+          if (pending.length >= sealAhead && !await next()) return false;
+        }
+      }
+      while (pending.isNotEmpty) {
+        if (!await next()) return false;
+      }
+      // Read to the end: the source checks it did not change meanwhile.
+      return !await local.moveNext();
+    } finally {
+      for (final (hash, _, _, _) in pending) {
+        hash.ignore();
+      }
+      await local.cancel();
+    }
   }
 
   /// Decode only into memory; the durable cache retains encrypted chunks.
@@ -787,6 +889,7 @@ class _Fetch {
     this.key,
     this.chunks, {
     this.asFile = false,
+    this.keep = true,
   }) {
     final held = files.node.store.heldBlobs(chunks);
     final missing = [
@@ -812,6 +915,9 @@ class _Fetch {
 
   /// Whether fetched chunks are kept as files: those of tree-listed files.
   final bool asFile;
+
+  /// Whether fetched chunks are kept at all.
+  final bool keep;
   final _batches = <List<int>>[];
   final _batchOf = <int, int>{};
   final _results = <int, Future<Map<int, Uint8List>>>{};
@@ -908,6 +1014,7 @@ class _Fetch {
             key,
             bytes: bytes,
             asFile: asFile,
+            keep: keep,
           );
           if (plain != null) got[i] = plain;
         }

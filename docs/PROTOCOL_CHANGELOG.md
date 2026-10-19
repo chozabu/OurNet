@@ -7,6 +7,18 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: derived-nonce marker; synced folders keep no chunk copies
+
+Additive. A file payload may carry `nonces: "derived"`: its chunks were
+sealed with nonces from the file key and plaintext (as every 0.2.47 build
+does), so a device holding the same plaintext can tell it is the same file
+by sealing it with that key and comparing chunk names, with nothing fetched.
+Older builds ignore the field. A synced folder's files keep no copy of their
+data chunks on the device that holds the folder: chunks are made from the
+folder when asked for, and a build that kept copies frees them once the
+folder is shown to make them. Conflict copies, and a local file the drive's
+copy replaces, still keep theirs.
+
 ## 0.2.47: chunk-list trees for files over 64 MiB
 
 Additive. A file of more than 512 chunks (over 64 MiB at 128 KiB chunks) lists

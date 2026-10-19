@@ -177,6 +177,7 @@ class EventDraft {
     'chunks',
     'chunkTree',
     'chunkDepth',
+    'nonces',
     'chunkBytes',
     'key',
     'size',

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'dart:convert';
@@ -105,14 +106,32 @@ class BlobWorker {
 
   /// The chunk [plain] encrypts to under [key], without storing it: the
   /// same bytes [encode] stores, since its nonce comes from the plaintext.
+  /// Runs on a small pool of isolates beside the serial worker, so several
+  /// chunks seal at once.
   Future<Uint8List> seal(Uint8List plain, List<int>? key) async =>
-      (await _request({
-            'op': 'seal',
+      (await _sealers.request({
             'bytes': plain,
             'key': key,
             'versioned': WireFormat.versionedBlobs,
           }))['bytes']
           as Uint8List;
+
+  /// The hash of the chunk [plain] encrypts to under [key]: its name, for
+  /// listing a file whose chunks are not kept here. On the sealing pool.
+  Future<String> sealedHash(Uint8List plain, List<int>? key) async {
+    if (_closing) throw StateError('Attachment worker is closed');
+    return (await _sealers.request({
+          'bytes': plain,
+          'key': key,
+          'versioned': WireFormat.versionedBlobs,
+          'hashOnly': true,
+        }))['hash']
+        as String;
+  }
+
+  late final _sealers = _SealPool(
+    Platform.numberOfProcessors > 4 ? 4 : max(1, Platform.numberOfProcessors - 1),
+  );
 
   /// Returns null only when a chunk is absent. Supplied network bytes are
   /// verified and authenticated before they are cached, unless [keep] is
@@ -270,6 +289,95 @@ class BlobWorker {
     } finally {
       _isolate?.kill(priority: Isolate.immediate);
       _responses.close();
+      _sealers.close();
+    }
+  }
+}
+
+/// Isolates that only seal chunks: no database, no state. Requests go to
+/// them in turn, started the first time they are needed.
+class _SealPool {
+  _SealPool(this.size);
+  final int size;
+  final _ports = <Future<SendPort>>[];
+  final _isolates = <Isolate>[];
+  final _replies = ReceivePort();
+  final _pending = <int, Completer<Map<String, dynamic>>>{};
+  var _next = 0, _turn = 0;
+  var _listening = false, _closed = false;
+
+  Future<Map<String, dynamic>> request(Map<String, dynamic> command) async {
+    if (_closed) throw StateError('Attachment worker is closed');
+    if (!_listening) {
+      _listening = true;
+      _replies.listen((message) {
+        if (message is! Map) return;
+        final request = _pending.remove(message['id']);
+        if (message['error'] != null) {
+          request?.completeError(StateError(message['error'] as String));
+        } else {
+          request?.complete(Map<String, dynamic>.from(message));
+        }
+      });
+    }
+    if (_ports.length < size) {
+      final ready = Completer<SendPort>();
+      final ports = ReceivePort();
+      ports.first.then((port) => ready.complete(port as SendPort));
+      _ports.add(ready.future);
+      _isolates.add(
+        await Isolate.spawn(
+          _seal,
+          (ports.sendPort, _replies.sendPort),
+          debugName: 'ournet-seal',
+        ),
+      );
+    }
+    final port = await _ports[_turn++ % _ports.length];
+    final id = _next++;
+    final result = Completer<Map<String, dynamic>>();
+    _pending[id] = result;
+    port.send({...command, 'id': id});
+    return result.future;
+  }
+
+  void close() {
+    _closed = true;
+    for (final isolate in _isolates) {
+      isolate.kill(priority: Isolate.immediate);
+    }
+    _replies.close();
+    for (final request in _pending.values) {
+      request.completeError(StateError('Attachment worker is closed'));
+    }
+    _pending.clear();
+  }
+}
+
+Future<void> _seal((SendPort, SendPort) ports) async {
+  final commands = ReceivePort();
+  ports.$1.send(commands.sendPort);
+  await for (final message in commands) {
+    final command = Map<String, dynamic>.from(message as Map);
+    final id = command['id'];
+    try {
+      final plain = command['bytes'] as Uint8List;
+      if (plain.length > 128 * 1024) throw StateError('Invalid chunk size');
+      final keyBytes = command['key'] as List<int>?;
+      final bytes = keyBytes == null
+          ? plain
+          : await sealBlob(
+              plain,
+              SecretKey(keyBytes),
+              versioned: command['versioned'] == true,
+            );
+      ports.$2.send({
+        'id': id,
+        'hash': blobHash(bytes),
+        if (command['hashOnly'] != true) 'bytes': bytes,
+      });
+    } catch (error) {
+      ports.$2.send({'id': id, 'error': error.toString()});
     }
   }
 }

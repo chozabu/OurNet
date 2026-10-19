@@ -91,7 +91,7 @@ void main() {
           isA<StateError>().having(
             (e) => e.message,
             'message',
-            allOf(contains('f.bin needs'), contains('storage limit')),
+            allOf(contains('Storing f.bin'), contains('storage you allowed')),
           ),
         ),
       );

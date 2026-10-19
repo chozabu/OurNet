@@ -1619,16 +1619,20 @@ class Store {
       _select(
         'SELECT 1 FROM tree_chunks t WHERE t.root IN (SELECT value FROM json_each(?)) '
         'AND NOT EXISTS (SELECT 1 FROM blobs b WHERE b.id=t.hash) '
-        'AND NOT EXISTS (SELECT 1 FROM blob_files f WHERE f.id=t.hash) LIMIT 1',
+        'AND NOT EXISTS (SELECT 1 FROM blob_files f WHERE f.id=t.hash) '
+        'AND NOT EXISTS (SELECT 1 FROM chunk_sources s WHERE s.hash=t.hash) LIMIT 1',
         [jsonEncode(roots)],
       ).isEmpty;
 
-  /// One query for a file's chunk list instead of one query per chunk.
+  /// Whether every one of [ids] is stored here or made from a synced folder
+  /// (see [chunkSource]): one query for a file's chunk list instead of one
+  /// query per chunk.
   bool hasBlobs(List<String> ids) =>
       ids.isEmpty ||
       _select(
             'SELECT COUNT(*) AS n FROM (SELECT id FROM blobs WHERE id IN (SELECT DISTINCT value FROM json_each(?1)) '
-            'UNION SELECT id FROM blob_files WHERE id IN (SELECT DISTINCT value FROM json_each(?1)))',
+            'UNION SELECT id FROM blob_files WHERE id IN (SELECT DISTINCT value FROM json_each(?1)) '
+            'UNION SELECT hash FROM chunk_sources WHERE hash IN (SELECT DISTINCT value FROM json_each(?1)))',
             [jsonEncode(ids)],
           ).first['n'] ==
           ids.toSet().length;

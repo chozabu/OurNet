@@ -1118,6 +1118,7 @@ class Notes {
           'size': size,
           'key': b64(key),
           'chunkBytes': chunkSize,
+          'nonces': 'derived',
         },
       );
       if (isNew && field == 'meta') {
@@ -1299,6 +1300,7 @@ class Notes {
       'chunks',
       'chunkTree',
       'chunkDepth',
+      'nonces',
       'name',
       'size',
       'key',

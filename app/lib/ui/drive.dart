@@ -83,8 +83,8 @@ extension _DrivePages on _OurNetAppState {
               'Existing files with matching names are preserved as conflicts; nothing is silently overwritten. '
               '$remoteFiles drive files · up to $remoteBytes bytes to download.\n\n'
               'Sync runs while OurNet is running and resumes when you reopen it. '
-              'Files can be any size that fits the storage limit in '
-              'Settings (${bytesText(node.store.storageLimit)}) and the disk. '
+              'Files of any size sync, as long as the disk has room. OurNet keeps '
+              'no second copy of them: other devices are sent them from this folder. '
               'Disconnecting leaves the files in place.',
             ),
           ),
@@ -418,18 +418,6 @@ extension _DrivePages on _OurNetAppState {
                   ),
                   value: driveSync.enabled,
                   onChanged: driveSync.setEnabled,
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Keep copies of large files'),
-                  subtitle: const Text(
-                    'Off: files over 64 MiB in a synced folder are not stored '
-                    'twice. Their chunks are made again from the folder when '
-                    'another device asks for them.',
-                  ),
-                  value: files.keepLargeCopies,
-                  onChanged: (value) =>
-                      update(() => files.keepLargeCopies = value),
                 ),
                 if (Platform.isAndroid)
                   SwitchListTile(

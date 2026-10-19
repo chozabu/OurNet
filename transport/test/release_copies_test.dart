@@ -74,21 +74,18 @@ void main() {
       node.store.db.select('SELECT COUNT(*) AS n FROM blob_files').first['n']
           as int;
 
-  test('kept by default: the encrypted copy stays', () async {
-    final object = await publish(bytes(3));
-    expect(sync.files.cached((await desktop.content(object))!), isTrue);
-    expect(dataChunks(desktop), greaterThan(700));
-  });
-
-  test('released: served from the folder, read back here, and refused once the '
-      'file changes', () async {
-    sync.files.keepLargeCopies = false;
+  test('a synced folder keeps no copy: served from the folder, read back '
+      'here, and refused once the file changes', () async {
     final data = bytes(5);
     final object = await publish(data);
     final payload = (await desktop.content(object))!;
-    // Only the list chunks are kept.
+    // Only the list chunks are stored; the folder holds the rest.
     expect(dataChunks(desktop), lessThan(40));
-    expect(sync.files.cached(payload), isFalse);
+    expect(
+      desktop.store.db.select('SELECT COUNT(*) AS n FROM blobs').first['n'],
+      0,
+    );
+    expect(sync.files.cached(payload), isTrue);
 
     // This device reads it from the folder, keeping nothing more.
     final local = '${temp.path}/local.bin';
@@ -115,8 +112,7 @@ void main() {
   test(
     'a device drops its copy only once another shows it holds the file',
     () async {
-      final data = bytes(11);
-      final object = await publish(data); // Kept on the desktop.
+      final object = await publish(bytes(11));
       await nd.sync(phone.identity.device);
       final mine = phone.store.get(object.id)!;
       final files = Files(phone, np);
@@ -126,10 +122,18 @@ void main() {
       expect(await files.releaseHeldElsewhere(mine), greaterThan(700));
       expect(files.cached(payload), isFalse);
 
-      // With nobody to show it, the desktop keeps its copy.
-      await np.stop();
-      expect(await sync.files.releaseHeldElsewhere(object), 0);
-      expect(sync.files.cached((await desktop.content(object))!), isTrue);
+      // With nobody to show it, the phone keeps its copy of another.
+      await File('${temp.path}/folder/other.bin').writeAsBytes(bytes(13));
+      await sync.sync();
+      await nd.sync(phone.identity.device);
+      final other = (await Drive(phone).entries())
+          .singleWhere((e) => e.current.data['name'] == 'other.bin')
+          .current
+          .object;
+      await files.save(other, '${temp.path}/o.bin');
+      await nd.stop();
+      expect(await files.releaseHeldElsewhere(other), 0);
+      expect(files.cached((await phone.content(other))!), isTrue);
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
