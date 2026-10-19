@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ournet/ui/app.dart';
@@ -67,6 +68,83 @@ void main() {
       expect((await Drive(node).entries()).single.current.deleted, false);
       await tester.pumpWidget(const SizedBox());
       await node.close();
+    },
+  );
+  testWidgets(
+    'connecting a folder with files on both sides opens the first-sync review',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final node = Node(await LocalIdentity.create(), Store());
+      final local = (await tester.runAsync(() async {
+        final docs =
+            (await node.content(await Drive(node).folder('Docs')))!['entry']
+                as String;
+        await Drive(node).write({
+          'entry': randomId(),
+          'folder': docs,
+          'name': 'a.txt',
+          'type': 'file',
+          'deleted': false,
+          'size': 3,
+          'chunks': const [],
+        });
+        final dir = await Directory.systemTemp.createTemp('ournet-connect-');
+        await File('${dir.path}/a.txt').writeAsString('local, longer');
+        return dir;
+      }))!;
+      addTearDown(() => local.delete(recursive: true));
+      await tester.pumpWidget(
+        OurNetApp(
+          node: node,
+          enablePlatform: false,
+          initialTab: Destination.files,
+          pickFolder: () async => local.path,
+        ),
+      );
+      Future<void> settle() async {
+        for (var i = 0; i < 4; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 100)),
+          );
+          await tester.pumpAndSettle();
+        }
+      }
+
+      await settle();
+      await tester.scrollUntilVisible(
+        find.text('Docs'),
+        200,
+        scrollable: find
+            .descendant(
+              of: find.byType(CustomScrollView),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      await tester.tap(find.text('Docs'));
+      await settle();
+      await tester.tap(find.text('Connect to local folder'));
+      for (
+        var i = 0;
+        i < 50 && find.text('Connect Docs').evaluate().isEmpty;
+        i++
+      ) {
+        if (find.textContaining('Folder connection:').evaluate().isNotEmpty) {
+          break;
+        }
+        await settle();
+      }
+      expect(find.textContaining('Folder connection:'), findsNothing);
+      expect(find.text('Connect Docs'), findsOneWidget);
+      expect(find.textContaining('Different on each side'), findsWidgets);
+      await tester.tap(find.text('Cancel'));
+      await settle();
+      expect(node.store.setting('folder-sync/connections'), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(node.close);
     },
   );
 }

@@ -198,6 +198,9 @@ class OurNetApp extends StatefulWidget {
 
   /// Replaces the platform image picker in note editors (tests).
   final Future<XFile?> Function(ImageSource source)? pickImage;
+
+  /// Replaces the platform folder picker for folder sync (tests).
+  final Future<String?> Function()? pickFolder;
   const OurNetApp({
     super.key,
     required this.node,
@@ -205,6 +208,7 @@ class OurNetApp extends StatefulWidget {
     this.initialTab,
     this.pickAttachment,
     this.pickImage,
+    this.pickFolder,
   });
   @override
   State<OurNetApp> createState() => _OurNetAppState();

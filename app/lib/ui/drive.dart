@@ -1,14 +1,16 @@
 part of 'app.dart';
 
 extension _DrivePages on _OurNetAppState {
-  Future<void> connectFolder({DriveEntry? folder}) async {
+  /// [context] must be below the app's Navigator, unlike this state's own,
+  /// for the dialogs and the first-sync review.
+  Future<void> connectFolder(BuildContext context, {DriveEntry? folder}) async {
     if (connectingFolder) return;
     setState(() => connectingFolder = true);
     try {
-      final location = await pickSyncFolder();
-      if (location == null || !mounted) return;
+      final location = await (widget.pickFolder ?? pickSyncFolder)();
+      if (location == null || !context.mounted) return;
       final local = await folderBackend(location).scan();
-      if (!mounted) return;
+      if (!context.mounted) return;
       final bytes = local.values.fold<int>(0, (n, item) => n + item.size);
       var remoteBytes = 0, remoteFiles = 0;
       if (folder != null) {
@@ -30,7 +32,7 @@ extension _DrivePages on _OurNetAppState {
           }
         }
       }
-      if (!mounted) return;
+      if (!context.mounted) return;
       final name =
           folder?.current.data['name'] as String? ??
           await ask(
@@ -42,13 +44,13 @@ extension _DrivePages on _OurNetAppState {
                     location,
                   ).uri.pathSegments.where((p) => p.isNotEmpty).last,
           );
-      if (name == null || name.trim().isEmpty || !mounted) return;
+      if (name == null || name.trim().isEmpty || !context.mounted) return;
       // Both sides have files: the person chooses which copies to keep
       // before anything syncs.
       final plan = folder == null
           ? null
           : await folderSync.plan(folder.current.entry, location);
-      if (!mounted) return;
+      if (!context.mounted) return;
       if (plan != null && plan.needsReview) {
         final decisions = await Navigator.push<Map<String, Json>>(
           context,
@@ -446,13 +448,13 @@ extension _DrivePages on _OurNetAppState {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    if (widget.enablePlatform &&
+                    if ((widget.enablePlatform || widget.pickFolder != null) &&
                         !Platform.isIOS &&
                         connection == null)
                       OutlinedButton.icon(
                         onPressed: connectingFolder
                             ? null
-                            : () => connectFolder(folder: folder),
+                            : () => connectFolder(context, folder: folder),
                         icon: const Icon(Icons.folder_copy_outlined),
                         label: Text(
                           connectingFolder
