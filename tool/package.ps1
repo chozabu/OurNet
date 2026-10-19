@@ -36,28 +36,38 @@ $taskVersion=(Select-String -Path (Join-Path $taskRoot 'app/pubspec.yaml') -Patt
 $taskOutput=Join-Path $taskRoot "dist/OurNet-$taskVersion-$taskBuild"
 $taskStage=Join-Path $taskRoot 'build/package-source'
 # Bundle our iroh binding (app/native), built from vendor/iroh_mobile.
+Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Building Windows iroh library"
 & (Join-Path $PSScriptRoot 'build-iroh.ps1')
 # Build a source snapshot so running app binaries are never overwritten.
+Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Updating Windows source snapshot"
 foreach($taskComponent in @('app','core','transport','native','vendor/iroh_mobile')) {
   $taskSource=Join-Path $taskRoot $taskComponent
   $taskDestination=Join-Path $taskStage $taskComponent
   New-Item -ItemType Directory -Force -Path $taskDestination | Out-Null
-  # Refresh source-only folders while retaining native build caches. These are
-  # generated copies, never the working repository or profile data.
+  # Mirror source-only folders: remove stale files without recopying unchanged
+  # sources/assets or touching the build caches alongside them.
   foreach($taskSourceFolder in @('lib','test','assets')) {
+    $taskOriginal=Join-Path $taskSource $taskSourceFolder
     $taskGenerated=[IO.Path]::GetFullPath((Join-Path $taskDestination $taskSourceFolder))
     $taskBoundary=[IO.Path]::GetFullPath($taskStage)+[IO.Path]::DirectorySeparatorChar
     if(!$taskGenerated.StartsWith($taskBoundary,[StringComparison]::OrdinalIgnoreCase)){throw 'Invalid snapshot source path'}
-    if(Test-Path -LiteralPath $taskGenerated){Remove-Item -LiteralPath $taskGenerated -Recurse -Force}
+    if(Test-Path -LiteralPath $taskOriginal){
+      robocopy $taskOriginal $taskGenerated /MIR /XJ /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+      if($LASTEXITCODE -ge 8){throw "Source snapshot failed: $taskComponent/$taskSourceFolder"}
+    } elseif(Test-Path -LiteralPath $taskGenerated){
+      Remove-Item -LiteralPath $taskGenerated -Recurse -Force
+    }
   }
-  robocopy $taskSource $taskDestination /E /XJ /XD build .dart_tool ephemeral target .git .gradle /XF '*.log' /NFL /NDL /NJH /NJS /NP | Out-Null
+  robocopy $taskSource $taskDestination /E /XJ /R:2 /W:1 /XD build .dart_tool ephemeral target .git .gradle /XF '*.log' /NFL /NDL /NJH /NJS /NP | Out-Null
   if($LASTEXITCODE -ge 8){throw "Source snapshot failed: $taskComponent"}
 }
 Push-Location (Join-Path $taskStage 'app')
 try {
   $env:CARGO_OURNET_NATIVE_PROFILE = 'release' # fat-LTO native library (native/rust/Cargo.toml)
+  Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Building Windows application"
   flutter build windows --release --no-tree-shake-icons "--dart-define=OURNET_BUILD=$taskBuild"
   if($LASTEXITCODE -ne 0){throw 'Windows build failed; close running release-build windows first'}
+  Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Creating portable Windows package"
   New-Item -ItemType Directory -Force -Path $taskOutput | Out-Null
   Copy-Item -Path 'build/windows/x64/runner/Release/*' -Destination $taskOutput -Recurse
   Get-VcRuntime | Copy-Item -Destination $taskOutput
@@ -72,6 +82,7 @@ Start-Process -FilePath (Join-Path $PSScriptRoot 'ournet.exe') -ArgumentList "--
   Compress-Archive -Path "$taskOutput/*" -DestinationPath "$taskOutput-windows.zip"
   "dist/OurNet-$taskVersion-$taskBuild" | Set-Content (Join-Path $taskRoot 'dist/latest-windows.txt')
   if($Msix){
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Creating MSIX package"
     $taskMsixArgs=@(
       '--logo-path',(Join-Path $taskRoot 'store/ournet-icon-512.png'),
       '--output-path',(Join-Path $taskRoot 'dist'),

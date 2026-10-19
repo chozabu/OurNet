@@ -57,6 +57,7 @@ void main(List<String> args) async {
       final ar = code.cCompiler?.archiver;
       if (ar != null) environment['AR_$cc'] = ar.toFilePath();
     }
+    final watch = Stopwatch()..start();
     final result = await Process.run(
       'cargo',
       [
@@ -82,6 +83,11 @@ void main(List<String> args) async {
         result.exitCode,
       );
     }
+    stderr.writeln(
+      'ournet_native: $triple ($profile) cargo completed in '
+      '${(watch.elapsedMilliseconds / 1000).toStringAsFixed(1)}s\n'
+      '${result.stderr}',
+    );
     // Copied out of the shared target so a library loaded by one package's
     // running tests never blocks another package's build from relinking.
     final name = code.targetOS.dylibFileName('ournet_native');

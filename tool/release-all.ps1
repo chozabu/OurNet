@@ -35,11 +35,17 @@ if(!$SkipStore){
 }
 if($taskProblems){throw ("Not releasing:`n - " + ($taskProblems -join "`n - "))}
 
-# Sequential: both builds run flutter in app/, which cannot share a build dir.
+# Sequential to avoid competing for CPU and memory during native builds.
 if(!$SkipPlay){
+  $taskWatch = [Diagnostics.Stopwatch]::StartNew()
+  Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Starting Play build and upload"
   & (Join-Path $PSScriptRoot 'release-android.ps1') -Notes $Notes -Track $Track
+  Write-Host ("Play build and upload completed in {0:n1} minutes" -f $taskWatch.Elapsed.TotalMinutes)
 }
 if(!$SkipStore){
+  $taskWatch = [Diagnostics.Stopwatch]::StartNew()
+  Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Starting Store build and submission"
   & (Join-Path $PSScriptRoot 'publish-store.ps1') -Build -NoCommit:$StoreNoCommit
+  Write-Host ("Store build and submission completed in {0:n1} minutes" -f $taskWatch.Elapsed.TotalMinutes)
 }
 "Done: " + (@(if(!$SkipPlay){"Play ($Track)"}; if(!$SkipStore){'Microsoft Store'}) -join ' + ')
