@@ -7,7 +7,7 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
-## Unreleased: derived-nonce marker; synced folders keep no chunk copies
+## 0.2.48: derived-nonce marker; synced folders keep no chunk copies
 
 Additive. A file payload may carry `nonces: "derived"`: its chunks were
 sealed with nonces from the file key and plaintext (as every 0.2.47 build
