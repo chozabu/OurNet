@@ -593,6 +593,9 @@ class FolderSync {
 
   Json _metadata(Json data) => {...data}
     ..remove('chunks')
+    ..remove('chunkTree')
+    ..remove('chunkDepth')
+    ..remove('chunkBytes')
     ..remove('key')
     ..remove('size');
 

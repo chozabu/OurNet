@@ -1280,7 +1280,15 @@ class Notes {
   );
 
   static Json _fileFields(Json data) => {
-    for (final key in ['chunks', 'name', 'size', 'key', 'chunkBytes'])
+    for (final key in [
+      'chunks',
+      'chunkTree',
+      'chunkDepth',
+      'name',
+      'size',
+      'key',
+      'chunkBytes',
+    ])
       if (data[key] != null) key: data[key],
   };
 }

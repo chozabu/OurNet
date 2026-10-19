@@ -7,6 +7,23 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: chunk-list trees for files over 64 MiB
+
+Additive. A file of more than 512 chunks (over 64 MiB at 128 KiB chunks) lists
+its chunks in a tree instead of inline, so files have no fixed size limit.
+
+| Field | Where | Meaning | Older builds |
+| --- | --- | --- | --- |
+| `chunkTree` | any payload carrying a file (`file`, `message`, `drive`, `post`, …) | Hashes of up to 512 list chunks. A list chunk is stored, encrypted and fetched like any chunk; its plaintext is the raw 32-byte hashes of the level below (up to `chunkBytes / 32`), data chunks at depth 1. `chunks` is then empty. | Refuse the payload (size over 64 MiB), so the file stays hidden rather than appearing empty. |
+| `chunkDepth` | with `chunkTree` | Levels of list chunks, 1 to 6, the same for every data chunk. | As above. |
+
+Files up to 512 chunks keep the inline `chunks` list, readable by every build.
+Writing trees at once breaks the read-before-write rule on purpose: no older
+build could make or accept a file this large, so nothing it could read before
+becomes unreadable. Devices serve a tree file's chunks once they hold the whole
+tree and have indexed it (`tree_chunks`, a local table rebuilt from the list
+chunks); the `blobs` request is unchanged.
+
 ## Unreleased: per-friend location levels
 
 Additive. No new request, kind or wire field: the `position` request is

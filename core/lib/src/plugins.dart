@@ -983,9 +983,7 @@ class Plugins {
     Uint8List package,
     List<String> people,
   ) async {
-    final key = people.isEmpty
-        ? null
-        : randomBytes(32);
+    final key = people.isEmpty ? null : randomBytes(32);
     final chunks = [
       for (var at = 0; at < package.length; at += chunkBytes)
         await node.blobs.encode(
@@ -1687,8 +1685,16 @@ class Plugins {
     if (running == null) return null;
     final handle = 'f${running.nextFile++}';
     running.files[handle] = Map.unmodifiable({
-      for (final key in const ['name', 'size', 'chunks', 'chunkBytes', 'key'])
-        key: file[key],
+      for (final key in const [
+        'name',
+        'size',
+        'chunks',
+        'chunkTree',
+        'chunkDepth',
+        'chunkBytes',
+        'key',
+      ])
+        if (file.containsKey(key)) key: file[key],
     });
     while (running.files.length > maxFileHandles) {
       running.files.remove(running.files.keys.first);

@@ -691,9 +691,13 @@ class _EventEditorState extends State<EventEditor> {
       _touch(() {
         if (stored != null) {
           draft.carry
-            ..removeWhere((k, _) => const ['chunks', 'chunkBytes', 'key', 'size', 'name', 'audio', 'transcript'].contains(k))
+            ..removeWhere((k, _) => const ['chunks', 'chunkTree', 'chunkDepth', 'chunkBytes', 'key', 'size', 'name', 'audio', 'transcript'].contains(k))
             ..addAll({
               'chunks': stored['chunks'],
+              if (stored['chunkTree'] != null) ...{
+                'chunkTree': stored['chunkTree'],
+                'chunkDepth': stored['chunkDepth'],
+              },
               'chunkBytes': stored['chunkBytes'],
               'size': stored['size'],
               'name': 'Voice note.${recording.mime == 'audio/wav' ? 'wav' : 'm4a'}',
@@ -1053,7 +1057,7 @@ class _EventEditorState extends State<EventEditor> {
                                   icon: const Icon(Icons.close, size: 18),
                                   onPressed: () => _touch(
                                     () => draft.carry.removeWhere(
-                                      (k, _) => const ['chunks', 'chunkBytes', 'key', 'size', 'name', 'audio', 'transcript'].contains(k),
+                                      (k, _) => const ['chunks', 'chunkTree', 'chunkDepth', 'chunkBytes', 'key', 'size', 'name', 'audio', 'transcript'].contains(k),
                                     ),
                                   ),
                                 ),

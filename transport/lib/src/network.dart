@@ -1866,9 +1866,18 @@ class PeerNetwork implements PluginLink {
       throw StateError('File not shared with peer');
     }
     final payload = await node.content(o);
-    final chunks = {...?(payload?['chunks'] as List?)};
-    if (!hashes.every(chunks.contains)) {
-      throw StateError('Unknown file chunk');
+    if (payload != null && hasChunkTree(payload)) {
+      // A tree-listed file: its list chunks and what they hold, as indexed
+      // when this device stored or fetched the whole tree.
+      final roots = (payload['chunkTree'] as List).cast<String>();
+      if (!hashes.every((h) => h is String && node.store.treeHas(roots, h))) {
+        throw StateError('Unknown file chunk');
+      }
+    } else {
+      final chunks = {...?(payload?['chunks'] as List?)};
+      if (!hashes.every(chunks.contains)) {
+        throw StateError('Unknown file chunk');
+      }
     }
     return [for (final hash in hashes) node.store.blob(hash as String)];
   }

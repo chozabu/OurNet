@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'builtin_modules.dart';
+import 'chunk_tree.dart';
 import 'model.dart';
 import 'public_chats.dart';
 import 'scopes.dart';
@@ -95,7 +96,10 @@ bool validContent(String kind, Json p) {
     return false;
   }
   if (p['parent'] != null && p['parent'] is! String) return false;
-  if (p['chunks'] != null) {
+  if (p['chunkTree'] != null) {
+    // A tree-listed file has no fixed size limit; see chunk_tree.dart.
+    if (!validChunkTree(p)) return false;
+  } else if (p['chunks'] != null) {
     if (p['chunks'] is! List ||
         (p['chunks'] as List).length > 513 ||
         !(p['chunks'] as List).every(

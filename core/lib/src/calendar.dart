@@ -175,6 +175,8 @@ class EventDraft {
   /// The payload fields that make up a voice note.
   static const audioFields = [
     'chunks',
+    'chunkTree',
+    'chunkDepth',
     'chunkBytes',
     'key',
     'size',

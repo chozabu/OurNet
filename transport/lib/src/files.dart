@@ -20,6 +20,10 @@ class Files {
       _BoundedQueue(16, 'Transfer queue is full; retry shortly');
   static const chunkSize = 128 * 1024;
   static const maxSize = 64 * 1024 * 1024;
+
+  /// The chunk size new files use; tests set a small one to build deep chunk
+  /// trees from small files.
+  static int newChunkBytes = chunkSize;
   Future<SignedObject> publish(
     String path, {
     List<String> audience = const [],
@@ -61,7 +65,11 @@ class Files {
         'name': name ?? stored['name'],
         'size': stored['size'],
         'chunks': stored['chunks'],
-        'chunkBytes': chunkSize,
+        if (stored['chunkTree'] != null) ...{
+          'chunkTree': stored['chunkTree'],
+          'chunkDepth': stored['chunkDepth'],
+        },
+        'chunkBytes': stored['chunkBytes'],
         'key': stored['key'],
         if (drive != null) ...drive,
         if (everyday != null) ...everyday,
@@ -84,8 +92,9 @@ class Files {
 
   /// Encrypts [path] into stored chunks without publishing anything, and
   /// returns the payload fields that describe it (`name`, `size`, `chunks`,
-  /// `chunkBytes`, `key`). For objects that carry a file among other things,
-  /// such as a calendar event's voice note.
+  /// `chunkBytes`, `key`, and `chunkTree` and `chunkDepth` for a file of
+  /// more than [inlineChunks] chunks). For objects that carry a file among
+  /// other things, such as a calendar event's voice note.
   Future<Json> store(
     String path, {
     bool encrypt = true,
@@ -98,35 +107,74 @@ class Files {
       if (size > maxSize) throw StateError('Prototype file limit is 64 MiB');
       final key = await Chacha20.poly1305Aead().newSecretKey();
       final keyBytes = encrypt ? await key.extractBytes() : null;
-      final chunks = <String>[];
+      final bytes = newChunkBytes;
+      final listing = ChunkTreeBuilder(
+        listFanOut(bytes),
+        (plain) => node.blobs.encode(plain, keyBytes),
+      );
       var completed = 0;
       onProgress?.call(0, size);
       final handle = await file.open();
       try {
         while (true) {
-          final data = await handle.read(chunkSize);
+          final data = await handle.read(bytes);
           if (data.isEmpty) break;
           completed += data.length;
-          if (completed > maxSize || completed > size) {
+          if (completed > size) {
             throw StateError('File changed during import');
           }
-          final id = await node.blobs.encode(data, keyBytes);
-          chunks.add(id);
+          await listing.add(await node.blobs.encode(data, keyBytes));
           onProgress?.call(completed, size);
         }
       } finally {
         await handle.close();
       }
       if (completed != size) throw StateError('File changed during import');
-      return {
+      final stored = {
         'name': file.uri.pathSegments.last,
         'size': size,
-        'chunks': chunks,
-        'chunkBytes': chunkSize,
+        ...await listing.finish(),
+        'chunkBytes': bytes,
         'key': keyBytes == null ? null : b64(keyBytes),
       };
+      await indexTree(stored);
+      return stored;
     } finally {
       trace.finish();
+    }
+  }
+
+  /// Records what the chunk tree of [payload] holds, from list chunks stored
+  /// here, so its chunks can be offered to other devices and counted as
+  /// cached. Returns false when a list chunk is not stored here yet.
+  Future<bool> indexTree(Json payload) async {
+    if (!hasChunkTree(payload)) return true;
+    final roots = (payload['chunkTree'] as List).cast<String>();
+    if (node.store.treeIndexed(roots)) return true;
+    final key = payload['key'] == null ? null : unb64(payload['key']);
+    final fanOut = listFanOut(payload['chunkBytes'] as int);
+    Future<Uint8List> open(String hash) async {
+      final plain = await node.blobs.decode(hash, key);
+      if (plain == null) throw const _Missing();
+      return plain;
+    }
+
+    try {
+      for (final root in roots) {
+        if (node.store.treeIndexed([root])) continue;
+        await for (final batch in treeMembers(
+          root,
+          payload['chunkDepth'] as int,
+          fanOut,
+          open,
+        )) {
+          node.store.indexTree(root, batch);
+        }
+        node.store.indexTree(root, const [], complete: true);
+      }
+      return true;
+    } on _Missing {
+      return false;
     }
   }
 
@@ -135,6 +183,11 @@ class Files {
   /// Whether every original chunk is local. Chunks are content-addressed and
   /// retained, so positive answers are remembered; others use one query.
   bool cached(Json payload) {
+    if (hasChunkTree(payload)) {
+      return node.store.treeStored(
+        (payload['chunkTree'] as List).cast<String>(),
+      );
+    }
     final chunks = (payload['chunks'] as List).cast<String>();
     if (chunks.isEmpty) return true;
     final known = _complete[node] ??= LinkedHashSet<String>();
@@ -203,27 +256,30 @@ class Files {
     var size = 0;
     onProgress?.call(0, payload['size'] as int);
     final key = payload['key'] == null ? null : unb64(payload['key']);
-    final chunks = (payload['chunks'] as List).cast<String>();
-    final fetch = _Fetch(this, object, key, chunks);
-    for (var i = 0; i < chunks.length; i++) {
-      final plain = await fetch.chunk(i);
-      size += plain.length;
-      if (size > maxSize || size > payload['size'])
-        throw StateError('File size exceeded');
-      onProgress?.call(size, payload['size'] as int);
-      yield plain;
+    // List chunks of a tree are fetched as they are reached, one at a time;
+    // data chunks a list chunk at a time, in batches as before.
+    Future<Uint8List> open(String hash) =>
+        _Fetch(this, object, key, [hash]).chunk(0);
+    await for (final chunks in chunkSegments(payload, open)) {
+      final fetch = _Fetch(this, object, key, chunks);
+      for (var i = 0; i < chunks.length; i++) {
+        final plain = await fetch.chunk(i);
+        size += plain.length;
+        if (size > payload['size']) throw StateError('File size exceeded');
+        onProgress?.call(size, payload['size'] as int);
+        yield plain;
+      }
     }
     if (size != payload['size']) throw StateError('File size mismatch');
+    await indexTree(payload);
   }
 
   /// Decode only into memory; the durable cache retains encrypted chunks.
   Future<Uint8List> readBytes(
     SignedObject object, {
     int limit = 8 * 1024 * 1024,
-  }) => _previewQueue.run(
-    '${object.id}/$limit',
-    () => _readBytes(object, limit),
-  );
+  }) =>
+      _previewQueue.run('${object.id}/$limit', () => _readBytes(object, limit));
 
   Future<Uint8List> _readBytes(SignedObject object, int limit) async {
     final trace = TimelineTask()..start('attachment.preview');
@@ -232,16 +288,19 @@ class Files {
       if (payload == null || payload['size'] is! int || payload['size'] > limit)
         throw StateError('Image exceeds preview limit');
       // Stored chunks decrypt in parallel with other attachment work; fetch
-      // from a source device only when some are not on this device.
-      final chunks = (payload['chunks'] as List? ?? const []).cast<String>();
-      final local = await node.blobs.readLocal(
-        chunks,
-        payload['key'] == null ? null : unb64(payload['key']),
-        limit: limit,
-        expectedSize: payload['size'] as int,
-      );
-      if (local != null) {
-        return local;
+      // from a source device only when some are not on this device. A
+      // tree-listed file is read through its tree.
+      if (!hasChunkTree(payload)) {
+        final chunks = (payload['chunks'] as List? ?? const []).cast<String>();
+        final local = await node.blobs.readLocal(
+          chunks,
+          payload['key'] == null ? null : unb64(payload['key']),
+          limit: limit,
+          expectedSize: payload['size'] as int,
+        );
+        if (local != null) {
+          return local;
+        }
       }
       final result = BytesBuilder(copy: false);
       await for (final chunk in _plain(object)) {
@@ -259,12 +318,9 @@ class Files {
   Future<void> cache(
     SignedObject object, {
     void Function(int, int)? onProgress,
-  }) => _transferQueue.run(
-    'cache/${object.id}',
-    () async {
-      await for (final _ in _plain(object, onProgress: onProgress)) {}
-    },
-  );
+  }) => _transferQueue.run('cache/${object.id}', () async {
+    await for (final _ in _plain(object, onProgress: onProgress)) {}
+  });
 
   /// Verified encrypted chunks remain cached after interruption, including
   /// across process restarts. Retries fetch only missing chunks. The plaintext
@@ -273,25 +329,26 @@ class Files {
     SignedObject object,
     String path, {
     void Function(int, int)? onProgress,
-  }) => _transferQueue.run(
-    'save/${object.id}/$path',
-    () async {
-      final target = File('$path.${randomId()}.ournet-part');
-      final output = await target.open(mode: FileMode.write);
-      var closed = false;
-      try {
-        await for (final data in _plain(object, onProgress: onProgress)) {
-          await output.writeFrom(data);
-        }
-        await output.close();
-        closed = true;
-        await target.rename(path);
-      } finally {
-        if (!closed) await output.close();
-        if (await target.exists()) await target.delete();
+  }) => _transferQueue.run('save/${object.id}/$path', () async {
+    final target = File('$path.${randomId()}.ournet-part');
+    final output = await target.open(mode: FileMode.write);
+    var closed = false;
+    try {
+      await for (final data in _plain(object, onProgress: onProgress)) {
+        await output.writeFrom(data);
       }
-    },
-  );
+      await output.close();
+      closed = true;
+      await target.rename(path);
+    } finally {
+      if (!closed) await output.close();
+      if (await target.exists()) await target.delete();
+    }
+  });
+}
+
+class _Missing {
+  const _Missing();
 }
 
 /// Runs at most two jobs at once and shares duplicate in-flight requests by

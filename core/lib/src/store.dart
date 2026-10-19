@@ -291,6 +291,15 @@ class Store {
       id TEXT PRIMARY KEY, bytes BLOB NOT NULL, size INTEGER NOT NULL, used INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS previews_used ON previews(used);
     ''');
+    // What each chunk-list tree holds, by its root list chunks (see
+    // chunk_tree.dart): which chunks a file's devices may be asked for.
+    // Derived from the list chunks themselves, so it can always be rebuilt.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS tree_chunks(root TEXT NOT NULL, hash TEXT NOT NULL,
+        PRIMARY KEY(root, hash)) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS tree_chunks_hash ON tree_chunks(hash);
+      CREATE TABLE IF NOT EXISTS tree_roots(root TEXT PRIMARY KEY) WITHOUT ROWID;
+    ''');
     // Maintain the quota across connections without scanning every blob for
     // every chunk. Triggers also cover direct deletes and transaction rollback.
     db.execute('''
@@ -1399,6 +1408,59 @@ class Store {
     ))
       row['id'] as String,
   };
+
+  /// Records that list chunk [root] holds [hashes] below it, at any depth.
+  /// [complete] marks the walk finished, so the root counts as indexed.
+  void indexTree(
+    String root,
+    Iterable<String> hashes, {
+    bool complete = false,
+  }) {
+    db.execute('BEGIN IMMEDIATE');
+    try {
+      final insert = _statement(
+        'INSERT OR IGNORE INTO tree_chunks(root, hash) VALUES (?,?)',
+      );
+      for (final hash in hashes) {
+        insert.execute([root, hash]);
+      }
+      if (complete) {
+        _statement(
+          'INSERT OR IGNORE INTO tree_roots(root) VALUES (?)',
+        ).execute([root]);
+      }
+      db.execute('COMMIT');
+    } catch (_) {
+      db.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  /// Whether every one of [roots] has been indexed by [indexTree].
+  bool treeIndexed(List<String> roots) =>
+      _select(
+        'SELECT COUNT(*) AS n FROM tree_roots WHERE root IN (SELECT DISTINCT value FROM json_each(?))',
+        [jsonEncode(roots)],
+      ).first['n'] ==
+      roots.toSet().length;
+
+  /// Whether [hash] is held by the tree of [roots]: one of them or below.
+  bool treeHas(List<String> roots, String hash) =>
+      roots.contains(hash) ||
+      _select(
+        'SELECT 1 FROM tree_chunks WHERE hash=? AND root IN (SELECT value FROM json_each(?)) LIMIT 1',
+        [hash, jsonEncode(roots)],
+      ).isNotEmpty;
+
+  /// Whether every chunk of the indexed tree of [roots] is stored here.
+  bool treeStored(List<String> roots) =>
+      treeIndexed(roots) &&
+      hasBlobs(roots) &&
+      _select(
+        'SELECT 1 FROM tree_chunks t WHERE t.root IN (SELECT value FROM json_each(?)) '
+        'AND NOT EXISTS (SELECT 1 FROM blobs b WHERE b.id=t.hash) LIMIT 1',
+        [jsonEncode(roots)],
+      ).isEmpty;
 
   /// One query for a file's chunk list instead of one query per chunk.
   bool hasBlobs(List<String> ids) =>
