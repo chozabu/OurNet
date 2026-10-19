@@ -210,6 +210,22 @@ void main() {
         driveRoot,
         await localFolder.resolveSymbolicLinks(),
       );
+      // A drive download also runs while typing: its encrypted retry cache
+      // must be released once the connected folder holds the complete file.
+      final incoming = await Files(phone, PeerNetwork(phone)).publish(
+        photo.path,
+        audience: [phone.person],
+        name: 'downloaded.jpg',
+        drive: {
+          'entry': randomId(),
+          'folder': driveRoot,
+          'revision': randomId(),
+          'parents': <String>[],
+          'deleted': false,
+          'driveFormat': 1,
+        },
+      );
+      final incomingData = (await phone.content(incoming))!;
       final camera = PhaseRecorder(budget)..start();
       await File(
         '${localFolder.path}/added.txt',
@@ -232,6 +248,13 @@ void main() {
       await editor.flush();
       await folderJob;
       expect(folderSync.status[driveRoot], contains('up to date'));
+      expect(
+        await File('${localFolder.path}/downloaded.jpg').length(),
+        incomingData['size'],
+      );
+      for (final hash in (incomingData['chunks'] as List).cast<String>()) {
+        expect(phone.store.hasBlob(hash), isFalse);
+      }
       expect(
         (await Drive(
           phone,

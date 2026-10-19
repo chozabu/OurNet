@@ -99,6 +99,13 @@ is local to this device and never dictates another device's location.
   history. Only new drive records are decoded when maintaining the drive index.
   Transfers run serially for folder connections using bounded temporary files;
   encryption and blob hashing continue to use the node's attachment worker.
+* Folder downloads retain verified encrypted chunks until the destination file
+  commits. A failed download removes its plaintext staging file; retries,
+  including after an app restart, reuse cached chunks and request only missing
+  ones. After a successful replacement, the folder is registered as the chunk
+  source and the redundant encrypted data chunks are removed. Downloads need
+  temporary space for both the encrypted cache and the new plaintext file.
+  An abandoned download can leave encrypted chunks in the normal blob cache.
 
 Current boundaries: the 64 MiB file limit and the storage limit still apply; the record count is not capped. Local filename changes are represented as delete/add.
 Drive-side renames and moves preserve entry identities and are applied to local
@@ -128,6 +135,14 @@ missing roots, disconnects, rename/move races, deleted parents with new children
 and compare-before-write protection. Existing endpoint
 transfer tests cover encrypted chunk delivery. `core/test/drive_test.dart` checks
 that repeated drive reads do not revisit retained revisions.
+
+The download retry regression interrupts a write, reopens the disk-backed node,
+checks that cached chunks are not requested again, and verifies that a successful
+retry removes the encrypted copies. The transport suite passed (105 tests,
+3 opt-in stress tests skipped), and transport/app analysis was clean on
+2026-10-19. The extended Windows note-history profile journey was not completed:
+its build selected the native-dev library despite the release environment
+setting, so no release-profile timing result is claimed. Android was not run.
 
 The note-history and photo-scroll profile journeys now include an active folder
 connection. `integration_test/folder_provider_test.dart` is an interactive Android

@@ -6,16 +6,40 @@ import 'package:test/test.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
 
+class FolderDownloadNetwork extends PeerNetwork {
+  FolderDownloadNetwork(super.node, this.source);
+  final FolderSync source;
+  final requested = <String>[];
+  @override
+  Future<Json> request(String device, Json request) async {
+    final hash = request['hash'] as String;
+    requested.add(hash);
+    final object = source.node.store.get(request['object'] as String)!;
+    final bytes = await source.files.network.chunkSource!(object, hash);
+    return {'bytes': bytes == null ? null : b64(bytes)};
+  }
+}
+
 class EditingBackend extends DiskFolderBackend {
   EditingBackend(super.location);
   bool editAfterPut = false;
   bool editAfterMove = false;
+  bool interruptWrite = false;
   @override
   Future<FolderItem> write(
     String path,
     Stream<List<int>> data,
     String? expected,
   ) async {
+    if (interruptWrite) {
+      interruptWrite = false;
+      return super.write(path, () async* {
+        await for (final chunk in data) {
+          yield chunk;
+          throw StateError('Simulated interrupted download');
+        }
+      }(), expected);
+    }
     final written = await super.write(path, data, expected);
     if (editAfterPut) {
       editAfterPut = false;
@@ -614,6 +638,40 @@ void main() {
       }
     },
   );
+  test('interrupted folder downloads reuse verified chunks and free them '
+      'after committing', () async {
+    final bytes = List.generate(Files.chunkSize * 2 + 3, (i) => i % 251);
+    await File('${desktop.path}/resume.bin').writeAsBytes(bytes);
+    await left.sync();
+    await syncPair(a, b);
+    final entry = (await Drive(
+      b,
+    ).entries()).singleWhere((e) => e.current.data['name'] == 'resume.bin');
+    final hashes = (entry.current.data['chunks'] as List).cast<String>();
+    await right.close();
+    final disk = EditingBackend(phone.path)..interruptWrite = true;
+    var network = FolderDownloadNetwork(b, left);
+    right = FolderSync(Files(b, network), (_) => disk, automatic: false);
+    await right.sync();
+    expect(right.status[root], contains('Simulated interrupted download'));
+    expect(await File('${phone.path}/resume.bin').exists(), isFalse);
+    final held = hashes.where(b.store.hasBlob).toSet();
+    expect(held, isNotEmpty);
+    expect(phone.listSync(), isEmpty); // Failed plaintext staging is removed.
+    final identity = b.identity;
+    await right.close();
+    await b.close();
+    b = Node(identity, Store(path: '${temp.path}/b.db'));
+    network = FolderDownloadNetwork(b, left);
+    right = FolderSync(Files(b, network), (_) => disk, automatic: false);
+    await right.sync();
+    expect(await File('${phone.path}/resume.bin').readAsBytes(), bytes);
+    expect(network.requested.toSet().intersection(held), isEmpty);
+    for (final hash in hashes) {
+      expect(b.store.hasBlob(hash), isFalse);
+    }
+    expect(b.store.chunkSourcesOf(root, 'resume.bin'), unorderedEquals(hashes));
+  });
   test('a device joining with identical files fetches nothing', () async {
     final same = List.generate(300 * 1024 + 5, (i) => (i * 11) & 255);
     final other = List.generate(300 * 1024 + 5, (i) => (i * 13) & 255);

@@ -268,9 +268,15 @@ class DiskFolderBackend extends FolderBackend {
       final output = temp.openWrite();
       try {
         await output.addStream(data);
-      } finally {
-        await output.close();
+      } catch (_) {
+        // A failed stream can close the sink itself. Preserve the transfer
+        // error rather than replacing it with a secondary "File closed".
+        try {
+          await output.close();
+        } catch (_) {}
+        rethrow;
       }
+      await output.close();
       await _check(path, expected);
       await temp.rename(target);
       return (await stat(path))!;
@@ -935,8 +941,9 @@ class FolderSync {
         await fs.mkdir(path);
         written = const FolderItem(true, 'directory');
       } else {
-        // Decrypted straight into a temporary file beside [path], once
-        // there is room for it and its encrypted chunks.
+        // Keep verified encrypted chunks until the replacement commits, so
+        // an interrupted download retries without fetching those bytes again.
+        // The folder becomes their source only after the write succeeds.
         files.checkRoomFor(
           v.data,
           destination: fs.location.startsWith('content:') ? null : fs.location,
@@ -950,11 +957,14 @@ class FolderSync {
           files.open(
             v.object,
             onChunk: (hash, offset, length) => seen.add((hash, offset, length)),
-            keepData: false,
+            keepData: true,
           ),
           item?.token,
         );
         sourced(path, written, seen);
+        for (final hash in seen.map((chunk) => chunk.$1).toSet()) {
+          node.store.removeBlob(hash);
+        }
       }
       record(v.entry, path, revision, v.isFolder, written);
     }
