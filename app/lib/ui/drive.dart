@@ -419,6 +419,18 @@ extension _DrivePages on _OurNetAppState {
                   value: driveSync.enabled,
                   onChanged: driveSync.setEnabled,
                 ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Keep copies of large files'),
+                  subtitle: const Text(
+                    'Off: files over 64 MiB in a synced folder are not stored '
+                    'twice. Their chunks are made again from the folder when '
+                    'another device asks for them.',
+                  ),
+                  value: files.keepLargeCopies,
+                  onChanged: (value) =>
+                      update(() => files.keepLargeCopies = value),
+                ),
                 if (connection != null)
                   ListTile(
                     contentPadding: EdgeInsets.zero,
@@ -613,6 +625,16 @@ extension _DrivePages on _OurNetAppState {
                 refresh();
                 return;
               }
+              if (action == 'release') {
+                final dropped = await files.releaseHeldElsewhere(v.object);
+                notice(
+                  dropped > 0
+                      ? 'Removed this device’s copy · another device keeps it'
+                      : 'Kept: no other device online showed it holds this file',
+                );
+                refresh();
+                return;
+              }
               if (action == 'rename') {
                 final name = await ask(context, 'Rename', initial: p['name']);
                 if (name != null) {
@@ -686,6 +708,11 @@ extension _DrivePages on _OurNetAppState {
               const PopupMenuItem(
                 value: 'cache',
                 child: Text('Keep this file offline'),
+              ),
+            if (!v.isFolder && hasChunkTree(p) && files.cached(p))
+              const PopupMenuItem(
+                value: 'release',
+                child: Text('Remove this device’s copy'),
               ),
             if (!v.isFolder)
               const PopupMenuItem(

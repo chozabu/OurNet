@@ -95,6 +95,30 @@ class FolderAccess(private val activity: Activity, channel: MethodChannel) {
                             readers[handle] = Reader(input)
                             handle
                         }
+                        "readRange" -> {
+                            // Part of a file, for making a chunk again: only while unchanged.
+                            val doc = check(tree, root, path, expected) ?: error("File missing")
+                            val offset = requireNotNull(call.argument<Number>("offset")).toLong()
+                            val length = requireNotNull(call.argument<Int>("length"))
+                            require(length in 0..(1 shl 20)) { "Invalid range" }
+                            val bytes = ByteArray(length)
+                            requireNotNull(resolver.openInputStream(doc.uri)) { "Cannot open file" }.use { input ->
+                                var skipped = 0L
+                                while (skipped < offset) {
+                                    val n = input.skip(offset - skipped)
+                                    if (n <= 0) error("File changed: $path")
+                                    skipped += n
+                                }
+                                var n = 0
+                                while (n < length) {
+                                    val got = input.read(bytes, n, length - n)
+                                    if (got < 0) error("File changed: $path")
+                                    n += got
+                                }
+                            }
+                            check(tree, root, path, expected)
+                            bytes
+                        }
                         "readEnd" -> {
                             // The token is checked again once read: an edit meanwhile fails it.
                             readers.remove(requireNotNull(call.argument<Int>("handle")))?.input?.close()

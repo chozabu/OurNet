@@ -108,6 +108,25 @@ class AndroidFolderBackend extends FolderBackend {
   }
 
   @override
+  Future<Uint8List> readRange(
+    String path,
+    int offset,
+    int length,
+    String expected,
+  ) async {
+    final bytes = await call<Uint8List>('readRange', {
+      'path': path,
+      'expected': expected,
+      'offset': offset,
+      'length': length,
+    });
+    if (bytes == null || bytes.length != length) {
+      throw StateError('File changed: $path');
+    }
+    return bytes;
+  }
+
+  @override
   Future<void> mkdir(String path) async {
     await call('mkdir', {'path': path});
   }

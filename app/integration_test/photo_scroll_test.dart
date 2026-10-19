@@ -51,9 +51,10 @@ class CountingBlobWorker extends BlobWorker {
     List<int>? key, {
     List<int>? bytes,
     bool asFile = false,
+    bool keep = true,
   }) {
     if (bytes == null) chunkReads++;
-    return super.decode(hash, key, bytes: bytes, asFile: asFile);
+    return super.decode(hash, key, bytes: bytes, asFile: asFile, keep: keep);
   }
 
   @override

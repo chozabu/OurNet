@@ -310,6 +310,15 @@ class Store {
       CREATE TRIGGER IF NOT EXISTS blob_file_removed AFTER DELETE ON blob_files
       BEGIN UPDATE blob_usage SET bytes=bytes-OLD.size WHERE id=1; END;
     ''');
+    // Where the plaintext of a chunk is, in a synced folder, so the chunk can
+    // be made again from it rather than kept (see FolderSync). Rows are
+    // hints: a chunk made from them is checked against its hash.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS chunk_sources(hash TEXT PRIMARY KEY, root TEXT NOT NULL,
+        path TEXT NOT NULL, offset INTEGER NOT NULL, length INTEGER NOT NULL,
+        token TEXT NOT NULL) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS chunk_sources_path ON chunk_sources(root, path);
+    ''');
     // A database restored or copied without its chunk folder cannot claim
     // the chunks: they are fetched again from devices that hold them.
     final chunks = chunkDirectory;
@@ -1446,6 +1455,74 @@ class Store {
       return null;
     }
   }
+
+  /// Records that file [path] of folder connection [root], while its token
+  /// is [token], holds the plaintext of [chunks]: (hash, offset, length).
+  void recordChunkSources(
+    String root,
+    String path,
+    String token,
+    List<(String, int, int)> chunks,
+  ) {
+    db.execute('BEGIN IMMEDIATE');
+    try {
+      _statement(
+        'DELETE FROM chunk_sources WHERE root=? AND path=?',
+      ).execute([root, path]);
+      final insert = _statement(
+        'INSERT OR REPLACE INTO chunk_sources VALUES (?,?,?,?,?,?)',
+      );
+      for (final (hash, offset, length) in chunks) {
+        insert.execute([hash, root, path, offset, length, token]);
+      }
+      db.execute('COMMIT');
+    } catch (_) {
+      db.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  /// Where chunk [hash]'s plaintext is: folder connection, path, offset,
+  /// length and the file's token then. Null when no folder holds it.
+  ({String root, String path, int offset, int length, String token})?
+  chunkSource(String hash) {
+    final rows = _select('SELECT * FROM chunk_sources WHERE hash=?', [hash]);
+    if (rows.isEmpty) return null;
+    final r = rows.first;
+    return (
+      root: r['root'] as String,
+      path: r['path'] as String,
+      offset: r['offset'] as int,
+      length: r['length'] as int,
+      token: r['token'] as String,
+    );
+  }
+
+  /// Chunks file [path] of [root] was recorded to hold.
+  List<String> chunkSourcesOf(String root, String path) => [
+    for (final row in _select(
+      'SELECT hash FROM chunk_sources WHERE root=? AND path=?',
+      [root, path],
+    ))
+      row['hash'] as String,
+  ];
+
+  /// Forgets what [path] of [root] holds, and below it for a folder.
+  void forgetChunkSources(String root, String path) => _execute(
+    'DELETE FROM chunk_sources WHERE root=? AND (path=? OR substr(path, 1, ?)=?)',
+    [root, path, path.length + 1, '$path/'],
+  );
+
+  /// Forgets every file of folder connection [root] as a source.
+  void forgetFolderSources(String root) =>
+      _execute('DELETE FROM chunk_sources WHERE root=?', [root]);
+
+  /// Follows a move from [from] to [to] within [root], below it too.
+  void moveChunkSources(String root, String from, String to) => _execute(
+    'UPDATE chunk_sources SET path=? || substr(path, ?) '
+    'WHERE root=? AND (path=? OR substr(path, 1, ?)=?)',
+    [to, from.length + 1, root, from, from.length + 1, '$from/'],
+  );
 
   /// Removes chunk [id], wherever it is stored. Returns whether it was here.
   bool removeBlob(String id) {

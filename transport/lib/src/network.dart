@@ -1879,8 +1879,16 @@ class PeerNetwork implements PluginLink {
         throw StateError('Unknown file chunk');
       }
     }
-    return [for (final hash in hashes) node.store.blob(hash as String)];
+    return [
+      for (final hash in hashes)
+        node.store.blob(hash as String) ?? await chunkSource?.call(o, hash),
+    ];
   }
+
+  /// Makes chunk `hash` of file `o` again from plaintext this device holds
+  /// elsewhere (a synced folder), checked against the hash; null when it
+  /// cannot. Set by folder sync, so released chunks can still be served.
+  Future<List<int>?> Function(SignedObject o, String hash)? chunkSource;
 
   Future<void> stop() {
     _restartFailed = false;

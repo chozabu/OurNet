@@ -55,6 +55,8 @@ void main() {
         of: find.text('Connected local folder · two-way sync'),
         matching: find.byType(ListTile),
       );
+      await tester.ensureVisible(card);
+      await tester.pumpAndSettle();
       await tester.tap(
         find.descendant(
           of: card,
@@ -124,8 +126,39 @@ void main() {
             )
             .first,
       );
+      // Clear of the navigation bar along the bottom.
+      await tester.drag(
+        find
+            .descendant(
+              of: find.byType(CustomScrollView),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+        const Offset(0, -300),
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Docs'));
       await settle();
+      await tester.scrollUntilVisible(
+        find.text('Connect to local folder'),
+        200,
+        scrollable: find
+            .descendant(
+              of: find.byType(CustomScrollView),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      await tester.drag(
+        find
+            .descendant(
+              of: find.byType(CustomScrollView),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+        const Offset(0, -300),
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Connect to local folder'));
       for (
         var i = 0;

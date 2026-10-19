@@ -134,6 +134,27 @@ Future<List<int>> argon2id(
 
 const _hexDigits = '0123456789abcdef';
 
+/// SHA-256 of [data].
+Uint8List sha256Bytes(List<int> data) =>
+    NativeCrypto.sha256(data) ??
+    Uint8List.fromList(digest.sha256.convert(data).bytes);
+
+/// HMAC-SHA-256 (RFC 2104) of [parts], in order, under [key].
+Uint8List hmacSha256(List<int> key, List<List<int>> parts) {
+  const block = 64;
+  final k = Uint8List(block)
+    ..setAll(0, key.length > block ? sha256Bytes(key) : key);
+  final inner = BytesBuilder(copy: false)
+    ..add([for (final b in k) b ^ 0x36]);
+  for (final part in parts) {
+    inner.add(part);
+  }
+  return sha256Bytes([
+    for (final b in k) b ^ 0x5c,
+    ...sha256Bytes(inner.takeBytes()),
+  ]);
+}
+
 /// Lowercase hex SHA-256, as `package:crypto`'s `toString()` gives it.
 String sha256Hex(List<int> data) {
   final hash = NativeCrypto.sha256(data);

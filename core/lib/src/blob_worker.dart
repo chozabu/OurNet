@@ -103,22 +103,36 @@ class BlobWorker {
     return hash;
   }
 
+  /// The chunk [plain] encrypts to under [key], without storing it: the
+  /// same bytes [encode] stores, since its nonce comes from the plaintext.
+  Future<Uint8List> seal(Uint8List plain, List<int>? key) async =>
+      (await _request({
+            'op': 'seal',
+            'bytes': plain,
+            'key': key,
+            'versioned': WireFormat.versionedBlobs,
+          }))['bytes']
+          as Uint8List;
+
   /// Returns null only when a chunk is absent. Supplied network bytes are
-  /// verified and authenticated before they are cached.
+  /// verified and authenticated before they are cached, unless [keep] is
+  /// false: a chunk made again from a file's plaintext is only passed on.
   Future<Uint8List?> decode(
     String hash,
     List<int>? key, {
     List<int>? bytes,
     bool asFile = false,
+    bool keep = true,
   }) async {
     final result = await _request({
       'op': 'decode',
       'hash': hash,
       'key': key,
       'asFile': asFile,
+      'keep': keep,
       'bytes': bytes ?? (store.path == null ? store.blob(hash) : null),
     });
-    if (store.path == null && bytes != null && result['bytes'] != null) {
+    if (store.path == null && keep && bytes != null && result['bytes'] != null) {
       store.putBlob(hash, bytes);
     }
     return result['bytes'] as Uint8List?;
@@ -331,7 +345,7 @@ Future<void> _run(({SendPort port, String? path}) initial) async {
         }
         final keyBytes = command['key'] as List<int>?;
         final key = keyBytes == null ? null : SecretKey(keyBytes);
-        if (command['op'] == 'encode') {
+        if (command['op'] == 'encode' || command['op'] == 'seal') {
           final plain = command['bytes'] as Uint8List;
           if (plain.length > 128 * 1024) throw StateError('Invalid chunk size');
           final bytes = key == null
@@ -341,6 +355,10 @@ Future<void> _run(({SendPort port, String? path}) initial) async {
                   key,
                   versioned: command['versioned'] == true,
                 );
+          if (command['op'] == 'seal') {
+            initial.port.send({'id': id, 'bytes': bytes});
+            continue;
+          }
           final hash = blobHash(bytes);
           store?.putBlob(hash, bytes, asFile: command['asFile'] == true);
           initial.port.send({
@@ -360,7 +378,7 @@ Future<void> _run(({SendPort port, String? path}) initial) async {
             throw StateError('Invalid file chunk');
           }
           final plain = key == null ? bytes : await openBlob(bytes, key);
-          if (supplied != null) {
+          if (supplied != null && command['keep'] != false) {
             store?.putBlob(hash, bytes, asFile: command['asFile'] == true);
           }
           initial.port.send({'id': id, 'bytes': Uint8List.fromList(plain)});

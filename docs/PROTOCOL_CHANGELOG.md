@@ -24,6 +24,14 @@ becomes unreadable. Devices serve a tree file's chunks once they hold the whole
 tree and have indexed it (`tree_chunks`, a local table rebuilt from the list
 chunks); the `blobs` request is unchanged.
 
+Encrypted chunks now take their nonce from the file key and the plaintext
+(HMAC-SHA-256, cut to 12 bytes) instead of at random, so a device holding a
+file's plaintext in a synced folder can make its chunks again and serve them
+without keeping them. Readers take the nonce from the chunk as before, so
+nothing changes for them. Large-file chunks are kept as files beside the
+database (`blob_files`, a local table) and backups carry them as
+`chunks/<hash>` entries, which older builds ignore when restoring.
+
 ## Unreleased: per-friend location levels
 
 Additive. No new request, kind or wire field: the `position` request is

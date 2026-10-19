@@ -59,10 +59,11 @@ void main() {
     expect(payload['chunks'], isEmpty);
     expect(payload['chunkDepth'], 1);
     expect(files.cached(payload), isTrue);
-    // Its chunks are files beside the database, not rows in it.
+    // Its chunks are files beside the database, not rows in it. (The
+    // pattern repeats, and equal chunks of one file are one chunk.)
     expect(
       node.store.db.select('SELECT COUNT(*) AS n FROM blob_files').first['n'],
-      greaterThan(560),
+      greaterThan(10),
     );
     expect(
       node.store.db.select('SELECT COUNT(*) AS n FROM blobs').first['n'],

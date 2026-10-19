@@ -73,6 +73,7 @@ class Files {
     List<String> audience = const [],
     Json? drive,
     void Function(int completed, int total)? onProgress,
+    ChunkSeen? onChunk,
   }) async => _publish(
     await storeFrom(
       source,
@@ -80,6 +81,7 @@ class Files {
       name: name,
       encrypt: audience.isNotEmpty,
       onProgress: onProgress,
+      onChunk: onChunk,
     ),
     audience: audience,
     name: name,
@@ -170,6 +172,7 @@ class Files {
     required String name,
     bool encrypt = true,
     void Function(int completed, int total)? onProgress,
+    ChunkSeen? onChunk,
   }) async {
     checkRoom(size, name: name);
     final trace = TimelineTask()..start('attachment.import');
@@ -186,11 +189,12 @@ class Files {
       var completed = 0;
       onProgress?.call(0, size);
       await for (final data in rechunk(source, bytes)) {
+        final offset = completed;
         completed += data.length;
         if (completed > size) throw StateError('File changed during import');
-        await listing.add(
-          await node.blobs.encode(data, keyBytes, asFile: asFile),
-        );
+        final hash = await node.blobs.encode(data, keyBytes, asFile: asFile);
+        await listing.add(hash);
+        onChunk?.call(hash, offset, data.length);
         onProgress?.call(completed, size);
       }
       if (completed != size) throw StateError('File changed during import');
@@ -342,6 +346,7 @@ class Files {
   Stream<List<int>> _plain(
     SignedObject object, {
     void Function(int, int)? onProgress,
+    ChunkSeen? onChunk,
   }) async* {
     final payload = await node.content(object);
     if (payload == null || payload['chunks'] is! List)
@@ -363,6 +368,7 @@ class Files {
       );
       for (var i = 0; i < chunks.length; i++) {
         final plain = await fetch.chunk(i);
+        onChunk?.call(chunks[i], size, plain.length);
         size += plain.length;
         if (size > payload['size']) throw StateError('File size exceeded');
         onProgress?.call(size, payload['size'] as int);
@@ -375,10 +381,73 @@ class Files {
 
   /// The plaintext of [object]'s file, fetched and decrypted a chunk at a
   /// time as it is read: for writing straight to where it is wanted.
+  /// [onChunk] sees each data chunk's hash and where it is in the file.
   Stream<List<int>> open(
     SignedObject object, {
     void Function(int, int)? onProgress,
-  }) => _plain(object, onProgress: onProgress);
+    ChunkSeen? onChunk,
+  }) => _plain(object, onProgress: onProgress, onChunk: onChunk);
+
+  /// Whether this device keeps its own encrypted copy of a large file (over
+  /// 64 MiB, listed in a chunk tree) it also holds as plaintext in a synced
+  /// folder, or that another of the person's devices holds. Off saves the
+  /// space: chunks are made again from the folder, or fetched again.
+  bool get keepLargeCopies =>
+      node.store.setting('files/keepLargeCopies') != false;
+  set keepLargeCopies(bool value) =>
+      node.store.set('files/keepLargeCopies', value);
+
+  /// Whether released copies stay released: not while the drive keeps every
+  /// file offline, which would fetch them straight back.
+  bool get releasesCopies =>
+      !keepLargeCopies && node.store.setting('drive/offline') != true;
+
+  /// Drops this device's copy of the data chunks of tree-listed [object]
+  /// once another device has shown it holds them, by sending a sample of
+  /// them, verified, on request. Returns how many chunks were dropped. The
+  /// list chunks stay, so the file can be fetched again.
+  Future<int> releaseHeldElsewhere(SignedObject object) async {
+    final payload = await node.content(object);
+    if (payload == null || !hasChunkTree(payload)) return 0;
+    final key = payload['key'] == null ? null : unb64(payload['key']);
+    final data = <String>[];
+    Future<Uint8List> open(String hash) async =>
+        (await node.blobs.decode(hash, key)) ?? (throw StateError('No list'));
+    await for (final segment in chunkSegments(payload, open)) {
+      data.addAll(segment);
+    }
+    if (data.isEmpty) return 0;
+    final sample = {data.first, data[data.length ~/ 2], data.last}.toList();
+    final fetch = _Fetch(this, object, key, sample);
+    for (final device in fetch._sources) {
+      try {
+        final answers = await fetch._ask(device, sample);
+        var held = true;
+        for (final (i, bytes) in answers.indexed) {
+          if (bytes == null ||
+              await node.blobs.decode(
+                    sample[i],
+                    key,
+                    bytes: bytes,
+                    keep: false,
+                  ) ==
+                  null) {
+            held = false;
+            break;
+          }
+        }
+        if (!held) continue;
+        var dropped = 0;
+        for (final hash in data.toSet()) {
+          if (node.store.removeBlob(hash)) dropped++;
+        }
+        return dropped;
+      } catch (_) {
+        /* Not reachable, or not holding it: ask the next. */
+      }
+    }
+    return 0;
+  }
 
   /// Decode only into memory; the durable cache retains encrypted chunks.
   Future<Uint8List> readBytes(
@@ -456,6 +525,10 @@ class Files {
     }
   });
 }
+
+/// Called with each data chunk of a file as it is stored or read: its hash,
+/// and the offset and length of its plaintext in the file.
+typedef ChunkSeen = void Function(String hash, int offset, int length);
 
 /// [bytes] for people: KB, MB or GB.
 String _sizeText(int bytes) => bytes < 1024 * 1024
@@ -646,6 +719,20 @@ class _Fetch {
   /// flight spread over the devices that hold the file.
   Future<Map<int, Uint8List>> _fetch(List<int> indices, int n) async {
     final got = <int, Uint8List>{};
+    final local = files.network.chunkSource;
+    if (local != null) {
+      for (final i in indices) {
+        final bytes = await local(object, chunks[i]);
+        if (bytes == null) continue;
+        final plain = await node.blobs.decode(
+          chunks[i],
+          key,
+          bytes: bytes,
+          keep: false,
+        );
+        if (plain != null) got[i] = plain;
+      }
+    }
     final sources = _sources;
     for (var s = 0; s < sources.length && got.length < indices.length; s++) {
       final device = sources[(n + s) % sources.length];

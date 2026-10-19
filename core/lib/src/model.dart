@@ -778,16 +778,34 @@ Future<Json> decryptWith(Json encrypted, List<int> contentKey) async {
       as Json;
 }
 
+/// The nonce a file chunk is encrypted with: HMAC-SHA-256 of its plaintext
+/// under the file's key, cut to 12 bytes (as in SIV). The same plaintext
+/// under the same key always gives the same chunk, so a device holding a
+/// file's plaintext can make its chunks again; different plaintext never
+/// shares a nonce, however a file is edited. Each published file has its own
+/// key, so equal chunks are visible only within one file.
+Uint8List chunkNonce(List<int> key, List<int> plain) => Uint8List.sublistView(
+  hmacSha256(key, [_chunkNonceDomain, plain]),
+  0,
+  12,
+);
+
+final _chunkNonceDomain = utf8.encode('ournet/chunk-nonce/1');
+
 /// Encrypts one file chunk. A versioned blob is [blobVersion] followed by the
 /// nonce, ciphertext and tag, with the version byte authenticated as AAD.
+/// Without a [nonce] the nonce comes from [chunkNonce]. Readers take the
+/// nonce from the blob, so how it was chosen never matters to them.
 Future<Uint8List> sealBlob(
   List<int> plain,
   SecretKey key, {
   required bool versioned,
+  List<int>? nonce,
 }) async {
   final box = await aead.encrypt(
     plain,
     secretKey: key,
+    nonce: nonce ?? chunkNonce(await key.extractBytes(), plain),
     aad: versioned ? const [blobVersion] : const [],
   );
   final body = box.concatenation();

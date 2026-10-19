@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:ournet_core/ournet_core.dart';
 import 'files.dart';
 import 'first_sync.dart';
@@ -44,6 +45,15 @@ abstract class FolderBackend {
     String path,
     Stream<List<int>> data,
     String? expected,
+  );
+
+  /// [length] bytes of file [path] from [offset], only while its content
+  /// stamp (or token) is still [expected]; throws otherwise.
+  Future<Uint8List> readRange(
+    String path,
+    int offset,
+    int length,
+    String expected,
   );
   Future<void> mkdir(String path);
   Future<void> move(String source, String destination, String expected);
@@ -232,6 +242,33 @@ class DiskFolderBackend extends FolderBackend {
   }
 
   @override
+  Future<Uint8List> readRange(
+    String path,
+    int offset,
+    int length,
+    String expected,
+  ) async {
+    Future<void> check() async {
+      final item = await stat(path);
+      if (item == null || (item.contentStamp ?? item.token) != expected) {
+        throw StateError('File changed: $path');
+      }
+    }
+
+    await check();
+    final file = await File(await _path(path)).open();
+    try {
+      await file.setPosition(offset);
+      final bytes = await file.read(length);
+      if (bytes.length != length) throw StateError('File changed: $path');
+      await check();
+      return bytes;
+    } finally {
+      await file.close();
+    }
+  }
+
+  @override
   Future<void> mkdir(String path) async {
     final target = await _path(path);
     if (await FileSystemEntity.type(target) != FileSystemEntityType.notFound) {
@@ -338,6 +375,7 @@ class FolderSync {
   bool get busy => _active != null;
   FolderSync(this.files, this.backend, {this.onUpdate, bool automatic = true})
     : _automatic = automatic {
+    files.network.chunkSource = _chunkFromFolder;
     if (automatic) {
       _changes = node.onChangesTo(const {'drive'}, schedule);
       _poll();
@@ -346,6 +384,28 @@ class FolderSync {
   }
 
   bool _background = false;
+
+  /// Chunk [hash] of [object] made again from the synced file holding its
+  /// plaintext, checked against the hash; null when no folder holds it as
+  /// it was. A file changed or gone since is forgotten as a source.
+  Future<List<int>?> _chunkFromFolder(SignedObject object, String hash) async {
+    final source = node.store.chunkSource(hash);
+    if (source == null) return null;
+    final config = connections[source.root];
+    final payload = await node.content(object);
+    if (config == null || payload == null) return null;
+    try {
+      final plain = await backend(
+        config['location'] as String,
+      ).readRange(source.path, source.offset, source.length, source.token);
+      final key = payload['key'] == null ? null : unb64(payload['key']);
+      final sealed = await node.blobs.seal(plain, key);
+      return blobHash(sealed) == hash ? sealed : null;
+    } catch (_) {
+      node.store.forgetChunkSources(source.root, source.path);
+      return null;
+    }
+  }
 
   /// How often connections are checked for changes no notification reported.
   /// In the background the check slows down to save battery: an Android
@@ -515,6 +575,7 @@ class FolderSync {
     final configs = connections..remove(root);
     node.store.set('folder-sync/connections', configs);
     node.store.removeSettingsUnder('folder-sync/item/$root/');
+    node.store.forgetFolderSources(root);
     await _watchers.remove(root)?.cancel();
     status.remove(root);
     _shown = Map.of(status);
@@ -680,6 +741,34 @@ class FolderSync {
       persist(id);
     }
 
+    // A large file's chunks can be made again from its plaintext here:
+    // recorded, and with keepLargeCopies off this device's own copy of them
+    // goes once the folder is shown to make the first one again (a file
+    // whose chunks another build sealed with random nonces cannot).
+    Future<void> sourced(
+      String path,
+      FolderItem item,
+      SignedObject object,
+      List<(String, int, int)> seen,
+    ) async {
+      final payload = await node.content(object);
+      if (payload == null || !hasChunkTree(payload) || seen.isEmpty) return;
+      node.store.recordChunkSources(
+        root,
+        path,
+        item.contentStamp ?? item.token,
+        seen,
+      );
+      if (!files.releasesCopies) return;
+      if (await _chunkFromFolder(object, seen.first.$1) == null) {
+        node.store.forgetChunkSources(root, path);
+        return;
+      }
+      for (final hash in {for (final (h, _, _) in seen) h}) {
+        node.store.removeBlob(hash);
+      }
+    }
+
     final drive = Drive(node);
     // Publishes [data] after [parents]: the local file at [path] for files,
     // a metadata-only revision for folders and deletions. Returns its revision.
@@ -699,6 +788,7 @@ class FolderSync {
       } else {
         // Encrypted straight from the folder; the read fails if the file
         // changes meanwhile.
+        final seen = <(String, int, int)>[];
         object = await files.publishFrom(
           fs.read(path, item.token),
           size: item.size,
@@ -709,7 +799,9 @@ class FolderSync {
             'revision': randomId(),
             'parents': parents,
           },
+          onChunk: (hash, offset, length) => seen.add((hash, offset, length)),
         );
+        await sourced(path, item, object, seen);
       }
       return (await node.content(object))!['revision'];
     }
@@ -792,7 +884,16 @@ class FolderSync {
           v.data,
           destination: fs.location.startsWith('content:') ? null : fs.location,
         );
-        written = await fs.write(path, files.open(v.object), item?.token);
+        final seen = <(String, int, int)>[];
+        written = await fs.write(
+          path,
+          files.open(
+            v.object,
+            onChunk: (hash, offset, length) => seen.add((hash, offset, length)),
+          ),
+          item?.token,
+        );
+        await sourced(path, written, v.object, seen);
       }
       record(v.entry, path, revision, v.isFolder, written);
     }
@@ -855,6 +956,7 @@ class FolderSync {
           continue;
         try {
           asideIn = await fs.setAside(path, item.token);
+          node.store.forgetChunkSources(root, path);
           moved.add(path);
           setAside++;
         } catch (e) {
@@ -890,6 +992,7 @@ class FolderSync {
       if (old?.token != base['token'] || old == null) continue;
       try {
         await fs.move(oldPath, moved.key, old.token);
+        node.store.moveChunkSources(root, oldPath, moved.key);
         final after = await fs.scan();
         for (final id in state.keys.toList()) {
           final item = state[id];
@@ -1254,7 +1357,10 @@ class FolderSync {
         if (item?.token != base['token']) continue;
         // Its children's deletions have not arrived yet.
         if (waiting.contains(path)) continue;
-        if (item != null) await fs.remove(path, item.token);
+        if (item != null) {
+          await fs.remove(path, item.token);
+          node.store.forgetChunkSources(root, path);
+        }
         state[v.entry] = {
           'path': path,
           'revision': v.data['revision'],
@@ -1313,7 +1419,10 @@ class FolderSync {
         continue;
       }
       try {
-        if (item != null) await fs.remove(path, item.token);
+        if (item != null) {
+          await fs.remove(path, item.token);
+          node.store.forgetChunkSources(root, path);
+        }
         state[id] = {...base, 'token': null};
         persist(id);
       } catch (e) {
