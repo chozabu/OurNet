@@ -516,6 +516,13 @@ extension _SettingsPages on _OurNetAppState {
 
   List<Widget> settingsEntries(BuildContext context) => [
     ListTile(
+      leading: const Icon(Icons.bug_report_outlined),
+      title: const Text('OurNet $appVersion'),
+      subtitle: const Text('Build $buildId · diagnostics and problem reports'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => openDiagnostics(context),
+    ),
+    ListTile(
       leading: node.avatars.of(node.person) == null
           ? const Icon(Icons.account_circle_outlined)
           : conversationAvatar(node.person, radius: 14),
@@ -587,13 +594,6 @@ extension _SettingsPages on _OurNetAppState {
         replacing: true,
         stopApp: network.stop,
       ).catchError((Object e) => notice('Could not restore: $e')),
-    ),
-    ListTile(
-      leading: const Icon(Icons.bug_report_outlined),
-      title: const Text('Diagnostics'),
-      subtitle: const Text('Status and problem reports'),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: () => openDiagnostics(context),
     ),
     SwitchListTile(
       title: const Text('Compact spacing'),

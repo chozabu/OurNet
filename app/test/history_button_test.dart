@@ -93,7 +93,7 @@ void main() {
     await tester.tap(find.text('Settings').first);
     await settle(tester);
     expect(find.text('Copy diagnostics'), findsNothing);
-    await tester.tap(find.text('Diagnostics'));
+    await tester.tap(find.byIcon(Icons.bug_report_outlined));
     await settle(tester);
     expect(find.text('No device sync errors'), findsOneWidget);
     expect(find.text('Recent network activity'), findsOneWidget);
