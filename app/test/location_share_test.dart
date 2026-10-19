@@ -16,6 +16,22 @@ class FakeSource implements PositionSource {
   Future<Fix?> now() async => null;
 }
 
+// Hold replies to exercise changes made while a position is still in flight.
+class HeldNetwork extends Network {
+  HeldNetwork(super.node);
+  final requests = <({Json request, Completer<Json> reply})>[];
+
+  @override
+  bool get running => true;
+
+  @override
+  Future<Json> request(String device, Json request) {
+    final reply = Completer<Json>();
+    requests.add((request: request, reply: reply));
+    return reply.future;
+  }
+}
+
 int now() => DateTime.now().millisecondsSinceEpoch;
 Fix at(double lat, double lng, [int? time]) =>
     Fix(lat: lat, lng: lng, at: time ?? now(), accuracy: 8);
@@ -29,6 +45,64 @@ Future<void> until(bool Function() done, {int ms = 8000}) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  for (final reconnect in [false, true]) {
+    test(
+      reconnect
+          ? 'reconnecting during a failed send retries the current position'
+          : 'turning sharing off during a send replaces the precise position',
+      () async {
+        final node = Node(await LocalIdentity.create(), Store());
+        final friend = await LocalIdentity.create();
+        await node.addContact(friend.certificate);
+        final network = HeldNetwork(node);
+        final source = FakeSource();
+        final share = LocationShare(
+          network,
+          source: source,
+          state: NoteState(node),
+          phone: false,
+        );
+        addTearDown(() async {
+          share.dispose();
+          await source.controller.close();
+          await node.close();
+        });
+        await share.refreshPrimary();
+        await share.start();
+        source.controller.add(at(40.4168, -3.7038));
+        await until(() => network.requests.isNotEmpty);
+        expect(network.requests, hasLength(1));
+        if (reconnect) {
+          network.peerSeen!(friend.device);
+          network.requests.first.reply.completeError(
+            TimeoutException('offline'),
+          );
+        } else {
+          await share.setLevel(friend.person, LocationLevel.off);
+          network.requests.first.reply.complete({});
+        }
+        await until(() => network.requests.length == 2);
+        expect(network.requests, hasLength(2));
+        final fix = Fix.parse(
+          network.requests.last.request['fix'],
+          now: now(),
+        )!;
+        if (reconnect) {
+          expect(fix.lat, 40.4168);
+        } else {
+          final centre = ApproxGrid.centreLat(
+            ApproxGrid.cellOf(40.4168, -3.7038).row,
+          );
+          expect(fix.lat, closeTo(centre, 1e-6));
+          expect(fix.accuracy, greaterThan(3000));
+        }
+        network.requests.last.reply.complete({});
+        await until(() => !share.backingOff(friend.device));
+        expect(share.backingOff(friend.device), isFalse);
+      },
+    );
+  }
 
   late Node a, b;
   late Network na, nb;
@@ -348,11 +422,12 @@ void main() {
     );
 
     test(
-      'a removed device is not chosen as primary',
+      'an unknown device does not replace the chosen primary',
       () async {
         await setUpDevices();
+        await sp.makePrimary(laptop.identity.device);
         await sp.makePrimary('not-one-of-mine');
-        expect(sp.primary, isNull);
+        expect(sp.primary, laptop.identity.device);
       },
       timeout: const Timeout(Duration(seconds: 60)),
     );

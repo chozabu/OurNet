@@ -397,6 +397,7 @@ class LocationShare extends ChangeNotifier {
   final _later = <String, Timer>{};
   final _retry = <String, Timer>{};
   final _inFlight = <String>{};
+  final _pendingForce = <String, bool>{};
   final _backoff = <String, ({DateTime until, int failures})>{};
 
   /// When the place each device last received was taken.
@@ -564,7 +565,10 @@ class LocationShare extends ChangeNotifier {
       return;
     }
     if (_inFlight.contains(device)) {
-      // Sent when the request on its way finishes, if this is newer.
+      // A level change or reconnect must follow even a fix with the same time.
+      if (force) {
+        _pendingForce[device] = retract || (_pendingForce[device] ?? false);
+      }
       return;
     }
     final now = DateTime.now();
@@ -606,9 +610,11 @@ class LocationShare extends ChangeNotifier {
               _cellTo.remove(device);
               if ('$e'.contains('Unknown request')) {
                 _refused.add(device);
+                _pendingForce.remove(device);
                 return;
               }
               _failed(device);
+              if (_pendingForce.containsKey(device)) _sendNewer(device);
             },
           ),
     );
@@ -622,7 +628,12 @@ class LocationShare extends ChangeNotifier {
   void _sendNewer(String device) {
     final latest = _sent ?? own;
     if (_disposed || latest == null) return;
-    if (latest.at > (_delivered[device] ?? 0)) _send(device, latest);
+    final retract = _pendingForce.remove(device);
+    if (retract != null) {
+      _send(device, latest, force: true, retract: retract);
+    } else if (latest.at > (_delivered[device] ?? 0)) {
+      _send(device, latest);
+    }
   }
 
   /// [device] did not answer (switched off, or out of signal): wait before
