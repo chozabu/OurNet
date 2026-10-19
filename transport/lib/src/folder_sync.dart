@@ -536,6 +536,32 @@ class FolderSync {
       return (await node.content(object))!['revision'];
     }
 
+    // Whether the local file at [path] holds exactly the bytes of the drive
+    // file [v]. Sizes are compared first; equal sizes compare the contents.
+    // Reading checks [item]'s token before and after, so an edit made during
+    // the comparison fails this pass rather than being adopted unseen.
+    Future<bool> sameFile(String path, FolderItem item, DriveVersion v) async {
+      if (v.data['size'] != item.size) return false;
+      final mine = '${stage.path}/local', theirs = '${stage.path}/remote';
+      await files.save(v.object, theirs);
+      await fs.readTo(path, mine, item.token);
+      final a = await File(mine).open(), b = await File(theirs).open();
+      try {
+        while (true) {
+          final x = await a.read(Files.chunkSize);
+          final y = await b.read(Files.chunkSize);
+          if (x.length != y.length) return false;
+          if (x.isEmpty) return true;
+          for (var i = 0; i < x.length; i++) {
+            if (x[i] != y[i]) return false;
+          }
+        }
+      } finally {
+        await a.close();
+        await b.close();
+      }
+    }
+
     try {
       // Apply drive moves parent-first. Moving a directory carries unknown
       // local children too; their edits retain their original baseline tokens.
@@ -805,6 +831,12 @@ class FolderSync {
             // revision. No timestamp winner and no first-sync overwrite.
             if (item.directory != v.isFolder) {
               conflicts++;
+              continue;
+            }
+            // An identical file adopts the drive's revision instead: no
+            // rival head and no upload.
+            if (!v.deleted && await sameFile(path, item, v)) {
+              record(v.entry, path, v.data['revision'], false, item);
               continue;
             }
             record(

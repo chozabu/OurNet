@@ -184,6 +184,35 @@ void main() {
     );
   });
   test(
+    'new connection adopts an identical existing file without a conflict',
+    () async {
+      await File('${desktop.path}/same.txt').writeAsString('same contents');
+      await left.sync();
+      await exchange();
+      await File('${phone.path}/same.txt').writeAsString('same contents');
+      final before = b.store.count;
+      await right.sync();
+      expect(b.store.count, before);
+      expect(right.status[root], isNot(contains('conflicts')));
+      await exchange();
+      await settle();
+      final entry = (await Drive(
+        a,
+      ).entries()).singleWhere((e) => e.current.data['name'] == 'same.txt');
+      expect(entry.conflicted, false);
+      expect(entry.history.length, 1);
+      expect(left.status[root], isNot(contains('conflicts')));
+      expect(right.status[root], isNot(contains('conflicts')));
+      // The adopted baseline syncs later edits normally.
+      await File('${phone.path}/same.txt').writeAsString('phone edit');
+      await settle();
+      expect(
+        await File('${desktop.path}/same.txt').readAsString(),
+        'phone edit',
+      );
+    },
+  );
+  test(
     'missing root cannot publish mass deletion; restarting retains baseline',
     () async {
       await File('${desktop.path}/kept.txt').writeAsString('keep');
