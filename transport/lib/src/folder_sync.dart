@@ -697,8 +697,6 @@ class FolderSync {
       if (item == null || item.directory) {
         object = await drive.write(data, parents: parents);
       } else {
-        if (item.size > Files.maxSize)
-          throw StateError('$path exceeds the 64 MiB file limit');
         // Encrypted straight from the folder; the read fails if the file
         // changes meanwhile.
         object = await files.publishFrom(
@@ -788,7 +786,12 @@ class FolderSync {
         await fs.mkdir(path);
         written = const FolderItem(true, 'directory');
       } else {
-        // Decrypted straight into a temporary file beside [path].
+        // Decrypted straight into a temporary file beside [path], once
+        // there is room for it and its encrypted chunks.
+        files.checkRoomFor(
+          v.data,
+          destination: fs.location.startsWith('content:') ? null : fs.location,
+        );
         written = await fs.write(path, files.open(v.object), item?.token);
       }
       record(v.entry, path, revision, v.isFolder, written);

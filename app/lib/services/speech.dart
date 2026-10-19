@@ -13,6 +13,9 @@ import 'package:path_provider/path_provider.dart';
 import 'live_speech.dart';
 
 /// A whisper.cpp model that can be downloaded once and used offline.
+/// The largest recording read whole into memory to play or transcribe.
+const maxRecordingBytes = 64 * 1024 * 1024;
+
 class SpeechModel {
   final String id, label, file, sha256;
   final int size;
@@ -375,7 +378,7 @@ class Speech extends ChangeNotifier {
     if (note == null || op == null) {
       throw StateError('The recording is unavailable.');
     }
-    final bytes = await files.readBytes(op.object, limit: Notes.maxFileSize);
+    final bytes = await files.readBytes(op.object, limit: maxRecordingBytes);
     final temp = Directory(
       '${(await getTemporaryDirectory()).path}${Platform.pathSeparator}ournet-speech',
     )..createSync(recursive: true);

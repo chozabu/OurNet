@@ -83,8 +83,8 @@ extension _DrivePages on _OurNetAppState {
               'Existing files with matching names are preserved as conflicts; nothing is silently overwritten. '
               '$remoteFiles drive files · up to $remoteBytes bytes to download.\n\n'
               'Sync runs while OurNet is running and resumes when you reopen it. '
-              'Current limits: 64 MiB per file, and the storage limit in '
-              'Settings (${bytesText(node.store.storageLimit)}). '
+              'Files can be any size that fits the storage limit in '
+              'Settings (${bytesText(node.store.storageLimit)}) and the disk. '
               'Disconnecting leaves the files in place.',
             ),
           ),

@@ -286,9 +286,6 @@ extension _GroupForum on _OurNetAppState {
         final result = await FilePicker.pickFile();
         final path = result?.path;
         if (path == null) return;
-        if ((result!.lengthSync() ?? 0) > Files.maxSize) {
-          throw StateError('Prototype file limit is 64 MiB');
-        }
         await files.publish(
           path,
           postSpace: space,

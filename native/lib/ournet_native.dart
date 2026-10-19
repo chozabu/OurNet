@@ -7,6 +7,7 @@
 @DefaultAsset('package:ournet_native/ournet_native.dart')
 library;
 
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:typed_data';
 
@@ -135,6 +136,12 @@ external int _jpeg(
   isLeaf: true,
 )
 external void _free(Pointer<Uint8> data, int length);
+
+@Native<Int64 Function(Pointer<Uint8>, Size)>(
+  symbol: 'ournet_free_space',
+  isLeaf: true,
+)
+external int _freeSpace(Pointer<Uint8> path, int length);
 
 Uint8List _bytes(List<int> value) =>
     value is Uint8List ? value : Uint8List.fromList(value);
@@ -305,5 +312,25 @@ abstract final class NativeImage {
     } finally {
       _free(data, out[1]);
     }
+  }
+}
+
+/// Disk questions Dart cannot ask itself.
+abstract final class NativeDisk {
+  static final bool _available = () {
+    try {
+      return _version() >= 3;
+    } catch (_) {
+      return false;
+    }
+  }();
+
+  /// Bytes this user may still write on the volume holding [path], or null
+  /// when that cannot be told (no library, or the path is not on a volume).
+  static int? freeBytes(String path) {
+    if (!_available) return null;
+    final bytes = Uint8List.fromList(utf8.encode(path));
+    final free = _freeSpace(bytes.address, bytes.length);
+    return free < 0 ? null : free;
   }
 }

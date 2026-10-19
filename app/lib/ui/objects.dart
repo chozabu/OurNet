@@ -522,9 +522,6 @@ extension _ObjectsPages on _OurNetAppState {
     final isMessage = tab == Destination.messages;
     final result = await FilePicker.pickFile();
     if (result == null) return;
-    if ((result.lengthSync() ?? 0) > Files.maxSize) {
-      throw StateError('Prototype file limit is 64 MiB');
-    }
     final path = result.path;
     if (path != null) {
       await files.publish(
@@ -536,17 +533,15 @@ extension _ObjectsPages on _OurNetAppState {
         post: postData,
       );
     } else {
-      final temp = File(
-        '${(await getTemporaryDirectory()).path}/${randomId()}.upload',
-      );
+      final tempDir = (await getTemporaryDirectory()).path;
+      final known = result.lengthSync();
+      if (known != null) {
+        files.checkRoom(known, name: result.name, destination: tempDir);
+      }
+      final temp = File('$tempDir/${randomId()}.upload');
       final output = temp.openWrite();
       try {
-        var size = 0;
         await for (final bytes in result.readAsByteStream()) {
-          size += bytes.length;
-          if (size > Files.maxSize) {
-            throw StateError('Prototype file limit is 64 MiB');
-          }
           output.add(bytes);
           await output.flush();
         }
@@ -580,7 +575,7 @@ extension _ObjectsPages on _OurNetAppState {
   });
   void previewImage(BuildContext context, SignedObject object) => act(() async {
     final image = Uint8List.fromList(
-      await files.readBytes(object, limit: Files.maxSize),
+      await files.readBytes(object, limit: Files.inlineImageLimit),
     );
     if (!context.mounted) return;
     await showImageViewer(context, bytes: Future.value(image));

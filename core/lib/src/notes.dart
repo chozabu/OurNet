@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:typed_data';
 import 'everyday.dart';
 import 'note_state.dart';
+import 'chunk_tree.dart';
 import 'model.dart';
 import 'node.dart';
 
@@ -1033,7 +1034,6 @@ class Notes {
   bool pinned(String id) => state.pinned(id);
 
   static const chunkSize = 128 * 1024;
-  static const maxFileSize = 64 * 1024 * 1024;
   static const maxFiles = 32;
 
   /// Encrypts [source] into content-addressed chunks and publishes it as an
@@ -1056,18 +1056,19 @@ class Notes {
       throw StateError('A note holds up to $maxFiles attachments.');
     }
     final key = randomBytes(32);
-    final chunks = <String>[];
+    // Listed inline up to 512 chunks, in a chunk tree beyond: no size limit.
+    final listing = ChunkTreeBuilder(
+      listFanOut(chunkSize),
+      (plain) => node.blobs.encode(plain, key),
+    );
     var pending = BytesBuilder(copy: false);
     var size = 0;
     await for (final part in source) {
       size += part.length;
-      if (size > maxFileSize) {
-        throw StateError('Attachments are up to 64 MiB.');
-      }
       pending.add(part);
       while (pending.length >= chunkSize) {
         final all = pending.takeBytes();
-        chunks.add(
+        await listing.add(
           await node.blobs.encode(
             Uint8List.sublistView(all, 0, chunkSize),
             key,
@@ -1078,8 +1079,14 @@ class Notes {
       }
     }
     if (pending.length > 0) {
-      chunks.add(await node.blobs.encode(pending.takeBytes(), key));
+      await listing.add(await node.blobs.encode(pending.takeBytes(), key));
     }
+    final listed = await listing.finish();
+    await indexChunkTree(node, {
+      ...listed,
+      'chunkBytes': chunkSize,
+      'key': b64(key),
+    });
     final file = fileId ?? randomId();
     var safeName = name.replaceAll(RegExp(r'[/\\\x00-\x1f]'), '_');
     safeName = safeName.substring(0, safeName.length.clamp(0, 255));
@@ -1098,7 +1105,7 @@ class Notes {
         clock,
         space: note.id,
         extra: {
-          'chunks': chunks,
+          ...listed,
           'name': safeName.trim().isEmpty ? 'Attachment' : safeName,
           'size': size,
           'key': b64(key),

@@ -918,7 +918,7 @@ extension _SettingsPages on _OurNetAppState {
     const ListTile(
       title: Text('Prototype limits'),
       subtitle: Text(
-        '64 MiB per file · 128 evidence records per received item, about 60 hops. No guaranteed incoming calls while the mobile app is suspended.',
+        'Files up to the storage limit · 128 evidence records per received item, about 60 hops. No guaranteed incoming calls while the mobile app is suspended.',
       ),
     ),
     const Padding(

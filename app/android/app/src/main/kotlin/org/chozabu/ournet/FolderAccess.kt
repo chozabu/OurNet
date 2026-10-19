@@ -322,7 +322,6 @@ class FolderAccess(private val activity: Activity, channel: MethodChannel) {
         return doc
     }
     companion object {
-        private const val LIMIT = 64L * 1024 * 1024
         private const val NOT_SYNCED = ".ournet-not-synced"
     }
 }

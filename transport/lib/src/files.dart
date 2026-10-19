@@ -19,7 +19,13 @@ class Files {
   _BoundedQueue<void> get _transferQueue => _transfers[node] ??=
       _BoundedQueue(16, 'Transfer queue is full; retry shortly');
   static const chunkSize = 128 * 1024;
-  static const maxSize = 64 * 1024 * 1024;
+
+  /// The largest image shown inline, decoded whole in memory. Larger images
+  /// are files like any other.
+  static const inlineImageLimit = 32 * 1024 * 1024;
+
+  /// Space left free on a disk when deciding whether a file fits.
+  static const diskReserve = 64 * 1024 * 1024;
 
   /// The chunk size new files use; tests set a small one to build deep chunk
   /// trees from small files.
@@ -147,7 +153,6 @@ class Files {
   }) async {
     final file = File(path);
     final size = await file.length();
-    if (size > maxSize) throw StateError('Prototype file limit is 64 MiB');
     return storeFrom(
       file.openRead(),
       size: size,
@@ -166,6 +171,7 @@ class Files {
     bool encrypt = true,
     void Function(int completed, int total)? onProgress,
   }) async {
+    checkRoom(size, name: name);
     final trace = TimelineTask()..start('attachment.import');
     try {
       final key = await Chacha20.poly1305Aead().newSecretKey();
@@ -198,39 +204,68 @@ class Files {
     }
   }
 
+  /// What storing a file of [size] bytes takes here, encrypted: each chunk
+  /// gains a version byte, nonce and tag, and a tree's list chunks hold a
+  /// hash per chunk.
+  static int storedSize(int size) {
+    final chunks = size ~/ newChunkBytes + 1;
+    return size + chunks * (1 + 12 + 16 + 32);
+  }
+
+  /// Refuses, with a message saying why, a file of [size] bytes that would
+  /// not fit: in OurNet's storage limit and on the disk holding its store
+  /// (when [stored]), or on the disk at [destination] for a plaintext copy.
+  /// Free disk space that cannot be told is not checked.
+  void checkRoom(
+    int size, {
+    String name = 'This file',
+    bool stored = true,
+    String? destination,
+  }) {
+    if (stored) {
+      final needed = storedSize(size);
+      final left = node.store.storageLimit - node.store.storedBytes;
+      if (needed > left) {
+        throw StateError(
+          '$name needs ${_sizeText(needed)}, but the storage limit leaves '
+          '${_sizeText(max(0, left))}. Raise the limit in Settings → Storage, '
+          'or remove files.',
+        );
+      }
+      final path = node.store.path;
+      final free = path == null ? null : NativeDisk.freeBytes(File(path).parent.path);
+      if (free != null && needed > free - diskReserve) {
+        throw StateError(
+          '$name needs ${_sizeText(needed)}, but this device has '
+          '${_sizeText(max(0, free))} free.',
+        );
+      }
+    }
+    if (destination != null) {
+      final free = NativeDisk.freeBytes(destination);
+      if (free != null && size > free - diskReserve) {
+        throw StateError(
+          '$name needs ${_sizeText(size)}, but there is only '
+          '${_sizeText(max(0, free))} free where it is saved.',
+        );
+      }
+    }
+  }
+
+  /// Checks there is room to fetch [payload]'s file and, with [destination],
+  /// to write it there.
+  void checkRoomFor(Json payload, {String? destination}) => checkRoom(
+    payload['size'] as int,
+    name: '${payload['name']}',
+    stored: !cached(payload),
+    destination: destination,
+  );
+
   /// Records what the chunk tree of [payload] holds, from list chunks stored
   /// here, so its chunks can be offered to other devices and counted as
   /// cached. Returns false when a list chunk is not stored here yet.
-  Future<bool> indexTree(Json payload) async {
-    if (!hasChunkTree(payload)) return true;
-    final roots = (payload['chunkTree'] as List).cast<String>();
-    if (node.store.treeIndexed(roots)) return true;
-    final key = payload['key'] == null ? null : unb64(payload['key']);
-    final fanOut = listFanOut(payload['chunkBytes'] as int);
-    Future<Uint8List> open(String hash) async {
-      final plain = await node.blobs.decode(hash, key);
-      if (plain == null) throw const _Missing();
-      return plain;
-    }
+  Future<bool> indexTree(Json payload) => indexChunkTree(node, payload);
 
-    try {
-      for (final root in roots) {
-        if (node.store.treeIndexed([root])) continue;
-        await for (final batch in treeMembers(
-          root,
-          payload['chunkDepth'] as int,
-          fanOut,
-          open,
-        )) {
-          node.store.indexTree(root, batch);
-        }
-        node.store.indexTree(root, const [], complete: true);
-      }
-      return true;
-    } on _Missing {
-      return false;
-    }
-  }
 
   static final _complete = Expando<LinkedHashSet<String>>();
 
@@ -391,6 +426,10 @@ class Files {
     String path, {
     void Function(int, int)? onProgress,
   }) => _transferQueue.run('save/${object.id}/$path', () async {
+    final payload = await node.content(object);
+    if (payload != null && payload['size'] is int) {
+      checkRoomFor(payload, destination: File(path).parent.path);
+    }
     final target = File('$path.${randomId()}.ournet-part');
     final output = await target.open(mode: FileMode.write);
     var closed = false;
@@ -407,6 +446,13 @@ class Files {
     }
   });
 }
+
+/// [bytes] for people: KB, MB or GB.
+String _sizeText(int bytes) => bytes < 1024 * 1024
+    ? '${(bytes / 1024).ceil()} KB'
+    : bytes < 1024 * 1024 * 1024
+    ? '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB'
+    : '${(bytes / 1024 / 1024 / 1024).toStringAsFixed(2)} GB';
 
 /// [source] in pieces of exactly [size] bytes, the last one shorter.
 Stream<Uint8List> rechunk(Stream<List<int>> source, int size) async* {
@@ -448,10 +494,6 @@ Future<bool> sameBytes(Stream<List<int>> a, Stream<List<int>> b) async {
     await left.cancel();
     await right.cancel();
   }
-}
-
-class _Missing {
-  const _Missing();
 }
 
 /// Runs at most two jobs at once and shares duplicate in-flight requests by

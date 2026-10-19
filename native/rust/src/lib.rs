@@ -42,7 +42,7 @@ unsafe fn array<const N: usize>(data: *const u8) -> [u8; N] {
 /// Bumped when a function is added or changes.
 #[no_mangle]
 pub extern "C" fn ournet_native_version() -> u32 {
-    2
+    3
 }
 
 /// Strict verification: rejects non-canonical and small-order values. Dart
@@ -223,4 +223,42 @@ pub unsafe extern "C" fn ournet_free(data: *mut u8, len: usize) {
     if !data.is_null() {
         drop(Box::from_raw(slice::from_raw_parts_mut(data, len)));
     }
+}
+
+/// Bytes this user may still write on the volume holding the UTF-8 [path],
+/// or -1 when that cannot be told. Not a crypto result: Dart treats -1 as
+/// unknown and skips its free-space check.
+#[no_mangle]
+pub unsafe extern "C" fn ournet_free_space(path: *const u8, len: usize) -> i64 {
+    let Ok(path) = std::str::from_utf8(input(path, len)) else {
+        return -1;
+    };
+    free_space(path).map_or(-1, |n| n.min(i64::MAX as u64) as i64)
+}
+
+#[cfg(unix)]
+fn free_space(path: &str) -> Option<u64> {
+    let path = std::ffi::CString::new(path).ok()?;
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(path.as_ptr(), &mut stat) } != 0 {
+        return None;
+    }
+    Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+}
+
+#[cfg(windows)]
+fn free_space(path: &str) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = std::ffi::OsStr::new(path).encode_wide().chain([0]).collect();
+    let mut available = 0u64;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(wide.as_ptr(), &mut available, std::ptr::null_mut(), std::ptr::null_mut())
+    };
+    (ok != 0).then_some(available)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn free_space(_path: &str) -> Option<u64> {
+    None
 }

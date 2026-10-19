@@ -1560,9 +1560,6 @@ extension _ConversationPages on _OurNetAppState {
             : 'Adding ${i + 1} of ${items.length} · ${item.name}',
       );
       try {
-        if (await File(item.path).length() > Files.maxSize) {
-          throw StateError('Larger than 64 MiB');
-        }
         await files.publish(
           item.path,
           name: item.name,
@@ -1596,19 +1593,17 @@ extension _ConversationPages on _OurNetAppState {
           staged.add((path: path, name: file.name));
           continue;
         }
-        // Content without a file path (Android providers): copy it out.
-        final temp = File(
-          '${(await getTemporaryDirectory()).path}/${randomId()}.upload',
-        );
+        // Content without a file path (Android providers): copy it out,
+        // once there is room for the copy and its encrypted chunks.
+        final tempDir = (await getTemporaryDirectory()).path;
+        if (file.lengthSync() case final int size) {
+          files.checkRoom(size, name: file.name, destination: tempDir);
+        }
+        final temp = File('$tempDir/${randomId()}.upload');
         temps.add(temp);
         final output = temp.openWrite();
         try {
-          var size = 0;
           await for (final bytes in file.readAsByteStream()) {
-            size += bytes.length;
-            if (size > Files.maxSize) {
-              throw StateError('${file.name} is larger than 64 MiB');
-            }
             output.add(bytes);
           }
         } finally {

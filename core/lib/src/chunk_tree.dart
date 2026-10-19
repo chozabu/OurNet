@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'model.dart';
+import 'node.dart';
 
 /// A file's chunks are listed in its payload (`chunks`) when there are at most
 /// [inlineChunks] of them, the most builds before 0.2.47 accept. A larger file
@@ -202,4 +203,42 @@ Stream<List<String>> treeMembers(
   for (final child in entries) {
     yield* treeMembers(child, depth - 1, fanOut, open);
   }
+}
+
+/// Records what the chunk tree of [payload] holds, from list chunks stored
+/// here, so its chunks can be offered to other devices and counted as
+/// stored. Returns false when a list chunk is not stored here yet.
+Future<bool> indexChunkTree(Node node, Json payload) async {
+  if (!hasChunkTree(payload)) return true;
+  final roots = (payload['chunkTree'] as List).cast<String>();
+  if (node.store.treeIndexed(roots)) return true;
+  final key = payload['key'] == null ? null : unb64(payload['key']);
+  final fanOut = listFanOut(payload['chunkBytes'] as int);
+  Future<Uint8List> open(String hash) async {
+    final plain = await node.blobs.decode(hash, key);
+    if (plain == null) throw const _Missing();
+    return plain;
+  }
+
+  try {
+    for (final root in roots) {
+      if (node.store.treeIndexed([root])) continue;
+      await for (final batch in treeMembers(
+        root,
+        payload['chunkDepth'] as int,
+        fanOut,
+        open,
+      )) {
+        node.store.indexTree(root, batch);
+      }
+      node.store.indexTree(root, const [], complete: true);
+    }
+    return true;
+  } on _Missing {
+    return false;
+  }
+}
+
+class _Missing {
+  const _Missing();
 }

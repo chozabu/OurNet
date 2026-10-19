@@ -81,6 +81,51 @@ void main() {
   });
 
   test(
+    'an attachment over 64 MiB is listed in a chunk tree, and copies',
+    () async {
+      const length = 64 * 1024 * 1024 + 1;
+      Stream<List<int>> source() async* {
+        final block = Uint8List(1024 * 1024);
+        for (var at = 0; at < length; at += block.length) {
+          final n = length - at < block.length ? length - at : block.length;
+          yield Uint8List.sublistView(
+            block..fillRange(0, n, at ~/ block.length),
+            0,
+            n,
+          );
+        }
+      }
+
+      final note = await alice.create();
+      final file = await alice.attach(
+        note.id,
+        note.epoch,
+        source(),
+        name: 'Long recording.m4a',
+        meta: {'kind': 'audio'},
+      );
+      final data = (await alice.get(note.id))!.file(file)!.data;
+      expect(data['size'], length);
+      expect(data['chunks'], isEmpty);
+      expect(data['chunkTree'], hasLength(1));
+      expect(a.store.treeIndexed((data['chunkTree'] as List).cast()), isTrue);
+      var chunks = 0;
+      await for (final segment in chunkSegments(
+        data,
+        (h) async => (await a.blobs.decode(h, unb64(data['key'])))!,
+      )) {
+        chunks += segment.length;
+      }
+      expect(chunks, 513);
+      final copy = await alice.copy(note.id);
+      expect(
+        copy.file(copy.files.single)!.data['chunkTree'],
+        data['chunkTree'],
+      );
+    },
+  );
+
+  test(
     'attachments keep encrypted chunks across collaborators and copies',
     () async {
       final audio = Uint8List.fromList(

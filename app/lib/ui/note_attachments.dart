@@ -68,7 +68,7 @@ class _AudioClipState extends State<AudioClip> {
     try {
       final Uint8List bytes = await widget.files.readBytes(
         widget.object,
-        limit: Notes.maxFileSize,
+        limit: maxRecordingBytes,
       );
       final created = AudioPlayer();
       subscriptions.addAll([

@@ -81,7 +81,7 @@ class _InlineImageState extends State<InlineImage> {
 
   void openOriginal(ImageProvider preview) => showImageViewer(
     context,
-    bytes: widget.files.readBytes(widget.object, limit: Files.maxSize),
+    bytes: widget.files.readBytes(widget.object, limit: Files.inlineImageLimit),
     preview: preview,
     title: widget.payload['name'] as String?,
   );
@@ -94,9 +94,9 @@ class _InlineImageState extends State<InlineImage> {
       widget.object,
       generate:
           available &&
-          size <= Files.maxSize &&
+          size <= Files.inlineImageLimit &&
           (manual || size <= Thumbnails.automaticLimit),
-      limit: manual ? Files.maxSize : Thumbnails.automaticLimit,
+      limit: manual ? Files.inlineImageLimit : Thumbnails.automaticLimit,
       attempt: attempt,
     );
     // Decode stored previews at display resolution: smaller textures upload

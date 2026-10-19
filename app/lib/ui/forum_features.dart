@@ -166,15 +166,19 @@ extension _ForumFeatures on _OurNetAppState {
       }
     } else {
       final directory = await getTemporaryDirectory();
+      if (attachment.lengthSync() case final int size) {
+        files.checkRoom(
+          size,
+          name: attachment.name as String,
+          destination: directory.path,
+        );
+      }
       final temp = File('${directory.path}/${randomId()}.post');
       try {
         final stream = attachment.readAsByteStream() as Stream<List<int>>;
         final output = temp.openWrite();
-        var size = 0;
         try {
           await for (final chunk in stream) {
-            size += chunk.length;
-            if (size > Files.maxSize) throw StateError('File exceeds 64 MiB');
             output.add(chunk);
           }
         } finally {

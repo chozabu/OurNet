@@ -211,11 +211,18 @@ class MainActivity : FlutterActivity() {
                         target.outputStream().use { output ->
                             val buffer = ByteArray(131072)
                             var total = 0L
+                            var checked = 0L
                             while (true) {
                                 val count = input.read(buffer)
                                 if (count < 0) break
+                                // No size limit: stop only when the disk is nearly full.
+                                if (total >= checked) {
+                                    require(folder.usableSpace > 64L * 1024 * 1024) {
+                                        "Not enough free space on this phone to import the shared file"
+                                    }
+                                    checked = total + 8L * 1024 * 1024
+                                }
                                 total += count
-                                require(total <= 64L * 1024 * 1024) { "File exceeds 64 MiB" }
                                 output.write(buffer, 0, count)
                             }
                         }
