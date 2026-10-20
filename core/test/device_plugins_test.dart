@@ -396,6 +396,47 @@ void main() {
     expect(copied, ['hello']);
     expect(pb.remoteLog.length, lessThanOrEqualTo(Plugins.remoteLogLimit));
   });
+  test(
+    'dashboard remembers its device and clearing it across restarts',
+    () async {
+      Future<void> restart() async {
+        await pb.close();
+        pb = Plugins(
+          b,
+          directory: '${temp.path}/b',
+          cache: '${Directory.systemTemp.path}/ournet-plugin-cache',
+        );
+        await pb.load();
+        await until(
+          () =>
+              pb['device-dashboard']?.status == PluginStatus.running &&
+              pb.surface('device-dashboard', 'Dashboard').containsKey('target'),
+        );
+      }
+
+      pb.event('device-dashboard', 'Dashboard', 'select', {
+        'value': a.identity.device,
+      });
+      await until(
+        () =>
+            pb.surface('device-dashboard', 'Dashboard')['target'] ==
+            a.identity.device,
+      );
+      await restart();
+      expect(
+        pb.surface('device-dashboard', 'Dashboard')['target'],
+        a.identity.device,
+      );
+      pb.event('device-dashboard', 'Dashboard', 'select', {'value': ''});
+      await until(
+        () => pb.surface('device-dashboard', 'Dashboard')['hasTarget'] == false,
+      );
+      expect(pb.surface('device-dashboard', 'Dashboard')['watching'], false);
+      expect(pb.surface('device-dashboard', 'Dashboard')['busy'], false);
+      await restart();
+      expect(pb.surface('device-dashboard', 'Dashboard')['target'], '');
+    },
+  );
   test('receiving switches stay as set when the app starts again', () async {
     pb.event('device-dashboard', 'Dashboard', 'sharing', {});
     pb.event('remote-input', 'RemoteInput', 'clipboard', {});

@@ -112,9 +112,9 @@ fn count(v: &Value) -> String {
 }
 
 impl Dashboard {
-    /// Keeps sharing and process control across launches.
+    /// Keeps sharing, process control and the watched device across launches.
     fn save(&self) {
-        let _ = store::set_json("settings", &json!({"sharing":self.sharing,"control":self.control}));
+        let _ = store::set_json("settings", &json!({"sharing":self.sharing,"control":self.control,"target":self.client.target}));
     }
     fn interval(&self) -> u64 {
         if self.interval == 0 { 1000 } else { self.interval }
@@ -133,6 +133,10 @@ impl Dashboard {
 
     fn show(&self) {
         self.client.show(SURFACE, true);
+        let mut options = vec![json!({"value":"","label":"No device",
+            "detail":"Stop watching","icon":"pause"})];
+        options.extend(common::Client::options(&common::devices(), true));
+        ui::update(SURFACE, &json!({"deviceOptions":options}));
         let v = &self.report;
         let has = !v.is_null();
         let n = |k: &str| v[k].as_f64();
@@ -485,7 +489,11 @@ impl Dashboard {
     }
 
     fn choose(&mut self, device: &str) {
-        if device == ournet_plugin::this_device() {
+        if !device.is_empty() && !common::own(device) {
+            return;
+        }
+        if device.is_empty() || device == ournet_plugin::this_device() {
+            self.client.status.clear();
             self.client.target = device.into();
             self.client.pending = None;
             self.client.link = common::Link::Idle;
@@ -494,7 +502,10 @@ impl Dashboard {
         }
         self.reset();
         self.paused = false;
-        self.sample();
+        self.save();
+        if !device.is_empty() {
+            self.sample();
+        }
     }
 }
 
@@ -511,6 +522,7 @@ impl Plugin for Dashboard {
         let saved: Value = store::get_json("settings").unwrap_or_default();
         self.sharing = saved["sharing"] == true;
         self.control = saved["control"] == true;
+        self.client.target = saved["target"].as_str().unwrap_or("").into();
         timer::set(1, 250);
         self.show();
     }

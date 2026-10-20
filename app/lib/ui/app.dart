@@ -607,6 +607,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         [
           ...Destination.navigation,
           Destination.settings,
+          Destination.plugin,
         ].where((d) => d.id == saved).firstOrNull ??
         Destination.notes;
     // A test or a link that names where to open starts in All.
@@ -969,6 +970,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       setState(() {
         final previousRoom = activeRoom?.object.id, previousTab = tab;
         final previousScope = viewScope;
+        final previousPlugin = pluginSection?.id;
         action();
         if (previousScope != viewScope ||
             previousRoom != activeRoom?.object.id) {
@@ -982,6 +984,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           everydayView = null;
           // The scope header checks the group against these.
           roomsView = null;
+        }
+        if (tab == Destination.plugin &&
+            (tab != previousTab || pluginSection?.id != previousPlugin)) {
+          node.store.set('lastPluginSection', pluginSection?.id);
         }
         if (tab != previousTab) {
           node.store.set('lastDestination', (tab.parent ?? tab).id);
@@ -2042,13 +2048,26 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         ),
       );
     });
-    _pluginSections = node.registry.changes.listen((_) => redraw());
+    void restorePluginSection() {
+      if (tab != Destination.plugin || pluginSection != null) return;
+      final saved = node.store.setting('lastPluginSection');
+      pluginSection = pluginSections.where((s) => s.id == saved).firstOrNull;
+    }
+
+    _pluginSections = node.registry.changes.listen((_) {
+      restorePluginSection();
+      redraw();
+    });
     if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
       final bridge = _localBridge = LocalBridge(plugins);
       _localBridgeSync = plugins.changes.listen((_) => bridge.sync());
     }
     unawaited(
       plugins.load().then((_) {
+        restorePluginSection();
+        if (tab == Destination.plugin && pluginSection == null) {
+          tab = Destination.notes;
+        }
         final folder = node.store.setting('pluginDevFolder');
         if (folder is String && !Platform.isAndroid) plugins.watch(folder);
         redraw();
