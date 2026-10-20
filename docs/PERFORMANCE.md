@@ -25,6 +25,14 @@ Results are written by the integration driver to
 gates. Startup frame callbacks are flushed before the interaction and pending
 frame callbacks are collected afterward; the engine batches these callbacks.
 
+`check.ps1 -Performance` compiles `integration_test/performance_test.dart` once
+for all six journeys, then saves the combined report as
+`app/build/performance_test-DEVICE.json`. Each journey retains its report key,
+temporary profiles and acceptance budgets. The photo decode-counting binding is
+shared, and image caches are cleared between tests. Individual test targets
+remain available for investigation. These checks are an explicit validation
+step; `release-all.ps1` does not run them automatically.
+
 The acceptance budgets, enabled by `PERF_ENFORCE=true`, follow the display's
 reported refresh rate (`1000 / refreshRate` ms; 16.7 ms at 60 Hz, 8.3 ms at
 120 Hz). The reports record `refreshRateHz` and `frameBudgetMs`:

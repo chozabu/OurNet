@@ -92,7 +92,10 @@ const dragMs = int.fromEnvironment('DRAG_MS', defaultValue: 260);
 const passGestures = int.fromEnvironment('PASS_GESTURES', defaultValue: -1);
 
 void main() {
-  final binding = CountingBinding();
+  registerPhotoScrollTests(CountingBinding());
+}
+
+void registerPhotoScrollTests(CountingBinding binding) {
   binding.framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.fullyLive;
   savedPlacesHistoryJourney(binding);
   testWidgets('Notes photo scrolling ($scenario)', (tester) async {

@@ -155,6 +155,7 @@ void main() {
           expect(opening.elapsedMilliseconds, lessThan(5000));
         }
       } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
         await local.close();
         await remote.close();
         await directory.delete(recursive: true);

@@ -24,16 +24,15 @@ if ($Performance) {
   try {
     & (Join-Path $PSScriptRoot 'with-native-profile.ps1') -Root $taskRoot -Command {
       # Android profile builds install as org.chozabu.ournet.profile, separate
-      # from the everyday app and its data. Each report is kept by name.
-      foreach ($taskTarget in @('responsiveness_test', 'photo_scroll_test', 'note_history_test', 'conversation_history_test', 'group_history_test', 'calendar_history_test')) {
-        Remove-Item build/integration_response_data.json -ErrorAction SilentlyContinue
-        flutter drive --profile -d $Device --driver=test_driver/performance.dart "--target=integration_test/$taskTarget.dart" --dart-define=PERF_ENFORCE=true
-        $taskExit = $LASTEXITCODE
-        if (Test-Path build/integration_response_data.json) {
-          Copy-Item build/integration_response_data.json "build/$taskTarget-$Device.json" -Force
-        }
-        if ($taskExit -ne 0) { throw "Performance acceptance check failed: $taskTarget" }
+      # from the everyday app and its data. Compile once; reports retain their
+      # journey keys, including when an acceptance gate fails.
+      Remove-Item build/integration_response_data.json -ErrorAction SilentlyContinue
+      flutter drive --profile -d $Device --driver=test_driver/performance.dart --target=integration_test/performance_test.dart --dart-define=PERF_ENFORCE=true
+      $taskExit = $LASTEXITCODE
+      if (Test-Path build/integration_response_data.json) {
+        Copy-Item build/integration_response_data.json "build/performance_test-$Device.json" -Force
       }
+      if ($taskExit -ne 0) { throw 'Performance acceptance check failed' }
     }
   } finally { Pop-Location }
 }
