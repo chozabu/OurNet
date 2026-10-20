@@ -15,6 +15,7 @@ class CallNetwork extends Network {
   final to = <String>[];
   final Set<String> unreachable = {};
   Future<void> Function(Json)? onRequest;
+  Future<void> Function(String, Json)? onDeviceRequest;
 
   @override
   Future<Json> request(String device, Json message) async {
@@ -22,6 +23,7 @@ class CallNetwork extends Network {
     final payload = message['payload'] as Json;
     sent.add(payload);
     to.add(device);
+    await onDeviceRequest?.call(device, payload);
     await onRequest?.call(payload);
     return {'ok': true};
   }
@@ -441,6 +443,112 @@ void main() {
     expect(calls.phase, 'calling');
     expect(calls.peer, friendPhone.device);
     await calls.hangup();
+  });
+
+  test('a pending offer does not delay another device connecting', () async {
+    final slow = Completer<void>();
+    final offered = Completer<void>();
+    network.onDeviceRequest = (device, payload) async {
+      if (device == friend.device && payload['type'] == 'offer') {
+        offered.complete();
+        await slow.future;
+      }
+    };
+    final calling = calls.callPerson(friend.person);
+    try {
+      await offered.future;
+      await Future<void>.delayed(Duration.zero);
+      expect(calls.rung, isTrue);
+      expect(calls.peer, friendPhone.device);
+      await event({
+        'event': 'onCandidate',
+        'candidate': {'candidate': 'c1', 'sdpMid': '0', 'sdpMLineIndex': 0},
+      });
+      expect(sentTo('ice'), [friendPhone.device]);
+      final session = calls.session;
+      await signal(network, friendPhone.device, {
+        'type': 'answer',
+        'session': session,
+        'sdp': 'answer-sdp',
+      });
+      slow.complete();
+      await calling;
+      expect(calls.peer, friendPhone.device);
+      expect(sentTo('ice'), [friendPhone.device]);
+      expect(calls.phase, isNot('idle'));
+    } finally {
+      if (!slow.isCompleted) slow.complete();
+      await calling;
+    }
+  });
+
+  test(
+    'an answer before offer acknowledgement releases queued candidates',
+    () async {
+      final gate = Completer<void>();
+      final offered = Completer<void>();
+      network.onDeviceRequest = (_, payload) async {
+        if (payload['type'] == 'offer') {
+          offered.complete();
+          await gate.future;
+        }
+      };
+      final calling = calls.call(friend.device);
+      try {
+        await offered.future;
+        await event({
+          'event': 'onCandidate',
+          'candidate': {
+            'candidate': 'early',
+            'sdpMid': '0',
+            'sdpMLineIndex': 0,
+          },
+        });
+        expect(sentTo('ice'), isEmpty);
+        await signal(network, friend.device, {
+          'type': 'answer',
+          'session': calls.session,
+          'sdp': 'answer-sdp',
+        });
+        expect(sentTo('ice'), [friend.device]);
+        gate.complete();
+        await calling;
+        expect(sentTo('ice'), [friend.device]);
+      } finally {
+        if (!gate.isCompleted) gate.complete();
+        await calling;
+      }
+    },
+  );
+
+  test('a later offer acknowledgement receives cached candidates', () async {
+    final slow = Completer<void>();
+    final offered = Completer<void>();
+    network.onDeviceRequest = (device, payload) async {
+      if (device == friend.device && payload['type'] == 'offer') {
+        offered.complete();
+        await slow.future;
+      }
+    };
+    final calling = calls.callPerson(friend.person);
+    try {
+      await offered.future;
+      await Future<void>.delayed(Duration.zero);
+      await event({
+        'event': 'onCandidate',
+        'candidate': {'candidate': 'c1', 'sdpMid': '0', 'sdpMLineIndex': 0},
+      });
+      expect(sentTo('ice'), [friendPhone.device]);
+      slow.complete();
+      await calling;
+      expect(
+        sentTo('ice'),
+        unorderedEquals([friendPhone.device, friend.device]),
+      );
+    } finally {
+      if (!slow.isCompleted) slow.complete();
+      await calling;
+    }
   });
 
   test('a device that cannot be reached yet rings once it can', () async {

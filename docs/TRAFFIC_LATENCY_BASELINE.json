@@ -1,0 +1,75 @@
+{
+  "utc": "2026-10-20T11:40:03.283380Z",
+  "platform": "windows",
+  "dart": "3.13.5 (stable) (Tue Sep 29 01:00:52 2026 -0700) on \"windows_x64\"",
+  "build": "Dart AOT executable, release native profile",
+  "scope": "Two peers in one process, local QUIC, memory TUN; no Flutter UI, system adapter, relay or WAN. RTT, not one-way latency.",
+  "requestRtt": {
+    "samples": 100,
+    "minMs": 0.4,
+    "medianMs": 0.515,
+    "p95Ms": 0.682,
+    "maxMs": 1.006
+  },
+  "coldDatagramRtt": {
+    "samples": 1,
+    "minMs": 2.183,
+    "medianMs": 2.183,
+    "p95Ms": 2.183,
+    "maxMs": 2.183
+  },
+  "warmDatagramRtt": {
+    "samples": 100,
+    "minMs": 0.173,
+    "medianMs": 0.236,
+    "p95Ms": 0.309,
+    "maxMs": 0.67
+  },
+  "warmDatagram1000ByteRtt": {
+    "samples": 100,
+    "minMs": 0.196,
+    "medianMs": 0.269,
+    "p95Ms": 0.345,
+    "maxMs": 0.369
+  },
+  "warmVpn1000ByteRtt": {
+    "samples": 100,
+    "minMs": 0.316,
+    "medianMs": 0.432,
+    "p95Ms": 0.523,
+    "maxMs": 0.597
+  },
+  "vpn1000ByteRttDuringDatagramLoad": {
+    "samples": 1000,
+    "minMs": 0.273,
+    "medianMs": 0.463,
+    "p95Ms": 0.812,
+    "maxMs": 2.019
+  },
+  "backgroundLoad": {
+    "attemptedPackets": 360,
+    "acceptedPackets": 360,
+    "packetBytes": 1000,
+    "note": "Accepted by local transport; delivery is not acknowledged."
+  },
+  "requestRttDuringBulk": {
+    "samples": 100,
+    "minMs": 0.978,
+    "medianMs": 3.507,
+    "p95Ms": 6.093,
+    "maxMs": 7.618
+  },
+  "vpn1000ByteRttDuringBulk": {
+    "samples": 100,
+    "minMs": 0.492,
+    "medianMs": 0.891,
+    "p95Ms": 2.165,
+    "maxMs": 3.356
+  },
+  "bulkLoad": {
+    "workers": 2,
+    "completedBatches": 55,
+    "receivedBytes": 57684440
+  },
+  "rssMiB": 152.09375
+}

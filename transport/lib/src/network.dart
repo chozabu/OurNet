@@ -496,6 +496,14 @@ class PeerNetwork implements PluginLink {
   final _datagramLinks = <String, _DatagramLink>{};
   final _datagramDials = <String, Future<_DatagramLink?>>{};
 
+  /// Bound packets retained while connections open, across all peers. These
+  /// are unreliable packets: overload should drop them, not build a backlog
+  /// that delays fresh VPN or real-time traffic after a slow dial.
+  static const maxPendingDatagrams = 64;
+  static const maxPendingDatagramBytes = 64 * 1024;
+  int _pendingDatagrams = 0;
+  int _pendingDatagramBytes = 0;
+
   /// How long a datagram link stays up with nothing sent or received.
   static const datagramIdle = Duration(seconds: 30);
 
@@ -509,11 +517,27 @@ class PeerNetwork implements PluginLink {
     if (!node.allowedPeer(device) || channel.length > 64) return false;
     var link = _datagramLinks[device];
     if (link == null || link.closed) {
-      link = await (_datagramDials[device] ??= _dialDatagrams(
-        device,
-      ).whenComplete(() => _datagramDials.remove(device)));
+      final size = data.length;
+      if (_pendingDatagrams >= maxPendingDatagrams ||
+          _pendingDatagramBytes + size > maxPendingDatagramBytes) {
+        return false;
+      }
+      _pendingDatagrams++;
+      _pendingDatagramBytes += size;
+      try {
+        link = await (_datagramDials[device] ??= _dialDatagrams(device)
+            .whenComplete(() {
+              // Map.remove returns the dial future itself. Returning that from
+              // whenComplete would make its completion wait on itself forever.
+              _datagramDials.remove(device);
+            }));
+      } finally {
+        _pendingDatagrams--;
+        _pendingDatagramBytes -= size;
+      }
     }
-    if (link == null) return false;
+    // Admission may have changed while the connection was opening.
+    if (link == null || !node.allowedPeer(device)) return false;
     final name = utf8.encode(channel);
     final frame = Uint8List(2 + name.length + data.length)
       ..[0] = 1

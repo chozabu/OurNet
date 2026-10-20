@@ -128,6 +128,7 @@ class Calls extends ChangeNotifier {
   bool _remoteReady = false;
   String? _session;
   bool _signallingReady = false;
+  final Set<String> _offering = {};
   final List<RTCIceCandidate> _outgoing = [];
   Timer? _ringTimeout;
 
@@ -467,8 +468,11 @@ class Calls extends ChangeNotifier {
   }
 
   /// Devices that should receive this call's signalling.
-  List<String> get _recipients =>
-      _ringing.isNotEmpty ? _ringing.toList() : [?peer];
+  List<String> get _recipients => _ringing.isNotEmpty
+      ? _ringing
+            .where((d) => !_offering.contains(d) && !_unreached.contains(d))
+            .toList()
+      : [?peer];
 
   /// Admitted devices of [person], excluding this one.
   List<String> devicesOf(String person) => [
@@ -507,6 +511,9 @@ class Calls extends ChangeNotifier {
       ..clear()
       ..addAll(devices);
     _unreached.clear();
+    _offering
+      ..clear()
+      ..addAll(devices);
     _woken.clear();
     this.video = video;
     _session = randomId();
@@ -541,9 +548,17 @@ class Calls extends ChangeNotifier {
           network
               .request(device, {'type': 'signal', 'payload': payload})
               .then<void>(
-                (_) {},
+                (_) async {
+                  if (_session != session || _answered) return;
+                  _offering.remove(device);
+                  // A sleeping second device must not hold up the first
+                  // device's candidates or its ringing indication.
+                  await _offerReached(device, session!);
+                },
                 onError: (Object e) {
                   if (_session != session) return;
+                  _offering.remove(device);
+                  if (_answered) return;
                   if (e is StateError && _refusals.contains(e.message)) {
                     refusals.add(e);
                     _ringing.remove(device);
@@ -556,6 +571,7 @@ class Calls extends ChangeNotifier {
               ),
       ]);
       if (_session != session) return;
+      if (_answered || phase != 'calling') return;
       if (_ringing.isEmpty) throw refusals.first;
       _choosePeer();
       rung = _unreached.length < _ringing.length;
@@ -580,11 +596,37 @@ class Calls extends ChangeNotifier {
   /// reached, if any did.
   void _choosePeer() {
     if (_ringing.isEmpty) return;
-    if (peer == null || !_ringing.contains(peer) || _unreached.contains(peer)) {
+    if (peer == null ||
+        !_ringing.contains(peer) ||
+        _unreached.contains(peer) ||
+        _offering.contains(peer)) {
       peer = _ringing.firstWhere(
-        (d) => !_unreached.contains(d),
+        (d) => !_unreached.contains(d) && !_offering.contains(d),
         orElse: () => _ringing.first,
       );
+    }
+  }
+
+  Future<void> _offerReached(String device, String session) async {
+    if (_session != session || _answered || phase != 'calling') return;
+    _unreached.remove(device);
+    rung = true;
+    _choosePeer();
+    notifyListeners();
+    if (!_signallingReady) {
+      await _flushOutgoing();
+      return;
+    }
+    // This device may have missed candidates sent while its offer was pending.
+    final found = _found.toList();
+    if (found.isEmpty) return;
+    for (final payload in _icePayloads(found)) {
+      if (_session != session || _answered) return;
+      try {
+        await network.request(device, {'type': 'signal', 'payload': payload});
+      } catch (_) {
+        // Other ringing devices can still take the call.
+      }
     }
   }
 
@@ -616,18 +658,7 @@ class Calls extends ChangeNotifier {
               .then<void>(
                 (_) async {
                   if (!live()) return;
-                  _unreached.remove(device);
-                  rung = true;
-                  _choosePeer();
-                  notifyListeners();
-                  final found = _found.toList();
-                  for (final payload
-                      in found.isEmpty ? const <Json>[] : _icePayloads(found)) {
-                    await network.request(device, {
-                      'type': 'signal',
-                      'payload': payload,
-                    });
-                  }
+                  await _offerReached(device, session);
                 },
                 onError: (Object e) {
                   if (!live()) return;
@@ -747,6 +778,9 @@ class Calls extends ChangeNotifier {
         );
         if (_session != session) return {'ignored': true};
         await _flush();
+        if (_session != session) return {'ignored': true};
+        // An auto-answer can arrive before the offer acknowledgement.
+        await _flushOutgoing();
       case 'ice':
         if (device != peer || _ringing.isNotEmpty) return {};
         final list = message['candidates'] is List
@@ -961,6 +995,7 @@ class Calls extends ChangeNotifier {
         : <String>{};
     _ringing.clear();
     _unreached.clear();
+    _offering.clear();
     _found.clear();
     final session = _session;
     // Phones woken for the call that never got the offer stop ringing.

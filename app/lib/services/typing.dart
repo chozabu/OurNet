@@ -25,6 +25,10 @@ class Typing extends ChangeNotifier {
 
   /// Devices whose build refused the request; not asked again this run.
   final _refused = <String>{};
+  // Slow/offline devices must not accumulate a new request on every burst.
+  // Keep independent hints best-effort and bound their connection attempts.
+  final _pending = <String>{};
+  static const _maxPending = 8;
   Timer? _expiry;
 
   bool get enabled => network.node.store.setting('typingIndicator') != false;
@@ -76,6 +80,7 @@ class Typing extends ChangeNotifier {
       final device = contact.device;
       if (contact.person != person ||
           _refused.contains(device) ||
+          _pending.contains(device) ||
           !node.allowedPeer(device)) {
         continue;
       }
@@ -84,6 +89,8 @@ class Typing extends ChangeNotifier {
         network.lastSync[device],
       ].whereType<DateTime>().where((t) => now.difference(t) < _recent);
       if (seen.isEmpty) continue;
+      if (_pending.length >= _maxPending) break;
+      _pending.add(device);
       unawaited(
         network
             .request(device, {'type': 'typing'})
@@ -92,7 +99,10 @@ class Typing extends ChangeNotifier {
               onError: (Object e) {
                 if ('$e'.contains('Unknown request')) _refused.add(device);
               },
-            ),
+            )
+            .whenComplete(() {
+              _pending.remove(device);
+            }),
       );
     }
   }

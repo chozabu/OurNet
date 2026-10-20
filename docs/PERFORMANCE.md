@@ -1,5 +1,119 @@
 # Repeatable performance checks
 
+## VPN latency
+
+`transport/bin/latency_benchmark.dart` runs two temporary peers through real
+local QUIC and the shipped VPN plugin. It measures request RTT, cold datagram
+setup, warm 4-byte and 1,000-byte datagram RTT, and 1,000-byte VPN packet RTT
+both idle and during synthetic datagram traffic. Each reply carries a sequence
+number; missing replies fail the run rather than silently biasing the samples.
+The VPN uses memory interfaces and a synthetic echo at the remote interface.
+No personal profile, administrator access or system VPN adapter is used.
+
+Build from the repository root, then run from `transport` after builds/tests
+have stopped:
+
+```powershell
+.\tool\with-native-profile.ps1 -Command {
+  Push-Location transport
+  try { dart build cli -t bin/latency_benchmark.dart -o build/latency }
+  finally { Pop-Location }
+}
+Copy-Item app/native/irohdart_ffi.dll transport/build/latency/bundle/bin/
+cd transport
+.\build\latency\bundle\bin\latency_benchmark.exe build/latency-local.json
+```
+
+Use the current `app/native` networking library (built by
+`tool/build-iroh.ps1`), not a stale DLL from an old Flutter build directory.
+The first socket discovery is outside the timed phases. Cold datagram setup
+is one sample after the ordinary request connection is already warm; it is
+not a cold app start. Warm phases use 100 replies and the load phase 1,000.
+The load generator attempts eight 1,000-byte datagrams per timer tick; actual
+timer cadence is platform-dependent, so the report records the accepted packet
+count rather than claiming a fixed offered rate. Accepted does not mean delivered.
+
+The checked-in `VPN_LATENCY_BASELINE.json` is a Windows AOT/release-native
+local baseline from 20 October 2026. It excludes Flutter frames, system adapter
+and helper overhead, WAN paths, relays and Android. Do not interpret it as
+internet latency or compare it to development VM timings. A cross-device run
+should compare device ping, VPN datagram checks and system ping on the same
+path, idle and under load; physical Android timing remains unvalidated.
+
+This measurement uncovered a cold-datagram completion bug: returning
+`_datagramDials.remove(device)` from `whenComplete` returned the very future
+being completed, leaving its waiters stuck. The cleanup now returns void.
+Waiting datagrams are also bounded across peers to 64 packets / 64 KiB;
+overload drops unreliable traffic instead of accumulating a late burst.
+There is no numerical before/after speedup claim: the previous cold-send path
+did not complete. These changes preserve the wire protocol and plugin packages.
+
+Saved run (milliseconds, round trip):
+
+| Measurement | Median | p95 |
+|---|---:|---:|
+| Ordinary request | 0.517 | 0.718 |
+| Warm 1,000-byte datagram | 0.253 | 0.335 |
+| Warm 1,000-byte VPN packet | 0.434 | 0.590 |
+| VPN during synthetic traffic | 0.511 | 0.862 |
+
+Cold datagram setup and echo took 2.416 ms (one sample). The short load phase
+accepted 384 background packets; it is not a saturation or sustained throughput
+test. The memory-interface path adds extra Dart callbacks for the synthetic
+system echo, so subtracting its RTT from plain datagram RTT does not isolate
+WASM or bridge cost. These local results do not justify a native forwarding
+rewrite or permanent keepalives without measurements on real device paths.
+
+Validation: transport analysis was clean. The full transport run had 106 passes,
+three opt-in skips and one direct-path event assertion failure
+(`peer_path_test.dart`, path still null). The focused rerun passed all eight
+backlog/path tests, including blocking a peer during a dial; both existing core
+VPN plugin tests passed. No Flutter UI or physical Android timing was collected.
+
+### Call startup, typing hints and bulk traffic, 20 October 2026
+
+Outgoing one-to-one calls ring all of a person's devices. Previously candidate
+signalling waited for every offer request to finish, so a reachable device
+waited behind another device's connection timeout. Each acknowledged offer now
+releases signalling to that device immediately. Pending/unreached devices do
+not receive trickled candidates until their offer is acknowledged; when they
+are reached they receive the candidates collected so far. An answer arriving
+before the offer acknowledgement also releases queued candidates, and late
+acknowledgements cannot reset a call that has already been answered.
+
+Deterministic call tests hold one device's offer acknowledgement open and assert
+that the other device receives candidates and can answer before it is released.
+They also cover candidate replay to a later acknowledgement and an answer
+arriving before acknowledgement. These establish removal of the wait, not an
+end-to-end WebRTC media-start speedup on real hardware.
+
+Typing hints now allow one outstanding request per device and eight across all
+devices. New bursts skip pending destinations rather than starting overlapping
+connection attempts. There is no replay queue for stale hints. Tests cover both
+the per-device limit and the global bound, and verify fresh hints can be sent
+after a pending request finishes.
+
+The latency harness also runs two bounded workers repeatedly fetching the real
+encrypted attachment `blobs` responses for a temporary 1 MiB file. Publication
+and metadata sync happen before measurement; the first complete batch confirms
+the load path is working. This exercises chunk serving and network contention,
+not the receiving file's disk writes/decryption or a complete user download.
+`TRAFFIC_LATENCY_BASELINE.json` records one Windows AOT/release-native local run:
+
+| Round trip | Idle median / p95 | During bulk median / p95 |
+|---|---:|---:|
+| Ordinary request | 0.515 / 0.682 ms | 3.507 / 6.093 ms |
+| 1,000-byte VPN packet | 0.432 / 0.523 ms | 0.891 / 2.165 ms |
+
+The workers completed 55 batches (57,684,440 encrypted bytes) across the two
+measured phases. This is short, same-machine contention, not WAN saturation,
+relay performance or an Android/UI responsiveness result. Requests slowed under
+bulk load but remained within milliseconds on this machine; no transfer
+scheduler, permanent keepalive or native forwarding rewrite was introduced.
+Cross-device/direct-versus-relay and physical media-start measurements remain
+outstanding. App and transport analysis were clean; all 58 focused call,
+group-call/UI, call-history and typing tests passed.
+
 ## Responsiveness acceptance checks
 
 Responsiveness is separate from completion time: attachment work may take time,
