@@ -401,6 +401,32 @@ void main() {
     expect(find.textContaining('from phone'), findsNothing);
     await tester.tap(find.text('Close'));
     await tester.pumpAndSettle();
+    await tester.tap(
+      find.byTooltip('Hide banner (remember on this device)'),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Being controlled by Phone'), findsNothing);
+    expect(rig.plugins.remoteSessions, isNotEmpty);
+    expect(
+      rig.node.store.setting(remoteSessionBannerHiddenSetting),
+      true,
+    );
+    // Recreating the widget must retain the preference, even with an active
+    // session. Settings can restore the banner without stopping sharing.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: RemoteSessionBanner(plugins: rig.plugins)),
+      ),
+    );
+    expect(find.text('Being controlled by Phone'), findsNothing);
+    rig.node.store.set(remoteSessionBannerHiddenSetting, false);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: RemoteSessionBanner(plugins: rig.plugins)),
+      ),
+    );
+    expect(find.text('Being controlled by Phone'), findsOneWidget);
     await tester.tap(find.text('Stop'));
     await rig.until(() => find.textContaining('Being').evaluate().isEmpty);
     await rig.until(

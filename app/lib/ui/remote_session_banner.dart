@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:ournet_core/ournet_core.dart';
 
+/// Local preference, retained across sessions and application restarts.
+const remoteSessionBannerHiddenSetting = 'remoteSessionBannerHidden';
+
 /// Shown on every page while another of this person's devices is watching
 /// or controlling this one through a plugin (Device Dashboard, Remote
 /// Input), with the local session log and a way to stop it here.
@@ -44,6 +47,10 @@ class _RemoteSessionBannerState extends State<RemoteSessionBanner> {
 
   @override
   Widget build(BuildContext context) {
+    final store = widget.plugins.node.store;
+    if (store.setting(remoteSessionBannerHiddenSetting) == true) {
+      return const SizedBox.shrink();
+    }
     final sessions = widget.plugins.remoteSessions;
     if (sessions.isEmpty) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
@@ -85,6 +92,13 @@ class _RemoteSessionBannerState extends State<RemoteSessionBanner> {
               TextButton(
                 onPressed: () => showRemoteLog(context, widget.plugins),
                 child: const Text('Log'),
+              ),
+              IconButton(
+                tooltip: 'Hide banner (remember on this device)',
+                onPressed: () => setState(
+                  () => store.set(remoteSessionBannerHiddenSetting, true),
+                ),
+                icon: const Icon(Icons.visibility_off_outlined),
               ),
               FilledButton.tonal(
                 onPressed: () => widget.plugins.stopRemoteSessions(),

@@ -604,6 +604,17 @@ extension _SettingsPages on _OurNetAppState {
       },
     ),
     SwitchListTile(
+      title: const Text('Show remote session banner'),
+      subtitle: const Text(
+        'Show when a linked device is viewing or controlling this device. '
+        'Hiding the banner leaves sharing running.',
+      ),
+      value: node.store.setting(remoteSessionBannerHiddenSetting) != true,
+      onChanged: (value) => update(
+        () => node.store.set(remoteSessionBannerHiddenSetting, !value),
+      ),
+    ),
+    SwitchListTile(
       title: const Text('Show names in direct messages'),
       subtitle: const Text(
         'Put the sender\'s name above their messages, as in group chats.',
