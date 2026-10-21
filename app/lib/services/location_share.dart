@@ -175,6 +175,7 @@ class LocationShare extends ChangeNotifier {
   StreamSubscription<void>? _updates;
   Timer? _primaryCheck;
   Future<void>? _refreshingPrimary;
+  bool _primaryRefreshRequested = false;
   String? _primary;
   bool _primaryKnown = false;
 
@@ -213,10 +214,21 @@ class LocationShare extends ChangeNotifier {
   /// Reads the primary device from this person's synced state, and acts on a
   /// change: starts or stops reading, and tells friends at once when this
   /// device has just become the primary.
-  Future<void> refreshPrimary() =>
-      _refreshingPrimary ??= _refreshPrimary().whenComplete(
-        () => _refreshingPrimary = null,
-      );
+  Future<void> refreshPrimary() {
+    _primaryRefreshRequested = true;
+    return _refreshingPrimary ??= _refreshPrimaryUntilCurrent().whenComplete(
+      () => _refreshingPrimary = null,
+    );
+  }
+
+  Future<void> _refreshPrimaryUntilCurrent() async {
+    do {
+      _primaryRefreshRequested = false;
+      await _refreshPrimary();
+      // A sync may have delivered a new choice after this pass read it.
+      // Coalesce overlapping callers, but await their fresh read as well.
+    } while (_primaryRefreshRequested && !_disposed);
+  }
 
   Future<void> _refreshPrimary() async {
     final state = this.state;

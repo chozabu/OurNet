@@ -32,6 +32,29 @@ class HeldNetwork extends Network {
   }
 }
 
+// Pause after the primary was read, while per-friend levels are prepared.
+class HeldPrimaryState extends NoteState {
+  HeldPrimaryState(super.node);
+  final preparing = Completer<void>();
+  final release = Completer<void>();
+  String? chosen;
+
+  @override
+  Future<void> refresh() async {}
+
+  @override
+  String? get locationPrimary => chosen;
+
+  @override
+  bool get locationLevelsStarted => false;
+
+  @override
+  Future<void> startLocationLevels(Iterable<String> friends, int now) async {
+    if (!preparing.isCompleted) preparing.complete();
+    await release.future;
+  }
+}
+
 int now() => DateTime.now().millisecondsSinceEpoch;
 Fix at(double lat, double lng, [int? time]) =>
     Fix(lat: lat, lng: lng, at: time ?? now(), accuracy: 8);
@@ -45,6 +68,29 @@ Future<void> until(bool Function() done, {int ms = 8000}) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+    'a primary refresh requested during another reads the new choice',
+    () async {
+      final node = Node(await LocalIdentity.create(), Store());
+      final state = HeldPrimaryState(node);
+      final share = LocationShare(Network(node), state: state, phone: false);
+      addTearDown(() async {
+        share.dispose();
+        await node.close();
+      });
+
+      final first = share.refreshPrimary();
+      await state.preparing.future;
+      // A sync delivers the choice while the old refresh is still preparing
+      // levels. A caller after that sync must not receive the old snapshot.
+      state.chosen = node.identity.device;
+      final afterSync = share.refreshPrimary();
+      state.release.complete();
+      await Future.wait([first, afterSync]);
+      expect(share.primary, node.identity.device);
+    },
+  );
 
   for (final reconnect in [false, true]) {
     test(

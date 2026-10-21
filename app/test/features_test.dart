@@ -415,7 +415,7 @@ void main() {
       if (tab == Destination.files) {
         await tester.tap(find.text('preview.png').first);
         await settled(tester);
-        expect(find.text('Drive history'), findsOneWidget);
+        expect(find.text('Drive history · newest first'), findsOneWidget);
         expect(find.byType(InlineImage), findsWidgets);
         await tester.tap(find.text('Close'));
         await settled(tester);
