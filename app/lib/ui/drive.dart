@@ -785,72 +785,79 @@ extension _DrivePages on _OurNetAppState {
     );
   }
 
-  Future<void> driveHistory(
-    BuildContext context,
-    List<DriveEntry> entries,
-  ) => showDialog<void>(
-    context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: const Text('Drive history'),
-      content: SizedBox(
-        width: 620,
-        height: 420,
-        child: ListView(
-          children: [
-            for (final entry in entries)
-              for (final v in entry.history)
-                ListTile(
-                  leading: !v.isFolder && isImagePayload(v.data)
-                      ? InlineImage(
-                          key: ValueKey(v.object.id),
-                          files: files,
-                          object: v.object,
-                          payload: v.data,
-                          online: network.running,
-                          thumbnail: true,
-                        )
-                      : null,
-                  title: Text(
-                    '${v.data['name']}${v.deleted ? ' · deleted' : ''}',
-                  ),
-                  subtitle: Text(
-                    '${v.object.certificate.label} · ${DateTime.fromMillisecondsSinceEpoch(v.object.created).toLocal()}${entry.heads.contains(v) ? ' · current' : ''}',
-                  ),
-                  trailing: Wrap(
-                    children: [
-                      if (!v.isFolder)
-                        IconButton(
-                          tooltip: 'Export this version',
-                          icon: const Icon(Icons.download),
-                          onPressed: () => saveFile(context, v.object, v.data),
-                        ),
-                      IconButton(
-                        tooltip: 'Use this version',
-                        icon: const Icon(Icons.restore),
-                        onPressed: () => act(() async {
-                          await Drive(
-                            node,
-                          ).revise(entry, {'deleted': false}, source: v);
-                          if (dialogContext.mounted) {
-                            Navigator.pop(dialogContext);
-                          }
-                          notice(
-                            'Version restored; previous revisions remain in history',
-                          );
-                        }),
-                      ),
-                    ],
-                  ),
+  Future<void> driveHistory(BuildContext context, List<DriveEntry> entries) {
+    final revisions =
+        [
+          for (final entry in entries)
+            for (final version in entry.history) (entry, version),
+        ]..sort((a, b) {
+          final time = b.$2.object.created.compareTo(a.$2.object.created);
+          return time != 0 ? time : a.$2.object.id.compareTo(b.$2.object.id);
+        });
+    return showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Drive history · newest first'),
+        content: SizedBox(
+          width: 620,
+          height: 420,
+          child: ListView.builder(
+            itemCount: revisions.length,
+            itemBuilder: (context, index) {
+              final (entry, v) = revisions[index];
+              return ListTile(
+                leading: !v.isFolder && isImagePayload(v.data)
+                    ? InlineImage(
+                        key: ValueKey(v.object.id),
+                        files: files,
+                        object: v.object,
+                        payload: v.data,
+                        online: network.running,
+                        thumbnail: true,
+                      )
+                    : null,
+                title: Text(
+                  '${v.data['name']}${v.deleted ? ' · deleted' : ''}',
                 ),
-          ],
+                subtitle: Text(
+                  '${v.object.certificate.label} · ${DateTime.fromMillisecondsSinceEpoch(v.object.created).toLocal()}${entry.heads.contains(v) ? ' · current' : ''}',
+                ),
+                trailing: Wrap(
+                  children: [
+                    if (!v.isFolder)
+                      IconButton(
+                        tooltip: 'Export this version',
+                        icon: const Icon(Icons.download),
+                        onPressed: () => saveFile(context, v.object, v.data),
+                      ),
+                    IconButton(
+                      tooltip: 'Use this version',
+                      icon: const Icon(Icons.restore),
+                      onPressed: () => act(() async {
+                        await Drive(
+                          node,
+                        ).revise(entry, {'deleted': false}, source: v);
+                        if (dialogContext.mounted) {
+                          Navigator.pop(dialogContext);
+                        }
+                        notice(
+                          'Version restored; previous revisions remain in history',
+                        );
+                      }),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Close'),
+          ),
+        ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(dialogContext),
-          child: const Text('Close'),
-        ),
-      ],
-    ),
-  );
+    );
+  }
 }
