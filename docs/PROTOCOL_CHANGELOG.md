@@ -7,6 +7,22 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: Git plugin 0.3 repository deletion and streamed local packs
+
+Additive plugin change; no ALPN, application version or required peer capability
+changes. `x.git.delete` carries `repo`; its signed creation time retires that
+repository's earlier metadata and pushes in the same space. Its push permission
+rule matches `x.git.push`. Later `x.git.repo` records may recreate the name;
+earlier pushes remain retired. Older plugins ignore deletion and can still show
+old history. This is logical deletion, not host-object or blob erasure.
+
+Authenticated desktop bridge attachment endpoints stream existing file payloads
+(including chunk trees) around the guest's whole-file memory API. No file payload
+field changes. Existing `push` requests remain accepted; the updated helper uses
+`push-file` with a host-created attachment handle and pack metadata. Older apps
+refuse the new endpoint/request individually. Large packs can be cloned even
+when the guest cannot browse them within its whole-file memory budget.
+
 ## 0.2.48: derived-nonce marker; synced folders keep no chunk copies
 
 Additive. A file payload may carry `nonces: "derived"`: its chunks were

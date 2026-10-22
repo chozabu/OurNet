@@ -15,7 +15,7 @@
 mod diff;
 mod pack;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::rc::Rc;
 
 use ournet_plugin::{files, json, store, ui, Audience, Context, Object, Plugin, Scope, Value};
@@ -24,20 +24,21 @@ use serde::{Deserialize, Serialize};
 
 const REPO: &str = "x.git.repo";
 const PUSH: &str = "x.git.push";
+const DELETE: &str = "x.git.delete";
 const PERSONAL: &str = "x.git";
 const SURFACE: &str = "Git";
 
 /// Largest pack one push may carry: the most a plugin's file may hold.
 const MAX_PACK: usize = 16 * 1024 * 1024;
 /// Time an indexing step may take before it yields, in milliseconds.
-const STEP_MS: u64 = 300;
+const STEP_MS: u64 = 16;
 const INDEX_TIMER: u64 = 1;
 /// Packs not here yet are asked for again after this, in milliseconds.
 const RETRY_MS: u32 = 30_000;
 const RETRY_TIMER: u64 = 2;
 /// What this version keeps in storage. Before 2, packs travelled as
 /// `x.git.chunk` objects; those pushes are left out and pushed again.
-const FORMAT: &[u8] = b"2";
+const FORMAT: &[u8] = b"3";
 
 /// A person's public space: their own repositories, followed by friends.
 fn home(person: &str) -> String {
@@ -91,6 +92,28 @@ struct Repo {
     /// The group's name, where known.
     #[serde(default)]
     group: String,
+    /// A signed deletion hides this incarnation, including late old pushes.
+    #[serde(default)]
+    deleted_at: u64,
+    #[serde(default)]
+    metadata_at: u64,
+    #[serde(default)]
+    metadata_owner: String,
+    #[serde(default)]
+    deleted: bool,
+}
+
+impl Repo {
+    fn delete_before(&mut self, at: u64) -> bool {
+        if at <= self.deleted_at { return false; }
+        self.deleted_at = at;
+        self.deleted = self.metadata_at <= at;
+        if !self.deleted {
+            self.created = self.metadata_at;
+            self.owner = self.metadata_owner.clone();
+        }
+        true
+    }
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -120,6 +143,9 @@ struct Push {
 }
 
 impl Push {
+    fn counts(&self) -> [usize; 3] {
+        [usize::from(self.fetching()), usize::from(!self.complete() && !self.fetching()), usize::from(self.indexed == 2)]
+    }
     /// Its pack (if any) has been read here.
     fn complete(&self) -> bool {
         self.indexed != 0
@@ -141,15 +167,15 @@ struct Objects {
     key: String,
     /// Indexed pushes with packs, by ID.
     packs: Vec<String>,
-    at: HashMap<Sha, (u16, u32)>,
-    cache: Vec<(u16, Rc<Vec<u8>>)>,
+    at: HashMap<Sha, (usize, u32)>,
+    cache: Vec<(usize, Rc<Vec<u8>>)>,
 }
 
 impl Objects {
     fn load(key: &str, pushes: &[Push]) -> Objects {
         let mut o = Objects { key: key.into(), packs: Vec::new(), at: HashMap::new(), cache: Vec::new() };
         for p in pushes.iter().filter(|p| p.indexed == 1 && p.pack) {
-            let n = o.packs.len() as u16;
+            let n = o.packs.len();
             for e in pack::load_entries(&store::get(&format!("idx/{}", p.id)).unwrap_or_default()) {
                 o.at.insert(e.sha, (n, e.offset));
             }
@@ -158,14 +184,15 @@ impl Objects {
         o
     }
 
-    fn pack(&mut self, n: u16) -> Result<Rc<Vec<u8>>, String> {
+    fn pack(&mut self, n: usize) -> Result<Rc<Vec<u8>>, String> {
         if let Some((_, p)) = self.cache.iter().find(|(i, _)| *i == n) {
             return Ok(p.clone());
         }
         let bytes = Rc::new(load_pack(&self.packs[n as usize])?);
         let held: usize = self.cache.iter().map(|(_, p)| p.len()).sum();
-        if held + bytes.len() > 24 * 1024 * 1024 || self.cache.len() >= 4 {
-            self.cache.remove(0);
+        let mut held = held;
+        while !self.cache.is_empty() && (held + bytes.len() > 24 * 1024 * 1024 || self.cache.len() >= 4) {
+            held -= self.cache.remove(0).1.len();
         }
         self.cache.push((n, bytes.clone()));
         Ok(bytes)
@@ -236,6 +263,15 @@ enum Tab {
     Code,
     Commits,
     Pushes,
+    Settings,
+}
+
+struct CommitPage {
+    key: String,
+    tip: Option<Sha>,
+    pending: Vec<Sha>,
+    seen: BTreeSet<Sha>,
+    rows: Vec<Value>,
 }
 
 #[derive(Default)]
@@ -243,9 +279,12 @@ struct Git {
     me: String,
     repos: BTreeMap<String, Repo>,
     pushes: HashMap<String, Vec<Push>>,
+    push_positions: HashMap<String, HashMap<String, usize>>,
+    ref_cache: HashMap<String, RefState>,
+    status_cache: HashMap<String, [usize; 3]>,
     objects: Option<Objects>,
     /// Pushes to index, in order, and the one being indexed.
-    queue: Vec<(String, String)>,
+    queue: VecDeque<(String, String)>,
     /// Pushes whose packs were not here, to ask for again.
     retry: Vec<(String, String)>,
     indexing: Option<(String, String, pack::Indexer)>,
@@ -263,6 +302,13 @@ struct Git {
     file: Option<String>,
     commit: Option<String>,
     commits_shown: usize,
+    pushes_shown: usize,
+    branch_filter: String,
+    delete_name: String,
+    clone_open: bool,
+    branches_open: bool,
+    diff_shown: usize,
+    commit_page: Option<CommitPage>,
     draft_name: String,
     draft_description: String,
     error: String,
@@ -271,15 +317,33 @@ struct Git {
 impl Git {
     fn load_pushes(&mut self, key: &str) -> &mut Vec<Push> {
         if !self.pushes.contains_key(key) {
-            let list = store::get_json(&format!("pushes/{key}")).unwrap_or_default();
+            let mut list: Vec<Push> = store::keys(&format!("push/{key}/")).iter().filter_map(|k| store::get_json(k)).collect();
+            list.sort_by(|a, b| (a.created, &a.id).cmp(&(b.created, &b.id)));
+            self.push_positions.insert(key.into(), list.iter().enumerate().map(|(i, p)| (p.id.clone(), i)).collect());
             self.pushes.insert(key.to_string(), list);
         }
         self.pushes.get_mut(key).unwrap()
     }
 
+    fn reindex_positions(&mut self, key: &str) {
+        let positions = self.pushes[key].iter().enumerate().map(|(i, p)| (p.id.clone(), i)).collect();
+        self.push_positions.insert(key.into(), positions);
+    }
+
+    fn push_position(&mut self, key: &str, id: &str) -> Option<usize> {
+        self.load_pushes(key);
+        self.push_positions.get(key)?.get(id).copied()
+    }
+
+    fn save_push(&self, key: &str, id: &str) {
+        if let Some(p) = self.push_positions.get(key).and_then(|m| m.get(id)).and_then(|i| self.pushes.get(key)?.get(*i)) {
+            let _ = store::set_json(&format!("push/{key}/{id}"), p);
+        }
+    }
+
     fn save_pushes(&self, key: &str) {
         if let Some(list) = self.pushes.get(key) {
-            let _ = store::set_json(&format!("pushes/{key}"), list);
+            for p in list { self.save_push(key, &p.id); }
         }
     }
 
@@ -322,6 +386,31 @@ impl Git {
             return None;
         }
         let key = repo_key(&o.space, &name);
+        if o.kind == DELETE {
+            let repo = self.repo_for(&o.space, &name, &o.author, o.created);
+            if !repo.delete_before(o.created) { return None; }
+            self.ref_cache.remove(&key);
+            self.status_cache.remove(&key);
+            self.load_pushes(&key).retain(|p| {
+                if p.created > o.created { return true; }
+                store::remove(&format!("push/{key}/{}", p.id));
+                store::remove(&format!("idx/{}", p.id));
+                false
+            });
+            self.reindex_positions(&key);
+            self.queue.retain(|(k, _)| k != &key);
+            self.retry.retain(|(k, _)| k != &key);
+            if self.indexing.as_ref().is_some_and(|(k, _, _)| k == &key) {
+                self.indexing = None;
+                store::remove("indexing");
+            }
+            self.objects = None;
+            self.save_repos();
+            return Some(key);
+        }
+        if self.repos.get(&key).is_some_and(|r| o.created <= r.deleted_at) {
+            return None;
+        }
         match o.kind.as_str() {
             REPO => {
                 let repo = self.repo_for(&o.space, &name, &o.author, o.created);
@@ -335,10 +424,20 @@ impl Git {
                     repo.description = p["description"].as_str().unwrap_or("").to_string();
                 }
                 repo.updated = repo.updated.max(o.created);
+                if o.created >= repo.metadata_at {
+                    repo.metadata_at = o.created;
+                    repo.metadata_owner = o.author.clone();
+                }
+                if repo.deleted_at > 0 && repo.created <= repo.deleted_at {
+                    repo.created = o.created;
+                    repo.owner = o.author.clone();
+                }
+                repo.deleted = false;
                 self.save_repos();
             }
             PUSH => {
-                self.repo_for(&o.space, &name, &o.author, o.created).updated = o.created;
+                let repo = self.repo_for(&o.space, &name, &o.author, o.created);
+                repo.updated = repo.updated.max(o.created);
                 let text_map = |v: &Value| -> BTreeMap<String, String> {
                     v.as_object()
                         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect())
@@ -362,15 +461,31 @@ impl Git {
                     indexed: 0,
                     error: String::new(),
                 };
-                let list = self.load_pushes(&key);
-                if list.iter().any(|q| q.id == push.id) {
-                    return None;
+                self.load_pushes(&key);
+                if self.push_positions[&key].contains_key(&push.id) { return None; }
+                let list = self.pushes.get_mut(&key).unwrap();
+                let appended = list.last().is_none_or(|p| (p.created, &p.id) < (push.created, &push.id));
+                let incoming = push.clone();
+                if appended {
+                    let position = list.len();
+                    list.push(push);
+                    self.push_positions.get_mut(&key).unwrap().insert(o.id.clone(), position);
+                } else {
+                    let position = list.partition_point(|p| (p.created, &p.id) < (push.created, &push.id));
+                    list.insert(position, push);
+                    self.reindex_positions(&key);
                 }
-                list.push(push);
-                list.sort_by(|a, b| (a.created, &a.id).cmp(&(b.created, &b.id)));
-                self.save_pushes(&key);
+                if let Some(counts) = self.status_cache.get_mut(&key) {
+                    for (total, n) in counts.iter_mut().zip(incoming.counts()) { *total += n; }
+                }
+                if appended {
+                    if let Some(state) = self.ref_cache.get_mut(&key) { state.apply(&incoming); }
+                } else {
+                    self.ref_cache.remove(&key);
+                }
+                self.save_push(&key, &o.id);
                 self.save_repos();
-                self.queue.push((key.clone(), o.id.clone()));
+                self.queue.push_back((key.clone(), o.id.clone()));
             }
             _ => return None,
         }
@@ -379,11 +494,36 @@ impl Git {
 
     /// The refs as the pushes left them (see [ref_state]).
     fn refs(&mut self, key: &str) -> BTreeMap<String, String> {
-        ref_state(self.load_pushes(key)).0
+        self.ref_state_cached(key).refs.clone()
+    }
+
+    fn status(&mut self, key: &str) -> [usize; 3] {
+        if let Some(counts) = self.status_cache.get(key) { return *counts; }
+        let mut counts = [0; 3];
+        for p in self.load_pushes(key) {
+            for (total, n) in counts.iter_mut().zip(p.counts()) { *total += n; }
+        }
+        self.status_cache.insert(key.into(), counts);
+        counts
+    }
+
+    fn update_status(&mut self, key: &str, before: [usize; 3], after: [usize; 3]) {
+        if let Some(counts) = self.status_cache.get_mut(key) {
+            for i in 0..3 { counts[i] = counts[i] - before[i] + after[i]; }
+        }
+    }
+
+    fn ref_state_cached(&mut self, key: &str) -> &RefState {
+        if !self.ref_cache.contains_key(key) {
+            let mut state = RefState::default();
+            for p in self.load_pushes(key) { state.apply(p); }
+            self.ref_cache.insert(key.into(), state);
+        }
+        &self.ref_cache[key]
     }
 
     fn head(&mut self, key: &str, refs: &BTreeMap<String, String>) -> Option<String> {
-        let named = self.load_pushes(key).iter().rev().find_map(|p| p.head.clone());
+        let named = self.ref_state_cached(key).head.clone();
         named
             .filter(|h| refs.contains_key(h))
             .or_else(|| ["refs/heads/main", "refs/heads/master"].iter().find(|h| refs.contains_key(**h)).map(|h| h.to_string()))
@@ -401,13 +541,18 @@ impl Git {
 
     fn index_step(&mut self) {
         if self.indexing.is_none() {
-            while let Some((key, id)) = (!self.queue.is_empty()).then(|| self.queue.remove(0)) {
-                let Some(push) = self.load_pushes(&key).iter().find(|p| p.id == id).cloned() else { continue };
+            while let Some((key, id)) = self.queue.pop_front() {
+                let Some(position) = self.push_position(&key, &id) else { continue };
+                let push = self.pushes[&key][position].clone();
                 if push.complete() {
                     continue;
                 }
                 if !push.pack {
                     self.finish(&key, &id, Ok(Vec::new()));
+                    continue;
+                }
+                if push.size > MAX_PACK as u64 {
+                    self.finish(&key, &id, Err("Pack is available to clone, but exceeds this device's in-memory browsing budget.".into()));
                     continue;
                 }
                 let bytes = match load_pack(&id) {
@@ -450,7 +595,7 @@ impl Git {
             store::remove(&key);
         }
         let mut found = Vec::new();
-        for kind in [REPO, PUSH] {
+        for kind in [REPO, PUSH, DELETE] {
             let mut before: Option<Object> = None;
             loop {
                 let page = ournet_plugin::query(kind, None, before.as_ref(), 500);
@@ -474,10 +619,14 @@ impl Git {
 
     /// [id]'s pack could not be fetched: says why, and tries again later.
     fn waiting(&mut self, key: &str, id: &str, why: String) {
-        if let Some(p) = self.load_pushes(key).iter_mut().find(|p| p.id == id) {
+        if let Some(position) = self.push_position(key, id) {
+            let p = &mut self.pushes.get_mut(key).unwrap()[position];
+            let before = p.counts();
             p.error = why;
+            let after = p.counts();
+            self.update_status(key, before, after);
         }
-        self.save_pushes(key);
+        self.save_push(key, id);
         if !self.retry.iter().any(|(k, i)| k == key && i == id) {
             self.retry.push((key.to_string(), id.to_string()));
         }
@@ -492,7 +641,9 @@ impl Git {
             Ok(entries) => store::set(&format!("idx/{id}"), &pack::save_entries(&entries)).map(|_| ()),
             Err(e) => Err(e),
         };
-        if let Some(p) = self.load_pushes(key).iter_mut().find(|p| p.id == id) {
+        if let Some(position) = self.push_position(key, id) {
+            let p = &mut self.pushes.get_mut(key).unwrap()[position];
+            let before = p.counts();
             match outcome {
                 Ok(()) => {
                     p.indexed = 1;
@@ -504,12 +655,21 @@ impl Git {
                     p.error = e;
                 }
             }
+            let after = p.counts();
+            self.update_status(key, before, after);
         }
-        self.save_pushes(key);
+        self.save_push(key, id);
         store::remove("indexing");
-        if self.objects.as_ref().map(|o| o.key == key).unwrap_or(false) {
-            let pushes = self.load_pushes(key).clone();
-            self.objects = Some(Objects::load(key, &pushes));
+        if self.objects.as_ref().is_some_and(|o| o.key == key) {
+            let push = self.push_position(key, id).and_then(|i| self.pushes[key].get(i)).filter(|p| p.indexed == 1 && p.pack).cloned();
+            if let Some(push) = push {
+                let objects = self.objects.as_mut().unwrap();
+                let n = objects.packs.len();
+                for entry in pack::load_entries(&store::get(&format!("idx/{id}")).unwrap_or_default()) {
+                    objects.at.insert(entry.sha, (n, entry.offset));
+                }
+                objects.packs.push(push.id);
+            }
         }
         if self.repo.as_deref() == Some(key) {
             self.show();
@@ -525,11 +685,11 @@ impl Git {
         let address = address.trim().trim_start_matches("ournet://").trim_end_matches('/');
         let address = address.strip_suffix(".git").unwrap_or(address);
         let first = address.split('/').next().unwrap_or("");
-        if self.repos.contains_key(first) {
+        if self.repos.get(first).is_some_and(|r| !r.deleted) {
             return Ok(first.to_string());
         }
         let name = address.rsplit('/').next().unwrap_or("");
-        let found: Vec<&Repo> = self.repos.values().filter(|r| r.name == name).collect();
+        let found: Vec<&Repo> = self.repos.values().filter(|r| !r.deleted && r.name == name).collect();
         match found.as_slice() {
             [one] => Ok(one.key.clone()),
             [] => Err(format!(
@@ -548,6 +708,7 @@ impl Git {
             let list: Vec<Value> = self
                 .repos
                 .values()
+                .filter(|r| !r.deleted)
                 .map(|r| json!({"url": format!("ournet://{}/{}", r.key, r.name), "where": r.place}))
                 .collect();
             return Ok((json!({"repos": list}), Vec::new()));
@@ -585,6 +746,7 @@ impl Git {
                 }
                 Ok((json!({}), load_pack(&push.id)?))
             }
+            "push-file" => self.receive(&key, request, &[]).map(|id| (json!({"id": id}), Vec::new())),
             "push" => self.receive(&key, request, body).map(|id| (json!({"id": id}), Vec::new())),
             _ => Err(format!("unknown request {op}")),
         }
@@ -604,7 +766,7 @@ impl Git {
         let refs = text_map(&request["refs"]);
         let old = text_map(&request["old"]);
         let force = request["force"].as_bool().unwrap_or(false);
-        if refs.is_empty() || refs.len() > 100 {
+        if refs.is_empty() {
             return Err("nothing to push".into());
         }
         for (r, sha) in &refs {
@@ -622,7 +784,10 @@ impl Git {
                 }
             }
         }
-        let objects = if pack_bytes.is_empty() { 0 } else { pack::check(pack_bytes)? };
+        let file = request["file"].as_str().filter(|_| request["op"] == "push-file");
+        let objects = if file.is_some() {
+            request["objects"].as_u64().and_then(|n| u32::try_from(n).ok()).ok_or("missing pack object count")?
+        } else if pack_bytes.is_empty() { 0 } else { pack::check(pack_bytes)? };
         if pack_bytes.len() > MAX_PACK {
             return Err(format!("too large to push here ({} MB at most)", MAX_PACK / 1024 / 1024));
         }
@@ -635,7 +800,7 @@ impl Git {
             "repo": repo.name,
             "refs": refs,
             "old": old,
-            "size": if objects > 0 { pack_bytes.len() } else { 0 },
+            "size": if file.is_some() { request["size"].as_u64().ok_or("missing pack size")? } else if objects > 0 { pack_bytes.len() as u64 } else { 0 },
             "objects": objects,
         });
         if force {
@@ -643,6 +808,9 @@ impl Git {
         }
         if let Some(head) = request["head"].as_str().filter(|h| h.starts_with("refs/heads/")) {
             payload["head"] = head.into();
+        }
+        if let Some(file) = file {
+            return files::publish(PUSH, &repo.space, to, &payload, file);
         }
         if objects == 0 {
             return ournet_plugin::publish(PUSH, &repo.space, to, &payload);
@@ -693,6 +861,7 @@ impl Git {
         let mut list: Vec<&Repo> = self
             .repos
             .values()
+            .filter(|r| !r.deleted)
             .filter(|r| match self.place {
                 Where::Public => r.place == Where::Public,
                 _ => r.space == self.space,
@@ -728,16 +897,25 @@ impl Git {
     fn show_repo(&mut self, data: &mut Value) {
         let Some(key) = self.repo.clone() else { return };
         let Some(repo) = self.repos.get(&key).cloned() else { return };
+        if repo.deleted {
+            self.mode = Mode::List;
+            self.repo = None;
+            data["mode"] = "list".into();
+            self.show_list(data);
+            return;
+        }
+        data["error"] = self.error.clone().into();
+        data["deleteName"] = self.delete_name.clone().into();
+        data["cloneOpen"] = self.clone_open.into();
+        data["branchesOpen"] = self.branches_open.into();
+        data["branchFilter"] = self.branch_filter.clone().into();
         let refs = self.refs(&key);
         let head = self.head(&key, &refs);
         let branch = self.branch.clone().filter(|b| refs.contains_key(b)).or(head);
         self.branch = branch.clone();
-        let pushes = self.load_pushes(&key).clone();
-        let waiting = pushes.iter().filter(|p| p.fetching()).count();
-        let unread = pushes.iter().filter(|p| !p.complete() && !p.fetching()).count();
-        let failed = pushes.iter().filter(|p| p.indexed == 2).count();
+        let [waiting, unread, failed] = self.status(&key);
         let mut notice = Vec::new();
-        for (base, side, _) in ref_state(&pushes).1 {
+        for (side, (base, _)) in self.ref_state_cached(&key).conflicts.clone() {
             let short = |r: &str| r.trim_start_matches("refs/heads/").replace("refs/tags/", "tag ");
             notice.push(format!(
                 "{} was pushed from two places at once: the later push is kept as {}. Fetch, merge it and push again.",
@@ -768,11 +946,13 @@ impl Git {
             Tab::Code => "code",
             Tab::Commits => "commits",
             Tab::Pushes => "pushes",
+            Tab::Settings => "settings",
         }
         .into();
         data["branches"] = refs
             .keys()
             .filter(|r| r.starts_with("refs/heads/") || r.starts_with("refs/tags/"))
+            .filter(|r| r.to_lowercase().contains(&self.branch_filter.to_lowercase()))
             .map(|r| {
                 let short = r.trim_start_matches("refs/heads/").replace("refs/tags/", "tag ");
                 json!({"ref": r, "name": short, "selected": Some(r) == branch.as_ref()})
@@ -794,7 +974,8 @@ impl Git {
             Mode::Repo => match self.tab {
                 Tab::Code => self.show_code(data, tip),
                 Tab::Commits => self.show_commits(data, tip),
-                Tab::Pushes => self.show_pushes(data, &pushes),
+                Tab::Pushes => self.show_pushes(data, &key),
+                Tab::Settings => {},
             },
             Mode::File => self.show_file(data, tip),
             Mode::Commit => self.show_commit(data),
@@ -967,34 +1148,41 @@ impl Git {
     fn show_commits(&mut self, data: &mut Value, tip: Option<Sha>) {
         let key = self.repo.clone().unwrap();
         let shown = self.commits_shown;
+        let mut page = self.commit_page.take().filter(|p| p.key == key && p.tip == tip)
+            .unwrap_or_else(|| CommitPage { key: key.clone(), tip, pending: tip.into_iter().collect(), seen: BTreeSet::new(), rows: Vec::new() });
         let objects = self.open_objects(&key);
-        let mut list = Vec::new();
-        let mut at = tip.map(|t| objects.peel(t));
-        let mut more = false;
-        while let Some(sha) = at {
-            if list.len() >= shown {
-                more = true;
+        while page.rows.len() < shown {
+            let Some(sha) = page.pending.pop() else { break };
+            let sha = objects.peel(sha);
+            if !page.seen.insert(sha) { continue; }
+            let Some(c) = objects.commit(&sha) else {
+                page.seen.remove(&sha);
+                page.pending.push(sha);
                 break;
-            }
-            let Some(c) = objects.commit(&sha) else { break };
-            list.push(json!({
+            };
+            page.rows.push(json!({
                 "sha": pack::hex(&sha),
                 "short": &pack::hex(&sha)[..7],
                 "title": c.title(),
                 "author": c.author.name,
                 "at": c.committer.time * 1000,
             }));
-            at = c.parents.first().copied();
+            page.pending.extend(c.parents.iter().rev().copied());
         }
-        data["commits"] = list.into();
-        data["more"] = more.into();
+        while page.pending.last().is_some_and(|sha| page.seen.contains(sha)) { page.pending.pop(); }
+        data["commits"] = page.rows.clone().into();
+        data["more"] = (!page.pending.is_empty()).into();
+        self.commit_page = Some(page);
     }
 
-    fn show_pushes(&mut self, data: &mut Value, pushes: &[Push]) {
+    fn show_pushes(&mut self, data: &mut Value, key: &str) {
+        let shown = self.pushes_shown;
+        let pushes = self.load_pushes(key);
+        let more = pushes.len() > shown;
         let list: Vec<Value> = pushes
             .iter()
             .rev()
-            .take(100)
+            .take(shown)
             .map(|p| {
                 let mut moved: Vec<String> = p
                     .refs
@@ -1028,6 +1216,7 @@ impl Git {
                 })
             })
             .collect();
+        data["morePushes"] = more.into();
         data["pushes"] = list.into();
     }
 
@@ -1063,6 +1252,7 @@ impl Git {
     fn show_commit(&mut self, data: &mut Value) {
         let key = self.repo.clone().unwrap();
         let Some(sha) = self.commit.as_deref().and_then(pack::unhex) else { return };
+        let limit = self.diff_shown.max(1500);
         let objects = self.open_objects(&key);
         let Some(c) = objects.commit(&sha) else {
             data["commit"] = json!({"title": "Not here yet", "body": "", "short": "", "author": "", "at": 0});
@@ -1084,9 +1274,20 @@ impl Git {
         diff_trees(objects, parent_tree, c.tree, "", &mut changes);
         let mut lines: Vec<Value> = Vec::new();
         let mut files: Vec<Value> = Vec::new();
+        let mut more = false;
         for (path, status, a, b) in &changes {
+            if lines.len() >= limit { more = true; break; }
             files.push(json!({"path": path, "status": status}));
-            let add = |lines: &mut Vec<Value>, kind: char, text: String| {
+            let (mut old_line, mut new_line) = (0usize, 0usize);
+            let mut add = |lines: &mut Vec<Value>, kind: char, text: String| {
+                if kind == '@' {
+                    let positions: Vec<usize> = text.split_whitespace().skip(1).take(2)
+                        .map(|s| s.trim_start_matches(['-', '+']).split(',').next().unwrap_or("0").parse().unwrap_or(0)).collect();
+                    if positions.len() == 2 { old_line = positions[0]; new_line = positions[1]; }
+                }
+                let numbered = matches!(kind, ' ' | '+' | '-') && (old_line > 0 || new_line > 0);
+                let old = if numbered && kind != '+' { let n = old_line.to_string(); old_line += 1; n } else { String::new() };
+                let new = if numbered && kind != '-' { let n = new_line.to_string(); new_line += 1; n } else { String::new() };
                 let bg: u32 = match kind {
                     '+' => 0x3328A745,
                     '-' => 0x33D73A49,
@@ -1095,13 +1296,9 @@ impl Git {
                     _ => 0x00000000,
                 };
                 let prefix = if kind == '@' || kind == 'f' { String::new() } else { kind.to_string() };
-                lines.push(json!({"text": format!("{prefix}{text}"), "bg": bg as i64}));
+                lines.push(json!({"text": format!("{prefix}{text}"), "bg": bg as i64, "oldLine": old, "newLine": new}));
             };
             add(&mut lines, 'f', format!("{status} {path}"));
-            if lines.len() > 1500 {
-                add(&mut lines, ' ', "More changes are not shown here.".into());
-                continue;
-            }
             let read = |o: &mut Objects, s: &Option<Sha>| -> Option<(String, bool)> {
                 match s {
                     None => Some((String::new(), false)),
@@ -1115,7 +1312,9 @@ impl Git {
             match (read(objects, a), read(objects, b)) {
                 (Some((old, false)), Some((new, false))) => match diff::unified(&old, &new, 3) {
                     Some(hunks) => {
-                        for (k, l) in hunks {
+                        let remaining = limit.saturating_sub(lines.len());
+                        more |= hunks.len() > remaining;
+                        for (k, l) in hunks.into_iter().take(remaining) {
                             add(&mut lines, k, l);
                         }
                     }
@@ -1125,6 +1324,7 @@ impl Git {
                 _ => add(&mut lines, ' ', "Not here yet.".into()),
             }
         }
+        data["moreDiff"] = more.into();
         data["files"] = files.into();
         data["diff"] = lines.into();
     }
@@ -1138,6 +1338,63 @@ impl Git {
         self.file = None;
         self.commit = None;
         self.commits_shown = 30;
+        self.pushes_shown = 30;
+        self.branch_filter.clear();
+        self.delete_name.clear();
+        self.clone_open = false;
+        self.branches_open = false;
+        self.diff_shown = 1500;
+        self.error.clear();
+        self.show();
+    }
+
+    fn repair_repo(&mut self) {
+        let Some(key) = self.repo.clone() else { return };
+        self.status_cache.remove(&key);
+        self.commit_page = None;
+        self.queue.retain(|(k, _)| k != &key);
+        self.retry.retain(|(k, _)| k != &key);
+        if self.indexing.as_ref().is_some_and(|(k, _, _)| k == &key) {
+            self.indexing = None;
+            store::remove("indexing");
+        }
+        let ids: Vec<String> = self.load_pushes(&key).iter_mut().map(|p| {
+            p.indexed = 0;
+            p.error.clear();
+            p.id.clone()
+        }).collect();
+        for id in ids {
+            store::remove(&format!("idx/{id}"));
+            self.queue.push_back((key.clone(), id));
+        }
+        self.objects = None;
+        self.save_pushes(&key);
+        self.error = "Rebuilding this repository's local index. You can keep browsing.".into();
+        self.schedule();
+        self.show();
+    }
+
+    fn delete_repo(&mut self) {
+        let Some(repo) = self.repo.as_ref().and_then(|k| self.repos.get(k)).cloned() else { return };
+        if !Self::may_write(&repo.space, &self.me) { return; }
+        if self.delete_name.trim() != repo.name {
+            self.error = "Type the repository name to confirm deletion.".into();
+            return self.show();
+        }
+        let to = match repo.place {
+            Where::Personal => Audience::Personal,
+            Where::Group => Audience::Group,
+            Where::Public => Audience::Public,
+        };
+        match ournet_plugin::publish(DELETE, &repo.space, to, &json!({"repo": repo.name})) {
+            Ok(id) => {
+                if let Some(o) = ournet_plugin::get(&id) { self.take(&o); }
+                self.mode = Mode::List;
+                self.repo = None;
+                self.error.clear();
+            },
+            Err(e) => self.error = e,
+        }
         self.show();
     }
 
@@ -1152,7 +1409,7 @@ impl Git {
             _ => self.space.clone(),
         };
         let key = repo_key(&space, &name);
-        if self.repos.contains_key(&key) {
+        if self.repos.get(&key).is_some_and(|r| !r.deleted) {
             self.error = "There is already a repository with that name here.".into();
             return self.show();
         }
@@ -1169,6 +1426,12 @@ impl Git {
                 let me = self.me.clone();
                 let group = if self.place == Where::Group { self.group_name.clone() } else { String::new() };
                 let repo = self.repo_for(&space, &name, &me, ournet_plugin::now());
+                repo.deleted = false;
+                repo.updated = ournet_plugin::now();
+                repo.metadata_at = repo.updated;
+                repo.metadata_owner = me.clone();
+                repo.created = repo.updated;
+                repo.owner = me;
                 repo.description = payload["description"].as_str().unwrap_or("").into();
                 repo.group = group;
                 self.save_repos();
@@ -1207,33 +1470,41 @@ impl Git {
 /// goes to `<ref>@<first 8 of its author>` instead, so no commits are
 /// lost and its author can fetch, merge and push again (and delete the
 /// side branch with `git push ournet :main@…`).
-fn ref_state(pushes: &[Push]) -> (BTreeMap<String, String>, Vec<(String, String, String)>) {
-    let mut refs: BTreeMap<String, String> = BTreeMap::new();
-    for p in pushes {
+#[derive(Default)]
+struct RefState {
+    refs: BTreeMap<String, String>,
+    conflicts: BTreeMap<String, (String, String)>,
+    head: Option<String>,
+}
+
+impl RefState {
+    fn apply(&mut self, p: &Push) {
+        if p.head.is_some() { self.head = p.head.clone(); }
         for (r, sha) in &p.refs {
-            let current = refs.get(r).map(String::as_str).unwrap_or("");
+            let current = self.refs.get(r).map(String::as_str).unwrap_or("");
             let was = p.old.get(r).map(String::as_str).unwrap_or("");
             if p.force || current == was || r.contains('@') {
                 if sha.is_empty() {
-                    refs.remove(r);
+                    self.refs.remove(r);
+                    self.conflicts.remove(r);
                 } else {
-                    refs.insert(r.clone(), sha.clone());
+                    self.refs.insert(r.clone(), sha.clone());
                 }
             } else if !sha.is_empty() {
                 let side = format!("{r}@{}", &p.author[..8.min(p.author.len())]);
-                refs.insert(side, sha.clone());
+                self.refs.insert(side.clone(), sha.clone());
+                self.conflicts.insert(side, (r.clone(), p.author.clone()));
             }
         }
     }
-    let conflicts = refs
-        .keys()
-        .filter_map(|side| {
-            let (base, who) = side.rsplit_once('@')?;
-            let author = pushes.iter().rev().find(|p| p.refs.contains_key(base) && p.author.starts_with(who))?;
-            Some((base.to_string(), side.clone(), author.author.clone()))
-        })
-        .collect();
-    (refs, conflicts)
+}
+
+#[cfg(test)]
+fn ref_state(pushes: &[Push]) -> (BTreeMap<String, String>, Vec<(String, String, String)>) {
+    let mut state = RefState::default();
+    for p in pushes { state.apply(p); }
+    let conflicts = state.conflicts.into_iter().map(|(side, (base, author))| (base, side, author)).collect();
+    (state.refs, conflicts)
 }
 
 /// Changed files between two trees: path, A/M/D, old and new blob.
@@ -1320,7 +1591,7 @@ impl Plugin for Git {
         for key in self.repos.keys().cloned().collect::<Vec<_>>() {
             for p in self.load_pushes(&key).clone() {
                 if !p.complete() {
-                    self.queue.push((key.clone(), p.id));
+                    self.queue.push_back((key.clone(), p.id));
                 }
             }
         }
@@ -1389,11 +1660,20 @@ impl Plugin for Git {
             "draftName" => self.draft_name = text("value"),
             "draftDescription" => self.draft_description = text("value"),
             "create" => self.create(),
+            "branches" => { self.branches_open = !self.branches_open; self.show(); },
+            "clone" => { self.clone_open = !self.clone_open; self.show(); },
+            "moreDiff" => { self.diff_shown += 1500; self.show(); },
+            "deleteName" => self.delete_name = text("value"),
+            "delete" => self.delete_repo(),
+            "repair" => self.repair_repo(),
+            "branchFilter" => { self.branch_filter = text("value"); self.show(); },
+            "morePushes" => { self.pushes_shown += 30; self.show(); },
             "open" => self.open_repo(&text("key")),
             "tab" => {
                 self.tab = match text("tab").as_str() {
                     "commits" => Tab::Commits,
                     "pushes" => Tab::Pushes,
+                    "settings" => Tab::Settings,
                     _ => Tab::Code,
                 };
                 self.mode = Mode::Repo;
@@ -1402,6 +1682,8 @@ impl Plugin for Git {
             }
             "branch" => {
                 self.branch = Some(text("ref"));
+                self.branches_open = false;
+                self.branch_filter.clear();
                 self.path.clear();
                 self.mode = Mode::Repo;
                 self.show();
@@ -1428,6 +1710,7 @@ impl Plugin for Git {
             }
             "commit" => {
                 self.commit = Some(text("sha"));
+                self.diff_shown = 1500;
                 self.mode = Mode::Commit;
                 self.show();
             }
@@ -1470,7 +1753,7 @@ impl Plugin for Git {
             self.index_step();
         }
         if token == RETRY_TIMER {
-            self.queue.append(&mut self.retry);
+            self.queue.extend(self.retry.drain(..));
             self.schedule();
         }
     }
@@ -1490,6 +1773,7 @@ impl Plugin for Git {
             self.repo = Some(repo.into());
             self.mode = Mode::Repo;
             self.commits_shown = 30;
+            self.pushes_shown = 30;
         }
     }
 }
@@ -1501,12 +1785,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn base64_round_trips() {
-        for n in 0..10 {
-            let bytes: Vec<u8> = (0..n).map(|i| (i * 37) as u8).collect();
-            assert_eq!(unb64(&b64(&bytes)).unwrap(), bytes);
+    fn deletion_is_monotonic_and_recreation_survives_late_delivery() {
+        let mut repo = Repo { metadata_at: 10, updated: 50, ..Default::default() };
+        assert!(repo.delete_before(20));
+        // A push at 50 cannot resurrect a deleted repository.
+        assert!(repo.deleted);
+        assert!(!repo.delete_before(19));
+        repo.metadata_at = 40;
+        repo.deleted = false;
+        // An earlier deletion delivered after recreation still retires old data.
+        assert!(repo.delete_before(30));
+        assert!(!repo.deleted);
+        assert_eq!(repo.deleted_at, 30);
+    }
+
+    #[test]
+    fn incremental_refs_match_replay_and_clear_resolved_conflicts() {
+        let pushes = [
+            push("alice", 1, "refs/heads/main", "", "one"),
+            push("bob", 2, "refs/heads/main", "", "two"),
+            push("alice", 3, "refs/heads/main", "one", "three"),
+            push("bob", 4, "refs/heads/main@bob", "two", ""),
+        ];
+        let mut cached = RefState::default();
+        for (i, p) in pushes.iter().enumerate() {
+            cached.apply(p);
+            assert_eq!(cached.refs, ref_state(&pushes[..=i]).0);
         }
-        assert_eq!(b64(b"hi!"), "aGkh");
+        assert!(cached.conflicts.is_empty());
+        assert_eq!(cached.refs["refs/heads/main"], "three");
     }
 
     fn push(author: &str, created: u64, r: &str, old: &str, new: &str) -> Push {

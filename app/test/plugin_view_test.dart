@@ -692,6 +692,21 @@ void main() {
   });
 
   testWidgets('git shows a pushed repository', (tester) async {
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData')
+          copied = (call.arguments as Map)['text'] as String;
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
     tester.view.physicalSize = const Size(800, 600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -705,6 +720,22 @@ void main() {
     await tester.tap(find.text('Create'));
     await rig.untilText('Nothing pushed yet');
     await rig.shot('git-new-repo');
+    final repo = rig.plugins.surface('git', 'Git')['repo'] as Map;
+    final url = repo['url'] as String;
+    expect(
+      find.byWidgetPredicate((w) => w is SelectableText && w.data == url),
+      findsOneWidget,
+    );
+    await tester.tap(find.byTooltip('Copy repository url'));
+    await tester.pump();
+    expect(copied, url);
+    await tester.tap(find.text('Code ▾'));
+    await rig.untilText('Clone command');
+    await tester.tap(find.byTooltip('Copy clone command'));
+    await tester.pump();
+    expect(copied, 'git clone $url');
+    await tester.tap(find.text('Code ▾'));
+    await rig.until(() => find.text('Clone command').evaluate().isEmpty);
 
     // A push as git-remote-ournet sends it, packed by real git.
     final pack = await tester.runAsync(_demoPack);
@@ -727,6 +758,25 @@ void main() {
     await rig.untilText('README.md');
     expect(find.textContaining('Hello from'), findsOneWidget);
     await rig.shot('git-code');
+    await tester.tap(find.widgetWithText(OutlinedButton, 'main'));
+    await rig.untilText('Find a branch or tag');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Find a branch or tag'),
+      'missing',
+    );
+    await rig.until(
+      () => (rig.plugins.surface('git', 'Git')['branches'] as List).isEmpty,
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Find a branch or tag'),
+      'main',
+    );
+    await rig.until(
+      () => (rig.plugins.surface('git', 'Git')['branches'] as List).length == 1,
+    );
+    await rig.shot('git-branches');
+    await tester.tap(find.widgetWithText(ListTile, 'main'));
+    await rig.until(() => find.text('Find a branch or tag').evaluate().isEmpty);
     await tester.tap(find.text('notes.txt'));
     await rig.untilText('3 lines, 14 bytes');
     await rig.shot('git-file');
@@ -736,8 +786,15 @@ void main() {
     await rig.untilText('+TWO');
     expect(find.text('-two'), findsOneWidget);
     await rig.shot('git-commit');
-    await tester.tap(find.text('Pushes'));
+    await tester.tap(find.text('Activity'));
     await rig.untilText('main → ${pack.$1.substring(0, 7)}');
+    await tester.tap(find.text('Settings'));
+    await rig.untilText('Rebuild local index');
+    await rig.shot('git-settings');
+    await tester.tap(find.text('Rebuild local index'));
+    await rig.untilText(
+      "Rebuilding this repository's local index. You can keep browsing.",
+    );
   });
 }
 

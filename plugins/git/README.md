@@ -34,11 +34,40 @@ remote. A push that would lose commits is refused unless forced (`+main` or
 fetched. The page shows the code at each branch and tag, the README,
 commits with their changes, and the pushes: who moved which branch, when.
 
+## Repository settings (0.3)
+
+**Settings → Rebuild local index** retries unreadable packs and replaces this
+repository's derived indexes, without changing signed history. Repair is local
+and can run while browsing.
+
+**Settings → Delete repository** asks for the repository name and publishes a
+signed `x.git.delete` record. Anyone allowed to push may delete (all members in
+a group; only the owner in a public space). It retires records at or before its
+signed timestamp. It stays deleted after restart/reindex/sync, including late
+old pushes. Creating the same name again starts fresh; the old deletion boundary
+remains. Local clones are untouched. Signed records and encrypted attachment
+chunks are retained by the host: this is a synced logical deletion, not secure
+erasure or immediate storage reclamation. Older Git plugins ignore the new kind
+and may still show the old repository, so upgrade the plugin on your devices.
+
+Code browsing has a searchable branch/tag list and a collapsible **Code** clone
+panel. The repository URL is always selectable and has a Copy button; the clone
+command has its own Copy button in the Code panel. **Activity** pages through every push; commit history includes merge
+parents and retains loaded pages. Commit diffs include old/new line numbers and
+**Show more changes**, rather than silently stopping at a fixed line count.
+Large comparisons use patience anchors with bounded quadratic work, falling back
+to replacement blocks where no useful anchors exist.
+
+The updated helper requires an app with the streaming local-bridge endpoints.
+The older helper's small-push protocol remains accepted. No app version or peer
+capability floor is raised by this plugin update.
+
 ## How it works
 
 | Kind | Holds |
 |---|---|
 | `x.git.repo` | name, description |
+| `x.git.delete` | repository name; its signed timestamp retires old records |
 | `x.git.push` | the refs moved (`refs`, and `old`: what the pusher had), whether forced, size and object count; its pack is attached as the push's file (the `files` API: encrypted chunks fetched from whoever has them) |
 
 Before 0.2 a pack travelled in `x.git.chunk` objects of base64; 0.2 reads
@@ -48,7 +77,11 @@ read. Push such repositories again.
 - A push's pack is what `git pack-objects --revs` makes for the new commits
   minus everything the repository already had, so a repository is the union
   of its pushes' packs. Each pack is self-contained (no thin packs), so it
-  can be read alone. One push carries 16 MB at most.
+  can be read alone. The current desktop helper spools packs to a temporary
+  file and streams uploads/downloads through the local bridge. Pack transfers
+  use the same encrypted chunk trees, disk checks, progress and cancellation
+  as folder sync; there is no fixed pack-transfer size ceiling. Temporary
+  disk space for the pack is required on the sending computer.
 - The refs are what the pushes, in order of when they were signed, left
   them. Pushes made apart (offline, say) can each build on a tip the other
   replaced: the first signed keeps the branch, and a later one that was not
@@ -80,9 +113,11 @@ pushes and clones with real git through the bridge.
   put it on the PATH.
 - Pull requests and issues (both would be ordinary signed kinds), forks as
   a button, and per-file history.
-- Large repositories: more than 16 MB per push, and packs too big to read
-  on a phone, would want the file chunks core already has (`plugin files`
-  is not a grant yet).
+- Browsing packs larger than 16 MiB: transfers work, but the current guest
+  reads packs whole through `files.read`, so it records an explicit browsing
+  error rather than repeatedly trying to fetch them. A range/stream guest API
+  and on-disk object index are needed to browse those packs within bounded
+  memory. Individual blob previews and file diffs also remain bounded.
 - Android has no local bridge: it browses repositories but nothing there
   runs git against it.
 

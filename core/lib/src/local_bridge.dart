@@ -22,6 +22,7 @@ class LocalBridge {
   final String path;
   HttpServer? _server;
   String _token = '';
+  int _fileTransfers = 0;
   Future<void> _work = Future.value();
 
   /// Largest request: a plugin's own limits come after.
@@ -112,6 +113,46 @@ class LocalBridge {
         return await refuse(HttpStatus.unauthorized, 'Wrong key');
       }
       final parts = request.uri.pathSegments;
+      // Streaming attachments bypass the bounded JSON request buffer, using
+      // transport's encrypted chunk trees and progress/cancellation support.
+      if (parts.length >= 3 &&
+          parts.first == 'plugins' &&
+          parts[2] == 'files') {
+        if (_fileTransfers >= 2) {
+          return await refuse(
+            HttpStatus.serviceUnavailable,
+            'Two file transfers are already running; retry shortly',
+          );
+        }
+        _fileTransfers++;
+        try {
+          if (request.method == 'POST' && parts.length == 3) {
+            final handle = await plugins.localStoreFile(
+              parts[1],
+              request,
+              request.contentLength,
+            );
+            response.headers.contentType = ContentType.json;
+            response.write(jsonEncode({'file': handle}));
+          } else if (request.method == 'GET' && parts.length == 4) {
+            final (size, source) = await plugins.localOpenFile(
+              parts[1],
+              parts[3],
+            );
+            response.headers.contentType = ContentType.binary;
+            response.contentLength = size;
+            await response.addStream(source);
+          } else {
+            return await refuse(HttpStatus.notFound, 'Not found');
+          }
+          await response.close();
+        } on StateError catch (e) {
+          await refuse(HttpStatus.badRequest, e.message);
+        } finally {
+          _fileTransfers--;
+        }
+        return;
+      }
       if (request.method != 'POST' ||
           parts.length != 2 ||
           parts.first != 'plugins') {

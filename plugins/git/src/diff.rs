@@ -4,7 +4,7 @@
 /// header.
 pub type Line = (char, String);
 
-/// Cells the LCS table may hold before a diff is called too large.
+/// Bound quadratic work; larger middles use unique-line anchors instead.
 const MAX_CELLS: usize = 4_000_000;
 
 /// The changes from [old] to [new] with [context] lines around each, or
@@ -42,11 +42,31 @@ fn position(ops: &[(char, &str)]) -> (usize, usize) {
 }
 
 fn ops<'a>(a: &[&'a str], b: &[&'a str]) -> Option<Vec<(char, &'a str)>> {
+    ops_inner(a, b, 0)
+}
+
+fn ops_inner<'a>(a: &[&'a str], b: &[&'a str], depth: usize) -> Option<Vec<(char, &'a str)>> {
     let prefix = a.iter().zip(b).take_while(|(x, y)| x == y).count();
     let suffix = a[prefix..].iter().rev().zip(b[prefix..].iter().rev()).take_while(|(x, y)| x == y).count();
     let (am, bm) = (&a[prefix..a.len() - suffix], &b[prefix..b.len() - suffix]);
-    if (am.len() + 1) * (bm.len() + 1) > MAX_CELLS {
-        return None;
+    if (am.len() + 1).saturating_mul(bm.len() + 1) > MAX_CELLS {
+        let mut out: Vec<(char, &str)> = a[..prefix].iter().map(|l| (' ', *l)).collect();
+        let anchors = if depth < 32 { anchors(am, bm) } else { Vec::new() };
+        if anchors.is_empty() {
+            out.extend(am.iter().map(|l| ('-', *l)));
+            out.extend(bm.iter().map(|l| ('+', *l)));
+        } else {
+            let (mut ai, mut bi) = (0, 0);
+            for (i, j) in anchors {
+                out.extend(ops_inner(&am[ai..i], &bm[bi..j], depth + 1)?);
+                out.push((' ', am[i]));
+                ai = i + 1;
+                bi = j + 1;
+            }
+            out.extend(ops_inner(&am[ai..], &bm[bi..], depth + 1)?);
+        }
+        out.extend(a[a.len() - suffix..].iter().map(|l| (' ', *l)));
+        return Some(out);
     }
     // Longest common subsequence of the middle, from the end.
     let w = bm.len() + 1;
@@ -80,9 +100,54 @@ fn ops<'a>(a: &[&'a str], b: &[&'a str]) -> Option<Vec<(char, &'a str)>> {
     Some(out)
 }
 
+/// Patience anchors: unique lines in both files, in their longest shared
+/// increasing order. O(lines log lines), with linear memory.
+fn anchors(a: &[&str], b: &[&str]) -> Vec<(usize, usize)> {
+    use std::collections::HashMap;
+    let mut left = HashMap::new();
+    let mut right = HashMap::new();
+    for (i, line) in a.iter().enumerate() {
+        left.entry(*line).and_modify(|v: &mut Option<usize>| *v = None).or_insert(Some(i));
+    }
+    for (i, line) in b.iter().enumerate() {
+        right.entry(*line).and_modify(|v: &mut Option<usize>| *v = None).or_insert(Some(i));
+    }
+    let pairs: Vec<(usize, usize)> = a.iter().enumerate().filter_map(|(i, line)| {
+        if left.get(line) != Some(&Some(i)) { return None; }
+        Some((i, (*right.get(line)?)?))
+    }).collect();
+    let mut tails: Vec<usize> = Vec::new();
+    let mut previous = vec![None; pairs.len()];
+    for (i, &(_, j)) in pairs.iter().enumerate() {
+        let at = tails.partition_point(|t| pairs[*t].1 < j);
+        if at > 0 { previous[i] = Some(tails[at - 1]); }
+        if at == tails.len() { tails.push(i); } else { tails[at] = i; }
+    }
+    let mut result = Vec::new();
+    let mut at = tails.last().copied();
+    while let Some(i) = at { result.push(pairs[i]); at = previous[i]; }
+    result.reverse();
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_diff_uses_anchors_and_reconstructs_both_files() {
+        let old = (0..3000).map(|i| format!("line {i}\n")).collect::<String>();
+        let new = old.replace("line 1\n", "changed 1\n").replace("line 2998\n", "changed 2998\n");
+        let a: Vec<_> = old.lines().collect();
+        let b: Vec<_> = new.lines().collect();
+        let result = ops(&a, &b).unwrap();
+        assert_eq!(result.iter().filter(|(k, _)| *k != '+').map(|(_, l)| *l).collect::<Vec<_>>(), a);
+        assert_eq!(result.iter().filter(|(k, _)| *k != '-').map(|(_, l)| *l).collect::<Vec<_>>(), b);
+        assert_eq!(result.iter().filter(|(k, _)| *k != ' ').count(), 4);
+        let replacements = vec!["replacement"; 3000];
+        let result = ops(&a, &replacements).unwrap();
+        assert_eq!(result.len(), 6000);
+    }
 
     #[test]
     fn hunks_show_changes_with_context() {

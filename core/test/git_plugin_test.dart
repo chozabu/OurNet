@@ -50,6 +50,40 @@ void main() {
       directory: '${temp.path}/plugins',
       cache: '${Directory.systemTemp.path}/ournet-plugin-cache',
     );
+    plugins.storeFileStream = (source, size, name) async {
+      final key = randomBytes(32);
+      final tree = ChunkTreeBuilder(
+        listFanOut(Plugins.fileChunkBytes),
+        (plain) => node.blobs.encode(plain, key),
+      );
+      var stored = 0;
+      await for (final chunk in rechunk(source, Plugins.fileChunkBytes)) {
+        stored += chunk.length;
+        if (stored > size) throw StateError('Wrong file length');
+        await tree.add(await node.blobs.encode(Uint8List.fromList(chunk), key));
+      }
+      if (stored != size) throw StateError('Wrong file length');
+      return {
+        'name': name,
+        'size': size,
+        'chunkBytes': Plugins.fileChunkBytes,
+        'key': b64(key),
+        ...await tree.finish(),
+      };
+    };
+    plugins.openFileStream = (object) async* {
+      final payload = (await node.content(object))!;
+      final key = payload['key'] is String
+          ? unb64(payload['key'] as String)
+          : null;
+      Future<Uint8List> read(String hash) async =>
+          (await node.blobs.readLocal([hash], key))!;
+      await for (final segment in chunkSegments(payload, read)) {
+        for (final hash in segment) {
+          yield await read(hash);
+        }
+      }
+    };
     final bridge = LocalBridge(plugins, path: '${temp.path}/bridge.json');
     cleanup.add(() async {
       await bridge.close();
@@ -143,6 +177,10 @@ void main() {
       HttpStatus.forbidden,
     );
     expect((await post('/plugins/echo', key)).$1, HttpStatus.badRequest);
+    expect((await post('/plugins/git/files', {})).$1, HttpStatus.unauthorized);
+    expect((await post('/plugins/echo/files', key)).$1, HttpStatus.badRequest);
+    // Chunked uploads without an exact length cannot claim an unbounded size.
+    expect((await post('/plugins/git/files', key)).$1, HttpStatus.badRequest);
     final (status, body) = await post('/plugins/git', key);
     expect(status, HttpStatus.ok);
     expect(body, startsWith('{"repos":[]}'));
@@ -226,7 +264,19 @@ void main() {
     await ok(['commit', '-m', 'First'], dir: work);
     File('$work/src/a.txt').writeAsStringSync('one\nTWO\nthree\n');
     await ok(['commit', '-am', 'Second'], dir: work);
-    await ok(['push', 'ournet://demo', 'main'], dir: work);
+    final tip = await git(['rev-parse', 'HEAD'], dir: work);
+    final tags = await Process.start('git', [
+      'update-ref',
+      '--stdin',
+    ], workingDirectory: work);
+    for (var i = 0; i < 130; i++) {
+      tags.stdin.writeln(
+        'create refs/tags/test$i ${tip.stdout.toString().trim()}',
+      );
+    }
+    await tags.stdin.close();
+    expect(await tags.exitCode, 0);
+    await ok(['push', 'ournet://demo', 'main', '--tags'], dir: work);
 
     final pushes = node.store.allOf(kind: 'x.git.push');
     expect(pushes, hasLength(1));
@@ -243,6 +293,11 @@ void main() {
     );
     expect(code['readme'], contains('Hello from'));
     expect((code['last'] as Map)['title'], 'Second');
+    expect(code['branches'], hasLength(131));
+    plugins.event('git', 'Git', 'branchFilter', {'value': 'test12'});
+    await until(plugins, (d) => (d['branches'] as List?)?.length == 11);
+    plugins.event('git', 'Git', 'branchFilter', {'value': ''});
+    await until(plugins, (d) => (d['branches'] as List?)?.length == 131);
 
     plugins.event('git', 'Git', 'tab', {'tab': 'commits'});
     final commits = await until(
@@ -288,6 +343,82 @@ void main() {
     );
   }, skip: skip);
 
+  test('deletion retires old pushes and the same name starts fresh', () async {
+    final (node, plugins, _) = await device();
+    await createRepo(plugins, 'retired');
+    await node.publish(
+      'x.git.push',
+      {
+        'repo': 'retired',
+        'refs': {'refs/heads/old': 'a' * 40},
+        'old': {'refs/heads/old': ''},
+        'size': 0,
+        'objects': 0,
+      },
+      space: 'x.git',
+      audience: [node.person],
+    );
+    await until(plugins, (d) => d['empty'] == false);
+    plugins.event('git', 'Git', 'tab', {'tab': 'settings'});
+    await until(plugins, (d) => d['tab'] == 'settings');
+    plugins.event('git', 'Git', 'delete', {});
+    await until(
+      plugins,
+      (d) => '${d['error']}'.contains('Type the repository name'),
+    );
+    expect(node.store.allOf(kind: 'x.git.delete'), isEmpty);
+    plugins.event('git', 'Git', 'deleteName', {'value': 'retired'});
+    plugins.event('git', 'Git', 'delete', {});
+    final removed = await until(
+      plugins,
+      (d) => d['mode'] == 'list' && d['empty'] == true,
+    );
+    expect(removed['repos'], isEmpty);
+    expect(node.store.allOf(kind: 'x.git.delete'), hasLength(1));
+    await plugins.restart('git');
+    await until(plugins, (_) => plugins['git']?.status == PluginStatus.running);
+    plugins.open('git', 'Git', {'scope': 'personal'});
+    await until(plugins, (d) => d['mode'] == 'list' && d['empty'] == true);
+    await createRepo(plugins, 'retired');
+    final fresh = await until(plugins, (d) => d['mode'] == 'repo');
+    expect(fresh['empty'], isTrue);
+    plugins.event('git', 'Git', 'repair', {});
+    await until(plugins, (d) => '${d['error']}'.contains('Rebuilding'));
+    expect(node.store.allOf(kind: 'x.git.delete'), hasLength(1));
+    await plugins.restart('git');
+    await until(plugins, (_) => plugins['git']?.status == PluginStatus.running);
+    plugins.open('git', 'Git', {'scope': 'personal'});
+    final repositories = await until(plugins, (d) => d['mode'] == 'list' && (d['repos'] as List?)?.length == 1);
+    final repo = (repositories['repos'] as List).single as Map;
+    plugins.event('git', 'Git', 'open', {'key': repo['key']});
+    await until(plugins, (d) => d['mode'] == 'repo' && d['empty'] == true);
+  });
+
+  test(
+    'a pack larger than the old 16 MiB limit pushes and clones',
+    () async {
+      final (_, plugins, _) = await device();
+      final url = await createRepo(plugins, 'unbounded');
+      final work = '${temp.path}/unbounded';
+      await ok(['init', work]);
+      final random = Random(7);
+      final bytes = Uint8List.fromList(
+        List.generate(17 * 1024 * 1024, (_) => random.nextInt(256)),
+      );
+      File('$work/large.bin').writeAsBytesSync(bytes);
+      await ok(['add', '.'], dir: work);
+      await ok(['commit', '-m', 'Beyond the old limit'], dir: work);
+      await ok(['push', url, 'main'], dir: work);
+      await ok(['clone', url, 'unbounded-copy']);
+      expect(
+        File('${temp.path}/unbounded-copy/large.bin').readAsBytesSync(),
+        bytes,
+      );
+    },
+    skip: skip,
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
   test("a large push travels as the push's file", () async {
     final (node, plugins, _) = await device();
     final url = await createRepo(plugins, 'big');
@@ -314,4 +445,24 @@ void main() {
     );
     expect((code['entries'] as List).single['name'], 'blob.bin');
   }, skip: skip);
+}
+
+Stream<Uint8List> rechunk(Stream<List<int>> source, int size) async* {
+  var buffer = Uint8List(size);
+  var filled = 0;
+  await for (final data in source) {
+    var at = 0;
+    while (at < data.length) {
+      final n = min(size - filled, data.length - at);
+      buffer.setRange(filled, filled + n, data, at);
+      filled += n;
+      at += n;
+      if (filled == size) {
+        yield buffer;
+        buffer = Uint8List(size);
+        filled = 0;
+      }
+    }
+  }
+  if (filled > 0) yield Uint8List.sublistView(buffer, 0, filled);
 }

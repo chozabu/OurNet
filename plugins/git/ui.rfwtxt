@@ -115,14 +115,12 @@ widget RepoHeader = Column(
     },
     Padding(
       padding: [16.0, 4.0, 16.0, 0.0],
-      child: TextInput(label: "Clone", value: data.repo.clone),
+      child: Row(children: [OutlinedButton(onPressed: event "clone" { }, child: Text(text: "Code ▾"))]),
     ),
-    switch data.repo.notice {
-      "": SizedBoxShrink(),
-      default: Padding(
-        padding: [16.0, 6.0, 16.0, 0.0],
-        child: Text(text: data.repo.notice, style: { color: 0xFFB26A00 }),
-      ),
+    Padding(padding: [16.0, 4.0, 16.0, 4.0], child: CopyableText(label: "Repository URL", text: data.repo.url)),
+    switch data.cloneOpen {
+      true: Padding(padding: [16.0, 4.0, 16.0, 4.0], child: CopyableText(label: "Clone command", text: data.repo.clone)),
+      default: SizedBoxShrink(),
     },
     Padding(
       padding: [8.0, 4.0, 8.0, 0.0],
@@ -130,7 +128,8 @@ widget RepoHeader = Column(
         children: [
           TextButton(onPressed: event "tab" { tab: "code" }, child: Text(text: "Code")),
           TextButton(onPressed: event "tab" { tab: "commits" }, child: Text(text: "Commits")),
-          TextButton(onPressed: event "tab" { tab: "pushes" }, child: Text(text: "Pushes")),
+          TextButton(onPressed: event "tab" { tab: "pushes" }, child: Text(text: "Activity")),
+          TextButton(onPressed: event "tab" { tab: "settings" }, child: Text(text: "Settings")),
           Expanded(child: SizedBoxShrink()),
           Text(text: data.branch, style: { fontWeight: "w600" }),
         ],
@@ -145,7 +144,9 @@ widget GitRepo = Column(
   children: [
     RepoHeader(),
     Expanded(
-      child: switch data.empty {
+      child: switch data.tab {
+        "settings": GitSettings(),
+        default: switch data.empty {
         true: SingleChildScrollView(
           padding: [16.0, 8.0, 16.0, 16.0],
           child: Column(
@@ -166,6 +167,7 @@ widget GitRepo = Column(
           default: GitCode(),
         },
       },
+      },
     ),
   ],
 );
@@ -183,16 +185,28 @@ widget Crumbs = Padding(
 
 widget GitCode = ListView(
   children: [
-    Wrap(
-      spacing: 4.0,
-      children: [
-        ...for b in data.branches:
-          switch b.selected {
-            true: ElevatedButton(onPressed: event "branch" { ref: b.ref }, child: Text(text: b.name)),
-            default: OutlinedButton(onPressed: event "branch" { ref: b.ref }, child: Text(text: b.name)),
-          },
-      ],
+    Padding(
+      padding: [16.0, 4.0, 16.0, 4.0],
+      child: Row(children: [OutlinedButton(onPressed: event "branches" { }, child: Text(text: data.branch))]),
     ),
+    switch data.branchesOpen {
+      true: Column(
+        crossAxisAlignment: "stretch",
+        children: [
+          Padding(padding: [16.0, 4.0, 16.0, 8.0], child: TextInput(label: "Find a branch or tag", value: data.branchFilter, onChanged: event "branchFilter" { })),
+          SizedBox(
+            height: 220.0,
+            child: ListView(
+              children: [
+                ...for b in data.branches:
+                  ListTile(dense: true, title: Text(text: b.name), onTap: event "branch" { ref: b.ref }),
+              ],
+            ),
+          ),
+        ],
+      ),
+      default: SizedBoxShrink(),
+    },
     Padding(
       padding: [8.0, 0.0, 8.0, 0.0],
       child: Wrap(
@@ -279,6 +293,10 @@ widget GitCommits = ListView(
 
 widget GitPushes = ListView(
   children: [
+    switch data.repo.notice {
+      "": SizedBoxShrink(),
+      default: Padding(padding: [16.0, 8.0, 16.0, 8.0], child: Text(text: data.repo.notice)),
+    },
     ...for p in data.pushes:
       ListTile(
         leading: Avatar(person: p.author),
@@ -297,7 +315,44 @@ widget GitPushes = ListView(
           ],
         ),
       ),
+    switch data.morePushes {
+      true: Padding(padding: [16.0, 8.0, 16.0, 16.0], child: Row(children: [OutlinedButton(onPressed: event "morePushes" { }, child: Text(text: "Older activity"))])),
+      default: SizedBoxShrink(),
+    },
   ],
+);
+
+widget GitSettings = SingleChildScrollView(
+  padding: [16.0, 8.0, 16.0, 24.0],
+  child: Column(
+    crossAxisAlignment: "stretch",
+    children: [
+      Text(text: "Repository settings", style: { fontSize: 20.0, fontWeight: "w600" }),
+      SizedBox(height: 12.0),
+      Text(text: data.repo.notice),
+      Text(text: "Repair local browsing", style: { fontWeight: "w600" }),
+      Text(text: "Re-read this repository's packs to rebuild its local index. Commits and branches are kept."),
+      Row(children: [OutlinedButton(onPressed: event "repair" { }, child: Text(text: "Rebuild local index"))]),
+      switch data.error {
+        "": SizedBoxShrink(),
+        default: Padding(padding: [0.0, 8.0, 0.0, 8.0], child: Text(text: data.error)),
+      },
+      SizedBox(height: 24.0),
+      switch data.repo.mine {
+        true: Column(
+          crossAxisAlignment: "stretch",
+          children: [
+            Text(text: "Delete repository", style: { fontSize: 18.0, fontWeight: "w600", color: 0xFFC62828 }),
+            Text(text: "Removes this repository and its old pushes from Git on devices running this version. Existing local clones are kept. You can create a fresh repository with the same name. Older plugin versions may still show the old data."),
+            SizedBox(height: 12.0),
+            TextInput(label: "Type the repository name to confirm", value: data.deleteName, onChanged: event "deleteName" { }),
+            Row(children: [OutlinedButton(onPressed: event "delete" { }, child: Text(text: "Delete repository", style: { color: 0xFFC62828 }))]),
+          ],
+        ),
+        default: Text(text: "Only people who can push to this repository can delete it."),
+      },
+    ],
+  ),
 );
 
 widget GitFile = Column(
@@ -357,11 +412,19 @@ widget GitCommit = Column(
             Container(
               color: line.bg,
               padding: [16.0, 0.0, 16.0, 0.0],
-              child: Text(
-                text: line.text,
-                style: { fontFamily: "Consolas", fontFamilyFallback: ["monospace", "Menlo", "Courier New"], fontSize: 12.0 },
+              child: Row(
+                crossAxisAlignment: "start",
+                children: [
+                  SizedBox(width: 40.0, child: Text(text: line.oldLine, style: { fontFamily: "Consolas", fontSize: 12.0 })),
+                  SizedBox(width: 40.0, child: Text(text: line.newLine, style: { fontFamily: "Consolas", fontSize: 12.0 })),
+                  Expanded(child: Text(text: line.text, style: { fontFamily: "Consolas", fontFamilyFallback: ["monospace", "Menlo", "Courier New"], fontSize: 12.0 })),
+                ],
               ),
             ),
+          switch data.moreDiff {
+            true: Padding(padding: [16.0, 8.0, 16.0, 16.0], child: Row(children: [OutlinedButton(onPressed: event "moreDiff" { }, child: Text(text: "Show more changes"))])),
+            default: SizedBoxShrink(),
+          },
         ],
       ),
     ),

@@ -788,3 +788,55 @@ one over budget, maximum event-loop delay 21.9 ms. Report:
 `app/build/calendar_history_test-windows.json`. No physical Android device was
 connected; Android timing is unvalidated. The other journeys were not re-run
 for this change.
+
+## Git plugin 0.3 validation, 22 October 2026
+
+Git transfers now spool the sending pack to a temporary file and stream through
+transport's encrypted chunk-tree file storage instead of the whole-file guest
+API. Repositories have synced logical deletion, local index repair, incremental
+reference/status caches, individual persisted push records and cached history
+pages. The guest still limits whole-pack browsing to 16 MiB; larger packs can be
+pushed/cloned and report that browsing limitation explicitly. These changes do
+not establish a Git throughput or frame-time baseline.
+
+Validation on Windows: analysis of core/transport/app was clean; 440 core, 108
+transport and 286 app tests passed (nine opt-in/platform skips in total), plus
+nine Git Rust tests. Regression coverage includes a 17 MiB pack pushed/cloned
+with real Git, a push with 131 refs, branch filtering, deletion/recreation across
+restart, index repair and rendered Git code/file/commit/activity/settings pages.
+The Git plugin package was rebuilt and copied to app assets and the core fixture;
+the desktop helper was rebuilt. No store release was made.
+
+`tool/check.ps1 -Performance` used the release-native wrapper and completed its
+Windows profile run, but **failed calendar acceptance**. The other profile test
+stages passed. An isolated calendar rerun with the same assertions also failed.
+This is an unresolved acceptance failure, not a passing performance validation.
+The calendar test uses 3,000 events, takes 12 incoming events and runs with
+`enablePlatform: false`; it does not exercise the Git plugin. No unchanged-checkout
+baseline was collected, so these results do not establish causality.
+
+At 60 Hz the enforced limits were frame-stage p95 < 16.667 ms, p99 < 33.333 ms
+and maximum event-loop delay < 100 ms. No timing assertion was changed.
+
+| Run / calendar phase | Frame p95 ms | Frame p99 ms | Maximum loop delay ms |
+| --- | ---: | ---: | ---: |
+| Full suite / paging | 21.415 | 27.796 | 30.495 |
+| Full suite / views | 11.377 | 40.960 | 95.325 |
+| Full suite / typing | 18.151 | 21.569 | 24.041 |
+| Isolated / paging | 114.319 | 443.180 | 163.180 |
+| Isolated / views | 62.859 | 530.515 | 573.969 |
+| Isolated / typing | 83.380 | 98.753 | 144.911 |
+
+Both runs also warned that the calendar's Year-view tap missed its hit target.
+Reports are in `app/build/performance_test-windows.json` and
+`app/build/performance-calendar-rerun-windows.json`; console logs are
+`build/git-upgrade-check.log` and `build/git-upgrade-calendar-rerun.log`.
+The wrapper restored `native-dev` after both runs. Physical Android timing was
+not available. Issues/pull requests, helper bundling and range-based browsing of
+large packs remain future work.
+
+Follow-up: the Git URL is a read-only native selectable control with an explicit
+Copy button, and the clone command has a separate Copy button. App analysis and
+the targeted Git UI regression (including exact clipboard payloads) passed after
+this change. The existing calendar failures remain unchanged; no performance
+budget was relaxed.

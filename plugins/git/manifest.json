@@ -1,7 +1,7 @@
 {
   "id": "git",
   "name": "Git",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "api": "0.2",
   "description": "Git repositories for yourself, a group, or friends in public: push and clone with ordinary git (git-remote-ournet), browse files, commits and changes here. Friends can clone while you are offline, and every push is signed by who made it.",
   "grants": ["objects", "identity", "local"],
@@ -9,6 +9,9 @@
     "repo": {
       "name": {"type": "string", "max": 100, "required": true},
       "description": {"type": "string", "max": 500}
+    },
+    "delete": {
+      "repo": {"type": "string", "max": 100, "required": true}
     },
     "push": {
       "repo": {"type": "string", "max": 100, "required": true},

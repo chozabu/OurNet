@@ -2008,6 +2008,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           ..link = network
           ..fetch = ((o) => files.readBytes(o, limit: PluginPackage.maxBytes))
           ..readFile = ((o, limit) => files.readBytes(o, limit: limit))
+          ..storeFileStream = ((source, size, name) =>
+              files.storeFrom(source, size: size, name: name))
+          ..openFileStream = ((o) => files.open(o))
           ..nameOf = name
           ..follow = notes.state.subscribe
           ..openTun = openPluginInterface

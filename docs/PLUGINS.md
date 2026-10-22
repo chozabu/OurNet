@@ -277,7 +277,8 @@ A package's `ui.rfwtxt` is an RFW library; each section names the widget
 (`surface`) its page shows. `PluginView` renders it over the surface's data and
 sends events back with the widget's arguments plus what the widget adds
 (`value`, `target`, `x`/`y`, `key`/`down`). The libraries are `core.widgets`,
-`core.material` and **`ournet`**: `TextInput`, `Markup` (headings, lists,
+`core.material` and **`ournet`**: `TextInput`, `CopyableText` (read-only selectable
+text with a Copy button; `text` and optional `label`), `Markup` (headings, lists,
 bold, italic, `[[links]]`, and lines `![caption](object ID)` showing that
 object's picture), `Canvas` (rect, circle, line and text commands in a
 scaled space, with tap and drag), `Keys`, `Avatar`, `PersonName`, `TimeAgo`,
@@ -476,3 +477,20 @@ single iroh library.
    allow-lists?
 6. Microblog likes count only from people this person follows, since a like
    lives in the liker's space. Enough, or should likes travel with the post?
+
+### Streaming local attachments
+
+The desktop loopback bridge also accepts authenticated `POST /plugins/<id>/files`
+with an exact Content-Length. It streams into transport's ordinary encrypted
+file storage and returns JSON `{"file":"<handle>"}` for `files.publish`.
+`GET /plugins/<id>/files/<object-id>` streams the attachment with an exact response
+length. Both require a running plugin granted **local** and **objects**, and
+reads require an object belonging to that plugin. Token and Host checks are the
+same as ordinary bridge requests. At most two streaming transfers run at once;
+overload returns 503. Ordinary plugin messages keep their 24 MiB bridge bound.
+
+The app supplies `Plugins.storeFileStream` and `Plugins.openFileStream` from
+transport; core remains independent of transport. The whole-file WIT API retains
+its existing bound. Git uses the streaming endpoints for transfer and the WIT
+API for bounded browsing. This is an additive desktop API; older local helpers
+continue to work, while new helpers report a clear error on older apps.

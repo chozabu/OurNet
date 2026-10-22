@@ -341,6 +341,12 @@ class Plugins {
   /// are read.
   Future<Uint8List> Function(SignedObject object, int limit)? readFile;
 
+  /// Streaming attachment storage and reads, supplied by transport. Large
+  /// local bridge transfers use these without crossing the plugin VM heap.
+  Future<Json> Function(Stream<List<int>> source, int size, String name)?
+  storeFileStream;
+  Stream<List<int>> Function(SignedObject object)? openFileStream;
+
   /// Where compiled code is kept; [directory]'s `.cache` unless given.
   final String cache;
 
@@ -2004,6 +2010,49 @@ class Plugins {
   bool get takesLocal => _running.values.any(
     (r) => r.handle != null && r.plugin.granted.contains('local'),
   );
+
+  _Running _localFiles(String plugin) {
+    final running = _running[plugin];
+    if (running == null ||
+        running.handle == null ||
+        !running.plugin.granted.contains('local') ||
+        !running.plugin.granted.contains('objects')) {
+      throw StateError('No plugin $plugin takes local files here');
+    }
+    return running;
+  }
+
+  Future<String> localStoreFile(
+    String plugin,
+    Stream<List<int>> source,
+    int size,
+  ) async {
+    final running = _localFiles(plugin);
+    final store = storeFileStream;
+    if (store == null) throw StateError('Streaming files are unavailable here');
+    if (size < 0) throw StateError('An exact file length is required');
+    final file = await store(source, size, 'pack');
+    if (_running[plugin] != running)
+      throw StateError('Plugin stopped during upload');
+    return addFile(plugin, file)!;
+  }
+
+  Future<(int, Stream<List<int>>)> localOpenFile(
+    String plugin,
+    String id,
+  ) async {
+    _localFiles(plugin);
+    final object = node.store.get(id);
+    if (object == null || PluginKinds.pluginOf(object.kind) != plugin) {
+      throw StateError('No such object of this plugin');
+    }
+    final content = await node.content(object);
+    final size = content?['size'];
+    final open = openFileStream;
+    if (size is! int || size < 0 || open == null)
+      throw StateError('Streaming file unavailable');
+    return (size, open(object));
+  }
 
   /// Hands [plugin] (granted `local`) a request from a program on this
   /// computer, as its `on-request` from device `local`, and returns its

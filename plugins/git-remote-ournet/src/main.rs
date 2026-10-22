@@ -10,15 +10,15 @@
 //! `~/.ournet/bridge.json` (or where `OURNET_BRIDGE` says).
 
 use std::collections::BTreeMap;
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::fs::{File, OpenOptions};
+use std::path::PathBuf;
 use std::net::TcpStream;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 
-/// Largest pack the plugin takes in one push.
-const MAX_PACK: usize = 16 * 1024 * 1024;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -119,14 +119,22 @@ fn fetch(url: &str, wanted: &[String]) -> Result<(), String> {
             continue;
         }
         let id = pack["id"].as_str().unwrap_or("");
-        let (_, bytes) = call(&json!({"op": "pack", "repo": url, "id": id}), &[])?;
+        let (mut source, length, chunked) = file_request("GET", &format!("/plugins/git/files/{id}"), None)?;
+        if chunked { return Err("OurNet returned a chunked pack instead of a file; update the app".into()); }
+        let length = length.ok_or("pack response has no length")?;
         let mut child = git()
             .args(["index-pack", "--stdin", "--fix-thin"])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .spawn()
             .map_err(|e| format!("running git: {e}"))?;
-        child.stdin.take().unwrap().write_all(&bytes).map_err(|e| e.to_string())?;
+        let mut target = child.stdin.take().unwrap();
+        let copied = io::copy(&mut source.by_ref().take(length), &mut target).map_err(|e| e.to_string());
+        drop(target);
+        if copied.as_ref().ok() != Some(&length) {
+            let _ = child.kill(); let _ = child.wait();
+            return Err(format!("pack transfer interrupted: {}", copied.err().map(|e| e.to_string()).unwrap_or_default()));
+        }
         if !child.wait().map_err(|e| e.to_string())?.success() {
             return Err(format!("git could not read push {id}"));
         }
@@ -194,31 +202,27 @@ fn push(url: &str, specs: &[String], remote: &BTreeMap<String, String>) -> Resul
     for sha in remote.values().filter(|s| has(s)) {
         revs.push_str(&format!("^{sha}\n"));
     }
-    let pack = if refs.values().all(|s| s.is_empty()) {
-        Vec::new()
-    } else {
+    let mut spool = Spool::new()?;
+    let has_pack = refs.values().any(|s| !s.is_empty());
+    let (size, objects) = if has_pack {
+        let file = spool.file.as_mut().unwrap();
         let mut child = git()
             .args(["pack-objects", "--stdout", "--revs", "--delta-base-offset", "-q"])
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("running git: {e}"))?;
-        let mut stdin = child.stdin.take().unwrap();
-        let writer = std::thread::spawn(move || stdin.write_all(revs.as_bytes()));
-        let mut pack = Vec::new();
-        child.stdout.take().unwrap().read_to_end(&mut pack).map_err(|e| e.to_string())?;
-        let _ = writer.join();
-        if !child.wait().map_err(|e| e.to_string())?.success() {
-            return Err("git pack-objects failed".into());
-        }
-        pack
-    };
-    if pack.len() > MAX_PACK {
-        for dst in refs.keys() {
-            results.push(format!("error {dst} push is {} MB; OurNet takes 16 MB at most per push", pack.len() >> 20));
-        }
-        return Ok(results);
-    }
+            .stdout(Stdio::from(file.try_clone().map_err(|e| e.to_string())?))
+            .spawn().map_err(|e| format!("running git: {e}"))?;
+        let write = child.stdin.take().unwrap().write_all(revs.as_bytes());
+        if write.is_err() { let _ = child.kill(); }
+        let status = child.wait().map_err(|e| e.to_string())?;
+        write.map_err(|e| e.to_string())?;
+        if !status.success() { return Err("git pack-objects failed".into()); }
+        let size = file.metadata().map_err(|e| e.to_string())?.len();
+        file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        let mut header = [0u8; 12];
+        file.read_exact(&mut header).map_err(|e| e.to_string())?;
+        if &header[..4] != b"PACK" { return Err("git produced an invalid pack".into()); }
+        (size, u32::from_be_bytes(header[8..12].try_into().unwrap()))
+    } else { (0, 0) };
     let mut request = json!({"op": "push", "repo": url, "refs": refs, "old": old});
     if force {
         request["force"] = true.into();
@@ -229,7 +233,21 @@ fn push(url: &str, specs: &[String], remote: &BTreeMap<String, String>) -> Resul
             request["head"] = head.into();
         }
     }
-    match call(&request, &pack) {
+    if has_pack {
+        let file = spool.file.as_mut().unwrap();
+        file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        eprintln!("ournet: uploading {size} bytes");
+        let (mut reply, _, chunked) = file_request("POST", "/plugins/git/files", Some((file, size)))?;
+        let mut bytes = Vec::new();
+        reply.by_ref().take(64 * 1024).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+        let bytes = if chunked { dechunk(&bytes)? } else { bytes };
+        let uploaded: Value = serde_json::from_slice(&bytes).map_err(|e| format!("bad upload answer: {e}"))?;
+        request["op"] = "push-file".into();
+        request["file"] = uploaded["file"].clone();
+        request["size"] = size.into();
+        request["objects"] = objects.into();
+    }
+    match call(&request, &[]) {
         Ok(_) => results.extend(refs.keys().map(|dst| format!("ok {dst}"))),
         Err(e) => {
             let e = e.replace('\n', " ");
@@ -237,6 +255,60 @@ fn push(url: &str, specs: &[String], remote: &BTreeMap<String, String>) -> Resul
         }
     }
     Ok(results)
+}
+
+/// A temporary pack on disk: producing/uploading it never grows the heap.
+struct Spool { path: PathBuf, file: Option<File> }
+impl Spool {
+    fn new() -> Result<Self, String> {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
+        let path = std::env::temp_dir().join(format!("ournet-pack-{}-{stamp}", std::process::id()));
+        let file = OpenOptions::new().read(true).write(true).create_new(true).open(&path).map_err(|e| e.to_string())?;
+        Ok(Self { path, file: Some(file) })
+    }
+}
+impl Drop for Spool {
+    fn drop(&mut self) { self.file.take(); let _ = std::fs::remove_file(&self.path); }
+}
+
+/// Streaming attachment endpoints of the authenticated local bridge.
+fn file_request(method: &str, path: &str, body: Option<(&mut File, u64)>) -> Result<(BufReader<TcpStream>, Option<u64>, bool), String> {
+    let (port, token) = bridge()?;
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).map_err(|e| e.to_string())?;
+    // An inactivity timeout, not a deadline on the total transfer size.
+    stream.set_read_timeout(Some(Duration::from_secs(300))).map_err(|e| e.to_string())?;
+    stream.set_write_timeout(Some(Duration::from_secs(300))).map_err(|e| e.to_string())?;
+    let length = body.as_ref().map(|(_, size)| *size).unwrap_or(0);
+    write!(stream, "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/octet-stream\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n").map_err(|e| e.to_string())?;
+    if let Some((file, size)) = body {
+        let copied = io::copy(&mut file.take(size), &mut stream).map_err(|e| e.to_string())?;
+        if copied != size { return Err("temporary pack changed during upload".into()); }
+    }
+    let mut source = BufReader::new(stream);
+    let mut status = String::new();
+    source.read_line(&mut status).map_err(|e| e.to_string())?;
+    let code = status.split_whitespace().nth(1).unwrap_or("").to_string();
+    let mut length = None;
+    let mut chunked = false;
+    let mut total = status.len();
+    loop {
+        let mut line = String::new();
+        source.read_line(&mut line).map_err(|e| e.to_string())?;
+        total += line.len();
+        if total > 64 * 1024 { return Err("oversized HTTP header".into()); }
+        if line == "\r\n" { break; }
+        if line.is_empty() { return Err("incomplete HTTP answer".into()); }
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") { length = value.trim().parse().ok(); }
+            if name.eq_ignore_ascii_case("transfer-encoding") { chunked = value.trim().eq_ignore_ascii_case("chunked"); }
+        }
+    }
+    if code != "200" {
+        let mut reason = String::new();
+        source.by_ref().take(4096).read_to_string(&mut reason).map_err(|e| e.to_string())?;
+        return Err(format!("OurNet file transfer ({code}): {reason}. Check that the app supports streaming Git files"));
+    }
+    Ok((source, length, chunked))
 }
 
 fn git() -> Command {

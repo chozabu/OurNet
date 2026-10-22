@@ -283,6 +283,11 @@ LocalWidgetLibrary ournetWidgets({
           (picked) => trigger(picked),
     ),
   ),
+  // Read-only text with native selection and an explicit user copy action.
+  'CopyableText': (context, source) => _CopyableText(
+    text: source.v<String>(['text']) ?? '',
+    label: source.v<String>(['label']) ?? '',
+  ),
   // A text field. `onSubmitted` and `onChanged` send `{value}`.
   'TextInput': (context, source) => _TextInput(
     value: source.v<String>(['value']) ?? '',
@@ -422,6 +427,37 @@ String _ago(int at) {
   if (d.inDays < 30) return '${d.inDays} d ago';
   final t = DateTime.fromMillisecondsSinceEpoch(at);
   return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
+}
+
+class _CopyableText extends StatelessWidget {
+  final String text, label;
+  const _CopyableText({required this.text, required this.label});
+
+  Future<void> _copy(BuildContext context) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: text));
+    } on PlatformException {
+      if (!context.mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text('Could not copy. Select the text and use Copy.'),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => InputDecorator(
+    decoration: InputDecoration(
+      labelText: label.isEmpty ? null : label,
+      suffixIcon: IconButton(
+        tooltip: label.isEmpty ? 'Copy' : 'Copy ${label.toLowerCase()}',
+        icon: const Icon(Icons.copy),
+        onPressed: () => _copy(context),
+      ),
+    ),
+    child: SelectableText(text),
+  );
 }
 
 class _TextInput extends StatefulWidget {
