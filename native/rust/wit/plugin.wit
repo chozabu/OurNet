@@ -181,6 +181,19 @@ interface files {
   read: func(id: string) -> result<list<u8>, string>;
 }
 
+/// Bounded random reads of attachments, without loading the whole file.
+interface file-ranges {
+  read: func(id: string, offset: u64, length: u32) -> result<list<u8>, string>;
+}
+
+/// Disk-backed derived indexes, isolated by plugin. Unlike small settings,
+/// these are not loaded into the guest or snapshotted as one memory map.
+interface index-store {
+  get: func(bucket: string, key: string) -> result<option<list<u8>>, string>;
+  put: func(bucket: string, entries: list<tuple<string, list<u8>>>) -> result<_, string>;
+  clear: func(bucket: string) -> result<_, string>;
+}
+
 /// What the app shows. Widgets come from the package's RFW library; a
 /// plugin updates the data they read.
 interface ui {
@@ -224,6 +237,8 @@ world plugin {
   import package-files;
   import plugin-offers;
   import files;
+  import file-ranges;
+  import index-store;
   import system-monitor;
   import process-control;
   import remote-input;

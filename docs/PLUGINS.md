@@ -494,3 +494,25 @@ transport; core remains independent of transport. The whole-file WIT API retains
 its existing bound. Git uses the streaming endpoints for transfer and the WIT
 API for bounded browsing. This is an additive desktop API; older local helpers
 continue to work, while new helpers report a clear error on older apps.
+
+### API 0.4: attachment ranges and disk indexes
+
+`file-ranges.read(id, offset:u64, length:u32)` reads at most 256 KiB from a plugin's
+own attached object without allocating the whole attachment. Like `files`, it
+requires `objects`. The host validates object ownership and bounds; transport
+fetches/decrypts only the needed data chunks and the ancestor lists in a chunk
+tree. Its bounded plaintext LRU is in memory; original cached chunks remain
+encrypted. Core's local-only fallback supports offline hosts and tests.
+
+`index-store` also requires `objects`: `get(bucket,key)`, `put(bucket,entries)`
+and `clear(bucket)` operate on plugin-isolated derived data. These indexes use a
+worker-owned SQLite connection at `<plugin-directory>/.indexes.sqlite`, with a
+4 MiB page-cache budget and a free-disk reserve. Calls are bounded (512 entries
+per write, 256 KiB per value); there is no fixed total index-size quota. It is a
+rebuildable cache, not signed protocol history or an API for decoded file bodies.
+The small `storage` interface and its existing quota remain unchanged. Consumers
+must detect a missing derived index and rebuild it from durable signed objects.
+
+Git 0.4 declares API 0.4 so older apps refuse it with an API-version message
+rather than linking an unsupported import. Old plugin components continue to
+link on the new host. No network capability floor or file-payload format changes.

@@ -7,6 +7,15 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: Git plugin 0.4 range-backed browsing
+
+Additive local host API 0.4: `file-ranges` and `index-store`, both covered by the
+existing objects grant. Git pack offsets are 64-bit in a new derived cache; no
+signed Git push fields, attachment payloads, ALPN or peer capabilities change.
+Git 0.4 rebuilds old local indexes, including pushes 0.3 could not browse. Old
+apps refuse the 0.4 plugin manifest individually; old plugins still link on the
+new host. Large ref updates are batched into existing signed push records.
+
 ## Unreleased: Git plugin 0.3 repository deletion and streamed local packs
 
 Additive plugin change; no ALPN, application version or required peer capability

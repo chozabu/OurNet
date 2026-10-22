@@ -9,7 +9,7 @@
 //! reached through its local bridge, whose port and key it writes to
 //! `~/.ournet/bridge.json` (or where `OURNET_BRIDGE` says).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
@@ -112,10 +112,13 @@ fn text_map(v: &Value) -> BTreeMap<String, String> {
 
 fn fetch(url: &str, wanted: &[String]) -> Result<(), String> {
     let listed = call(&json!({"op": "packs", "repo": url}), &[])?.0;
+    let all_tips: Vec<String> = listed["packs"].as_array().into_iter().flatten()
+        .flat_map(|p| p["tips"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from)).collect();
+    let mut present = has_many(&all_tips)?;
     // Oldest first: each push's pack leaves out what earlier ones carried.
     for pack in listed["packs"].as_array().cloned().unwrap_or_default() {
         let tips: Vec<&str> = pack["tips"].as_array().map(|t| t.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
-        if !tips.is_empty() && tips.iter().all(|t| has(t)) {
+        if !tips.is_empty() && tips.iter().all(|t| present.contains(*t)) {
             continue;
         }
         let id = pack["id"].as_str().unwrap_or("");
@@ -138,8 +141,10 @@ fn fetch(url: &str, wanted: &[String]) -> Result<(), String> {
         if !child.wait().map_err(|e| e.to_string())?.success() {
             return Err(format!("git could not read push {id}"));
         }
+        present.extend(tips.into_iter().map(String::from));
     }
-    let missing = wanted.iter().filter(|w| !has(w)).count();
+    let final_present = has_many(wanted)?;
+    let missing = wanted.iter().filter(|w| !final_present.contains(*w)).count();
     if missing > 0 {
         let waiting = listed["waiting"].as_u64().unwrap_or(0);
         return Err(if waiting > 0 {
@@ -157,6 +162,10 @@ fn push(url: &str, specs: &[String], remote: &BTreeMap<String, String>) -> Resul
     let mut refs = BTreeMap::new();
     let mut old = BTreeMap::new();
     let mut force = false;
+    let remote_tips: Vec<String> = remote.values().cloned().collect();
+    let present = has_many(&remote_tips)?;
+    let local_refs = output(&["for-each-ref", "--format=%(refname) %(objectname)"])
+        .unwrap_or_default().lines().filter_map(|line| line.split_once(' ').map(|(r,s)| (r.to_string(),s.to_string()))).collect::<BTreeMap<_,_>>();
     for spec in specs {
         let (forced, spec) = match spec.strip_prefix('+') {
             Some(s) => (true, s),
@@ -167,7 +176,7 @@ fn push(url: &str, specs: &[String], remote: &BTreeMap<String, String>) -> Resul
         let new = if src.is_empty() {
             String::new()
         } else {
-            match output(&["rev-parse", "--verify", "--quiet", src]) {
+            match local_refs.get(src).cloned().or_else(|| output(&["rev-parse", "--verify", "--quiet", src])) {
                 Some(sha) => sha,
                 None => {
                     results.push(format!("error {dst} cannot resolve {src}"));
@@ -176,7 +185,7 @@ fn push(url: &str, specs: &[String], remote: &BTreeMap<String, String>) -> Resul
             }
         };
         if !forced && !was.is_empty() && !new.is_empty() && was != new {
-            if !has(&was) {
+            if !present.contains(&was) {
                 results.push(format!("error {dst} fetch first"));
                 continue;
             }
@@ -199,7 +208,7 @@ fn push(url: &str, specs: &[String], remote: &BTreeMap<String, String>) -> Resul
     for sha in refs.values().filter(|s| !s.is_empty()) {
         revs.push_str(&format!("{sha}\n"));
     }
-    for sha in remote.values().filter(|s| has(s)) {
+    for sha in &present {
         revs.push_str(&format!("^{sha}\n"));
     }
     let mut spool = Spool::new()?;
@@ -247,14 +256,74 @@ fn push(url: &str, specs: &[String], remote: &BTreeMap<String, String>) -> Resul
         request["size"] = size.into();
         request["objects"] = objects.into();
     }
-    match call(&request, &[]) {
-        Ok(_) => results.extend(refs.keys().map(|dst| format!("ok {dst}"))),
-        Err(e) => {
-            let e = e.replace('\n', " ");
-            results.extend(refs.keys().map(|dst| format!("error {dst} {e}")));
+    // A signed OurNet record has a bounded payload. Split metadata, not the
+    // repository: thousands of tags remain ordinary Git refs. Only the first
+    // record attaches the uploaded pack; subsequent records point into it.
+    let batches = ref_batches(&refs, &old);
+    let mut attached = false;
+    for (batch_refs, batch_old) in batches {
+        let mut batch = request.clone();
+        batch["refs"] = json!(batch_refs);
+        batch["old"] = json!(batch_old);
+        if attached {
+            batch["op"] = "push".into();
+            batch.as_object_mut().unwrap().remove("file");
+            batch.as_object_mut().unwrap().remove("head");
+            batch["size"] = 0.into();
+            batch["objects"] = 0.into();
+        }
+        match call(&batch, &[]) {
+            Ok(_) => {
+                attached = true;
+                results.extend(batch_refs.keys().map(|dst| format!("ok {dst}")));
+            },
+            Err(error) => {
+                let error = error.replace('\n', " ");
+                results.extend(batch_refs.keys().map(|dst| format!("error {dst} {error}")));
+            }
         }
     }
     Ok(results)
+}
+
+fn ref_batches(refs: &BTreeMap<String, String>, old: &BTreeMap<String, String>) -> Vec<(BTreeMap<String, String>, BTreeMap<String, String>)> {
+    let mut batches = Vec::new();
+    let mut next = BTreeMap::new();
+    let mut before = BTreeMap::new();
+    let mut bytes = 2usize;
+    for (name, sha) in refs {
+        let was = old.get(name).cloned().unwrap_or_default();
+        // Both maps stay well below the schema's per-record byte budgets.
+        let size = serde_json::to_vec(&(name, sha, &was)).unwrap().len() + name.len() + 16;
+        if !next.is_empty() && bytes + size > 20 * 1024 {
+            batches.push((std::mem::take(&mut next), std::mem::take(&mut before)));
+            bytes = 2;
+        }
+        next.insert(name.clone(), sha.clone());
+        before.insert(name.clone(), was);
+        bytes += size;
+    }
+    if !next.is_empty() { batches.push((next, before)); }
+    batches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn all_refs_survive_metadata_batching() {
+        let refs: BTreeMap<_,_> = (0..10000).map(|i| (format!("refs/tags/release-{i}"), "a".repeat(40))).collect();
+        let old = refs.clone();
+        let batches = ref_batches(&refs, &old);
+        assert!(batches.len() > 1);
+        let mut recovered = BTreeMap::new();
+        for (after, before) in batches {
+            assert!(serde_json::to_vec(&after).unwrap().len() < 24000);
+            assert!(serde_json::to_vec(&before).unwrap().len() < 24000);
+            recovered.extend(after);
+        }
+        assert_eq!(recovered, refs);
+    }
 }
 
 /// A temporary pack on disk: producing/uploading it never grows the heap.
@@ -321,14 +390,33 @@ fn output(args: &[&str]) -> Option<String> {
     (out.status.success() && !text.is_empty()).then_some(text)
 }
 
-/// Whether this repository has object [sha].
-fn has(sha: &str) -> bool {
-    git()
-        .args(["cat-file", "-e", sha])
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+/// One Git subprocess for any number of object-presence checks. In
+/// particular, thousands of tags do not launch thousands of processes.
+fn has_many(objects: &[String]) -> Result<BTreeSet<String>, String> {
+    let unique: BTreeSet<String> = objects.iter().cloned().collect();
+    if unique.is_empty() { return Ok(BTreeSet::new()); }
+    let mut child = git().args(["cat-file", "--batch-check=%(objectname)"])
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .spawn().map_err(|e| e.to_string())?;
+    let mut input = child.stdin.take().unwrap();
+    let writer = std::thread::spawn(move || -> io::Result<()> {
+        for object in unique { writeln!(input, "{object}")?; }
+        Ok(())
+    });
+    let mut found = BTreeSet::new();
+    let read = (|| -> io::Result<()> {
+        for line in BufReader::new(child.stdout.take().unwrap()).lines() {
+            let line = line?;
+            if (line.len()==40 || line.len()==64) && line.bytes().all(|c| c.is_ascii_hexdigit()) { found.insert(line); }
+        }
+        Ok(())
+    })();
+    if read.is_err() { let _ = child.kill(); }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    writer.join().map_err(|_| "Git object writer stopped")?.map_err(|e| e.to_string())?;
+    read.map_err(|e| e.to_string())?;
+    if !status.success() { return Err("git cat-file failed".into()); }
+    Ok(found)
 }
 
 fn bridge() -> Result<(u16, String), String> {

@@ -17,7 +17,26 @@ const OFS_DELTA: u8 = 6;
 const REF_DELTA: u8 = 7;
 
 /// Largest object read, whole: bigger blobs are named, not shown.
-pub const MAX_OBJECT: usize = 32 * 1024 * 1024;
+pub const MAX_OBJECT: usize = 16 * 1024 * 1024;
+
+/// Immutable packed bytes, read in bounded windows from the host.
+pub trait Source {
+    fn len(&self) -> u64;
+    fn range(&mut self, offset: u64, length: usize) -> Result<Vec<u8>, String>;
+    fn find(&mut self, _sha: &Sha) -> Option<u64> { None }
+}
+
+impl Source for Vec<u8> {
+    fn len(&self) -> u64 { Vec::len(self) as u64 }
+    fn range(&mut self, offset: u64, length: usize) -> Result<Vec<u8>, String> {
+        let start = usize::try_from(offset).map_err(|_| "offset too large")?;
+        self.get(start..start.checked_add(length).ok_or("range overflow")?).map(|v| v.to_vec()).ok_or("pack is cut short".into())
+    }
+}
+
+fn byte(source: &mut dyn Source, at: u64) -> Result<u8, String> {
+    source.range(at, 1)?.first().copied().ok_or("pack is cut short".into())
+}
 
 pub fn hex(sha: &Sha) -> String {
     sha.iter().map(|b| format!("{b:02x}")).collect()
@@ -71,42 +90,42 @@ pub fn check(pack: &[u8]) -> Result<u32, String> {
 /// for a delta, its base.
 struct Header {
     kind: u8,
-    size: usize,
-    data: usize,
+    size: u64,
+    data: u64,
     base: Option<Base>,
 }
 
 enum Base {
-    Offset(usize),
+    Offset(u64),
     Sha(Sha),
 }
 
-fn header(pack: &[u8], at: usize) -> Result<Header, String> {
+fn header(pack: &mut dyn Source, at: u64) -> Result<Header, String> {
     let bad = || "pack is cut short".to_string();
     let mut pos = at;
-    let mut c = *pack.get(pos).ok_or_else(bad)?;
+    let mut c = byte(pack, pos)?;
     pos += 1;
     let kind = (c >> 4) & 7;
-    let mut size = (c & 15) as usize;
+    let mut size = (c & 15) as u64;
     let mut shift = 4;
     while c & 0x80 != 0 {
-        c = *pack.get(pos).ok_or_else(bad)?;
+        c = byte(pack, pos)?;
         pos += 1;
-        if shift > 50 {
+        if shift > 60 {
             return Err("bad object size".into());
         }
-        size |= ((c & 0x7f) as usize) << shift;
+        size |= ((c & 0x7f) as u64).checked_shl(shift).ok_or("object size overflow")?;
         shift += 7;
     }
     let base = match kind {
         OFS_DELTA => {
-            let mut c = *pack.get(pos).ok_or_else(bad)?;
+            let mut c = byte(pack, pos)?;
             pos += 1;
-            let mut ofs = (c & 0x7f) as usize;
+            let mut ofs = (c & 0x7f) as u64;
             while c & 0x80 != 0 {
-                c = *pack.get(pos).ok_or_else(bad)?;
+                c = byte(pack, pos)?;
                 pos += 1;
-                ofs = ((ofs + 1) << 7) | (c & 0x7f) as usize;
+                ofs = ofs.checked_add(1).and_then(|v| v.checked_mul(128)).and_then(|v| v.checked_add((c & 0x7f) as u64)).ok_or("delta offset overflow")?;
                 if ofs > at {
                     return Err("delta base before the pack".into());
                 }
@@ -117,34 +136,66 @@ fn header(pack: &[u8], at: usize) -> Result<Header, String> {
             Some(Base::Offset(at - ofs))
         }
         REF_DELTA => {
-            let sha: Sha = pack.get(pos..pos + 20).ok_or_else(bad)?.try_into().unwrap();
+            let sha: Sha = pack.range(pos, 20)?.try_into().map_err(|_| bad())?;
             pos += 20;
             Some(Base::Sha(sha))
         }
         COMMIT | TREE | BLOB | TAG => None,
         _ => return Err(format!("unknown object type {kind}")),
     };
-    if size > MAX_OBJECT {
-        return Err("object too large".into());
-    }
     Ok(Header { kind, size, data: pos, base })
 }
 
 /// Inflates the zlib stream at [at], which should give [size] bytes; returns
 /// them and how many bytes of the pack the stream took.
-fn inflate(pack: &[u8], at: usize, size: usize) -> Result<(Vec<u8>, usize), String> {
-    let mut out = vec![0u8; size + 1];
-    let mut state = DecompressorOxide::new();
-    let flags = inflate_flags::TINFL_FLAG_PARSE_ZLIB_HEADER
-        | inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF
-        | inflate_flags::TINFL_FLAG_COMPUTE_ADLER32;
-    let input = pack.get(at..).ok_or("pack is cut short")?;
-    let (status, used, written) = decompress(&mut state, input, &mut out, 0, flags);
-    if status != TINFLStatus::Done || written != size {
-        return Err("bad compressed data".into());
+/// A bounded inflate cursor. The 32 KiB dictionary and input window stay
+/// fixed even for a multi-gigabyte blob. Large objects are hashed, not kept.
+struct Inflate {
+    decoder: Box<DecompressorOxide>,
+    dictionary: Vec<u8>,
+    output_at: usize,
+    at: u64,
+    size: u64,
+    written: u64,
+    data: Option<Vec<u8>>,
+    hash: sha1_smol::Sha1,
+    done: bool,
+}
+
+impl Inflate {
+    fn new(at: u64, size: u64, kind: u8, retain: bool) -> Self {
+        let mut hash = sha1_smol::Sha1::new();
+        hash.update(format!("{} {}\0", type_name(kind), size).as_bytes());
+        Self { decoder: Box::new(DecompressorOxide::new()), dictionary: vec![0; 32768], output_at: 0,
+            at, size, written: 0, data: retain.then(Vec::new), hash, done: false }
     }
-    out.truncate(size);
-    Ok((out, used))
+    fn step(&mut self, source: &mut dyn Source) -> Result<(), String> {
+        let n = (source.len().saturating_sub(self.at)).min(64 * 1024) as usize;
+        if n == 0 { return Err("compressed object is cut short".into()); }
+        let input = source.range(self.at, n)?;
+        let flags = inflate_flags::TINFL_FLAG_PARSE_ZLIB_HEADER | inflate_flags::TINFL_FLAG_COMPUTE_ADLER32 | inflate_flags::TINFL_FLAG_HAS_MORE_INPUT;
+        let (status, used, written) = decompress(&mut self.decoder, &input, &mut self.dictionary, self.output_at, flags);
+        self.at += used as u64;
+        self.written = self.written.checked_add(written as u64).ok_or("object size overflow")?;
+        if self.written > self.size { return Err("inflated object exceeds declared size".into()); }
+        let bytes = &self.dictionary[self.output_at..self.output_at + written];
+        self.hash.update(bytes);
+        if let Some(data) = &mut self.data { data.extend_from_slice(bytes); }
+        self.output_at = (self.output_at + written) % self.dictionary.len();
+        match status {
+            TINFLStatus::Done => { if self.written != self.size { return Err("wrong inflated size".into()); } self.done = true; },
+            TINFLStatus::HasMoreOutput | TINFLStatus::NeedsMoreInput if used > 0 || written > 0 => {},
+            _ => return Err("bad compressed data".into()),
+        }
+        Ok(())
+    }
+}
+
+fn inflate(source: &mut dyn Source, at: u64, size: u64) -> Result<(Vec<u8>, u64), String> {
+    if size > MAX_OBJECT as u64 { return Err("object exceeds preview memory budget; clone to open it".into()); }
+    let mut cursor = Inflate::new(at, size, BLOB, true);
+    while !cursor.done { cursor.step(source)?; }
+    Ok((cursor.data.unwrap(), cursor.at - at))
 }
 
 fn varint(delta: &[u8], pos: &mut usize) -> Result<usize, String> {
@@ -153,7 +204,7 @@ fn varint(delta: &[u8], pos: &mut usize) -> Result<usize, String> {
     loop {
         let c = *delta.get(*pos).ok_or("bad delta")?;
         *pos += 1;
-        value |= ((c & 0x7f) as usize) << shift;
+        value |= ((c & 0x7f) as usize).checked_shl(shift).ok_or("delta preview size exceeds address space")?;
         shift += 7;
         if c & 0x80 == 0 || shift > 56 {
             return Ok(value);
@@ -192,10 +243,14 @@ pub fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>, String> {
             if len == 0 {
                 len = 0x10000;
             }
-            out.extend_from_slice(base.get(offset..offset + len).ok_or("bad delta copy")?);
+            if len > size.saturating_sub(out.len()) { return Err("delta exceeds declared output size".into()); }
+            let end = offset.checked_add(len).ok_or("bad delta copy range")?;
+            out.extend_from_slice(base.get(offset..end).ok_or("bad delta copy")?);
         } else if op != 0 {
             let n = op as usize;
-            out.extend_from_slice(delta.get(pos..pos + n).ok_or("bad delta insert")?);
+            if n > size.saturating_sub(out.len()) { return Err("delta exceeds declared output size".into()); }
+            let end = pos.checked_add(n).ok_or("bad delta insert range")?;
+            out.extend_from_slice(delta.get(pos..end).ok_or("bad delta insert")?);
             pos += n;
         } else {
             return Err("bad delta op".into());
@@ -214,30 +269,34 @@ pub trait Lookup {
 
 /// Reads the object at [offset], following its delta chain.
 pub fn read_at(
-    pack: &[u8],
-    offset: usize,
-    own: &HashMap<Sha, u32>,
+    pack: &mut dyn Source,
+    offset: u64,
+    own: &HashMap<Sha, u64>,
     other: &mut dyn Lookup,
 ) -> Result<(u8, Vec<u8>), String> {
     // Walk down to a whole object, then apply the deltas back up.
     let mut deltas: Vec<Vec<u8>> = Vec::new();
     let mut at = offset;
+    let mut visited = std::collections::HashSet::new();
+    let mut delta_bytes = 0;
     let (kind, mut data) = loop {
-        if deltas.len() > 64 {
-            return Err("delta chain too long".into());
-        }
+        if !visited.insert(at) { return Err("cyclic delta chain".into()); }
         let h = header(pack, at)?;
         let (data, _) = inflate(pack, h.data, h.size)?;
         match h.base {
             None => break (h.kind, data),
             Some(Base::Offset(base)) => {
+                delta_bytes += data.len() + 64;
+                if delta_bytes > MAX_OBJECT { return Err("delta preview exceeds memory budget; clone to open it".into()); }
                 deltas.push(data);
                 at = base;
             }
             Some(Base::Sha(sha)) => {
+                delta_bytes += data.len() + 64;
+                if delta_bytes > MAX_OBJECT { return Err("delta preview exceeds memory budget; clone to open it".into()); }
                 deltas.push(data);
-                if let Some(&base) = own.get(&sha) {
-                    at = base as usize;
+                if let Some(base) = own.get(&sha).copied().or_else(|| pack.find(&sha)) {
+                    at = base;
                 } else {
                     break other.object(&sha).ok_or("delta base is missing")?;
                 }
@@ -250,110 +309,175 @@ pub fn read_at(
     Ok((kind, data))
 }
 
+/// Peel annotated tags until a non-tag object, with cycle detection rather
+/// than an arbitrary nesting count.
+pub fn peel(mut sha: Sha, lookup: &mut dyn Lookup) -> Sha {
+    let mut seen = std::collections::HashSet::new();
+    while seen.insert(sha) {
+        match lookup.object(&sha) {
+            Some((TAG, data)) => match tag_target(&data) { Some(next) => sha=next, None => break },
+            _ => break,
+        }
+    }
+    sha
+}
+
 /// An object found while indexing a pack.
 #[derive(Clone, Copy)]
 pub struct Entry {
     pub sha: Sha,
-    pub offset: u32,
+    pub offset: u64,
     pub kind: u8,
 }
 
 /// Indexes a pack a piece at a time, so a big one is spread over several
 /// calls: each [Indexer::step] reads until its time is up.
 pub struct Indexer {
-    pub pack: Vec<u8>,
+    source: Box<dyn Source>,
     count: u32,
     done: u32,
-    pos: usize,
+    pos: u64,
+    /// Only one bounded batch is retained before it is written to disk.
     pub entries: Vec<Entry>,
-    own: HashMap<Sha, u32>,
-    /// Whole objects by offset, kept while their deltas are likely near.
-    cache: HashMap<usize, (u8, std::rc::Rc<Vec<u8>>)>,
+    own: HashMap<Sha, u64>,
+    cache: HashMap<u64, (u8, std::rc::Rc<Vec<u8>>)>,
     cached: usize,
+    verifying: u64,
+    checksum: sha1_smol::Sha1,
+    verified: bool,
+    pending: Option<(u64, Header, Inflate)>,
+    pub skipped_previews: u32,
 }
 
-const CACHE_BYTES: usize = 12 * 1024 * 1024;
+const CACHE_BYTES: usize = 4 * 1024 * 1024;
 
 impl Indexer {
-    pub fn new(pack: Vec<u8>) -> Result<Indexer, String> {
-        let count = check(&pack)?;
-        Ok(Indexer {
-            pack,
-            count,
-            done: 0,
-            pos: 12,
-            entries: Vec::new(),
-            own: HashMap::new(),
-            cache: HashMap::new(),
-            cached: 0,
-        })
+    pub fn from_source(mut source: Box<dyn Source>) -> Result<Self, String> {
+        if source.len() < 32 { return Err("not a git pack".into()); }
+        let header = source.range(0, 12)?;
+        if header.len() != 12 || &header[..4] != b"PACK" { return Err("not a git pack".into()); }
+        let version = u32::from_be_bytes(header[4..8].try_into().unwrap());
+        if version != 2 && version != 3 { return Err(format!("unsupported pack version {version}")); }
+        Ok(Self { source, count: u32::from_be_bytes(header[8..12].try_into().unwrap()), done: 0, pos: 12,
+            entries: Vec::new(), own: HashMap::new(), cache: HashMap::new(), cached: 0,
+            verifying: 0, checksum: sha1_smol::Sha1::new(), verified: false, pending: None, skipped_previews: 0 })
     }
 
-    pub fn finished(&self) -> bool {
-        self.done >= self.count
+    pub fn progress(&self) -> String {
+        if !self.verified {
+            format!("Checking pack: {} / {} MiB", self.verifying / (1024*1024), self.source.len() / (1024*1024))
+        } else {
+            format!("Indexing objects: {} / {}", self.done, self.count)
+        }
     }
 
-    /// Reads entries until [more] says stop; true when the pack is done.
+    pub fn checkpoint(&self) -> (u64, u32, bool) { (self.pos, self.done, self.verified) }
+
+    pub fn resume(mut self, checkpoint: (u64,u32,bool)) -> Self {
+        let (pos, done, verified) = checkpoint;
+        if verified && pos >= 12 && pos <= self.source.len()-20 && done <= self.count {
+            self.pos=pos;
+            self.done=done;
+            self.verified=true;
+        }
+        self
+    }
+
+    pub fn take_entries(&mut self) -> Vec<Entry> {
+        self.own.clear();
+        std::mem::take(&mut self.entries)
+    }
+
     pub fn step(&mut self, other: &mut dyn Lookup, mut more: impl FnMut() -> bool) -> Result<bool, String> {
-        while !self.finished() && more() {
-            let at = self.pos;
-            let h = header(&self.pack, at)?;
-            let (data, used) = inflate(&self.pack, h.data, h.size)?;
-            self.pos = h.data + used;
-            if self.pos > self.pack.len() - 20 {
-                return Err("pack is cut short".into());
+        while !self.verified && more() {
+            let body = self.source.len() - 20;
+            let n = (body - self.verifying).min(64 * 1024) as usize;
+            if n > 0 {
+                self.checksum.update(&self.source.range(self.verifying, n)?);
+                self.verifying += n as u64;
             }
-            let (kind, whole) = match h.base {
-                None => (h.kind, data),
-                Some(base) => {
-                    let (kind, base) = match base {
-                        Base::Offset(o) => self.whole(o, other)?,
-                        Base::Sha(sha) => match self.own.get(&sha) {
-                            Some(&o) => self.whole(o as usize, other)?,
-                            None => {
-                                let (k, d) = other.object(&sha).ok_or("delta base is missing")?;
-                                (k, std::rc::Rc::new(d))
-                            }
-                        },
-                    };
-                    (kind, apply_delta(&base, &data)?)
+            if self.verifying == body {
+                if self.checksum.digest().bytes()[..] != self.source.range(body, 20)? { return Err("pack checksum does not match".into()); }
+                self.verified = true;
+            }
+        }
+        while self.verified && self.done < self.count && self.entries.len() < 128 && more() {
+            let (at, h, mut stream) = match self.pending.take() {
+                Some(p) => p,
+                None => {
+                    let h = header(self.source.as_mut(), self.pos)?;
+                    let stream = Inflate::new(h.data, h.size, h.kind, h.size <= MAX_OBJECT as u64);
+                    (self.pos, h, stream)
                 }
             };
-            let sha = object_sha(kind, &whole);
-            self.own.insert(sha, at as u32);
-            self.entries.push(Entry { sha, offset: at as u32, kind });
-            // Trees and small objects are the usual delta bases.
-            if whole.len() < 1024 * 1024 {
-                self.keep(at, kind, std::rc::Rc::new(whole));
+            while !stream.done && more() {
+                if let Err(error) = stream.step(self.source.as_mut()) {
+                    self.pending = Some((at, h, stream));
+                    return Err(error);
+                }
+            }
+            if !stream.done { self.pending = Some((at, h, stream)); return Ok(false); }
+            self.pos = stream.at;
+            if self.pos > self.source.len() - 20 { return Err("pack is cut short".into()); }
+            let result: Result<Option<(u8, Vec<u8>)>, String> = match (h.base, stream.data.take()) {
+                (None, data) => {
+                    let sha = stream.hash.digest().bytes();
+                    self.own.insert(sha, at);
+                    self.entries.push(Entry { sha, offset: at, kind: h.kind });
+                    if let Some(data) = data { self.keep(at, h.kind, std::rc::Rc::new(data)); }
+                    else { self.skipped_previews += 1; }
+                    Ok(None)
+                },
+                (Some(base), Some(delta)) => {
+                    let resolved = match base {
+                        Base::Offset(o) => self.whole(o, other),
+                        Base::Sha(sha) => match self.own.get(&sha) {
+                            Some(&o) => self.whole(o, other),
+                            None => other.object(&sha).map(|(k,d)| (k,std::rc::Rc::new(d))).ok_or("delta base unavailable for preview".into()),
+                        }
+                    };
+                    resolved.and_then(|(kind, data)| apply_delta(&data, &delta).map(|whole| Some((kind, whole))))
+                },
+                (Some(_), None) => Err("delta exceeds preview memory budget".into()),
+            };
+            match result {
+                Ok(Some((kind, whole))) => {
+                    let sha = object_sha(kind, &whole);
+                    self.own.insert(sha, at);
+                    self.entries.push(Entry { sha, offset: at, kind });
+                    self.keep(at, kind, std::rc::Rc::new(whole));
+                },
+                Ok(None) => {},
+                Err(error) if error.contains("preview") || error == "object too large" => { self.skipped_previews += 1; },
+                Err(error) => return Err(error),
             }
             self.done += 1;
         }
-        Ok(self.finished())
+        let finished = self.verified && self.done == self.count;
+        if finished && self.pos != self.source.len() - 20 { return Err("unexpected bytes after pack objects".into()); }
+        Ok(finished)
     }
 
-    fn keep(&mut self, at: usize, kind: u8, data: std::rc::Rc<Vec<u8>>) {
-        if self.cached + data.len() > CACHE_BYTES {
-            self.cache.clear();
-            self.cached = 0;
-        }
+    fn keep(&mut self, at: u64, kind: u8, data: std::rc::Rc<Vec<u8>>) {
+        if data.len() > CACHE_BYTES { return; }
+        if self.cached + data.len() > CACHE_BYTES { self.cache.clear(); self.cached = 0; }
         self.cached += data.len();
         self.cache.insert(at, (kind, data));
     }
 
-    fn whole(&mut self, at: usize, other: &mut dyn Lookup) -> Result<(u8, std::rc::Rc<Vec<u8>>), String> {
-        if let Some((k, d)) = self.cache.get(&at) {
-            return Ok((*k, d.clone()));
-        }
-        let (k, d) = read_at(&self.pack, at, &self.own, other)?;
+    fn whole(&mut self, at: u64, other: &mut dyn Lookup) -> Result<(u8, std::rc::Rc<Vec<u8>>), String> {
+        if let Some((k,d)) = self.cache.get(&at) { return Ok((*k,d.clone())); }
+        let (k,d) = read_at(self.source.as_mut(), at, &self.own, other)?;
         let d = std::rc::Rc::new(d);
         self.keep(at, k, d.clone());
-        Ok((k, d))
+        Ok((k,d))
     }
 }
 
-/// Serialised entries: 20-byte SHA, 4-byte offset, 1-byte type each.
+/// Serialised entries used by the offset-codec regression.
+#[cfg(test)]
 pub fn save_entries(entries: &[Entry]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(entries.len() * 25);
+    let mut out = Vec::with_capacity(entries.len() * 29);
     for e in entries {
         out.extend_from_slice(&e.sha);
         out.extend_from_slice(&e.offset.to_be_bytes());
@@ -362,13 +486,14 @@ pub fn save_entries(entries: &[Entry]) -> Vec<u8> {
     out
 }
 
+#[cfg(test)]
 pub fn load_entries(bytes: &[u8]) -> Vec<Entry> {
     bytes
-        .chunks_exact(25)
+        .chunks_exact(29)
         .map(|c| Entry {
             sha: c[..20].try_into().unwrap(),
-            offset: u32::from_be_bytes(c[20..24].try_into().unwrap()),
-            kind: c[24],
+            offset: u64::from_be_bytes(c[20..28].try_into().unwrap()),
+            kind: c[28],
         })
         .collect()
 }
@@ -472,6 +597,97 @@ mod tests {
         let delta = [11u8, 11, 0x90, 6, 5, b't', b'h', b'e', b'r', b'e'];
         assert_eq!(apply_delta(base, &delta).unwrap(), b"hello there");
         assert!(apply_delta(b"short", &delta).is_err());
+    }
+
+    struct Empty;
+    impl Lookup for Empty { fn object(&mut self, _: &Sha) -> Option<(u8, Vec<u8>)> { None } }
+
+    fn packed(objects: &[(u8, Vec<u8>)]) -> Vec<u8> {
+        let mut out = b"PACK".to_vec();
+        out.extend_from_slice(&2u32.to_be_bytes());
+        out.extend_from_slice(&(objects.len() as u32).to_be_bytes());
+        for (kind, data) in objects {
+            let mut n = data.len();
+            let mut first = ((*kind) << 4) | (n as u8 & 15);
+            n >>= 4;
+            if n > 0 { first |= 128; }
+            out.push(first);
+            while n > 0 { let mut b = (n & 127) as u8; n >>= 7; if n > 0 { b |= 128; } out.push(b); }
+            out.extend(miniz_oxide::deflate::compress_to_vec_zlib(data, 1));
+        }
+        let sum = sha1_smol::Sha1::from(&out).digest().bytes();
+        out.extend_from_slice(&sum);
+        out
+    }
+
+    #[test]
+    fn annotated_tags_are_not_limited_to_eight_levels() {
+        struct Tags(HashMap<Sha,(u8,Vec<u8>)>);
+        impl Lookup for Tags { fn object(&mut self, sha: &Sha) -> Option<(u8,Vec<u8>)> { self.0.get(sha).cloned() } }
+        let mut tags = Tags(HashMap::new());
+        let mut ids = Vec::new();
+        for i in 0..100u32 { let mut sha=[0;20]; sha[..4].copy_from_slice(&i.to_be_bytes()); ids.push(sha); }
+        for i in 0..99 { tags.0.insert(ids[i], (TAG, format!("object {}\ntype tag\n\n", hex(&ids[i+1])).into_bytes())); }
+        tags.0.insert(ids[99], (COMMIT, Vec::new()));
+        assert_eq!(peel(ids[0], &mut tags), ids[99]);
+        tags.0.insert(ids[99], (TAG, format!("object {}\n", hex(&ids[0])).into_bytes()));
+        assert_eq!(peel(ids[0], &mut tags), ids[0]);
+    }
+
+    #[test]
+    fn index_batches_are_bounded_and_offsets_are_64_bit() {
+        let objects: Vec<_> = (0..300).map(|i| (BLOB, format!("blob {i}").into_bytes())).collect();
+        let bytes = packed(&objects);
+        let mut index = Indexer::from_source(Box::new(bytes.clone())).unwrap();
+        let mut count = 0;
+        loop {
+            let done = index.step(&mut Empty, || true).unwrap();
+            assert!(index.entries.len() <= 128);
+            count += index.take_entries().len();
+            if done { break; }
+        }
+        assert_eq!(count, objects.len());
+        let high = Entry { sha: [7;20], offset: (1u64 << 33) + 123, kind: BLOB };
+        assert_eq!(load_entries(&save_entries(&[high]))[0].offset, high.offset);
+    }
+
+    #[test]
+    fn indexing_resumes_at_a_persisted_object_boundary() {
+        let bytes = packed(&(0..300).map(|i| (BLOB, format!("resume {i}").into_bytes())).collect::<Vec<_>>());
+        let mut first = Indexer::from_source(Box::new(bytes.clone())).unwrap();
+        assert!(!first.step(&mut Empty, || true).unwrap());
+        let previous = first.take_entries();
+        assert_eq!(previous.len(), 128);
+        let mut resumed = Indexer::from_source(Box::new(bytes)).unwrap().resume(first.checkpoint());
+        let mut remaining = Vec::new();
+        loop {
+            let done = resumed.step(&mut Empty, || true).unwrap();
+            remaining.extend(resumed.take_entries());
+            if done { break; }
+        }
+        assert_eq!(remaining.len(), 172);
+        assert!(!previous.iter().any(|a| remaining.iter().any(|b| a.sha == b.sha)));
+    }
+
+    #[test]
+    fn huge_blob_is_streamed_and_does_not_hide_later_metadata() {
+        let mut seed = 42u32;
+        let blob: Vec<u8> = (0..17*1024*1024).map(|_| { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; seed as u8 }).collect();
+        let expected = object_sha(BLOB, &blob);
+        let bytes = packed(&[(BLOB, blob), (COMMIT, b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n\nLarge repository\n".to_vec())]);
+        assert!(bytes.len() > 16 * 1024 * 1024);
+        let mut index = Indexer::from_source(Box::new(bytes)).unwrap();
+        let mut found = Vec::new();
+        loop {
+            let mut ticks = 0;
+            let done = index.step(&mut Empty, || { ticks += 1; ticks < 8 }).unwrap();
+            found.extend(index.take_entries());
+            if done { break; }
+        }
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].sha, expected);
+        assert_eq!(found[1].kind, COMMIT);
+        assert_eq!(index.skipped_previews, 1);
     }
 
     #[test]

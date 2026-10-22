@@ -210,6 +210,43 @@ Stream<List<String>> chunkSegments(
   }
 }
 
+/// Finds one data chunk without scanning preceding tree branches. The caller
+/// may cache immutable list chunks; a lookup visits only the tree depth.
+Future<String> chunkHashAt(
+  Json payload,
+  int index,
+  Future<Uint8List> Function(String hash) open,
+) async {
+  if (index < 0) throw RangeError.value(index);
+  if (!hasChunkTree(payload)) {
+    final chunks = payload['chunks'] as List;
+    if (index >= chunks.length) throw StateError('Chunk is outside file');
+    return chunks[index] as String;
+  }
+  final fanOut = listFanOut(payload['chunkBytes'] as int);
+  final depth = payload['chunkDepth'] as int;
+  if (depth < 1 || depth > maxTreeDepth || fanOut < 2)
+    throw StateError('Invalid chunk tree');
+  var span = 1;
+  for (var i = 0; i < depth; i++) {
+    span *= fanOut;
+  }
+  final roots = payload['chunkTree'] as List;
+  final root = index ~/ span;
+  if (root >= roots.length) throw StateError('Chunk is outside file');
+  var hash = roots[root] as String;
+  var remainder = index % span;
+  for (var level = depth; level > 0; level--) {
+    final entries = unpackHashes(await open(hash), fanOut);
+    span ~/= fanOut;
+    final child = remainder ~/ span;
+    if (child >= entries.length) throw StateError('Chunk tree is cut short');
+    hash = entries[child];
+    remainder %= span;
+  }
+  return hash;
+}
+
 /// Every chunk below list chunk [root] of a tree at [depth], list chunks and
 /// data chunks alike, in batches of up to one list chunk's entries.
 Stream<List<String>> treeMembers(

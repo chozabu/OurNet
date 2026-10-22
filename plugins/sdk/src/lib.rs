@@ -294,6 +294,24 @@ pub mod files {
     }
 }
 
+/// Bounded range reads over the host's encrypted attachment chunks.
+pub mod file_ranges {
+    pub fn read(id: &str, offset: u64, length: u32) -> Result<Vec<u8>, String> {
+        super::host::file_ranges::read(id, offset, length)
+    }
+}
+
+/// Derived on-disk indexes; no fixed total-size ceiling or guest memory map.
+pub mod index {
+    pub fn get(bucket: &str, key: &str) -> Result<Option<Vec<u8>>, String> {
+        super::host::index_store::get(bucket, key)
+    }
+    pub fn put(bucket: &str, entries: &[(String, Vec<u8>)]) -> Result<(), String> {
+        super::host::index_store::put(bucket, entries)
+    }
+    pub fn clear(bucket: &str) -> Result<(), String> { super::host::index_store::clear(bucket) }
+}
+
 /// What the app shows.
 pub mod ui {
     use super::{host, Value};

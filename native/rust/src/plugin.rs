@@ -33,7 +33,7 @@ wasmtime::component::bindgen!({ path: "wit", world: "plugin" });
 use crate::tun as interface;
 use ournet::plugin::{
     clock, files, identity, live, log, objects, package_files, plugin_offers, storage, tun, types,
-    ui, system_monitor, process_control, remote_input, clipboard_write,
+    ui, system_monitor, process_control, remote_input, clipboard_write, file_ranges, index_store,
 };
 
 /// Posts one message to Dart: the plugin's handle and a buffer Dart frees
@@ -41,7 +41,7 @@ use ournet::plugin::{
 type Post = unsafe extern "C" fn(handle: u64, data: *mut u8, len: usize);
 
 /// Bumped when the message protocol or the WIT world changes.
-const HOST_VERSION: u32 = 3;
+const HOST_VERSION: u32 = 4;
 
 /// CPU time one call into a plugin may use, excluding time spent waiting on
 /// the host. A plugin over it is stopped: it has looped, not worked.
@@ -864,6 +864,37 @@ impl files::Host for Host {
     }
 }
 
+impl file_ranges::Host for Host {
+    fn read(&mut self, id: String, offset: u64, length: u32) -> Result<Vec<u8>, String> {
+        self.granted("objects")?;
+        if length > 256 * 1024 { return Err("range reads are at most 256 KiB per call".into()); }
+        let (_, bytes) = self.ask_bytes("files.range", json!({"id": id, "offset": offset, "length": length}), None)?;
+        Ok(bytes)
+    }
+}
+
+impl index_store::Host for Host {
+    fn get(&mut self, bucket: String, key: String) -> Result<Option<Vec<u8>>, String> {
+        self.granted("objects")?;
+        let (_, bytes) = self.ask_bytes("index.get", json!({"bucket": bucket, "key": key}), None)?;
+        match bytes.first() {
+            Some(1) => Ok(Some(bytes[1..].to_vec())),
+            Some(0) => Ok(None),
+            _ => Err("bad index response".into()),
+        }
+    }
+    fn put(&mut self, bucket: String, entries: Vec<(String, Vec<u8>)>) -> Result<(), String> {
+        self.granted("objects")?;
+        if entries.len() > 512 { return Err("index writes are at most 512 entries per batch".into()); }
+        let entries: Vec<Value> = entries.into_iter().map(|(k, v)| json!([k, base64(&v)])).collect();
+        self.ask("index.put", json!({"bucket": bucket, "entries": entries})).map(|_| ())
+    }
+    fn clear(&mut self, bucket: String) -> Result<(), String> {
+        self.granted("objects")?;
+        self.ask("index.clear", json!({"bucket": bucket})).map(|_| ())
+    }
+}
+
 /// Standard base64, for bytes in an import's JSON.
 fn base64(bytes: &[u8]) -> String {
     const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -941,7 +972,7 @@ fn check_imports(
             .and_then(|rest| rest.split('@').next())
             .ok_or_else(|| format!("imports {name}, which OurNet does not provide"))?;
         // Files are attached to the plugin's own objects: part of that grant.
-        let granted = if interface == "files" { "objects" } else { interface };
+        let granted = if matches!(interface, "files" | "file-ranges" | "index-store") { "objects" } else { interface };
         let allowed = ALWAYS.contains(&interface)
             || grants.iter().any(|g| g == granted)
             || (runtime && GRANTABLE.contains(&granted));

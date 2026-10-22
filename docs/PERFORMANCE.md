@@ -840,3 +840,33 @@ Copy button, and the clone command has a separate Copy button. App analysis and
 the targeted Git UI regression (including exact clipboard payloads) passed after
 this change. The existing calendar failures remain unchanged; no performance
 budget was relaxed.
+
+### Git 0.4 range/index follow-up
+
+The earlier 16 MiB whole-pack browser budget is removed. The Git guest now reads
+64 KiB windows, hashes raw blobs through a fixed inflate dictionary, writes
+bounded object-index batches to a dedicated disk worker and looks up locations
+on demand. Offsets are 64-bit. Branch-picker rows and helper ref metadata are
+paged/batched, and common local Git checks use batch subprocesses. Index progress
+is operation-specific, with restart checkpoints at completed object boundaries.
+
+A real-checkout integration imported the approximately 22 MB OurNet pack, showed
+its app/core/transport/plugins directories and commit history, rebuilt its local
+index and reopened it after a host restart. This passed. Encrypted range tests
+crossed data/list-chunk boundaries in a deep tree. A persisted index beyond the
+old 16 MiB quota also passed. These functional checks are not kernel/Unreal-scale
+performance evidence. Remaining limits and qualification targets are recorded
+in `plugins/git/LIMITS.md`; in particular decoded-object previews, push/ref
+metadata, LFS and SHA-256 still require work. The calendar failures above are
+not cleared by these tests.
+
+The opt-in disk-index scale test also passed: one million locations written in
+bounded batches, persisted, reopened and sampled. This validates the derived
+index backend; it does not qualify million-object Git imports or browsing.
+
+The complete 0.4 check passed core (443), transport (109) and app (286) tests,
+with clean analysis. Rust Git/helper tests passed (15 and 1). The Windows
+profile suite still failed the calendar frame-stage p95 gate: 23.969 ms against
+16.667 ms. Reports are `app/build/performance_test-windows.json` and
+`build/git-range-check.log`. Budgets remain unchanged; physical Android timing
+was not available. The native profile wrapper restored `native-dev`.

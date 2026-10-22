@@ -28,9 +28,10 @@ class PluginManifest {
 
   /// The plugin API versions this build hosts. 0.3 adds permissioned device
   /// monitoring, process control, input and clipboard writes. 0.2 adds `files`.
+  /// 0.4 adds bounded file ranges and disk-backed derived indexes.
   /// Packages declare the API they need so older builds refuse them when
   /// reading the package rather than failing to start them.
-  static const apis = {'0.1', '0.2', '0.3'};
+  static const apis = {'0.1', '0.2', '0.3', '0.4'};
 
   final String id;
   final String name;

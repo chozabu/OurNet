@@ -17,8 +17,15 @@ class Files {
   Files(this.node, this.network);
   _BoundedQueue<Uint8List> get _previewQueue => _previews[node] ??=
       _BoundedQueue(32, 'Preview queue is full; tap to retry');
-  _BoundedQueue<void> get _transferQueue => _transfers[node] ??=
-      _BoundedQueue(16, 'Transfer queue is full; retry shortly');
+  _BoundedQueue<void> get _transferQueue => _transfers[node] ??= _BoundedQueue(
+    16,
+    'Transfer queue is full; retry shortly',
+  );
+  static final _rangeQueues = Expando<_BoundedQueue<Uint8List>>();
+  static final _rangePages = Expando<LinkedHashMap<String, Uint8List>>();
+  _BoundedQueue<Uint8List> get _rangeQueue => _rangeQueues[node] ??=
+      _BoundedQueue(16, 'File range queue is full; retry shortly');
+
   static const chunkSize = 128 * 1024;
 
   /// The largest image shown inline, decoded whole in memory. Larger images
@@ -235,7 +242,8 @@ class Files {
     final key = 'imports/$journal';
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final e in node.store.settingsUnder('imports/').entries) {
-      if (e.value is! Map || (e.value['at'] as int? ?? 0) < now - journalAge.inMilliseconds) {
+      if (e.value is! Map ||
+          (e.value['at'] as int? ?? 0) < now - journalAge.inMilliseconds) {
         node.store.removeSetting('imports/${e.key}');
       }
     }
@@ -409,7 +417,9 @@ class Files {
         );
       }
       final path = node.store.path;
-      final free = path == null ? null : NativeDisk.freeBytes(File(path).parent.path);
+      final free = path == null
+          ? null
+          : NativeDisk.freeBytes(File(path).parent.path);
       if (free != null && needed > free - diskReserve) {
         throw StateError(
           '$name needs ${_sizeText(needed)}, but this device has '
@@ -441,7 +451,6 @@ class Files {
   /// here, so its chunks can be offered to other devices and counted as
   /// cached. Returns false when a list chunk is not stored here yet.
   Future<bool> indexTree(Json payload) => indexChunkTree(node, payload);
-
 
   static final _complete = Expando<LinkedHashSet<String>>();
 
@@ -594,6 +603,53 @@ class Files {
     shown: true,
     keepData: keepData,
   );
+
+  /// Bounded random access to encrypted file chunks. A deep tree lookup
+  /// visits only its ancestor lists; it never streams earlier file bytes.
+  Future<Uint8List> readRange(SignedObject object, int offset, int length) =>
+      _rangeQueue.run('${object.id}/$offset/$length', () async {
+        if (offset < 0 || length < 0 || length > 256 * 1024)
+          throw StateError('Invalid file range');
+        final payload = await node.content(object);
+        final size = payload?['size'];
+        if (payload == null ||
+            size is! int ||
+            offset > size ||
+            length > size - offset)
+          throw StateError('Range is outside file');
+        final key = payload['key'] is String ? unb64(payload['key']) : null;
+        final pages = _rangePages[node] ??= LinkedHashMap();
+        Future<Uint8List> open(String hash) async {
+          final cacheKey = '${object.id}/$hash';
+          final cached = pages.remove(cacheKey);
+          if (cached != null) {
+            pages[cacheKey] = cached;
+            return cached;
+          }
+          final plain = await _Fetch(this, object, key, [
+            hash,
+          ], asFile: hasChunkTree(payload)).chunk(0);
+          pages[cacheKey] = plain;
+          while (pages.length > 32) {
+            pages.remove(pages.keys.first);
+          }
+          return plain;
+        }
+
+        final bytes = payload['chunkBytes'] as int;
+        final out = BytesBuilder(copy: false);
+        var at = offset;
+        while (at < offset + length) {
+          final hash = await chunkHashAt(payload, at ~/ bytes, open);
+          final data = await open(hash);
+          final start = at % bytes;
+          final n = min(offset + length - at, data.length - start);
+          if (n <= 0) throw StateError('File chunk is cut short');
+          out.add(Uint8List.sublistView(data, start, start + n));
+          at += n;
+        }
+        return out.takeBytes();
+      });
 
   /// Drops this device's copy of the data chunks of tree-listed [object]
   /// once another device has shown it holds them, by sending a sample of

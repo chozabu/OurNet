@@ -17,8 +17,9 @@ mod pack;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::rc::Rc;
+use std::cell::RefCell;
 
-use ournet_plugin::{files, json, store, ui, Audience, Context, Object, Plugin, Scope, Value};
+use ournet_plugin::{files, file_ranges, index, json, store, ui, Audience, Context, Object, Plugin, Scope, Value};
 use pack::{Lookup, Sha};
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +39,7 @@ const RETRY_MS: u32 = 30_000;
 const RETRY_TIMER: u64 = 2;
 /// What this version keeps in storage. Before 2, packs travelled as
 /// `x.git.chunk` objects; those pushes are left out and pushed again.
-const FORMAT: &[u8] = b"3";
+const FORMAT: &[u8] = b"4";
 
 /// A person's public space: their own repositories, followed by friends.
 fn home(person: &str) -> String {
@@ -75,6 +76,13 @@ fn valid_name(name: &str) -> bool {
         && name.len() <= 100
         && !name.starts_with('.')
         && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+}
+
+fn valid_ref(name: &str) -> bool {
+    name.starts_with("refs/") && !name.ends_with('/') && !name.ends_with('.')
+        && !name.contains("..") && !name.contains("@{") && !name.contains("//")
+        && !name.bytes().any(|b| b <= 32 || b == 127 || b"~^:?*[\\".contains(&b))
+        && name.split('/').all(|part| !part.is_empty() && !part.starts_with('.') && !part.ends_with(".lock"))
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -162,46 +170,96 @@ fn load_pack(push: &str) -> Result<Vec<u8>, String> {
     files::read(push)
 }
 
-/// The objects of one repository: where each is, and the packs lately read.
+fn transient(error: &str) -> bool {
+    ["not here", "No online source", "TimeoutException", "queue is full"].iter().any(|s| error.contains(s))
+}
+
+/// Packed attachment windows. Clones share a small page LRU, never the pack.
+#[derive(Clone)]
+struct FilePack {
+    id: String,
+    size: u64,
+    bucket: String,
+    pages: Rc<RefCell<Vec<(u64, Rc<Vec<u8>>)>>>,
+}
+
+impl FilePack {
+    fn new(id: &str, size: u64, key: &str) -> Self {
+        Self { id: id.into(), size, bucket: format!("objects/{key}"), pages: Rc::new(RefCell::new(Vec::new())) }
+    }
+}
+
+impl pack::Source for FilePack {
+    fn len(&self) -> u64 { self.size }
+    fn range(&mut self, offset: u64, length: usize) -> Result<Vec<u8>, String> {
+        if offset > self.size || length as u64 > self.size - offset { return Err("pack range is outside file".into()); }
+        let mut out = Vec::with_capacity(length);
+        let mut at = offset;
+        while out.len() < length {
+            let page = at / 65536 * 65536;
+            let cached = { let mut pages = self.pages.borrow_mut(); pages.iter().position(|(p,_)| *p == page).map(|i| { let v=pages.remove(i); let data=v.1.clone(); pages.push(v); data }) };
+            let bytes = match cached {
+                Some(bytes) => bytes,
+                None => {
+                    let n = (self.size - page).min(65536) as u32;
+                    let bytes = Rc::new(file_ranges::read(&self.id, page, n)?);
+                    if bytes.len() != n as usize { return Err("file range was cut short".into()); }
+                    let mut pages = self.pages.borrow_mut();
+                    if pages.len() >= 4 { pages.remove(0); }
+                    pages.push((page, bytes.clone()));
+                    bytes
+                }
+            };
+            let start = (at - page) as usize;
+            let n = (length-out.len()).min(bytes.len()-start);
+            out.extend_from_slice(&bytes[start..start+n]);
+            at += n as u64;
+        }
+        Ok(out)
+    }
+    fn find(&mut self, sha: &Sha) -> Option<u64> {
+        let record = index::get(&self.bucket, &pack::hex(sha)).ok()??;
+        if record.len() < 17 || &record[17..] != self.id.as_bytes() { return None; }
+        Some(u64::from_be_bytes(record[..8].try_into().ok()?))
+    }
+}
+
+/// Object locations are indexed on disk; only recent range windows live here.
 struct Objects {
     key: String,
-    /// Indexed pushes with packs, by ID.
-    packs: Vec<String>,
-    at: HashMap<Sha, (usize, u32)>,
-    cache: Vec<(usize, Rc<Vec<u8>>)>,
+    sources: Vec<FilePack>,
+    reading: BTreeSet<Sha>,
 }
 
 impl Objects {
-    fn load(key: &str, pushes: &[Push]) -> Objects {
-        let mut o = Objects { key: key.into(), packs: Vec::new(), at: HashMap::new(), cache: Vec::new() };
-        for p in pushes.iter().filter(|p| p.indexed == 1 && p.pack) {
-            let n = o.packs.len();
-            for e in pack::load_entries(&store::get(&format!("idx/{}", p.id)).unwrap_or_default()) {
-                o.at.insert(e.sha, (n, e.offset));
-            }
-            o.packs.push(p.id.clone());
-        }
-        o
-    }
-
-    fn pack(&mut self, n: usize) -> Result<Rc<Vec<u8>>, String> {
-        if let Some((_, p)) = self.cache.iter().find(|(i, _)| *i == n) {
-            return Ok(p.clone());
-        }
-        let bytes = Rc::new(load_pack(&self.packs[n as usize])?);
-        let held: usize = self.cache.iter().map(|(_, p)| p.len()).sum();
-        let mut held = held;
-        while !self.cache.is_empty() && (held + bytes.len() > 24 * 1024 * 1024 || self.cache.len() >= 4) {
-            held -= self.cache.remove(0).1.len();
-        }
-        self.cache.push((n, bytes.clone()));
-        Ok(bytes)
+    fn load(key: &str, _pushes: &[Push]) -> Self {
+        Self { key: key.into(), sources: Vec::new(), reading: BTreeSet::new() }
     }
 
     fn read(&mut self, sha: &Sha) -> Option<(u8, Vec<u8>)> {
-        let (n, offset) = *self.at.get(sha)?;
-        let pack = self.pack(n).ok()?;
-        pack::read_at(&pack, offset as usize, &HashMap::new(), self).ok()
+        if !self.reading.insert(*sha) { return None; }
+        let result = self.read_inner(sha);
+        self.reading.remove(sha);
+        result
+    }
+
+    fn read_inner(&mut self, sha: &Sha) -> Option<(u8, Vec<u8>)> {
+        let record = index::get(&format!("objects/{}", self.key), &pack::hex(sha)).ok()??;
+        if record.len() < 17 { return None; }
+        let offset = u64::from_be_bytes(record[..8].try_into().ok()?);
+        let size = u64::from_be_bytes(record[8..16].try_into().ok()?);
+        let id = std::str::from_utf8(&record[17..]).ok()?;
+        let mut source = if let Some(i) = self.sources.iter().position(|p| p.id == id) {
+            let source = self.sources.remove(i);
+            self.sources.push(source.clone());
+            source
+        } else {
+            let source = FilePack::new(id, size, &self.key);
+            if self.sources.len() >= 4 { self.sources.remove(0); }
+            self.sources.push(source.clone());
+            source
+        };
+        pack::read_at(&mut source, offset, &HashMap::new(), self).ok()
     }
 
     fn commit(&mut self, sha: &Sha) -> Option<pack::Commit> {
@@ -219,18 +277,8 @@ impl Objects {
     }
 
     /// Follows annotated tags down to what they name.
-    fn peel(&mut self, mut sha: Sha) -> Sha {
-        for _ in 0..8 {
-            match self.read(&sha) {
-                Some((pack::TAG, data)) => match pack::tag_target(&data) {
-                    Some(t) => sha = t,
-                    None => break,
-                },
-                _ => break,
-            }
-        }
-        sha
-    }
+    fn peel(&mut self, sha: Sha) -> Sha { pack::peel(sha, self) }
+
 }
 
 impl Lookup for Objects {
@@ -288,6 +336,8 @@ struct Git {
     /// Pushes whose packs were not here, to ask for again.
     retry: Vec<(String, String)>,
     indexing: Option<(String, String, pack::Indexer)>,
+    index_waiting: bool,
+    progress_at: u64,
     followed: BTreeSet<String>,
 
     // Where the page is.
@@ -304,6 +354,7 @@ struct Git {
     commits_shown: usize,
     pushes_shown: usize,
     branch_filter: String,
+    branch_offset: usize,
     delete_name: String,
     clone_open: bool,
     branches_open: bool,
@@ -389,6 +440,7 @@ impl Git {
         if o.kind == DELETE {
             let repo = self.repo_for(&o.space, &name, &o.author, o.created);
             if !repo.delete_before(o.created) { return None; }
+            let _ = index::clear(&format!("objects/{key}"));
             self.ref_cache.remove(&key);
             self.status_cache.remove(&key);
             self.load_pushes(&key).retain(|p| {
@@ -404,7 +456,11 @@ impl Git {
                 self.indexing = None;
                 store::remove("indexing");
             }
+            self.index_waiting = false;
             self.objects = None;
+            let retained: Vec<String> = self.load_pushes(&key).iter_mut().map(|p| { p.indexed=0; p.error.clear(); p.id.clone() }).collect();
+            for id in retained { self.queue.push_back((key.clone(), id)); }
+            self.save_pushes(&key);
             self.save_repos();
             return Some(key);
         }
@@ -534,14 +590,16 @@ impl Git {
     // Indexing ------------------------------------------------------------
 
     fn schedule(&self) {
-        if self.indexing.is_some() || !self.queue.is_empty() {
+        if !self.index_waiting && (self.indexing.is_some() || !self.queue.is_empty()) {
             ournet_plugin::timer::set(INDEX_TIMER, 10);
         }
     }
 
     fn index_step(&mut self) {
+        let tick_end = ournet_plugin::now() + STEP_MS;
         if self.indexing.is_none() {
             while let Some((key, id)) = self.queue.pop_front() {
+                if ournet_plugin::now() >= tick_end { self.queue.push_front((key, id)); break; }
                 let Some(position) = self.push_position(&key, &id) else { continue };
                 let push = self.pushes[&key][position].clone();
                 if push.complete() {
@@ -551,38 +609,53 @@ impl Git {
                     self.finish(&key, &id, Ok(Vec::new()));
                     continue;
                 }
-                if push.size > MAX_PACK as u64 {
-                    self.finish(&key, &id, Err("Pack is available to clone, but exceeds this device's in-memory browsing budget.".into()));
-                    continue;
-                }
-                let bytes = match load_pack(&id) {
-                    Ok(bytes) => bytes,
-                    Err(e) => {
-                        // Not here yet, and no friend that has it answered.
-                        self.waiting(&key, &id, e);
-                        continue;
-                    }
-                };
+                let source = FilePack::new(&id, push.size, &key);
                 let _ = store::set("indexing", id.as_bytes());
-                match pack::Indexer::new(bytes) {
+                match pack::Indexer::from_source(Box::new(source)) {
                     Ok(ix) => {
-                        self.indexing = Some((key, id, ix));
+                        let checkpoint = store::get_json(&format!("checkpoint/{id}")).unwrap_or((12u64, 0u32, false));
+                        self.indexing = Some((key, id, ix.resume(checkpoint)));
                         break;
                     }
+                    Err(e) if transient(&e) => self.waiting(&key, &id, e),
                     Err(e) => self.finish(&key, &id, Err(e)),
                 }
             }
         }
-        let Some((key, id, mut ix)) = self.indexing.take() else { return };
+        let Some((key, id, mut ix)) = self.indexing.take() else { self.schedule(); return };
         if self.objects.as_ref().map(|o| o.key != key).unwrap_or(true) {
-            let pushes = self.load_pushes(&key).clone();
-            self.objects = Some(Objects::load(&key, &pushes));
+            self.objects = Some(Objects::load(&key, &[]));
         }
         let until = ournet_plugin::now() + STEP_MS;
-        match ix.step(&mut Earlier(&mut self.objects), || ournet_plugin::now() < until) {
-            Ok(true) => self.finish(&key, &id, Ok(ix.entries)),
-            Ok(false) => self.indexing = Some((key, id, ix)),
-            Err(e) => self.finish(&key, &id, Err(e)),
+        let result = ix.step(&mut Earlier(&mut self.objects), || ournet_plugin::now() < until);
+        if self.repo.as_deref() == Some(&key) && ournet_plugin::now().saturating_sub(self.progress_at) >= 200 {
+            self.progress_at = ournet_plugin::now();
+            ui::update(SURFACE, &json!({"indexProgress": ix.progress()}));
+        }
+        let entries = ix.take_entries();
+        let size = self.pushes[&key][self.push_positions[&key][&id]].size;
+        let values: Vec<(String, Vec<u8>)> = entries.iter().map(|e| {
+            let mut value = e.offset.to_be_bytes().to_vec();
+            value.extend_from_slice(&size.to_be_bytes());
+            value.push(e.kind);
+            value.extend_from_slice(id.as_bytes());
+            (pack::hex(&e.sha), value)
+        }).collect();
+        let stored = if values.is_empty() { Ok(()) } else { index::put(&format!("objects/{key}"), &values) };
+        if let Err(error) = stored {
+            self.finish(&key, &id, Err(error));
+        } else {
+            let _ = store::set_json(&format!("checkpoint/{id}"), &ix.checkpoint());
+            match result {
+                Ok(true) => self.finish(&key, &id, Ok(Vec::new())),
+                Ok(false) => self.indexing = Some((key, id, ix)),
+                Err(error) if transient(&error) => {
+                    self.waiting(&key, &id, error);
+                    self.index_waiting = true;
+                    self.indexing = Some((key, id, ix));
+                },
+                Err(error) => self.finish(&key, &id, Err(error)),
+            }
         }
         self.schedule();
     }
@@ -591,6 +664,10 @@ impl Git {
     /// earlier one kept and reads every repository and push back from the
     /// host, which sends each object only once.
     fn rebuild(&mut self) {
+        // Object entries are derived and isolated from signed history.
+        // Existing repository buckets are cleared once when migrating formats.
+        let known: BTreeMap<String, Repo> = store::get_json("repos").unwrap_or_default();
+        for key in known.keys() { let _ = index::clear(&format!("objects/{key}")); }
         for key in store::keys("") {
             store::remove(&key);
         }
@@ -638,7 +715,7 @@ impl Git {
 
     fn finish(&mut self, key: &str, id: &str, result: Result<Vec<pack::Entry>, String>) {
         let outcome = match result {
-            Ok(entries) => store::set(&format!("idx/{id}"), &pack::save_entries(&entries)).map(|_| ()),
+            Ok(_) => Ok(()),
             Err(e) => Err(e),
         };
         if let Some(position) = self.push_position(key, id) {
@@ -660,17 +737,7 @@ impl Git {
         }
         self.save_push(key, id);
         store::remove("indexing");
-        if self.objects.as_ref().is_some_and(|o| o.key == key) {
-            let push = self.push_position(key, id).and_then(|i| self.pushes[key].get(i)).filter(|p| p.indexed == 1 && p.pack).cloned();
-            if let Some(push) = push {
-                let objects = self.objects.as_mut().unwrap();
-                let n = objects.packs.len();
-                for entry in pack::load_entries(&store::get(&format!("idx/{id}")).unwrap_or_default()) {
-                    objects.at.insert(entry.sha, (n, entry.offset));
-                }
-                objects.packs.push(push.id);
-            }
-        }
+        store::remove(&format!("checkpoint/{id}"));
         if self.repo.as_deref() == Some(key) {
             self.show();
         }
@@ -770,7 +837,7 @@ impl Git {
             return Err("nothing to push".into());
         }
         for (r, sha) in &refs {
-            if !r.starts_with("refs/") || r.len() > 200 || !(sha.is_empty() || pack::unhex(sha).is_some()) {
+            if !valid_ref(r) || !(sha.is_empty() || pack::unhex(sha).is_some()) {
                 return Err(format!("bad ref {r}"));
             }
         }
@@ -824,14 +891,15 @@ impl Git {
 
     fn open_objects(&mut self, key: &str) -> &mut Objects {
         if self.objects.as_ref().map(|o| o.key != key).unwrap_or(true) {
-            let pushes = self.load_pushes(key).clone();
-            self.objects = Some(Objects::load(key, &pushes));
+            self.objects = Some(Objects::load(key, &[]));
         }
         self.objects.as_mut().unwrap()
     }
 
     fn show(&mut self) {
+        let progress = self.indexing.as_ref().filter(|(key,_,_)| self.repo.as_ref() == Some(key)).map(|(_,_,ix)| ix.progress()).unwrap_or_default();
         let mut data = json!({
+            "indexProgress": progress,
             "mode": match self.mode {
                 Mode::List => "list",
                 Mode::New => "new",
@@ -930,7 +998,7 @@ impl Git {
             notice.push("Reading the newest pushes…".to_string());
         }
         if failed > 0 {
-            notice.push(format!("{failed} pushes could not be read here; git can still fetch them."));
+            notice.push(format!("{failed} {} could not be read here; Activity shows the error. Git can still fetch the original packs.", if failed == 1 { "push" } else { "pushes" }));
         }
         let url = format!("ournet://{}/{}", repo.key, repo.name);
         data["repo"] = json!({
@@ -949,16 +1017,19 @@ impl Git {
             Tab::Settings => "settings",
         }
         .into();
-        data["branches"] = refs
-            .keys()
-            .filter(|r| r.starts_with("refs/heads/") || r.starts_with("refs/tags/"))
-            .filter(|r| r.to_lowercase().contains(&self.branch_filter.to_lowercase()))
-            .map(|r| {
-                let short = r.trim_start_matches("refs/heads/").replace("refs/tags/", "tag ");
-                json!({"ref": r, "name": short, "selected": Some(r) == branch.as_ref()})
-            })
-            .collect::<Vec<_>>()
-            .into();
+        let filter = self.branch_filter.to_lowercase();
+        let mut branches: Vec<Value> = if self.branches_open {
+            refs.keys().filter(|r| r.starts_with("refs/heads/") || r.starts_with("refs/tags/"))
+                .filter(|r| filter.is_empty() || r.to_lowercase().contains(&filter))
+                .skip(self.branch_offset).take(51)
+                .map(|r| json!({"ref": r, "name": r.trim_start_matches("refs/heads/").replace("refs/tags/", "tag "), "selected": Some(r) == branch.as_ref()})).collect()
+        } else { Vec::new() };
+        let more_branches = branches.len() > 50;
+        branches.truncate(50);
+        data["branches"] = branches.into();
+        data["moreBranches"] = more_branches.into();
+        data["previousBranches"] = (self.branch_offset > 0).into();
+        data["refCount"] = refs.len().into();
         data["branch"] = branch
             .as_deref()
             .map(|b| b.trim_start_matches("refs/heads/").to_string())
@@ -1244,7 +1315,7 @@ impl Git {
                     (text, format!("{lines} lines, {}", size(bytes.len() as u64)))
                 }
             }
-            None => (String::new(), "Not here yet.".to_string()),
+            None => (String::new(), "Preview unavailable here; clone the repository to open this object.".to_string()),
         };
         data["file"] = json!({"name": name, "text": text, "note": note});
     }
@@ -1271,10 +1342,10 @@ impl Git {
         });
         let parent_tree = c.parents.first().and_then(|p| objects.commit(p)).and_then(|p| p.tree);
         let mut changes = Vec::new();
-        diff_trees(objects, parent_tree, c.tree, "", &mut changes);
+        let truncated = diff_trees(&mut |sha| objects.tree(sha), parent_tree, c.tree, "", limit + 1, &mut changes);
         let mut lines: Vec<Value> = Vec::new();
         let mut files: Vec<Value> = Vec::new();
-        let mut more = false;
+        let mut more = truncated;
         for (path, status, a, b) in &changes {
             if lines.len() >= limit { more = true; break; }
             files.push(json!({"path": path, "status": status}));
@@ -1340,6 +1411,7 @@ impl Git {
         self.commits_shown = 30;
         self.pushes_shown = 30;
         self.branch_filter.clear();
+        self.branch_offset = 0;
         self.delete_name.clear();
         self.clone_open = false;
         self.branches_open = false;
@@ -1350,6 +1422,8 @@ impl Git {
 
     fn repair_repo(&mut self) {
         let Some(key) = self.repo.clone() else { return };
+        if let Err(e) = index::clear(&format!("objects/{key}")) { self.error = e; return self.show(); }
+        self.index_waiting = false;
         self.status_cache.remove(&key);
         self.commit_page = None;
         self.queue.retain(|(k, _)| k != &key);
@@ -1365,6 +1439,7 @@ impl Git {
         }).collect();
         for id in ids {
             store::remove(&format!("idx/{id}"));
+            store::remove(&format!("checkpoint/{id}"));
             self.queue.push_back((key.clone(), id));
         }
         self.objects = None;
@@ -1509,38 +1584,37 @@ fn ref_state(pushes: &[Push]) -> (BTreeMap<String, String>, Vec<(String, String,
 
 /// Changed files between two trees: path, A/M/D, old and new blob.
 fn diff_trees(
-    objects: &mut Objects,
-    a: Option<Sha>,
-    b: Option<Sha>,
-    prefix: &str,
+    tree: &mut impl FnMut(&Sha) -> Vec<pack::TreeEntry>,
+    a: Option<Sha>, b: Option<Sha>, prefix: &str, limit: usize,
     out: &mut Vec<(String, &'static str, Option<Sha>, Option<Sha>)>,
-) {
-    if a == b || out.len() >= 300 {
-        return;
-    }
-    let left = a.map(|t| objects.tree(&t)).unwrap_or_default();
-    let right = b.map(|t| objects.tree(&t)).unwrap_or_default();
-    let mut names: BTreeSet<&str> = left.iter().map(|e| e.name.as_str()).collect();
-    names.extend(right.iter().map(|e| e.name.as_str()));
-    for name in names {
-        let l = left.iter().find(|e| e.name == name);
-        let r = right.iter().find(|e| e.name == name);
-        let path = format!("{prefix}{name}");
-        let dir = |e: Option<&pack::TreeEntry>| e.filter(|e| e.is_dir()).map(|e| e.sha);
-        let file = |e: Option<&pack::TreeEntry>| e.filter(|e| !e.is_dir() && !e.is_submodule()).map(|e| e.sha);
-        if dir(l).is_some() || dir(r).is_some() {
-            diff_trees(objects, dir(l), dir(r), &format!("{path}/"), out);
+) -> bool {
+    enum Task { Tree(Option<Sha>,Option<Sha>,String), File(String,Option<Sha>,Option<Sha>) }
+    let mut pending = vec![Task::Tree(a,b,prefix.into())];
+    while let Some(task) = pending.pop() {
+        if out.len() >= limit { return true; }
+        match task {
+            Task::File(path, left, right) => {
+                let status = match (left,right) { (None,Some(_)) => "Added", (Some(_),None) => "Deleted", _ => "Changed" };
+                out.push((path,status,left,right));
+            },
+            Task::Tree(a,b,prefix) => {
+                if a==b { continue; }
+                let left: BTreeMap<String,pack::TreeEntry> = a.as_ref().map(&mut *tree).unwrap_or_default().into_iter().map(|e| (e.name.clone(), e)).collect();
+                let right: BTreeMap<String,pack::TreeEntry> = b.as_ref().map(&mut *tree).unwrap_or_default().into_iter().map(|e| (e.name.clone(), e)).collect();
+                let names: BTreeSet<&str> = left.keys().chain(right.keys()).map(String::as_str).collect();
+                for name in names.into_iter().rev() {
+                    let l=left.get(name); let r=right.get(name);
+                    let path=format!("{prefix}{name}");
+                    let dir=|e: Option<&pack::TreeEntry>| e.filter(|e|e.is_dir()).map(|e|e.sha);
+                    let file=|e: Option<&pack::TreeEntry>| e.filter(|e| !e.is_dir() && !e.is_submodule()).map(|e|e.sha);
+                    let (fl,fr)=(file(l),file(r));
+                    if fl!=fr { pending.push(Task::File(path.clone(),fl,fr)); }
+                    if dir(l)!=dir(r) { pending.push(Task::Tree(dir(l),dir(r),format!("{path}/"))); }
+                }
+            }
         }
-        let (fl, fr) = (file(l), file(r));
-        if fl != fr {
-            let status = match (fl, fr) {
-                (None, Some(_)) => "Added",
-                (Some(_), None) => "Deleted",
-                _ => "Changed",
-            };
-            out.push((path, status, fl, fr));
-        }
     }
+    false
 }
 
 /// Text to show for [bytes], at most [max] of them; true when binary.
@@ -1573,8 +1647,10 @@ fn split(payload: &[u8]) -> (Value, &[u8]) {
 impl Plugin for Git {
     fn init(&mut self) {
         self.me = ournet_plugin::me();
-        if store::get("format").as_deref() != Some(FORMAT) {
+        let disk_format = index::get("control", "format").ok().flatten();
+        if store::get("format").as_deref() != Some(FORMAT) || disk_format.as_deref() != Some(FORMAT) {
             self.rebuild();
+            let _ = index::put("control", &[("format".into(), FORMAT.to_vec())]);
         }
         self.repos = store::get_json("repos").unwrap_or_default();
         self.followed = store::get_json("followed").unwrap_or_default();
@@ -1582,8 +1658,8 @@ impl Plugin for Git {
         if let Some(id) = store::get("indexing") {
             let id = String::from_utf8_lossy(&id).to_string();
             for key in self.repos.keys().cloned().collect::<Vec<_>>() {
-                if self.load_pushes(&key).iter().any(|p| p.id == id) {
-                    self.finish(&key.clone(), &id, Err("it stopped the plugin while being read".into()));
+                if self.load_pushes(&key).iter().any(|p| p.id == id) && store::get(&format!("checkpoint/{id}")).is_none() {
+                    self.finish(&key.clone(), &id, Err("indexing stopped before its first checkpoint; rebuild the local index to retry".into()));
                 }
             }
             store::remove("indexing");
@@ -1666,7 +1742,9 @@ impl Plugin for Git {
             "deleteName" => self.delete_name = text("value"),
             "delete" => self.delete_repo(),
             "repair" => self.repair_repo(),
-            "branchFilter" => { self.branch_filter = text("value"); self.show(); },
+            "branchFilter" => { self.branch_filter = text("value"); self.branch_offset = 0; self.show(); },
+            "nextBranches" => { self.branch_offset += 50; self.show(); },
+            "previousBranches" => { self.branch_offset = self.branch_offset.saturating_sub(50); self.show(); },
             "morePushes" => { self.pushes_shown += 30; self.show(); },
             "open" => self.open_repo(&text("key")),
             "tab" => {
@@ -1684,6 +1762,7 @@ impl Plugin for Git {
                 self.branch = Some(text("ref"));
                 self.branches_open = false;
                 self.branch_filter.clear();
+                self.branch_offset = 0;
                 self.path.clear();
                 self.mode = Mode::Repo;
                 self.show();
@@ -1753,6 +1832,7 @@ impl Plugin for Git {
             self.index_step();
         }
         if token == RETRY_TIMER {
+            self.index_waiting = false;
             self.queue.extend(self.retry.drain(..));
             self.schedule();
         }
@@ -1855,6 +1935,33 @@ mod tests {
         forced.force = true;
         let (refs, _) = ref_state(&[pushes[0].clone(), pushes[1].clone(), forced]);
         assert_eq!(refs[main], "b2");
+    }
+
+    #[test]
+    fn tree_diffs_page_beyond_300_files_and_do_not_recurse_on_the_stack() {
+        let root=[1;20];
+        let entries: Vec<_>=(0..1000).map(|i|pack::TreeEntry { mode: 0o100644, name: format!("file-{i:04}"), sha: [2;20] }).collect();
+        let mut lookup=|_: &Sha| entries.clone();
+        let mut changes=Vec::new();
+        assert!(diff_trees(&mut lookup,None,Some(root),"",501,&mut changes));
+        assert_eq!(changes.len(),501);
+        changes.clear();
+        assert!(!diff_trees(&mut lookup,None,Some(root),"",1500,&mut changes));
+        assert_eq!(changes.len(),1000);
+        let mut deep=|sha: &Sha| {
+            let depth=u32::from_be_bytes(sha[..4].try_into().unwrap());
+            let mut next=[0;20]; next[..4].copy_from_slice(&(depth+1).to_be_bytes());
+            vec![pack::TreeEntry { mode: if depth<2000 {0o40000} else {0o100644}, name: "d".into(), sha: next }]
+        };
+        changes.clear();
+        diff_trees(&mut deep,None,Some([0;20]),"",10,&mut changes);
+        assert_eq!(changes.len(),1);
+    }
+
+    #[test]
+    fn git_ref_validation_does_not_impose_a_200_byte_name_limit() {
+        assert!(valid_ref(&format!("refs/heads/{}", "branch-".repeat(80))));
+        for bad in ["refs/heads/a b", "refs/heads/a\nb", "refs/heads/a.lock", "refs/heads/.hidden", "refs/heads/a..b", "refs/heads/a@{b", "refs/heads/a\\b"] { assert!(!valid_ref(bad), "{bad}"); }
     }
 
     #[test]

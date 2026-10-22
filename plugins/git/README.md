@@ -62,6 +62,26 @@ The updated helper requires an app with the streaming local-bridge endpoints.
 The older helper's small-push protocol remains accepted. No app version or peer
 capability floor is raised by this plugin update.
 
+## Large-pack browsing (0.4)
+
+Requires app host API 0.4. An upgrade rebuilds old derived indexes and retries
+packs that 0.3 rejected as too large. No deletion or re-push is needed.
+
+The browser reads 64 KiB windows from encrypted file chunks, verifies and indexes
+incrementally, and stores SHA-to-location lookups in a worker-owned SQLite cache.
+Offsets are 64-bit. Large raw blobs are hashed through a fixed inflate dictionary
+without holding their bodies in memory; their presence does not hide other
+files. Object batches and range windows stay bounded regardless of pack size.
+Progress distinguishes checking the pack from indexing its objects. Checkpoints
+resume at completed object boundaries after restart.
+
+The helper batches large ref updates into ordinary signed records and batches
+local object-presence checks through Git, so many tags do not mean thousands of
+Git subprocesses. The branch picker pages its search results.
+
+These are structural improvements, not a claim that every Git feature or kernel/
+Unreal-sized repository has been validated. See [the limits audit](LIMITS.md).
+
 ## How it works
 
 | Kind | Holds |
@@ -113,11 +133,10 @@ pushes and clones with real git through the bridge.
   put it on the PATH.
 - Pull requests and issues (both would be ordinary signed kinds), forks as
   a button, and per-file history.
-- Browsing packs larger than 16 MiB: transfers work, but the current guest
-  reads packs whole through `files.read`, so it records an explicit browsing
-  error rather than repeatedly trying to fetch them. A range/stream guest API
-  and on-disk object index are needed to browse those packs within bounded
-  memory. Individual blob previews and file diffs also remain bounded.
+- Full large-project qualification: see [LIMITS.md](LIMITS.md). The 0.4 browser
+  reads packed ranges and keeps object locations on disk; a large pack or raw
+  blob no longer makes the entire push unreadable. Decoded-object previews,
+  push/ref metadata and advanced Git features still need further work.
 - Android has no local bridge: it browses repositories but nothing there
   runs git against it.
 

@@ -40,6 +40,31 @@ void main() {
     return out;
   }
 
+  test(
+    'random chunk lookup visits only ancestors, including partial last branches',
+    () async {
+      for (final (count, fanOut) in [
+        (512, 4),
+        (600, 4),
+        (5000, 32),
+        (4097, 8),
+        (1500, 3),
+      ]) {
+        final (listing, lists) = await build(count, fanOut);
+        final payload = {...listing, 'chunkBytes': fanOut * 32};
+        for (final i in [0, count ~/ 2, count - 1]) {
+          var opened = 0;
+          final hash = await chunkHashAt(payload, i, (h) async {
+            opened++;
+            return lists[h]!;
+          });
+          expect(hash, hashOf(i));
+          expect(opened, listing['chunkDepth'] ?? 0);
+        }
+      }
+    },
+  );
+
   test('up to 512 chunks stay inline; more build a tree', () async {
     final (small, _) = await build(inlineChunks, 4096);
     expect(small.keys, ['chunks']);

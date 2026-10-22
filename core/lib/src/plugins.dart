@@ -12,6 +12,8 @@ import 'fast_crypto.dart' show sha256Hex;
 import 'model.dart';
 import 'node.dart';
 import 'plugin_manifest.dart';
+import 'plugin_index.dart';
+import 'chunk_tree.dart';
 import 'plugin_release.dart';
 import 'registry.dart';
 
@@ -346,6 +348,10 @@ class Plugins {
   Future<Json> Function(Stream<List<int>> source, int size, String name)?
   storeFileStream;
   Stream<List<int>> Function(SignedObject object)? openFileStream;
+
+  Future<Uint8List> Function(SignedObject object, int offset, int length)?
+  readFileRange;
+  late final _index = PluginIndex('$directory/.indexes.sqlite');
 
   /// Where compiled code is kept; [directory]'s `.cache` unless given.
   final String cache;
@@ -1282,6 +1288,7 @@ class Plugins {
     for (final id in _running.keys.toList()) {
       _stop(id);
     }
+    await _index.close();
     node.registry.unhandle(liveRequest, _answerRequest);
     _sessionExpiry?.cancel();
     await _remote.close();
@@ -1758,6 +1765,45 @@ class Plugins {
     return local;
   }
 
+  Future<Uint8List> _fileRange(
+    SignedObject object,
+    int offset,
+    int length,
+  ) async {
+    if (offset < 0 || length < 0 || length > 256 * 1024)
+      throw StateError('Invalid file range');
+    final payload = await node.content(object);
+    final size = payload?['size'];
+    if (payload == null ||
+        size is! int ||
+        offset > size ||
+        length > size - offset)
+      throw StateError('Range is outside file');
+    final read = readFileRange;
+    if (read != null)
+      return read(object, offset, length).timeout(const Duration(seconds: 25));
+    final key = payload['key'] is String ? unb64(payload['key']) : null;
+    Future<Uint8List> open(String hash) async {
+      final plain = await node.blobs.decode(hash, key);
+      if (plain == null) throw StateError('File chunk is not here yet');
+      return plain;
+    }
+
+    final bytes = payload['chunkBytes'] as int;
+    final out = BytesBuilder(copy: false);
+    var at = offset;
+    while (at < offset + length) {
+      final hash = await chunkHashAt(payload, at ~/ bytes, open);
+      final data = await open(hash);
+      final start = at % bytes;
+      final n = min(offset + length - at, data.length - start);
+      if (n <= 0) throw StateError('File chunk is cut short');
+      out.add(Uint8List.sublistView(data, start, start + n));
+      at += n;
+    }
+    return out.takeBytes();
+  }
+
   /// Whether [space] belongs to [plugin]: `x.<plugin>` or under it.
   static bool _ownSpace(String plugin, String space) =>
       space == 'x.$plugin' || space.startsWith('x.$plugin.');
@@ -1819,7 +1865,7 @@ class Plugins {
   ]) async {
     // Files are attached to the plugin's own objects: part of that grant.
     final interface = switch (fn.split('.').first) {
-      'files' => 'objects',
+      'files' || 'index' => 'objects',
       final other => other,
     };
     if (PluginManifest.grantable.contains(interface) &&
@@ -1883,6 +1929,35 @@ class Plugins {
         final file = _running[plugin.id]?.files['${args['file']}'];
         if (file == null) throw StateError('No such file: store it first');
         return _publish(plugin, own(args['kind']), args, file: file);
+      case 'index.get':
+        final value =
+            await _index.request(
+                  plugin.id,
+                  'get',
+                  '${args['bucket']}',
+                  key: '${args['key']}',
+                )
+                as Uint8List?;
+        return Uint8List.fromList(value == null ? [0] : [1, ...value]);
+      case 'index.put':
+        await _index.request(
+          plugin.id,
+          'put',
+          '${args['bucket']}',
+          entries: [
+            for (final e in (args['entries'] as List))
+              (e[0] as String, Uint8List.fromList(unb64(e[1] as String))),
+          ],
+        );
+        return null;
+      case 'index.clear':
+        await _index.request(plugin.id, 'clear', '${args['bucket']}');
+        return null;
+      case 'files.range':
+        final o = node.store.get('${args['id']}');
+        if (o == null || PluginKinds.pluginOf(o.kind) != plugin.id)
+          throw StateError('No such object of this plugin');
+        return _fileRange(o, args['offset'] as int, args['length'] as int);
       case 'files.read':
         final o = node.store.get('${args['id']}');
         if (o == null || PluginKinds.pluginOf(o.kind) != plugin.id) {

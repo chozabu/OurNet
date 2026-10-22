@@ -103,8 +103,12 @@ void main() {
     return (node, plugins, bridge);
   }
 
-  Future<Json> until(Plugins plugins, bool Function(Json data) done) async {
-    final deadline = DateTime.now().add(const Duration(seconds: 30));
+  Future<Json> until(
+    Plugins plugins,
+    bool Function(Json data) done, {
+    Duration limit = const Duration(seconds: 30),
+  }) async {
+    final deadline = DateTime.now().add(limit);
     while (!done(plugins.surface('git', 'Git'))) {
       if (DateTime.now().isAfter(deadline)) {
         fail('Timed out; surface is ${plugins.surface('git', 'Git')}');
@@ -293,11 +297,29 @@ void main() {
     );
     expect(code['readme'], contains('Hello from'));
     expect((code['last'] as Map)['title'], 'Second');
-    expect(code['branches'], hasLength(131));
+    expect(code['refCount'], 131);
+    plugins.event('git', 'Git', 'branches', {});
+    final firstRefs = await until(
+      plugins,
+      (d) => (d['branches'] as List?)?.length == 50,
+    );
+    expect(firstRefs['moreBranches'], isTrue);
+    plugins.event('git', 'Git', 'nextBranches', {});
+    final nextRefs = await until(plugins, (d) => d['previousBranches'] == true);
+    expect(
+      (nextRefs['branches'] as List).first,
+      isNot((firstRefs['branches'] as List).first),
+    );
     plugins.event('git', 'Git', 'branchFilter', {'value': 'test12'});
     await until(plugins, (d) => (d['branches'] as List?)?.length == 11);
     plugins.event('git', 'Git', 'branchFilter', {'value': ''});
-    await until(plugins, (d) => (d['branches'] as List?)?.length == 131);
+    await until(
+      plugins,
+      (d) =>
+          (d['branches'] as List?)?.length == 50 &&
+          d['previousBranches'] == false,
+    );
+    plugins.event('git', 'Git', 'branches', {});
 
     plugins.event('git', 'Git', 'tab', {'tab': 'commits'});
     final commits = await until(
@@ -388,7 +410,10 @@ void main() {
     await plugins.restart('git');
     await until(plugins, (_) => plugins['git']?.status == PluginStatus.running);
     plugins.open('git', 'Git', {'scope': 'personal'});
-    final repositories = await until(plugins, (d) => d['mode'] == 'list' && (d['repos'] as List?)?.length == 1);
+    final repositories = await until(
+      plugins,
+      (d) => d['mode'] == 'list' && (d['repos'] as List?)?.length == 1,
+    );
     final repo = (repositories['repos'] as List).single as Map;
     plugins.event('git', 'Git', 'open', {'key': repo['key']});
     await until(plugins, (d) => d['mode'] == 'repo' && d['empty'] == true);
@@ -409,6 +434,16 @@ void main() {
       await ok(['add', '.'], dir: work);
       await ok(['commit', '-m', 'Beyond the old limit'], dir: work);
       await ok(['push', url, 'main'], dir: work);
+      final shown = await until(
+        plugins,
+        (d) => (d['entries'] as List?)?.isNotEmpty ?? false,
+      );
+      expect((shown['entries'] as List).single['name'], 'large.bin');
+      expect((shown['last'] as Map)['title'], 'Beyond the old limit');
+      expect(
+        (shown['repo'] as Map)['notice'],
+        isNot(contains('could not be read')),
+      );
       await ok(['clone', url, 'unbounded-copy']);
       expect(
         File('${temp.path}/unbounded-copy/large.bin').readAsBytesSync(),
@@ -417,6 +452,88 @@ void main() {
     },
     skip: skip,
     timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'thousands of tags span bounded signed ref records',
+    () async {
+      final (node, plugins, _) = await device();
+      final url = await createRepo(plugins, 'many-tags');
+      final work = '${temp.path}/tags';
+      await ok(['init', work]);
+      File('$work/README.md').writeAsStringSync('# Many tags');
+      await ok(['add', '.'], dir: work);
+      await ok(['commit', '-m', 'Tags'], dir: work);
+      final tip = (await git([
+        'rev-parse',
+        'HEAD',
+      ], dir: work)).stdout.toString().trim();
+      final tags = await Process.start('git', [
+        'update-ref',
+        '--stdin',
+      ], workingDirectory: work);
+      for (var i = 0; i < 1500; i++) {
+        tags.stdin.writeln('create refs/tags/v$i $tip');
+      }
+      await tags.stdin.close();
+      expect(await tags.exitCode, 0);
+      await ok(['push', url, 'main', '--tags'], dir: work);
+      await until(plugins, (d) => d['refCount'] == 1501);
+      expect(node.store.allOf(kind: 'x.git.push').length, greaterThan(1));
+      final listed = await git(['ls-remote', url], dir: work);
+      expect(listed.exitCode, 0);
+      expect(
+        listed.stdout.toString().trim().split('\n'),
+        hasLength(1502),
+      ); // HEAD plus refs
+    },
+    skip: skip,
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  test(
+    'the real OurNet checkout pack exposes its files and history',
+    () async {
+      final (_, plugins, _) = await device();
+      final url = await createRepo(plugins, 'checkout');
+      final source = Directory('..').absolute.path;
+      await ok(['push', url, 'main'], dir: source);
+      final shown = await until(
+        plugins,
+        (d) => (d['entries'] as List?)?.isNotEmpty ?? false,
+        limit: const Duration(minutes: 5),
+      );
+      final names = [for (final e in shown['entries'] as List) e['name']];
+      expect(names, containsAll(['app', 'core', 'transport', 'plugins']));
+      expect(
+        (shown['repo'] as Map)['notice'],
+        isNot(contains('could not be read')),
+      );
+      plugins.event('git', 'Git', 'tab', {'tab': 'commits'});
+      await until(plugins, (d) => (d['commits'] as List?)?.isNotEmpty ?? false);
+      plugins.event('git', 'Git', 'repair', {});
+      await until(plugins, (d) => '${d['error']}'.contains('Rebuilding'));
+      // Persisted checkpoints and disk entries survive a host restart.
+      await plugins.restart('git');
+      await until(
+        plugins,
+        (_) => plugins['git']?.status == PluginStatus.running,
+      );
+      plugins.open('git', 'Git', {'scope': 'personal'});
+      final repos = await until(plugins, (d) => d['mode'] == 'list');
+      plugins.event('git', 'Git', 'open', {
+        'key': ((repos['repos'] as List).single as Map)['key'],
+      });
+      await until(
+        plugins,
+        (d) => (d['entries'] as List?)?.isNotEmpty ?? false,
+        limit: const Duration(minutes: 5),
+      );
+    },
+    skip: skip == false && Platform.environment['OURNET_GIT_SCALE'] != '1'
+        ? 'Opt in with OURNET_GIT_SCALE=1 to import the real checkout'
+        : skip,
+    timeout: const Timeout(Duration(minutes: 12)),
   );
 
   test("a large push travels as the push's file", () async {

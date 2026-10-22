@@ -23,6 +23,36 @@ void main() {
   );
 
   test(
+    'random encrypted ranges cross chunks and deep tree boundaries',
+    () async {
+      final node = Node(await LocalIdentity.create(), Store());
+      final network = PeerNetwork(node);
+      addTearDown(() async {
+        await network.stop();
+        await node.close();
+      });
+      final files = Files(node, network);
+      final bytes = data(512 * 32 * 1024 + 4096 + 17);
+      final source = File('${directory.path}/ranges.bin')
+        ..writeAsBytesSync(bytes);
+      final object = await files.publish(source.path, audience: [node.person]);
+      for (final offset in [0, 1020, 32760, bytes.length - 117]) {
+        final length = offset == bytes.length - 117 ? 117 : 4096;
+        expect(
+          await files.readRange(object, offset, length),
+          bytes.sublist(offset, offset + length),
+        );
+      }
+      expect(await files.readRange(object, bytes.length, 0), isEmpty);
+      await expectLater(
+        files.readRange(object, bytes.length, 1),
+        throwsStateError,
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
     'a depth-2 tree stores, indexes and reads back on its own device',
     () async {
       final node = Node(await LocalIdentity.create(), Store());

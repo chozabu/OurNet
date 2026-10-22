@@ -122,6 +122,10 @@ widget RepoHeader = Column(
       true: Padding(padding: [16.0, 4.0, 16.0, 4.0], child: CopyableText(label: "Clone command", text: data.repo.clone)),
       default: SizedBoxShrink(),
     },
+    switch data.indexProgress {
+      "": SizedBoxShrink(),
+      default: Padding(padding: [16.0, 4.0, 16.0, 4.0], child: Text(text: data.indexProgress)),
+    },
     Padding(
       padding: [8.0, 4.0, 8.0, 0.0],
       child: Row(
@@ -203,6 +207,16 @@ widget GitCode = ListView(
               ],
             ),
           ),
+          Row(children: [
+            switch data.previousBranches {
+              true: TextButton(onPressed: event "previousBranches" { }, child: Text(text: "Previous branches/tags")),
+              default: SizedBoxShrink(),
+            },
+            switch data.moreBranches {
+              true: TextButton(onPressed: event "nextBranches" { }, child: Text(text: "More branches/tags")),
+              default: SizedBoxShrink(),
+            },
+          ]),
         ],
       ),
       default: SizedBoxShrink(),
