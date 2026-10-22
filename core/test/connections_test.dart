@@ -157,4 +157,52 @@ void main() {
       contains('Friends'),
     );
   });
+
+  test('the graph reaches out by distance, with links and what was left '
+      'out', () async {
+    await publishAll();
+    await spread();
+    final g = alice.connections.graph();
+    expect(
+      [for (final p in g.people) (p.id, p.hops)],
+      [(alice.person, 0), (bob.person, 1), (carol.person, 2)],
+    );
+    expect(g.people[1].listed, isNotNull);
+    expect(g.links, [(0, 1), (1, 2)]);
+    // Dave is one link past the edge.
+    expect(g.omitted, 1);
+    // Asked again, nothing is worked out twice.
+    expect(identical(alice.connections.graph(), g), isTrue);
+
+    final all = alice.connections.graph(depth: Connections.maxLinks);
+    expect(all.people.map((p) => p.hops), [0, 1, 2, 3]);
+    expect(all.links, [(0, 1), (1, 2), (2, 3)]);
+    expect(all.omitted, 0);
+    expect(all.count(2), 1);
+
+    final capped = alice.connections.graph(depth: 6, maxNodes: 2);
+    expect(capped.people.map((p) => p.id), [alice.person, bob.person]);
+    expect(capped.omitted, 1);
+
+    // Blocked people and everyone only reached through them drop out.
+    alice.block(carol.person, true);
+    final blocked = alice.connections.graph(depth: 6);
+    expect(blocked.people.map((p) => p.id), [alice.person, bob.person]);
+    expect(blocked.omitted, 0);
+  });
+
+  test('a friend of two friends is linked to both, once each', () async {
+    await befriend(alice, carol);
+    await publishAll();
+    await spread();
+    await syncPair(alice, carol);
+    final g = alice.connections.graph(depth: 1);
+    expect(g.people.map((p) => p.id), [
+      alice.person,
+      ...([bob.person, carol.person]..sort()),
+    ]);
+    // Alice-Bob, Alice-Carol and Bob-Carol, each in one direction.
+    expect(g.links, [(0, 1), (0, 2), (1, 2)]);
+    expect(g.omitted, 1);
+  });
 }

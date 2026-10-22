@@ -13,6 +13,35 @@ class FriendList {
   const FriendList(this.id, this.friends, this.devices, this.created);
 }
 
+/// Someone [Connections.graph] reached.
+class GraphPerson {
+  final String id;
+
+  /// Links from this person: 0 for this person, 1 for a friend.
+  final int hops;
+
+  /// When their newest list was written, or null when none is known.
+  final int? listed;
+  const GraphPerson(this.id, this.hops, this.listed);
+}
+
+/// The part of the friend graph around this person, from
+/// [Connections.graph].
+class FriendGraph {
+  /// Closest first; within a distance, in the order they were reached.
+  final List<GraphPerson> people;
+
+  /// Links between people in [people], each once, as indexes into it with
+  /// the lower first.
+  final List<(int, int)> links;
+
+  /// People linked to those shown who were left out for distance or room.
+  final int omitted;
+  const FriendGraph(this.people, this.links, this.omitted);
+
+  int count(int hops) => people.where((p) => p.hops == hops).length;
+}
+
 /// Someone asking this person to connect.
 class ConnectRequest {
   final SignedObject object;
@@ -61,11 +90,13 @@ class Connections {
 
   Map<String, FriendList>? _lists;
   Map<String, Set<String>>? _claimedBy;
+  final _graphs = <String, FriendGraph>{};
 
   /// Called by the node when a friend list is stored.
   void changed() {
     _lists = null;
     _claimedBy = null;
+    _graphs.clear();
   }
 
   /// Each person's newest list, read once and kept until one changes.
@@ -198,6 +229,62 @@ class Connections {
       frontier = next;
     }
     return null;
+  }
+
+  /// Everyone within [depth] links of this person, at most [maxNodes] of
+  /// them, closest first, and the links between them. Blocked and forgotten
+  /// people are left out. Kept until a list, friend or block changes, so it
+  /// can be asked for on every frame.
+  FriendGraph graph({int depth = 2, int maxNodes = 300}) {
+    final mine = this.mine().toList()..sort();
+    final key = [
+      depth,
+      maxNodes,
+      mine.join(','),
+      Object.hashAllUnordered(node.blocked),
+      Object.hashAllUnordered(node.forgotten),
+    ].join('/');
+    if (_graphs[key] case final cached?) return cached;
+    if (_graphs.length > 8) _graphs.clear();
+    bool hidden(String p) =>
+        node.blocked.contains(p) || node.forgotten.contains(p);
+    final index = <String, int>{node.person: 0};
+    final people = [GraphPerson(node.person, 0, lists[node.person]?.created)];
+    final omitted = <String>{};
+    var frontier = [node.person];
+    for (var hops = 1; frontier.isNotEmpty; hops++) {
+      final next = <String>[];
+      for (final p in frontier) {
+        for (final n in neighbours(p).toList()..sort()) {
+          if (index.containsKey(n) || hidden(n)) continue;
+          if (hops > depth || people.length >= maxNodes) {
+            omitted.add(n);
+            continue;
+          }
+          index[n] = people.length;
+          people.add(GraphPerson(n, hops, lists[n]?.created));
+          next.add(n);
+        }
+      }
+      // One ring past the edge is read only to count who was left out.
+      if (hops > depth) break;
+      frontier = next;
+    }
+    final links = <(int, int)>[];
+    for (var i = 0; i < people.length; i++) {
+      final ns = [
+        for (final n in neighbours(people[i].id))
+          if (index[n] case final j? when j > i) j,
+      ]..sort();
+      for (final j in ns) {
+        links.add((i, j));
+      }
+    }
+    return _graphs[key] = FriendGraph(
+      List.unmodifiable(people),
+      List.unmodifiable(links),
+      omitted.length,
+    );
   }
 
   /// This person's devices that still have access.
