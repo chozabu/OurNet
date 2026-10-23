@@ -1,7 +1,8 @@
 # OurNet privacy declaration
 
-_Last updated: 19 September 2026. Applies to OurNet for Android (`org.chozabu.ournet`)
-and Windows (the Microsoft Store app `Chozabu.OurNet`, and the zip download)._
+_Last updated: 23 October 2026. Applies to OurNet for Android (`org.chozabu.ournet`),
+Windows (the Microsoft Store app `Chozabu.OurNet`, and the zip download) and
+Linux (`io.github.chozabu.OurNet`)._
 
 ## The short version
 
@@ -55,6 +56,17 @@ sees your phone's Firebase token, when it is woken, and the IP addresses of the
 devices that wake it; it does not learn who your friends are. Google sees when
 your phone is woken. Turn it off in Settings to stop this.
 
+**Your location, to the people you choose.** If you allow location access,
+your position goes to your own devices and to the friends you pick, precisely
+or only roughly, as you set for each friend. It is sent live over the
+encrypted connection and not logged anywhere, and you can pause it at any
+time.
+
+**To the map provider, while you use the map.** Map images come from
+[OpenFreeMap](https://openfreemap.org), which sees your IP address and roughly
+which area you are looking at. Areas you have viewed are kept on your device,
+and the map can be set not to use the internet at all.
+
 **To a speech service, if you choose one.** Voice notes can be transcribed by
 Whisper, which runs on your device; downloading a Whisper model fetches it from
 Hugging Face, which sees your IP address. If you choose the system speech
@@ -70,8 +82,8 @@ would rather say so plainly than claim nothing ever leaves.
 
 ## What stays on your device
 
-- Your private keys, held in Android's key store, or on Windows encrypted to your
-  Windows account
+- Your private keys, held in Android's key store, on Windows encrypted to your
+  Windows account, or on Linux in a file only you can read
 - Your notes, files and message history, in a local database
 - Text recognised from images, which is processed on-device
 
@@ -84,6 +96,7 @@ would rather say so plainly than claim nothing ever leaves.
 | Microphone | Voice notes and calls |
 | Notifications | Telling you about new messages, replies, calls and note reminders. By default a message notification shows the sender and text, which your phone can hide on the lock screen; Settings can limit it to the sender |
 | Run at startup / exact alarms | Re-scheduling note reminders after a restart (Android); starting in the notification area when you sign in, only if you turn it on in Settings (Windows) |
+| Location | Showing you on the map and sharing your position with the friends you choose; on Android this can continue in the background while OurNet stays connected |
 | Incoming network connections (Windows firewall) | Letting your friends' devices connect directly to yours |
 
 Camera and microphone are used only while you are actively using the feature

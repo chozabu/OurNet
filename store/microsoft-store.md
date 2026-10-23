@@ -31,9 +31,9 @@ Category: **Social networking / communication**.
 - Violence, fear, sex, language, drugs, gambling: **No** (the app ships no
   content; everything comes from the user's own friends).
 - Users can interact or exchange content with each other: **Yes**.
-- Shares the user's location with other users: **Yes**. Users can post a
-  location they type in to friends. The app never reads the device location,
-  but the conservative answer costs nothing.
+- Shares the user's location with other users: **Yes**. Users can share their
+  device location with friends they choose (precise or approximate, per
+  friend), and share saved places.
 - Digital purchases: **No**.
 - Unrestricted internet access, such as a browser: **No**.
 
