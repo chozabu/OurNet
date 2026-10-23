@@ -8,6 +8,7 @@ import 'package:rfw/formats.dart' show parseLibraryFile;
 import 'package:rfw/rfw.dart';
 
 import 'plugin_widgets.dart';
+import 'plugin_markdown.dart';
 
 /// One surface of a plugin: its RFW widget (from the package's `ui.rfwtxt`)
 /// over the data the plugin last sent for it. Events go back to the plugin;
@@ -99,6 +100,26 @@ class _PluginViewState extends State<PluginView> {
           image: (id, height) =>
               widget.image?.call(widget.plugin, id, height) ??
               const SizedBox.shrink(),
+          repositoryFile: (repository, commit, path) async {
+            final answer = await widget.plugins.local(
+              widget.plugin,
+              Uint8List.fromList(
+                utf8.encode(
+                  jsonEncode({
+                    'op': 'blob',
+                    'repo': repository,
+                    'commit': commit,
+                    'path': path,
+                  }),
+                ),
+              ),
+            );
+            final split = answer.indexOf(10);
+            if (split < 0) {
+              throw StateError('Invalid repository image response');
+            }
+            return Uint8List.sublistView(answer, split + 1);
+          },
           pickFile: (accept) async =>
               widget.pickFile?.call(widget.plugin, accept),
         ),
@@ -261,6 +282,7 @@ LocalWidgetLibrary ournetWidgets({
   required Widget Function(String person, double size) avatar,
   Widget Function(String id, double? height)? image,
   Future<Json?> Function(String accept)? pickFile,
+  MarkdownRepositoryFile? repositoryFile,
 }) => LocalWidgetLibrary(<String, LocalWidgetBuilder>{
   ...pluginLayoutWidgets(),
   // The picture attached to one of the plugin's objects, by `object` ID;
@@ -322,12 +344,14 @@ LocalWidgetLibrary ournetWidgets({
     _ago(source.v<int>(['at']) ?? 0),
     style: Theme.of(context).textTheme.bodySmall,
   ),
-  // Markdown-like text: headings, bullets, **bold**, *italic*, [[links]]
-  // that send `onLink` with `{target}`, and lines `![caption](object ID)`
-  // showing that object's picture.
-  'Markup': (context, source) => _Markup(
+  // GFM, presentation HTML, wiki links and attachment/repository images.
+  'Markup': (context, source) => PluginMarkdown(
     text: source.v<String>(['text']) ?? '',
-    image: image,
+    attachmentImage: image,
+    repositoryFile: repositoryFile,
+    repository: source.v<String>(['repository']) ?? '',
+    commit: source.v<String>(['commit']) ?? '',
+    directory: source.v<String>(['directory']) ?? '',
     onLink: source.handler<ValueChanged<String>>(
       ['onLink'],
       (trigger) =>
@@ -567,124 +591,6 @@ class _FilePickState extends State<_FilePick> {
           ),
     label: Text(widget.label),
   );
-}
-
-class _Markup extends StatelessWidget {
-  final String text;
-  final ValueChanged<String>? onLink;
-  final Widget Function(String id, double? height)? image;
-  const _Markup({required this.text, required this.onLink, this.image});
-
-  /// A line that is only `![caption](object ID)`.
-  static final _picture = RegExp(
-    r'^!\[([^\]]*)\]\(([A-Za-z0-9_=+/-]{8,128})\)$',
-  );
-
-  static final _inline = RegExp(r'\*\*(.+?)\*\*|\*(.+?)\*|\[\[(.+?)\]\]');
-
-  List<InlineSpan> _spans(BuildContext context, String line) {
-    final spans = <InlineSpan>[];
-    var at = 0;
-    for (final m in _inline.allMatches(line)) {
-      if (m.start > at) spans.add(TextSpan(text: line.substring(at, m.start)));
-      if (m[1] != null) {
-        spans.add(
-          TextSpan(
-            text: m[1],
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-        );
-      } else if (m[2] != null) {
-        spans.add(
-          TextSpan(
-            text: m[2],
-            style: const TextStyle(fontStyle: FontStyle.italic),
-          ),
-        );
-      } else {
-        final target = m[3]!;
-        spans.add(
-          WidgetSpan(
-            alignment: PlaceholderAlignment.baseline,
-            baseline: TextBaseline.alphabetic,
-            child: InkWell(
-              onTap: onLink == null ? null : () => onLink!(target),
-              child: Text(
-                target,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.primary,
-                  decoration: TextDecoration.underline,
-                ),
-              ),
-            ),
-          ),
-        );
-      }
-      at = m.end;
-    }
-    if (at < line.length) spans.add(TextSpan(text: line.substring(at)));
-    return spans;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context).textTheme;
-    final blocks = <Widget>[];
-    for (final line in const LineSplitter().convert(text)) {
-      final trimmed = line.trimRight();
-      if (trimmed.isEmpty) {
-        blocks.add(const SizedBox(height: 8));
-        continue;
-      }
-      final picture = _picture.firstMatch(trimmed);
-      if (picture != null) {
-        final caption = picture[1]!.trim();
-        blocks.add(
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                image?.call(picture[2]!, 320) ?? const SizedBox.shrink(),
-                if (caption.isNotEmpty) Text(caption, style: theme.bodySmall),
-              ],
-            ),
-          ),
-        );
-        continue;
-      }
-      final heading = RegExp(r'^(#{1,3}) (.*)$').firstMatch(trimmed);
-      final bullet = RegExp(r'^[-*] (.*)$').firstMatch(trimmed);
-      final style = switch (heading?[1]?.length) {
-        1 => theme.headlineSmall,
-        2 => theme.titleLarge,
-        3 => theme.titleMedium,
-        _ => theme.bodyMedium,
-      };
-      final body = heading?[2] ?? bullet?[1] ?? trimmed;
-      final rich = Text.rich(
-        TextSpan(style: style, children: _spans(context, body)),
-      );
-      blocks.add(
-        bullet == null
-            ? Padding(
-                padding: EdgeInsets.only(top: heading == null ? 0 : 8),
-                child: rich,
-              )
-            : Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('  •  '),
-                  Expanded(child: rich),
-                ],
-              ),
-      );
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: blocks,
-    );
-  }
 }
 
 class _Canvas extends StatefulWidget {

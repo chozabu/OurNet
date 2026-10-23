@@ -782,6 +782,22 @@ impl Git {
         }
         let key = self.resolve(request["repo"].as_str().unwrap_or(""))?;
         match op {
+            "blob" => {
+                let commit = request["commit"].as_str().and_then(pack::unhex).ok_or("invalid commit")?;
+                let path = repository_path(request["path"].as_str().unwrap_or(""))?;
+                let (name, parents) = path.split_last().ok_or("no file path")?;
+                let objects = self.open_objects(&key);
+                let commit = objects.peel(commit);
+                let mut tree = objects.commit(&commit).and_then(|c| c.tree).ok_or("commit not available yet")?;
+                for parent in parents {
+                    tree = objects.tree(&tree).into_iter().find(|e| e.name == *parent && e.is_dir())
+                        .ok_or("folder not available yet")?.sha;
+                }
+                let entry = objects.tree(&tree).into_iter().find(|e| e.name == *name && !e.is_dir() && !e.is_submodule())
+                    .ok_or("file not available yet")?;
+                let (_, bytes) = objects.read(&entry.sha).ok_or("image preview unavailable; clone to open the original")?;
+                Ok((json!({"size": bytes.len()}), bytes))
+            }
             "list" => {
                 let refs = self.refs(&key);
                 let head = self.head(&key, &refs);
@@ -1149,7 +1165,10 @@ impl Git {
     }
 
     fn show_code(&mut self, data: &mut Value, tip: Option<Sha>) {
+        let tip = self.commit.as_deref().and_then(pack::unhex).or(tip);
         self.crumbs(data);
+        data["markdownDirectory"] = self.path.join("/").into();
+        data["markdownCommit"] = tip.map(|s| pack::hex(&s)).unwrap_or_default().into();
         data["hasLast"] = false.into();
         data["plugin"] = "".into();
         let Some(tip) = tip else {
@@ -1298,6 +1317,8 @@ impl Git {
             Some(c) => pack::unhex(c),
             None => tip,
         };
+        data["markdownDirectory"] = self.path.join("/").into();
+        data["markdownCommit"] = at.map(|s| pack::hex(&s)).unwrap_or_default().into();
         let entry = at
             .and_then(|t| self.tree_at(t, &self.path.clone()))
             .and_then(|entries| entries.into_iter().find(|e| e.name == name));
@@ -1317,7 +1338,8 @@ impl Git {
             }
             None => (String::new(), "Preview unavailable here; clone the repository to open this object.".to_string()),
         };
-        data["file"] = json!({"name": name, "text": text, "note": note});
+        data["file"] = json!({"name": name, "text": text, "note": note,
+            "markdown": is_markdown(&name)});
     }
 
     fn show_commit(&mut self, data: &mut Value) {
@@ -1618,6 +1640,24 @@ fn diff_trees(
 }
 
 /// Text to show for [bytes], at most [max] of them; true when binary.
+fn repository_path(path: &str) -> Result<Vec<String>, String> {
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {},
+            ".." => { if parts.pop().is_none() { return Err("path leaves repository".into()); } },
+            p if p.contains('\\') || p.contains('\0') => return Err("invalid repository path".into()),
+            p => parts.push(p.to_string()),
+        }
+    }
+    Ok(parts)
+}
+
+fn is_markdown(name: &str) -> bool {
+    let name = name.to_lowercase();
+    name == "readme" || [".md", ".markdown", ".mdown", ".mkdn"].iter().any(|s| name.ends_with(s))
+}
+
 fn text_of(bytes: &[u8], max: usize) -> (String, bool) {
     if bytes[..bytes.len().min(8000)].contains(&0) {
         return (String::new(), true);
@@ -1777,6 +1817,27 @@ impl Plugin for Git {
                     self.mode = Mode::File;
                 }
                 self.show();
+            }
+            "markdownLink" => {
+                if let Ok(mut path) = repository_path(&text("target")) {
+                    self.commit = Some(text("commit"));
+                    if let Some(name) = path.pop() {
+                        let is_dir = self.commit.as_deref().and_then(pack::unhex)
+                            .and_then(|tip| self.tree_at(tip, &path))
+                            .and_then(|entries| entries.into_iter().find(|e| e.name == name))
+                            .is_some_and(|e| e.is_dir());
+                        if is_dir {
+                            path.push(name);
+                            self.file = None;
+                            self.mode = Mode::Repo;
+                        } else {
+                            self.file = Some(name);
+                            self.mode = Mode::File;
+                        }
+                    } else { self.file = None; self.mode = Mode::Repo; }
+                    self.path = path;
+                    self.show();
+                }
             }
             "crumb" => {
                 let depth = args["depth"].as_u64().unwrap_or(0) as usize;

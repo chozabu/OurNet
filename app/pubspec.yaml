@@ -1,7 +1,7 @@
 name: ournet
 description: Friend-to-friend sharing with persistent identities and signed provenance.
 publish_to: none
-version: 0.2.51+50
+version: 0.2.52+50
 
 environment:
   sdk: ^3.12.2
@@ -51,6 +51,10 @@ dependencies:
   http: ^1.6.0
   vector_tile_renderer: ^5.2.1
   rfw: ^1.1.4
+  markdown: ^7.3.1
+  flutter_widget_from_html_core: ^0.17.4
+  html: ^0.15.7
+  flutter_svg: ^2.3.0
 dev_dependencies:
   integration_test:
     sdk: flutter

@@ -273,7 +273,9 @@ widget GitCode = ListView(
       "": SizedBoxShrink(),
       default: Padding(
         padding: [16.0, 12.0, 16.0, 24.0],
-        child: Markup(text: data.readme),
+        child: Markup(text: data.readme, repository: data.repo.url,
+          commit: data.markdownCommit, directory: data.markdownDirectory,
+          onLink: event "markdownLink" { commit: data.markdownCommit }),
       ),
     },
   ],
@@ -386,10 +388,15 @@ widget GitFile = Column(
     Expanded(
       child: SingleChildScrollView(
         padding: [16.0, 4.0, 16.0, 24.0],
-        child: SingleChildScrollView(
-          scrollDirection: "horizontal",
-          child: Mono(text: data.file.text),
-        ),
+        child: switch data.file.markdown {
+          true: Markup(text: data.file.text, repository: data.repo.url,
+            commit: data.markdownCommit, directory: data.markdownDirectory,
+            onLink: event "markdownLink" { commit: data.markdownCommit }),
+          default: SingleChildScrollView(
+            scrollDirection: "horizontal",
+            child: Mono(text: data.file.text),
+          ),
+        },
       ),
     ),
   ],

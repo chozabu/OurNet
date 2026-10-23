@@ -365,6 +365,51 @@ void main() {
     );
   }, skip: skip);
 
+  test('Markdown links and image blobs stay pinned to their repository commit', () async {
+    final (_, plugins, _) = await device();
+    final url = await createRepo(plugins, 'markdown');
+    final work = '${temp.path}/markdown';
+    await ok(['init', work]);
+    File('$work/README.md').writeAsStringSync('# Readme\n[Guide](docs/guide.md)\n![Picture](docs/pic.png)\n');
+    Directory('$work/docs').createSync();
+    File('$work/docs/guide.md').writeAsStringSync('# Guide\n[Back](../README.md)\n');
+    File('$work/docs/pic.png').writeAsBytesSync([1, 2, 3, 4]);
+    await ok(['add', '.'], dir: work);
+    await ok(['commit', '-m', 'Markdown and image'], dir: work);
+    final first = (await git(['rev-parse', 'HEAD'], dir: work)).stdout.toString().trim();
+    await ok(['push', url, 'main'], dir: work);
+    final shown = await until(plugins, (d) => d['markdownCommit'] == first && '${d['readme']}'.contains('# Readme'));
+    expect(shown['markdownDirectory'], '');
+    Future<Uint8List> blob(String commit, String path) async {
+      final answer = await plugins.local('git', Uint8List.fromList(utf8.encode('${jsonEncode({
+        'op': 'blob', 'repo': url, 'commit': commit, 'path': path,
+      })}\n')));
+      return Uint8List.sublistView(answer, answer.indexOf(10) + 1);
+    }
+    expect(await blob(first, 'docs/pic.png'), [1, 2, 3, 4]);
+    await expectLater(blob(first, '../private'), throwsStateError);
+    await expectLater(blob(first, 'docs'), throwsStateError);
+    plugins.event('git', 'Git', 'markdownLink', {'target': 'docs/guide.md', 'commit': first});
+    final guide = await until(plugins, (d) => d['mode'] == 'file' && (d['file'] as Map?)?['name'] == 'guide.md');
+    expect((guide['file'] as Map)['markdown'], true);
+    expect(guide['markdownDirectory'], 'docs');
+    expect(guide['markdownCommit'], first);
+    File('$work/docs/pic.png').writeAsBytesSync([5, 6, 7, 8]);
+    await ok(['add', '.'], dir: work);
+    await ok(['commit', '-m', 'Replace picture'], dir: work);
+    final second = (await git(['rev-parse', 'HEAD'], dir: work)).stdout.toString().trim();
+    await ok(['push', url, 'main'], dir: work);
+    await until(plugins, (d) => !'${(d['repo'] as Map?)?['notice']}'.contains('Reading'));
+    expect(await blob(first, 'docs/pic.png'), [1, 2, 3, 4]);
+    // Wait for the new commit's derived object index, independently of UI focus.
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    while (true) {
+      try { expect(await blob(second, 'docs/pic.png'), [5, 6, 7, 8]); break; }
+      on StateError { if (DateTime.now().isAfter(deadline)) rethrow; await Future<void>.delayed(const Duration(milliseconds: 20)); }
+    }
+    expect(plugins.surface('git', 'Git')['markdownCommit'], first);
+  }, skip: skip);
+
   test('deletion retires old pushes and the same name starts fresh', () async {
     final (node, plugins, _) = await device();
     await createRepo(plugins, 'retired');

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ournet/ui/plugin_markdown.dart';
 import 'package:ournet/ui/plugin_view.dart';
 import 'package:ournet/ui/remote_session_banner.dart';
 import 'package:ournet_core/ournet_core.dart';
@@ -133,6 +134,17 @@ class Rig {
 
   Future<void> untilText(String text) =>
       until(() => find.text(text).evaluate().isNotEmpty);
+
+  /// Markdown renders off the UI isolate into rich text.
+  Future<void> untilMarkdown(String text) => until(
+    () => find
+        .descendant(
+          of: find.byType(PluginMarkdown),
+          matching: find.textContaining(text, findRichText: true),
+        )
+        .evaluate()
+        .isNotEmpty,
+  );
 
   Future<void> shot(String name) async {
     if (_shots.isEmpty) return;
@@ -401,16 +413,11 @@ void main() {
     expect(find.textContaining('from phone'), findsNothing);
     await tester.tap(find.text('Close'));
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.byTooltip('Hide banner (remember on this device)'),
-    );
+    await tester.tap(find.byTooltip('Hide banner (remember on this device)'));
     await tester.pumpAndSettle();
     expect(find.text('Being controlled by Phone'), findsNothing);
     expect(rig.plugins.remoteSessions, isNotEmpty);
-    expect(
-      rig.node.store.setting(remoteSessionBannerHiddenSetting),
-      true,
-    );
+    expect(rig.node.store.setting(remoteSessionBannerHiddenSetting), true);
     // Recreating the widget must retain the preference, even with an active
     // session. Settings can restore the banner without stopping sharing.
     await tester.pumpWidget(const SizedBox());
@@ -461,14 +468,14 @@ void main() {
     await rig.until(() => true);
     await rig.shot('wiki-edit');
     await tester.tap(find.text('Save'));
-    await rig.untilText('Welcome');
+    await rig.untilMarkdown('Welcome');
     expect(find.text('Home'), findsOneWidget);
     await rig.shot('wiki-page');
     final stored = rig.node.store.objects(kind: 'x.wiki.page');
     expect(stored.single.app, 'wiki@0.2.0');
 
     // A link to a page nobody wrote starts it.
-    await tester.tap(find.text('Recipes'));
+    await tester.tapOnText(find.textRange.ofSubstring('Recipes'));
     await rig.untilText('New page');
     expect(find.text('Recipes'), findsOneWidget);
     await tester.tap(find.text('Cancel'));
@@ -484,7 +491,7 @@ void main() {
     );
     await tester.tap(find.text('Save'));
     await rig.untilText('History');
-    expect(find.text('Second version'), findsOneWidget);
+    await rig.untilMarkdown('Second version');
     await tester.tap(find.text('History'));
     await rig.until(
       () => find.textContaining('characters').evaluate().length == 2,
@@ -541,7 +548,7 @@ void main() {
     );
     await tester.tap(find.text('Save'));
     await rig.untilText('picture wiki ${picture.id}');
-    expect(find.textContaining('The end.'), findsOneWidget);
+    await rig.untilMarkdown('The end.');
     final page = rig.node.store.objects(kind: 'x.wiki.page').single;
     final payload = (await tester.runAsync(() => rig.node.content(page)))!;
     expect(payload['chunks'], isNotEmpty);
@@ -551,9 +558,7 @@ void main() {
 
     // Search and the activity feed open the plugin at an object.
     await rig.show('wiki', 'Wiki', image: image, object: page.id);
-    await rig.until(
-      () => find.textContaining('The end.').evaluate().isNotEmpty,
-    );
+    await rig.untilMarkdown('The end.');
     expect(find.text('Cats'), findsOneWidget);
   });
 
@@ -757,7 +762,7 @@ void main() {
       ),
     );
     await rig.untilText('README.md');
-    expect(find.textContaining('Hello from'), findsOneWidget);
+    await rig.untilMarkdown('Hello from');
     await rig.shot('git-code');
     await tester.tap(find.widgetWithText(OutlinedButton, 'main'));
     await rig.untilText('Find a branch or tag');
