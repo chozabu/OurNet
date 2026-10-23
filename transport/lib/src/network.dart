@@ -722,7 +722,9 @@ class PeerNetwork implements PluginLink {
           });
         });
       }
-      unawaited(_accept());
+      for (var i = 0; i < acceptors; i++) {
+        unawaited(_accept());
+      }
       log(local ? 'Local network started' : 'Network started');
       if (automatic) unawaited(syncAll());
     } catch (e) {
@@ -1546,6 +1548,12 @@ class PeerNetwork implements PluginLink {
     if (!running) return;
     await Future.wait(node.contacts.keys.toList().map(sync));
   }
+
+  /// Inbound connections whose handshakes run at once. iroh's accept also
+  /// completes the handshake, so with one waiting a single peer that went
+  /// silent mid-handshake (a phone losing signal, a peer restarting just as
+  /// it was dialled) would hold off every other device until it times out.
+  static const acceptors = 4;
 
   Future<void> _accept() async {
     final endpoint = _endpoint!;
