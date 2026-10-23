@@ -1007,6 +1007,14 @@ class Node {
           route,
     ];
     store.primeEvidence([for (final route in visible) route.id]);
+    // Someone else's object held without a receipt of this device's (it came
+    // through one of this person's devices, perhaps one since removed) cannot
+    // be handed on to friends. Leaving it out tells a friend who can route it
+    // to hand it over afresh; one who cannot offers nothing, so two such
+    // holders settle. Own devices relay without a route and see everything.
+    if (peer != null && peer.person != person) {
+      visible.removeWhere((route) => !_routed(route));
+    }
     return {
       ..._inventoryHeader(peer),
       'have': {for (final route in visible) route.id: ''},
@@ -1321,6 +1329,15 @@ class Node {
             ? ''
             : hash(shared.toList()..sort()).substring(0, 16);
       });
+
+  /// Whether this device can hand [o] on to a friend: it is this person's, or
+  /// this device holds a receipt for it. Records of removed devices are
+  /// dropped when the removal arrives, and their dependants with them.
+  bool _routed(ObjectRoute o) =>
+      o.author == person ||
+      store
+          .evidenceRoutes(o.id)
+          .any((r) => r.receipt && r.signer == identity.device);
 
   /// Per-path digests for an inventory, leaving out objects the two share
   /// nothing for.

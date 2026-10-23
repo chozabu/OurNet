@@ -194,4 +194,57 @@ void main() {
     expect(report['readable'], 1);
     expect(report['unreadable'], isEmpty);
   });
+
+  test('a profile held without a route is routed afresh by its '
+      'author and then reaches the next friend', () async {
+    await setUpDevices();
+    final profile = await friend.publish('profile', {
+      'name': 'Henry',
+    }, space: '_identity');
+    await syncPair(friend, old);
+    await syncPair(old, laptop);
+    await laptop.revoke(old.identity.device);
+    final other = Node(await LocalIdentity.create(), Store());
+    await befriend(laptop, other);
+    // The only route ran through the removed phone: nothing to hand on.
+    await syncPair(laptop, other);
+    expect(other.store.get(profile.id), isNull);
+
+    // The author's device sees it is not held by a route and hands it over.
+    await syncPair(friend, laptop);
+    await syncPair(laptop, other);
+    expect(other.store.get(profile.id), isNotNull);
+    // And settles: nothing more passes either way.
+    expect(await syncPair(friend, laptop), 0);
+    expect(await syncPair(laptop, other), 0);
+  });
+
+  test('two holders without a route settle without offering it', () async {
+    await setUpDevices();
+    final profile = await friend.publish('profile', {
+      'name': 'Henry',
+    }, space: '_identity');
+    // Another person whose removed phone was their only route too.
+    final second = Node(await LocalIdentity.create(), Store());
+    final secondOld = Node(
+      await LocalIdentity.create(root: second.identity.root, label: 'Old'),
+      Store(),
+    );
+    await second.addContact(secondOld.identity.certificate);
+    await secondOld.addContact(second.identity.certificate);
+    await befriend(secondOld, friend);
+    await syncPair(friend, old);
+    await syncPair(old, laptop);
+    await syncPair(friend, secondOld);
+    await syncPair(secondOld, second);
+    await laptop.revoke(old.identity.device);
+    await second.revoke(secondOld.identity.device);
+    await befriend(laptop, second);
+
+    final before = laptop.store.evidence(profile.id).length;
+    await syncPair(laptop, second);
+    expect(await syncPair(laptop, second), 0);
+    expect(laptop.store.evidence(profile.id).length, before);
+    expect(second.store.get(profile.id), isNotNull);
+  });
 }

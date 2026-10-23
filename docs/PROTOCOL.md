@@ -29,7 +29,11 @@ historical evidence, is excluded, and a friend never takes or is sent a revoked
 device's work. This person's own devices are the exception: a device that sends
 `ownRelay` in its inventory is handed, by the person's other devices, what the
 person wrote on a device since removed and what reached them only through one,
-signatures checked, without a delivery route. Other historical validity and
+signatures checked, without a delivery route. Such an object can be handed
+on to friends only once it has a route again: inventories for other people
+leave out someone else's objects this device holds no receipt for, so a peer
+that can route one (its author, or a device holding its own receipt) hands
+it over afresh, and one that cannot offers nothing. Other historical validity and
 recovery policy are not implemented.
 
 Sync inventories carry root-signed device certificates with address hints.
