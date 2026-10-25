@@ -8,6 +8,7 @@ import 'message_text.dart';
 import '../services/noise_suppression.dart';
 import '../services/typing.dart';
 import '../services/windows_tun.dart';
+import '../services/remote_desktop.dart';
 import '../services/location_share.dart';
 import '../services/map_tiles.dart';
 import 'map_page.dart';
@@ -359,6 +360,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// Installed plugins; null where they cannot run (tests, in-memory
   /// profiles). See docs/PLUGINS.md.
   Plugins? plugins;
+  RemoteDesktops? _desktops;
 
   /// The plugin section open, for [Destination.plugin].
   PluginSection? pluginSection;
@@ -1404,6 +1406,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _pluginSections?.cancel();
     _localBridgeSync?.cancel();
     unawaited(_localBridge?.close());
+    _desktops?.dispose();
     unawaited(plugins?.close());
     publicComposer.dispose();
     publicFocus.dispose();
@@ -2034,6 +2037,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                 members: await everyday.members(room),
               ),
           ];
+    if (Platform.isWindows) _desktops = RemoteDesktops(network, plugins);
     _pluginNotices = plugins.notices.listen((n) {
       if (n.kind == 'log') return;
       notice(

@@ -1,0 +1,87 @@
+import core.widgets;
+import core.material;
+import ournet;
+
+widget RemoteDesktop = switch data.viewing {
+  true: Viewer(),
+  default: Setup(),
+};
+
+widget Viewer = Column(crossAxisAlignment: "stretch", children: [
+  Padding(padding: [12.0, 8.0, 12.0, 8.0], child: Wrap(spacing: 8.0, runSpacing: 8.0, crossAxisAlignment: "center", children: [
+    Pill(label: data.viewingName, tone: "active", icon: "computer"),
+    Text(text: "Click the picture to control it. Ctrl+Alt+Shift+F: full view.", style: {fontSize: 12.0}),
+    ActionButton(label: "Disconnect", icon: "stop", style: "tonal", danger: true, onPressed: event "disconnect" {}),
+  ])),
+  Expanded(child: Center(child: DesktopView(session: data.session))),
+]);
+
+widget Setup = ListView(
+  padding: [16.0, 12.0, 16.0, 24.0],
+  children: [
+    Presence(onShown: event "shown" {}, onHidden: event "hidden" {}),
+    Text(text: "Remote Desktop", style: {fontSize: 22.0, fontWeight: "w600"}),
+    Text(text: "See and control your own devices' screens, fast enough for games.", style: {fontSize: 12.0}),
+    switch data.viewed {
+      true: Padding(padding: [0.0, 8.0, 0.0, 0.0], child: Row(children: [
+        Pill(label: data.viewedLabel, tone: "active", icon: "computer"),
+      ])),
+      default: SizedBoxShrink(),
+    },
+    SizedBox(height: 12.0),
+    Responsive(
+      breakpoint: 760.0,
+      narrow: Column(crossAxisAlignment: "stretch", children: [Connect(), SizedBox(height: 12.0), Receive()]),
+      wide: Row(crossAxisAlignment: "start", children: [
+        Expanded(child: Connect()),
+        SizedBox(width: 16.0),
+        Expanded(child: Receive()),
+      ]),
+    ),
+  ],
+);
+
+widget Connect = Panel(
+  title: "View a device", icon: "devices",
+  subtitle: "Choose one of your devices running Remote Desktop with receiving allowed.",
+  child: Column(crossAxisAlignment: "stretch", children: [
+    Choice(label: data.deviceLabel, detail: data.deviceDetail, icon: "computer",
+      options: data.deviceOptions, onSelected: event "select" {}),
+    SizedBox(height: 10.0),
+    Choice(label: data.qualityLabel, detail: "Stream quality", icon: "speed",
+      options: data.qualityOptions, onSelected: event "quality" {}),
+    SizedBox(height: 10.0),
+    Wrap(spacing: 6.0, runSpacing: 6.0, children: [
+      Pill(label: data.remoteLabel, tone: data.remoteTone, icon: "shield"),
+    ]),
+    SizedBox(height: 6.0),
+    Text(text: data.status, style: {fontSize: 12.0}),
+    SizedBox(height: 10.0),
+    Wrap(spacing: 8.0, runSpacing: 8.0, children: [
+      ActionButton(label: data.connectLabel, icon: "play", style: "filled", enabled: data.canConnect, onPressed: event "connect" {}),
+      ActionButton(label: "Preview this screen", icon: "this", style: "outlined", onPressed: event "preview" {}),
+    ]),
+    SizedBox(height: 6.0),
+    Text(text: "Preview shows this device's own screen through the same capture and encoder, without control: a quick check that it works here.", style: {fontSize: 12.0}),
+  ]),
+);
+
+widget Receive = Panel(
+  title: "Receive on this device", icon: "shield",
+  subtitle: "Off until you turn it on. Only your own devices can connect.",
+  child: Column(crossAxisAlignment: "stretch", children: [
+    Toggle(label: "Allow remote desktop", icon: "computer",
+      detail: "Your other devices may see this screen and use its mouse and keyboard.",
+      value: data.receiving, onChanged: event "receiving" {}),
+    SizedBox(height: 6.0),
+    Wrap(spacing: 6.0, runSpacing: 6.0, children: [
+      switch data.viewed {
+        true: Pill(label: data.viewedLabel, tone: "active", icon: "computer"),
+        default: switch data.receiving {
+          true: Pill(label: data.receiveLabel, tone: "warn", icon: "shield"),
+          default: Pill(label: data.receiveLabel, tone: "off", icon: "off"),
+        },
+      },
+    ]),
+  ]),
+);

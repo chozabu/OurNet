@@ -4,7 +4,7 @@
 # which writes `dist/<id>.ournet-plugin`. See docs/PLUGINS.md.
 [workspace]
 resolver = "2"
-members = ["sdk", "pack", "echo", "wiki", "microblog", "tictactoe", "pong", "vpn", "git", "git-remote-ournet", "js", "device-dashboard", "remote-input"]
+members = ["sdk", "pack", "echo", "wiki", "microblog", "tictactoe", "pong", "vpn", "git", "git-remote-ournet", "js", "device-dashboard", "remote-input", "remote-desktop"]
 
 [workspace.package]
 edition = "2021"

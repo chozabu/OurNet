@@ -224,6 +224,23 @@ interface clipboard-write {
   write: func(text: string) -> result<_, string>;
 }
 
+/// Remote desktop sessions. Video, audio and input run natively between
+/// the two devices, never through the plugin, which only says who may
+/// connect and when to show a view. Requires `remote-desktop` (API 0.6).
+interface remote-desktop {
+  /// While answering a live request from one of this person's own devices:
+  /// lets that device open one desktop stream here within 15 seconds. The
+  /// host refuses it for anyone else's device, whatever the plugin decides.
+  admit: func() -> result<_, string>;
+  /// Opens a view of `device`'s desktop, which must have admitted this
+  /// device just before. `options` is JSON: `fps`, `kbps`, `width` (the
+  /// widest stream). Returns the session for a `DesktopView` widget's
+  /// `session`; it connects in the background and shows how it is going.
+  view: func(device: string, options: string) -> result<string, string>;
+  /// Ends a view this plugin opened.
+  close: func(session: string);
+}
+
 world plugin {
   use types.{object};
   import log;
@@ -243,6 +260,7 @@ world plugin {
   import process-control;
   import remote-input;
   import clipboard-write;
+  import remote-desktop;
 
   /// Called once after loading, and after a hot reload's `restore`.
   export init: func();

@@ -489,6 +489,7 @@ class PeerNetwork implements PluginLink {
     'pair',
     'datagrams',
     'ping',
+    'desktop',
   };
 
   /// Connections carrying live datagrams, by device: one this device dialled
@@ -550,6 +551,58 @@ class PeerNetwork implements PluginLink {
       return true;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// Answers `desktop` requests: who may open one, and what streams it.
+  /// The handler throws [StateError] to refuse, or calls
+  /// [DesktopServing.accept] and serves until the stream ends. Without one,
+  /// the request is unknown here, as on builds before it.
+  Future<void> Function(String peer, Json request, DesktopServing stream)?
+  serveDesktop;
+
+  Future<void> _serveDesktop(
+    String peer,
+    Json request,
+    iroh.SendStream send,
+    iroh.Connection connection,
+  ) async {
+    final serve = serveDesktop;
+    if (serve == null) throw StateError('Unknown request');
+    final stream = DesktopServing._(send, connection);
+    try {
+      await serve(peer, request, stream);
+    } catch (e) {
+      if (stream._accepted) {
+        log('Desktop stream to $peer ended: $e');
+      } else {
+        rethrow;
+      }
+    } finally {
+      stream.close();
+    }
+  }
+
+  /// Opens a desktop stream from [device]: a connection of its own, the
+  /// request on its first stream, frames on the reply and datagrams back.
+  /// Throws [StateError] with the reason when [device] refuses.
+  Future<DesktopViewing> openDesktop(String device, Json request) async {
+    final connection = await _connect(device);
+    _connections.add(connection);
+    try {
+      final (send, recv) = await connection.openBi();
+      await send.writeAll(bytes({...request, 'type': 'desktop', ..._stamp}));
+      await send.finish();
+      final viewing = DesktopViewing._(connection, recv, () {
+        _account(connection, device);
+        _connections.remove(connection);
+      });
+      await viewing._readHeader();
+      return viewing;
+    } catch (_) {
+      _connections.remove(connection);
+      connection.close();
+      rethrow;
     }
   }
 
@@ -1731,6 +1784,10 @@ class PeerNetwork implements PluginLink {
       } else {
         if (!node.allowedPeer(peer)) throw StateError('Device not admitted');
         lastInbound[peer] = DateTime.now();
+        if (j['type'] == 'desktop') {
+          await _serveDesktop(peer, j, send, connection);
+          return false;
+        }
         if (const {'pull', 'push', 'delta'}.contains(j['type'])) {
           _notePeer(peer, j);
           if (!_current(j)) throw StateError(outdatedPeer);
@@ -2137,3 +2194,156 @@ bool validWake(Json wake) =>
     (wake['device'] as String).length <= 64 &&
     wake['token'] is String &&
     (wake['token'] as String).length <= 128;
+
+/// The served side of a desktop stream ([PeerNetwork.serveDesktop]).
+class DesktopServing {
+  DesktopServing._(this._send, this._connection);
+  final iroh.SendStream _send;
+  final iroh.Connection _connection;
+  bool _accepted = false, _closed = false;
+  Future<void> _writing = Future.value();
+  int _queued = 0;
+
+  /// Bytes written and not yet taken by QUIC.
+  int get queued => _queued;
+  bool get closed => _closed;
+
+  /// Says yes with [header] (a JSON line), before any frame.
+  Future<void> accept(Json header) {
+    _accepted = true;
+    return write(utf8.encode('${jsonEncode({...header, 'ok': true})}\n'));
+  }
+
+  /// Writes [bytes] after everything written before.
+  Future<void> write(List<int> bytes) {
+    if (_closed) return Future.value();
+    _queued += bytes.length;
+    return _writing = _writing
+        .then((_) => _closed ? null : _send.writeAll(bytes))
+        .whenComplete(() => _queued -= bytes.length);
+  }
+
+  /// Datagrams from the viewer, until the connection closes.
+  Stream<Uint8List> get datagrams async* {
+    try {
+      while (!_closed) {
+        yield await _connection.readDatagram();
+      }
+    } catch (_) {
+      // Closed by either side.
+    }
+  }
+
+  /// Resolves when the viewer's connection closes.
+  Future<void> get done => _connection.closed().then((_) {});
+
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    unawaited(
+      _writing
+          .then((_) => _send.finish())
+          .catchError((Object _) {})
+          .whenComplete(
+            () => Future<void>.delayed(
+              const Duration(milliseconds: 200),
+              _connection.close,
+            ),
+          ),
+    );
+  }
+}
+
+/// The viewing side of a desktop stream ([PeerNetwork.openDesktop]).
+class DesktopViewing {
+  DesktopViewing._(this._connection, this._recv, this._closedHook);
+  final iroh.Connection _connection;
+  final iroh.RecvStream _recv;
+  final void Function() _closedHook;
+  bool _closed = false;
+
+  /// The largest frame read: a 4K keyframe at a high bit rate fits.
+  static const maxFrame = 16 * 1024 * 1024;
+
+  /// What the served side said when it accepted.
+  Json header = const {};
+
+  Uint8List _pending = Uint8List(0);
+
+  Future<Uint8List> _take(int n) async {
+    while (_pending.length < n) {
+      final chunk = await _recv.read(256 * 1024);
+      if (chunk == null) throw StateError('Stream ended');
+      _pending = _pending.isEmpty
+          ? chunk
+          : (BytesBuilder(copy: false)
+                  ..add(_pending)
+                  ..add(chunk))
+                .takeBytes();
+    }
+    final out = Uint8List.sublistView(_pending, 0, n);
+    _pending = Uint8List.sublistView(_pending, n);
+    return out;
+  }
+
+  Future<void> _readHeader() async {
+    final line = BytesBuilder(copy: false);
+    while (true) {
+      final newline = _pending.indexOf(0x0a);
+      if (newline >= 0) {
+        line.add(Uint8List.sublistView(_pending, 0, newline));
+        _pending = Uint8List.sublistView(_pending, newline + 1);
+        break;
+      }
+      line.add(_pending);
+      if (line.length > 64 * 1024) throw StateError('Header too long');
+      final chunk = await _recv.read(64 * 1024);
+      if (chunk == null) {
+        _pending = Uint8List(0);
+        break;
+      }
+      _pending = chunk;
+    }
+    final j = jsonDecode(utf8.decode(line.takeBytes())) as Json;
+    if (j['error'] != null) throw StateError('${j['error']}');
+    header = j;
+  }
+
+  /// Frames as `(type, body)`, in order, until either side ends the stream.
+  Stream<(int, Uint8List)> get frames async* {
+    try {
+      while (!_closed) {
+        final head = await _take(5);
+        final length = ByteData.sublistView(head).getUint32(1, Endian.little);
+        if (length > maxFrame) throw StateError('Frame too large');
+        yield (head[0], await _take(length));
+      }
+    } on StateError {
+      // Ended.
+    } on iroh.IrohException {
+      // Closed.
+    } finally {
+      close();
+    }
+  }
+
+  /// Sends one datagram to the served side; false if it could not go.
+  bool datagram(List<int> data) {
+    if (_closed) return false;
+    try {
+      _connection.sendDatagram(data);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool get closed => _closed;
+
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    _closedHook();
+    _connection.close();
+  }
+}

@@ -13,7 +13,8 @@ class PluginManifest {
   /// its own objects, names and groups, live messages to friends, a virtual
   /// network interface (a VPN), and requests from programs on this computer
   /// through the app's [LocalBridge] (git, for the Git plugin). Device
-  /// monitoring, process control, input and clipboard writes are separate grants.
+  /// monitoring, process control, input, clipboard writes and remote desktop
+  /// are separate grants.
   static const grantable = {
     'objects',
     'identity',
@@ -24,15 +25,17 @@ class PluginManifest {
     'process-control',
     'remote-input',
     'clipboard-write',
+    'remote-desktop',
   };
 
   /// The plugin API versions this build hosts. 0.3 adds permissioned device
   /// monitoring, process control, input and clipboard writes. 0.2 adds `files`.
   /// 0.4 adds bounded file ranges and disk-backed derived indexes.
   /// 0.5 adds the native code browser and interactive commit-network widgets.
+  /// 0.6 adds remote desktop sessions and the `DesktopView` widget.
   /// Packages declare the API they need so older builds refuse them when
   /// reading the package rather than failing to start them.
-  static const apis = {'0.1', '0.2', '0.3', '0.4', '0.5'};
+  static const apis = {'0.1', '0.2', '0.3', '0.4', '0.5', '0.6'};
 
   final String id;
   final String name;

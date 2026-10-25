@@ -49,6 +49,26 @@ pub mod device {
     }
 }
 
+/// Remote desktop sessions (host API 0.6, grant `remote-desktop`). Video
+/// and input never pass through the plugin: it says who may connect and
+/// when to show a view.
+pub mod desktop {
+    use super::{host, Value};
+    /// While answering one of this person's own devices: lets it open one
+    /// desktop stream here within 15 seconds.
+    pub fn admit() -> Result<(), String> {
+        host::remote_desktop::admit()
+    }
+    /// Opens a view of [device]'s desktop (`fps`, `kbps`, `width` in
+    /// [options]); the session is for a `DesktopView` widget.
+    pub fn view(device: &str, options: &Value) -> Result<String, String> {
+        host::remote_desktop::view(device, &options.to_string())
+    }
+    pub fn close(session: &str) {
+        host::remote_desktop::close(session)
+    }
+}
+
 /// A plugin. Every method has a default that does nothing, so a plugin
 /// implements only what it uses. One value lives for as long as the plugin
 /// runs; a hot reload hands its [Plugin::save_state] to the new version.

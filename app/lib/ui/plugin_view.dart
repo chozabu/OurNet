@@ -7,6 +7,7 @@ import 'package:ournet_core/ournet_core.dart';
 import 'package:rfw/formats.dart' show parseLibraryFile;
 import 'package:rfw/rfw.dart';
 
+import 'desktop_view.dart';
 import 'plugin_widgets.dart';
 import 'git_network.dart';
 import 'git_code_browser.dart';
@@ -288,6 +289,12 @@ LocalWidgetLibrary ournetWidgets({
 }) => LocalWidgetLibrary(<String, LocalWidgetBuilder>{
   ...pluginLayoutWidgets(),
   'CommitNetwork': commitNetworkWidget,
+  // Another device's desktop, by the `session` `remote-desktop.view`
+  // returned; `stats: false` hides the figures.
+  'DesktopView': (context, source) => DesktopView(
+    session: source.v<String>(['session']) ?? '',
+    showStats: source.v<bool>(['stats']) ?? true,
+  ),
   'CodeBrowser': gitCodeWidget,
   'GitLocationInput': gitLocationWidget,
   // The picture attached to one of the plugin's objects, by `object` ID;

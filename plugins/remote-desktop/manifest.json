@@ -1,0 +1,6 @@
+{
+  "id":"remote-desktop", "name":"Remote Desktop", "version":"0.1.0", "api":"0.6",
+  "description":"See and control your own Windows devices' screens with low latency: hardware H.264 video, mouse and keyboard, full view for games. Receiving is off until you turn it on, and stays as you set it. Only your own devices can connect.",
+  "grants":["identity","live","remote-desktop"],
+  "sections":[{"name":"desktop","title":"Remote Desktop","icon":"devices","surface":"RemoteDesktop","scopes":["personal"]}]
+}

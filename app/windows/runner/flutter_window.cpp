@@ -2,6 +2,7 @@
 
 #include <optional>
 
+#include "desktop_texture.h"
 #include "flutter/generated_plugin_registrant.h"
 #include "system_speech.h"
 
@@ -32,6 +33,11 @@ bool FlutterWindow::OnCreate() {
       flutter_controller_->engine()->messenger());
   tray_ = std::make_unique<SystemTray>(
       flutter_controller_->engine()->messenger(), GetHandle());
+  desktop_textures_ = std::make_unique<DesktopTextures>(
+      flutter_controller_->engine()->messenger(),
+      FlutterDesktopRegistrarGetTextureRegistrar(
+          flutter_controller_->engine()->GetRegistrarForPlugin(
+              "OurNetDesktopTextures")));
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   // Started with Windows, OurNet waits in the notification area.
@@ -52,6 +58,7 @@ bool FlutterWindow::OnCreate() {
 void FlutterWindow::OnDestroy() {
   speech_ = nullptr;
   noise_suppression_ = nullptr;
+  desktop_textures_ = nullptr;
   tray_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;

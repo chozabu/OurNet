@@ -198,6 +198,7 @@ brief:
 | `process-control` | `process-control` | end a sampled process with a matching start time (API 0.3) |
 | `remote-input` | `remote-input` | bounded mouse, Unicode text and named-key input (API 0.3) |
 | `clipboard-write` | `clipboard-write` | write text without clipboard read access (API 0.3) |
+| `remote-desktop` | `remote-desktop` | admit one of your devices to stream this screen; open and close views of another's (API 0.6, [REMOTE_DESKTOP.md](REMOTE_DESKTOP.md)) |
 | (none) | `local` | requests from programs on this computer arrive as `on-request` from device `local` |
 
 Exports: `init`, `on-objects`, `on-open(surface, context)`, `on-event`,
@@ -425,6 +426,9 @@ Device Dashboard and Remote Input add opt-in, own-device monitoring, process
 control, mouse/keyboard input and write-only clipboard transfer. Their host
 capabilities use API 0.3 with four separate grants. See
 [DEVICE_PLUGINS.md](DEVICE_PLUGINS.md) for setup, permissions and platform limits.
+Remote Desktop streams a screen with hardware H.264 and sends mouse and
+keyboard back, natively, under its own grant (API 0.6); see
+[REMOTE_DESKTOP.md](REMOTE_DESKTOP.md).
 
 | Plugin | Shows | Uses |
 |---|---|---|
@@ -516,6 +520,14 @@ must detect a missing derived index and rebuild it from durable signed objects.
 Git 0.4 declares API 0.4 so older apps refuse it with an API-version message
 rather than linking an unsupported import. Old plugin components continue to
 link on the new host. No network capability floor or file-payload format changes.
+## Remote desktop (host API 0.6)
+
+`DesktopView` takes `session` (from `remote-desktop.view`) and optional
+`stats: false`. It shows the decoded stream as a texture, letterboxed;
+clicking it sends this device's mouse and keyboard while it has focus, and
+Ctrl+Alt+Shift+F toggles a full view. The widget, not the plugin, handles
+input: pointer moves and keys never wait on a plugin call.
+
 ## Native Git browser widgets (host API 0.5)
 
 `CodeBrowser` takes `text`, `repository`, `commit`, `path`, optional `line`,

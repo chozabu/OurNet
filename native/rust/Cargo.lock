@@ -909,6 +909,7 @@ dependencies = [
  "sha2",
  "sysinfo",
  "wasmtime",
+ "windows",
  "windows-sys",
  "x25519-dalek",
 ]

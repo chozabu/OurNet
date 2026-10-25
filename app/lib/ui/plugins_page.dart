@@ -15,6 +15,9 @@ const grantMeanings = {
   'remote-input':
       'Control the mouse and type into other applications on this device',
   'clipboard-write': 'Replace text in this device’s clipboard (cannot read it)',
+  'remote-desktop':
+      'Show this device’s screen to, and take mouse and keyboard from, your '
+      'own devices you allow',
   'objects': 'Save and sync its own data, signed by you',
   'identity': "See your friends' and groups' names and who is in each group",
   'live': "Exchange live messages with friends' devices that run it",
@@ -684,6 +687,7 @@ class _PluginsPageState extends State<PluginsPage> {
               'process-control',
               'remote-input',
               'clipboard-write',
+              'remote-desktop',
             }.contains(g),
           ),
         ))

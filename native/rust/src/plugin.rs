@@ -34,6 +34,7 @@ use crate::tun as interface;
 use ournet::plugin::{
     clock, files, identity, live, log, objects, package_files, plugin_offers, storage, tun, types,
     ui, system_monitor, process_control, remote_input, clipboard_write, file_ranges, index_store,
+    remote_desktop,
 };
 
 /// Posts one message to Dart: the plugin's handle and a buffer Dart frees
@@ -41,7 +42,7 @@ use ournet::plugin::{
 type Post = unsafe extern "C" fn(handle: u64, data: *mut u8, len: usize);
 
 /// Bumped when the message protocol or the WIT world changes.
-const HOST_VERSION: u32 = 5;
+const HOST_VERSION: u32 = 6;
 
 /// CPU time one call into a plugin may use, excluding time spent waiting on
 /// the host. A plugin over it is stopped: it has looped, not worked.
@@ -195,7 +196,7 @@ const ALWAYS: [&str; 7] = ["types", "log", "clock", "storage", "ui", "package-fi
 const OFFER_LIMIT: usize = 4 << 20;
 
 /// Interfaces a plugin may be granted.
-const GRANTABLE: [&str; 8] = ["objects", "identity", "live", "tun", "system-monitor", "process-control", "remote-input", "clipboard-write"];
+const GRANTABLE: [&str; 9] = ["objects", "identity", "live", "tun", "system-monitor", "process-control", "remote-input", "clipboard-write", "remote-desktop"];
 
 /// The largest package entry `package-files.read` returns.
 const FILE_LIMIT: u64 = 16 << 20;
@@ -327,7 +328,7 @@ enum Caller {
 
 /// Capabilities that act on this device for whoever is asking: a live
 /// request may reach them only from one of this person's own devices.
-const OWN_DEVICE_ONLY: [&str; 4] = ["system-monitor", "process-control", "remote-input", "clipboard-write"];
+const OWN_DEVICE_ONLY: [&str; 5] = ["system-monitor", "process-control", "remote-input", "clipboard-write", "remote-desktop"];
 
 /// How often an ongoing remote session is reported to Dart, at most.
 const SESSION_REPORT: Duration = Duration::from_secs(1);
@@ -501,6 +502,34 @@ impl clipboard_write::Host for Host {
         if text.len() > 16384 { return Err("Text exceeds 16 KiB".into()); }
         self.ask("clipboard-write.write", json!({"text": text}))?;
         Ok(())
+    }
+}
+
+impl remote_desktop::Host for Host {
+    fn admit(&mut self) -> Result<(), String> {
+        self.granted("remote-desktop")?;
+        let Caller::Remote { device, .. } = self.caller.clone() else {
+            return Err("Only while answering one of your devices".into());
+        };
+        self.on_behalf("remote-desktop")?;
+        self.ask("remote-desktop.admit", json!({"device": device}))?;
+        Ok(())
+    }
+    fn view(&mut self, device: String, options: String) -> Result<String, String> {
+        self.granted("remote-desktop")?;
+        if self.caller != Caller::Local {
+            return Err("Only for the person at this device".into());
+        }
+        if options.len() > 4096 {
+            return Err("Options too large".into());
+        }
+        let session = self.ask("remote-desktop.view", json!({"device": device, "options": options}))?;
+        Ok(session.as_str().unwrap_or_default().to_string())
+    }
+    fn close(&mut self, session: String) {
+        if self.granted("remote-desktop").is_ok() {
+            let _ = self.ask("remote-desktop.close", json!({"session": session}));
+        }
     }
 }
 
@@ -1421,7 +1450,7 @@ mod tests {
     fn device_capabilities_serve_only_own_devices() {
         let friend = Caller::Remote { device: "friend".into(), own: false };
         let mine = Caller::Remote { device: "laptop".into(), own: true };
-        for capability in ["system-monitor", "process-control", "remote-input", "clipboard-write"] {
+        for capability in ["system-monitor", "process-control", "remote-input", "clipboard-write", "remote-desktop"] {
             assert!(admit(&friend, capability).is_err());
             assert_eq!(admit(&mine, capability), Ok(Some("laptop".into())));
             assert_eq!(admit(&Caller::Local, capability), Ok(None));

@@ -41,7 +41,7 @@ class RemoteSession {
   final String plugin, device;
 
   /// The capabilities it has used: `system-monitor`, `process-control`,
-  /// `remote-input`, `clipboard-write`.
+  /// `remote-input`, `clipboard-write`, `remote-desktop`.
   final Set<String> capabilities = {};
   final DateTime started;
   DateTime last;
@@ -338,6 +338,44 @@ class Plugins {
   /// Closes what [openTun] opened for [plugin].
   void Function(String plugin)? closeTun;
 
+  /// Opens a view of [device]'s desktop for [plugin] (granted
+  /// `remote-desktop`) and returns its session, for a `DesktopView`; it
+  /// connects in the background. Null: no remote desktop here.
+  String Function(String plugin, String device, Json options)? openDesktop;
+
+  /// Ends a view [openDesktop] opened.
+  void Function(String session)? closeDesktop;
+
+  /// Ends the desktop streams this device serves for [plugin]: when it
+  /// stops, or the person stops remote sessions.
+  void Function(String plugin)? stopDesktops;
+
+  /// How long a device a plugin admitted may take to open its stream.
+  static const desktopAdmission = Duration(seconds: 15);
+
+  /// Devices plugins admitted to open a desktop stream here, until when.
+  final _desktopAdmitted = <(String, String), DateTime>{};
+
+  /// Whether [device] may open a desktop stream served for [plugin] now:
+  /// the plugin runs with `remote-desktop`, admitted the device in the last
+  /// [desktopAdmission] (each admission is used once), and the device is
+  /// one of this person's own. Called by the network for each stream.
+  bool admitDesktop(String device, String plugin) {
+    final until = _desktopAdmitted.remove((plugin, device));
+    final running = _running[plugin];
+    return until != null &&
+        DateTime.now().isBefore(until) &&
+        running != null &&
+        running.plugin.status == PluginStatus.running &&
+        running.plugin.granted.contains('remote-desktop') &&
+        ownDevice(device);
+  }
+
+  /// A desktop stream served for [plugin] to [device] is still going: shown
+  /// in the remote-session banner and log like the other capabilities.
+  void desktopServing(String plugin, String device) =>
+      _remoteUsed(plugin, {'device': device, 'capability': 'remote-desktop'});
+
   /// Reads the file attached to [object], fetching chunks this device
   /// lacks from friends, for `files.read`. Without it, only local chunks
   /// are read.
@@ -504,6 +542,7 @@ class Plugins {
     'process-control' => 'ending processes',
     'remote-input' => 'controlling mouse and keyboard',
     'clipboard-write' => 'sending clipboard text',
+    'remote-desktop' => 'viewing and controlling the desktop',
     _ => capability,
   };
 
@@ -1401,6 +1440,8 @@ class Plugins {
     }
     running.changes?.cancel();
     node.registry.withdraw(id);
+    _desktopAdmitted.removeWhere((key, _) => key.$1 == id);
+    stopDesktops?.call(id);
     if (running.handle != null) host?.stop(running.handle!);
     for (final call in running.calls.values) {
       call.completeError(StateError('Plugin stopped'));
@@ -2028,6 +2069,33 @@ class Plugins {
               'devices': devices,
             },
         ];
+      case 'remote-desktop.admit':
+        final device = '${args['device']}';
+        // The native host has refused anyone else's device already.
+        if (!ownDevice(device)) {
+          throw StateError('remote-desktop is only for your own devices');
+        }
+        final now = DateTime.now();
+        _desktopAdmitted.removeWhere((_, until) => now.isAfter(until));
+        if (_desktopAdmitted.length >= 16) {
+          throw StateError('Too many devices waiting to connect');
+        }
+        _desktopAdmitted[(plugin.id, device)] = now.add(desktopAdmission);
+        return null;
+      case 'remote-desktop.view':
+        final open = openDesktop;
+        if (open == null) {
+          throw StateError('Remote desktop does not run on this device');
+        }
+        final device = '${args['device']}';
+        if (device != node.identity.device && !ownDevice(device)) {
+          throw StateError('remote-desktop is only for your own devices');
+        }
+        final options = jsonDecode('${args['options']}');
+        return open(plugin.id, device, options is Map ? options.cast() : {});
+      case 'remote-desktop.close':
+        closeDesktop?.call('${args['session']}');
+        return null;
       case 'tun.open':
         final open = openTun;
         if (open == null) throw StateError('VPNs do not run on this device');

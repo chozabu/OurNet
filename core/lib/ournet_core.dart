@@ -13,6 +13,13 @@ export 'src/plugin_release.dart';
 export 'package:ournet_native/plugin_host.dart' show PluginHost;
 export 'package:ournet_native/ournet_native.dart' show NativeDisk;
 export 'package:ournet_native/noise_suppression.dart' show NoiseSuppression;
+export 'package:ournet_native/desktop.dart'
+    show
+        DesktopCapture,
+        DesktopDecoder,
+        DesktopDatagram,
+        DesktopFrame,
+        desktopAvailable;
 export 'src/node.dart';
 export 'src/store.dart';
 export 'src/blob_worker.dart' show BlobWorker;
