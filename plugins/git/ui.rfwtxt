@@ -115,7 +115,7 @@ widget RepoHeader = Column(
     },
     Padding(
       padding: [16.0, 4.0, 16.0, 0.0],
-      child: Row(children: [OutlinedButton(onPressed: event "clone" { }, child: Text(text: "Code ▾"))]),
+      child: Row(children: [OutlinedButton(onPressed: event "clone" { }, child: Text(text: "Code ▾")), SizedBox(width: 8.0), OutlinedButton(onPressed: event "tab" {tab: "fork"}, child: Text(text: "Fork"))]),
     ),
     Padding(padding: [16.0, 4.0, 16.0, 4.0], child: CopyableText(label: "Repository URL", text: data.repo.url)),
     switch data.cloneOpen {
@@ -128,17 +128,37 @@ widget RepoHeader = Column(
     },
     Padding(
       padding: [8.0, 4.0, 8.0, 0.0],
-      child: Row(
+      child: SingleChildScrollView(scrollDirection: "horizontal", child: Row(
         children: [
           TextButton(onPressed: event "tab" { tab: "code" }, child: Text(text: "Code")),
           TextButton(onPressed: event "tab" { tab: "commits" }, child: Text(text: "Commits")),
           TextButton(onPressed: event "tab" { tab: "pushes" }, child: Text(text: "Activity")),
+          TextButton(onPressed: event "tab" { tab: "pulls" }, child: Text(text: "Pull requests")),
+          TextButton(onPressed: event "tab" { tab: "network" }, child: Text(text: "Network")),
+          TextButton(onPressed: event "tab" { tab: "compare" }, child: Text(text: "Compare")),
           TextButton(onPressed: event "tab" { tab: "settings" }, child: Text(text: "Settings")),
-          Expanded(child: SizedBoxShrink()),
+          SizedBox(width: 12.0),
           Text(text: data.branch, style: { fontWeight: "w600" }),
         ],
-      ),
+      )),
     ),
+    switch data.copyProgress {
+      "": SizedBoxShrink(),
+      default: Padding(padding: [16.0, 4.0, 16.0, 4.0], child: Wrap(children: [Text(text: data.copyProgress),
+        switch data.copyPaused {
+          true: TextButton(onPressed: event "copyResume" {}, child: Text(text: "Resume")),
+          default: TextButton(onPressed: event "copyPause" {}, child: Text(text: "Pause")),
+        },
+      ])),
+    },
+    switch data.error {
+      "": SizedBoxShrink(),
+      default: Padding(padding: [16.0, 4.0, 16.0, 4.0], child: Text(text: data.error)),
+    },
+    switch data.repo.parent {
+      "": SizedBoxShrink(),
+      default: TextButton(onPressed: event "upstream" {}, child: Text(text: "Fork · open upstream repository")),
+    },
     Divider(),
   ],
 );
@@ -149,6 +169,10 @@ widget GitRepo = Column(
     RepoHeader(),
     Expanded(
       child: switch data.tab {
+        "pulls": GitPulls(),
+        "network": GitNetwork(),
+        "compare": GitCompare(),
+        "fork": GitFork(),
         "settings": GitSettings(),
         default: switch data.empty {
         true: SingleChildScrollView(
@@ -385,20 +409,15 @@ widget GitFile = Column(
         ],
       ),
     ),
-    Expanded(
-      child: SingleChildScrollView(
-        padding: [16.0, 4.0, 16.0, 24.0],
-        child: switch data.file.markdown {
-          true: Markup(text: data.file.text, repository: data.repo.url,
-            commit: data.markdownCommit, directory: data.markdownDirectory,
-            onLink: event "markdownLink" { commit: data.markdownCommit }),
-          default: SingleChildScrollView(
-            scrollDirection: "horizontal",
-            child: Mono(text: data.file.text),
-          ),
-        },
-      ),
-    ),
+    Expanded(child: switch data.file.markdown {
+      true: SingleChildScrollView(padding: [16.0, 4.0, 16.0, 24.0],
+        child: Markup(text: data.file.text, repository: data.repo.url,
+          commit: data.markdownCommit, directory: data.markdownDirectory,
+          onLink: event "markdownLink" {commit: data.markdownCommit})),
+      default: CodeBrowser(repository: data.repo.url, commit: data.markdownCommit,
+        path: data.filePath, line: data.jumpLine, text: data.file.text, entries: data.siblings,
+        onOpen: event "entry" {}),
+    }),
   ],
 );
 
@@ -451,3 +470,99 @@ widget GitCommit = Column(
     ),
   ],
 );
+
+
+widget GitCompare = ListView(children: [
+  Padding(padding: [16.0, 8.0, 16.0, 16.0], child: Column(crossAxisAlignment: "stretch", children: [
+    Text(text: "Compare branches or commits", style: {fontSize: 20.0, fontWeight: "w600"}),
+    Text(text: "Compare exact snapshots in this repository or one of its forks."),
+    TextInput(label: "Base ref or commit", value: data.compareBase, onChanged: event "compareBase" {}),
+    TextInput(label: "Head repository URL or key", value: data.compareSource, onChanged: event "compareSource" {}),
+    TextInput(label: "Head ref or commit", value: data.compareHead, onChanged: event "compareHead" {}),
+    Row(children: [ElevatedButton(onPressed: event "compare" {}, child: Text(text: "Compare changes"))]),
+    Divider(), GitLocationInput(onOpen: event "location" {}),
+  ])),
+]);
+
+widget GitFork = SingleChildScrollView(padding: [16.0, 8.0, 16.0, 16.0],
+  child: Column(crossAxisAlignment: "stretch", children: [
+    Text(text: "Fork this repository", style: {fontSize: 20.0, fontWeight: "w600"}),
+    Text(text: "Creates an independent copy of the history known to this device within the same sharing audience. Public forks go in your own public space. Group forks stay in the group. Personal forks stay personal."),
+    TextInput(label: "Fork name", value: data.forkName, maxLength: 100, onChanged: event "forkName" {}),
+    Row(children: [ElevatedButton(onPressed: event "fork" {}, child: Text(text: "Create fork"))]),
+  ]),
+);
+
+widget GitPulls = ListView(children: [
+  Padding(padding: [16.0, 8.0, 16.0, 16.0], child: Column(crossAxisAlignment: "stretch", children: [
+    Text(text: "Pull requests", style: {fontSize: 20.0, fontWeight: "w600"}),
+    ...for p in data.pulls: ListTile(title: Text(text: p.title), subtitle: Row(children: [
+      Text(text: p.status), Text(text: " · "), PersonName(person: p.author),
+    ]), onTap: event "pullOpen" {id: p.id}),
+    Wrap(children: [
+      TextButton(onPressed: event "pullFirst" {}, child: Text(text: "Newest requests")),
+      switch data.morePulls {true: TextButton(onPressed: event "pullNext" {}, child: Text(text: "Older requests")), default: SizedBoxShrink()},
+    ]),
+    switch data.pullSelected {
+      true: Column(crossAxisAlignment: "stretch", children: [
+        Divider(), Text(text: data.pull.title, style: {fontSize: 22.0, fontWeight: "w600"}),
+        Text(text: data.pull.status), PersonName(person: data.pull.author),
+        Text(text: data.pull.source), Text(text: data.pull.headRef), Text(text: "proposes changes into"), Text(text: data.pull.baseRef),
+        Markup(text: data.pull.body),
+        CopyableText(label: "Proposal base commit", text: data.pull.base),
+        CopyableText(label: "Current target commit", text: data.pull.currentBase),
+        CopyableText(label: "Reviewed head commit", text: data.pull.head),
+        Wrap(children: [
+          OutlinedButton(onPressed: event "pullDiff" {}, child: Text(text: "Files changed")),
+          OutlinedButton(onPressed: event "pullAction" {head: data.pull.head, action: "approve"}, child: Text(text: "Approve reviewed commit")),
+          OutlinedButton(onPressed: event "pullAction" {head: data.pull.head, action: "request-changes"}, child: Text(text: "Request changes")),
+        ]),
+        switch data.pullCanManage {true: Wrap(children: [
+          TextButton(onPressed: event "pullAction" {head: data.pull.head, action: "update"}, child: Text(text: "Update proposed head")),
+          TextButton(onPressed: event "pullAction" {head: data.pull.head, action: "close"}, child: Text(text: "Close request")),
+          TextButton(onPressed: event "pullAction" {head: data.pull.head, action: "reopen"}, child: Text(text: "Reopen request")),
+        ]), default: SizedBoxShrink()},
+        switch data.pullCanMerge {true: Wrap(children: [ElevatedButton(onPressed: event "pullMerge" {head: data.pull.head, base: data.pull.currentBase}, child: Text(text: "Merge fast-forward"))]), default: SizedBoxShrink()},
+        Text(text: "A merge verifies ancestry and refuses a changed target. Diverged branches need a local Git merge. Reviews identify a specific proposed commit."),
+        Divider(), Text(text: "Discussion and reviews", style: {fontWeight: "w600"}),
+        ...for c in data.comments: Padding(padding: [0.0, 8.0, 0.0, 8.0], child: Column(crossAxisAlignment: "stretch", children: [
+          Row(children: [PersonName(person: c.author), Text(text: " · "), Text(text: c.action), Text(text: " · "), TimeAgo(at: c.at)]),
+          Markup(text: c.body),
+          switch c.action {
+            "approve": CopyableText(label: "Reviewed commit", text: c.head),
+            "request-changes": CopyableText(label: "Reviewed commit", text: c.head),
+            default: SizedBoxShrink(),
+          },
+        ])),
+        Wrap(children: [TextButton(onPressed: event "commentFirst" {}, child: Text(text: "Newest comments")),
+          switch data.moreComments {true: TextButton(onPressed: event "commentNext" {}, child: Text(text: "Older comments")), default: SizedBoxShrink()},
+        ]),
+        TextInput(label: "Comment or review", value: data.commentDraft, lines: 4, maxLength: 12000, onChanged: event "commentDraft" {}),
+        Wrap(children: [ElevatedButton(onPressed: event "pullAction" {head: data.pull.head, action: "comment"}, child: Text(text: "Comment"))]),
+      ]), default: SizedBoxShrink(),
+    },
+    Divider(), Text(text: "Propose changes from this branch", style: {fontSize: 18.0, fontWeight: "w600"}),
+    TextInput(label: "Target repository URL or key", value: data.pullTarget, onChanged: event "pullTarget" {}),
+    TextInput(label: "Target branch ref", value: data.pullBaseRef, onChanged: event "pullBaseRef" {}),
+    TextInput(label: "Pull request title", value: data.pullTitle, maxLength: 200, onChanged: event "pullTitle" {}),
+    TextInput(label: "Pull request description", value: data.pullBody, lines: 4, maxLength: 12000, onChanged: event "pullBody" {}),
+    Wrap(children: [ElevatedButton(onPressed: event "newPull" {}, child: Text(text: "Create pull request"))]),
+  ])),
+]);
+
+widget GitNetwork = ListView(children: [
+  Padding(padding: [16.0, 8.0, 16.0, 8.0], child: Column(crossAxisAlignment: "stretch", children: [
+    Text(text: "Repository network", style: {fontSize: 20.0, fontWeight: "w600"}),
+    Text(text: "Branches and forks visible to this device. Drag to pan, pinch to zoom, and select a commit to inspect it. Other private forks remain private."),
+    switch data.networkLoading {true: Text(text: "Loading commit connections…"), default: SizedBoxShrink()},
+    SizedBox(height: 430.0, child: CommitNetwork(nodes: data.networkNodes, lanes: data.networkLanes, onCommit: event "networkCommit" {})),
+    Wrap(children: [
+      TextButton(onPressed: event "networkRefresh" {}, child: Text(text: "Newest commits")),
+      switch data.networkMore {true: TextButton(onPressed: event "networkMore" {}, child: Text(text: "Older commits")), default: SizedBoxShrink()},
+      switch data.networkPreviousBranches {true: TextButton(onPressed: event "networkBranchesPrevious" {}, child: Text(text: "Previous branches")), default: SizedBoxShrink()},
+      switch data.networkMoreBranches {true: TextButton(onPressed: event "networkBranchesNext" {}, child: Text(text: "More branches")), default: SizedBoxShrink()},
+    ]),
+    Text(text: "Forks and upstream", style: {fontSize: 18.0, fontWeight: "w600"}),
+    ...for r in data.networkForks: ListTile(title: Text(text: r.name), subtitle: PersonName(person: r.owner), onTap: event "open" {key: r.key}),
+  ])),
+]);
