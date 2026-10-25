@@ -87,7 +87,7 @@ import '../services/note_widgets.dart';
 import '../services/reminders.dart';
 import '../services/calendar_reminders.dart';
 import '../controllers/calendar_controller.dart';
-import 'calendar_dates.dart' show eventTitle, daysBetween;
+import 'calendar_dates.dart' show eventTitle, daysBetween, dateKey;
 import 'calendar_flows.dart';
 import 'calendar_page.dart';
 import 'event_links.dart';

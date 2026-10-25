@@ -985,3 +985,42 @@ delay was 73.240 ms, and typing/update p95 was 11.636 ms. Reports are
 `build/calendar-qualification.log`, `build/calendar-qualification-performance.log`
 and `app/build/performance-calendar-qualified-full-suite.json`. The native
 wrapper restored `native-dev`. No budgets were changed.
+
+### Shared chat and Activity date labels (25 October 2026)
+
+Chat history and Activity day headings now use the calendar's UTC date-label
+helper after extracting each instant's local date. They avoid constructing
+local midnights repeatedly for grouping, while retaining local dates for the
+reader. Relative headings use calendar-day differences rather than elapsed
+24-hour periods, so a 23/25-hour day cannot shift Today/Yesterday. This reduces
+production code by three lines and introduces no persistent cache. The widget
+regression covers both clock-change weekends and current relative headings.
+
+The broader audit found that notes presentation and friend-graph placement
+already retain expensive derived state. Further profiling targets are public
+file filtering (`app/lib/ui/drive.dart`), forum definitions/moderation
+(`app/lib/ui/forum_features.dart`) and older group-chat paging. The first two
+still query retained history during later builds; the third had a 48.373 ms
+paging frame-stage p95 in the earlier qualified full-suite report, despite
+passing its separately enforced typing/update phase. These need dedicated
+history-scaling/profile evidence before a larger incremental-index change.
+
+Validation: analysis is clean; 453 core, 110 transport and 302 app tests pass.
+The first follow-up full performance run under background load passed six
+journeys and failed four: note camera-return event-loop maximum 121.145 ms
+(limit <100), conversation frame-stage p95 18.935 ms and group typing/update
+p95 21.846 ms (limit <16.667), and calendar view-switch event-loop maximum
+101.851 ms (limit <100). Retained report:
+`app/build/performance-date-reuse-loaded-machine.json`.
+
+After the user confirmed the machine was idle, the same enforced Windows
+profile/release-native suite passed all 10 tests, without further source or
+budget changes. Conversation p95 was 9.188 ms, group typing/update p95 was
+12.675 ms, calendar paging p95 was 9.549 ms, and calendar view-switch event-loop
+maximum was 65.951 ms. Group older-message paging still reports 44.167 ms p95;
+that phase is reported separately and currently has no enforced frame gate.
+These runs demonstrate contention sensitivity, not a controlled percentage
+speedup for the date change. Logs: `build/date-reuse-check.log` and
+`build/date-reuse-idle-performance.log`; final report:
+`app/build/performance-date-reuse-idle.json`. The native wrapper restored
+`native-dev`. Physical Android timing remains unvalidated.

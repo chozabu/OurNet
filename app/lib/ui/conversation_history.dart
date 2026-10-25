@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:ournet_core/ournet_core.dart';
+import 'calendar_dates.dart' show dateKey, daysBetween;
 
 /// A reversed message list with day grouping. Its owner retains pagination,
 /// drafts and scroll position; the widget only renders the supplied window.
@@ -85,14 +86,12 @@ class ConversationHistory extends StatelessWidget {
   }
 
   DateTime messageDay(SignedObject o) {
-    final t = DateTime.fromMillisecondsSinceEpoch(o.created).toLocal();
-    return DateTime(t.year, t.month, t.day);
+    return dateKey(DateTime.fromMillisecondsSinceEpoch(o.created));
   }
 
   Widget daySeparator(BuildContext context, DateTime day) {
     final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final gap = today.difference(day).inDays;
+    final gap = daysBetween(day, now);
     const months = [
       'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',

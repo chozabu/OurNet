@@ -131,7 +131,7 @@ extension _ActivityPage on _OurNetAppState {
         dividerShown = true;
       }
       final at = DateTime.fromMillisecondsSinceEpoch(e.at);
-      final d = DateTime(at.year, at.month, at.day).millisecondsSinceEpoch;
+      final d = dateKey(at).millisecondsSinceEpoch;
       if (d != day) {
         rows.add(d);
         day = d;
@@ -205,10 +205,8 @@ extension _ActivityPage on _OurNetAppState {
   }
 
   String activityDay(BuildContext context, int day) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final d = DateTime.fromMillisecondsSinceEpoch(day);
-    final days = today.difference(d).inDays;
+    final d = DateTime.fromMillisecondsSinceEpoch(day, isUtc: true);
+    final days = daysBetween(d, DateTime.now());
     if (days == 0) return 'Today';
     if (days == 1) return 'Yesterday';
     final local = MaterialLocalizations.of(context);

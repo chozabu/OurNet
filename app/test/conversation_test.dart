@@ -7,6 +7,60 @@ import 'package:ournet_core/ournet_core.dart';
 import 'features_test.dart' show settled;
 
 void main() {
+  testWidgets('day headings follow local dates across clock changes', (
+    tester,
+  ) async {
+    final identity = await LocalIdentity.create();
+    final controller = ScrollController();
+    addTearDown(controller.dispose);
+    final history = ConversationHistory(
+      peer: 'dates',
+      objects: const [],
+      controller: controller,
+      bubble: (_, _, _) => const SizedBox.shrink(),
+    );
+    // Local midnight and the final minute stay in the same group, even on
+    // 23/25-hour days. Different dates must not collapse into one group.
+    final dates = [
+      DateTime(2026, 3, 28),
+      DateTime(2026, 3, 29),
+      DateTime(2026, 3, 30),
+      DateTime(2026, 10, 24),
+      DateTime(2026, 10, 25),
+      DateTime(2026, 10, 26),
+    ];
+    DateTime group(DateTime at) => history.messageDay(
+      SignedObject(
+        {'created': at.millisecondsSinceEpoch},
+        '',
+        identity.certificate,
+      ),
+    );
+    for (final date in dates) {
+      final day = group(date);
+      expect(group(DateTime(date.year, date.month, date.day, 23, 59)), day);
+      expect(group(DateTime(date.year, date.month, date.day + 1)), isNot(day));
+      expect((day.year, day.month, day.day), (date.year, date.month, date.day));
+    }
+    final now = DateTime.now();
+    final yesterday = group(DateTime(now.year, now.month, now.day - 1, 23));
+    final today = group(now);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Column(
+          children: [
+            Builder(
+              builder: (context) => history.daySeparator(context, yesterday),
+            ),
+            Builder(builder: (context) => history.daySeparator(context, today)),
+          ],
+        ),
+      ),
+    );
+    expect(find.text('Yesterday'), findsOneWidget);
+    expect(find.text('Today'), findsOneWidget);
+  });
+
   testWidgets('conversation paging and incoming updates preserve draft', (
     tester,
   ) async {
