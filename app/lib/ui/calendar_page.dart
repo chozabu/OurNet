@@ -24,6 +24,14 @@ class CalendarPage extends StatefulWidget {
   State<CalendarPage> createState() => _CalendarPageState();
 }
 
+IconButton _calendarArrow(String label, int direction, VoidCallback onPressed, {bool compact = false}) =>
+    IconButton(
+      tooltip: label,
+      onPressed: onPressed,
+      visualDensity: compact ? VisualDensity.compact : null,
+      icon: Icon(direction < 0 ? Icons.chevron_left : Icons.chevron_right, size: compact ? 20 : null),
+    );
+
 class _CalendarPageState extends State<CalendarPage> {
   final focus = FocusNode(debugLabel: 'calendar');
   final searchField = TextEditingController();
@@ -33,23 +41,20 @@ class _CalendarPageState extends State<CalendarPage> {
   CalendarController get c => widget.controller;
   CalendarFlows get flows => widget.flows;
 
-  @override
-  void initState() {
-    super.initState();
-    c.addListener(_changed);
-  }
+  // Their inputs stay fixed; each control still observes inherited theme changes.
+  late final _previous = _calendarArrow('Previous', -1, () => c.step(-1));
+  late final _next = _calendarArrow('Next', 1, () => c.step(1));
+  late final _today = OutlinedButton(onPressed: () => c.today(), child: const Text('Today'));
+  late final _todayIcon = IconButton(tooltip: 'Today', icon: const Icon(Icons.today), onPressed: () => c.today());
+  late final _createButton = FilledButton.icon(onPressed: _create, icon: const Icon(Icons.add), label: const Text('Create'));
+  late final _searchButton = IconButton(tooltip: 'Search', icon: const Icon(Icons.search), onPressed: _startSearch);
 
   @override
   void dispose() {
-    c.removeListener(_changed);
     focus.dispose();
     searchField.dispose();
     searchFocus.dispose();
     super.dispose();
-  }
-
-  void _changed() {
-    if (mounted) setState(() {});
   }
 
   bool get _typing =>
@@ -139,57 +144,60 @@ class _CalendarPageState extends State<CalendarPage> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 900 && c.group == null;
-        // Swiping sideways by touch moves a screenful, as other calendars do.
-        // Mice keep their own drags: moving and resizing events.
-        final body = searching
-            ? _results(context)
-            : GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                supportedDevices: const {PointerDeviceKind.touch},
-                onHorizontalDragEnd: (d) {
-                  final v = d.primaryVelocity ?? 0;
-                  if (v.abs() > 500) c.step(v < 0 ? 1 : -1);
-                },
-                child: _view(context),
-              );
-        return Focus(
-          focusNode: focus,
-          autofocus: true,
-          onKeyEvent: _key,
-          child: Scaffold(
-            backgroundColor: Colors.transparent,
-            floatingActionButton: wide
-                ? null
-                : FloatingActionButton(
-                    tooltip: 'New event',
-                    onPressed: _createOnFocus,
-                    child: const Icon(Icons.add),
+    return ListenableBuilder(
+      listenable: c,
+      builder: (context, _) => LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 900 && c.group == null;
+          // Swiping sideways by touch moves a screenful, as other calendars do.
+          // Mice keep their own drags: moving and resizing events.
+          final body = searching
+              ? _results(context)
+              : GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  supportedDevices: const {PointerDeviceKind.touch},
+                  onHorizontalDragEnd: (d) {
+                    final v = d.primaryVelocity ?? 0;
+                    if (v.abs() > 500) c.step(v < 0 ? 1 : -1);
+                  },
+                  child: _view(context),
+                );
+          return Focus(
+            focusNode: focus,
+            autofocus: true,
+            onKeyEvent: _key,
+            child: Scaffold(
+              backgroundColor: Colors.transparent,
+              floatingActionButton: wide
+                  ? null
+                  : FloatingActionButton(
+                      tooltip: 'New event',
+                      onPressed: _createOnFocus,
+                      child: const Icon(Icons.add),
+                    ),
+              body: Row(
+                children: [
+                  if (wide) SizedBox(width: 248, child: _sidebar(context)),
+                  if (wide) const VerticalDivider(width: 1),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        _toolbar(context, constraints.maxWidth, wide),
+                        const Divider(height: 1),
+                        if (!c.ready)
+                          const LinearProgressIndicator(minHeight: 2)
+                        else
+                          const SizedBox(height: 2),
+                        Expanded(child: body),
+                      ],
+                    ),
                   ),
-            body: Row(
-              children: [
-                if (wide) SizedBox(width: 248, child: _sidebar(context)),
-                if (wide) const VerticalDivider(width: 1),
-                Expanded(
-                  child: Column(
-                    children: [
-                      _toolbar(context, constraints.maxWidth, wide),
-                      const Divider(height: 1),
-                      if (!c.ready)
-                        const LinearProgressIndicator(minHeight: 2)
-                      else
-                        const SizedBox(height: 2),
-                      Expanded(child: body),
-                    ],
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -236,30 +244,11 @@ class _CalendarPageState extends State<CalendarPage> {
           if (wide)
             Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: FilledButton.icon(
-                onPressed: _create,
-                icon: const Icon(Icons.add),
-                label: const Text('Create'),
-              ),
+              child: _createButton,
             ),
-          if (!compact)
-            OutlinedButton(onPressed: c.today, child: const Text('Today'))
-          else
-            IconButton(
-              tooltip: 'Today',
-              icon: const Icon(Icons.today),
-              onPressed: c.today,
-            ),
-          IconButton(
-            tooltip: 'Previous',
-            icon: const Icon(Icons.chevron_left),
-            onPressed: () => c.step(-1),
-          ),
-          IconButton(
-            tooltip: 'Next',
-            icon: const Icon(Icons.chevron_right),
-            onPressed: () => c.step(1),
-          ),
+          if (!compact) _today else _todayIcon,
+          _previous,
+          _next,
           Expanded(
             child: GestureDetector(
               onTap: () async {
@@ -279,11 +268,7 @@ class _CalendarPageState extends State<CalendarPage> {
               ),
             ),
           ),
-          IconButton(
-            tooltip: 'Search',
-            icon: const Icon(Icons.search),
-            onPressed: _startSearch,
-          ),
+          _searchButton,
           PopupMenuButton<CalendarView>(
             tooltip: 'View',
             initialValue: c.view,
@@ -561,8 +546,12 @@ class _MiniMonth extends StatefulWidget {
 }
 
 class _MiniMonthState extends State<_MiniMonth> {
-  late DateTime month = DateTime(widget.controller.focus.year, widget.controller.focus.month);
+  late DateTime month = DateTime.utc(widget.controller.focus.year, widget.controller.focus.month);
   DateTime? lastFocus;
+  late final _previous = _calendarArrow('Previous month', -1,
+      () => setState(() => month = addMonths(month, -1)), compact: true);
+  late final _next = _calendarArrow('Next month', 1,
+      () => setState(() => month = addMonths(month, 1)), compact: true);
 
   @override
   Widget build(BuildContext context) {
@@ -571,83 +560,70 @@ class _MiniMonthState extends State<_MiniMonth> {
     // Follow the main view when it moves to another month.
     if (lastFocus != c.focus) {
       lastFocus = c.focus;
-      month = DateTime(c.focus.year, c.focus.month);
+      month = DateTime.utc(c.focus.year, c.focus.month);
     }
-    final days = monthGridDays(month, c.firstWeekday);
+    final days = monthGridDays(month, c.firstWeekday, utc: true);
     final weeks = monthWeeks(month, c.firstWeekday);
     final today = DateTime.now();
-    final shown = c.gridDays;
+    final shown = c.gridDays.map(dateKey).toSet();
     return Column(
       children: [
         Row(
           children: [
             Expanded(
-              child: Text(
-                formatMonth(month),
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
+              child: Text(formatMonth(month), style: Theme.of(context).textTheme.titleSmall),
             ),
-            IconButton(
-              visualDensity: VisualDensity.compact,
-              tooltip: 'Previous month',
-              icon: const Icon(Icons.chevron_left, size: 20),
-              onPressed: () => setState(() => month = addMonths(month, -1)),
-            ),
-            IconButton(
-              visualDensity: VisualDensity.compact,
-              tooltip: 'Next month',
-              icon: const Icon(Icons.chevron_right, size: 20),
-              onPressed: () => setState(() => month = addMonths(month, 1)),
-            ),
+            _previous,
+            _next,
           ],
         ),
-        Row(
+        Table(
           children: [
-            for (var i = 0; i < 7; i++)
-              Expanded(
-                child: Text(
-                  weekdayShort(days[i].weekday).substring(0, 1),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
-                ),
-              ),
-          ],
-        ),
-        for (var w = 0; w < weeks; w++)
-          Row(
-            children: [
-              for (final day in days.sublist(w * 7, w * 7 + 7))
-                Expanded(
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: () => c.go(day),
-                    child: Container(
-                      height: 28,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: sameDay(day, today)
-                            ? scheme.primary
-                            : shown.any((d) => sameDay(d, day)) && c.view != CalendarView.month
-                            ? scheme.primaryContainer
-                            : null,
-                        shape: sameDay(day, today) ? BoxShape.circle : BoxShape.rectangle,
-                      ),
-                      child: Text(
-                        '${day.day}',
-                        style: TextStyle(
-                          fontSize: 12,
+            TableRow(
+              children: [
+                for (var i = 0; i < 7; i++)
+                  Text(
+                    weekdayShort(days[i].weekday).substring(0, 1),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                  ),
+              ],
+            ),
+            for (var w = 0; w < weeks; w++)
+              TableRow(
+                children: [
+                  for (final day in days.sublist(w * 7, w * 7 + 7))
+                    InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () => c.go(DateTime(day.year, day.month, day.day)),
+                      child: Container(
+                        height: 28,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
                           color: sameDay(day, today)
-                              ? scheme.onPrimary
-                              : day.month == month.month
-                              ? scheme.onSurface
-                              : scheme.onSurfaceVariant.withValues(alpha: 0.5),
+                              ? scheme.primary
+                              : shown.contains(day) && c.view != CalendarView.month
+                              ? scheme.primaryContainer
+                              : null,
+                          shape: sameDay(day, today) ? BoxShape.circle : BoxShape.rectangle,
+                        ),
+                        child: Text(
+                          '${day.day}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: sameDay(day, today)
+                                ? scheme.onPrimary
+                                : day.month == month.month
+                                ? scheme.onSurface
+                                : scheme.onSurfaceVariant.withValues(alpha: 0.5),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                ),
-            ],
-          ),
+                ],
+              ),
+          ],
+        ),
       ],
     );
   }

@@ -18,14 +18,13 @@ String monthShort(int month) => monthNames[month - 1].substring(0, 3);
 String weekdayShort(int weekday) => weekdayNames[weekday - 1].substring(0, 3);
 
 DateTime dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
-DateTime addDays(DateTime d, int days) =>
-    DateTime(d.year, d.month, d.day + days, d.hour, d.minute);
-bool sameDay(DateTime a, DateTime b) =>
-    a.year == b.year && a.month == b.month && a.day == b.day;
+
+/// A date label, not an instant: no local timezone conversion is needed.
+DateTime dateKey(DateTime d) => DateTime.utc(d.year, d.month, d.day);
+DateTime addDays(DateTime d, int days) => DateTime(d.year, d.month, d.day + days, d.hour, d.minute);
+bool sameDay(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
 int daysBetween(DateTime a, DateTime b) =>
-    DateTime.utc(b.year, b.month, b.day)
-        .difference(DateTime.utc(a.year, a.month, a.day))
-        .inDays;
+    DateTime.utc(b.year, b.month, b.day).difference(DateTime.utc(a.year, a.month, a.day)).inDays;
 
 /// The first day of the week containing [d], for weeks that begin on
 /// [firstWeekday] (Monday 1 to Sunday 7).
@@ -33,16 +32,21 @@ DateTime startOfWeek(DateTime d, int firstWeekday) =>
     DateTime(d.year, d.month, d.day - (d.weekday - firstWeekday + 7) % 7);
 
 /// The six weeks (42 days) a month grid shows.
-List<DateTime> monthGridDays(DateTime month, int firstWeekday) {
+List<DateTime> monthGridDays(DateTime month, int firstWeekday, {bool utc = false}) {
+  if (utc) {
+    final first = DateTime.utc(month.year, month.month);
+    final lead = (first.weekday - firstWeekday + 7) % 7;
+    return [for (var i = 0; i < 42; i++) DateTime.utc(month.year, month.month, 1 - lead + i)];
+  }
   final first = startOfWeek(DateTime(month.year, month.month), firstWeekday);
   return [for (var i = 0; i < 42; i++) addDays(first, i)];
 }
 
 /// How many weeks of [monthGridDays] a month needs: four to six.
 int monthWeeks(DateTime month, int firstWeekday) {
-  final first = startOfWeek(DateTime(month.year, month.month), firstWeekday);
-  final last = DateTime(month.year, month.month + 1, 0);
-  return (daysBetween(first, last) ~/ 7) + 1;
+  final lead = (DateTime.utc(month.year, month.month).weekday - firstWeekday + 7) % 7;
+  final days = DateTime.utc(month.year, month.month + 1, 0).day;
+  return (lead + days + 6) ~/ 7;
 }
 
 /// ISO 8601 week number.

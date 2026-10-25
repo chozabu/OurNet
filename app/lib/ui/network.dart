@@ -219,27 +219,28 @@ extension _NetworkPages on _OurNetAppState {
     );
   }
 
-  /// Devices of [person] that still have access, as linked.
-  List<DeviceCertificate> activeDevices(String person) => [
-    for (final c in node.contacts.values)
-      if (c.person == person && !node.revoked.contains(c.device)) c,
-  ];
+  /// Devices that still have access, grouped once for all rows of a build.
+  Map<String, List<DeviceCertificate>> get devicesByPerson => memo('devicesByPerson', () {
+    final grouped = <String, List<DeviceCertificate>>{};
+    for (final c in node.contacts.values) {
+      if (!node.revoked.contains(c.device)) (grouped[c.person] ??= []).add(c);
+    }
+    return grouped;
+  });
+
+  List<DeviceCertificate> activeDevices(String person) => devicesByPerson[person] ?? const [];
 
   /// Friends with a device that still has access, by name. Blocked people
   /// are listed apart.
   List<String> get friendsByName => memo(
     'friendsByName',
-    () =>
-        {
-          for (final c in node.contacts.values)
-            if (c.person != node.person &&
-                !node.revoked.contains(c.device) &&
-                !node.forgotten.contains(c.person) &&
-                !node.blocked.contains(c.person))
-              c.person,
-        }.toList()..sort(
-          (a, b) => name(a).toLowerCase().compareTo(name(b).toLowerCase()),
-        ),
+    () => [
+      for (final person in devicesByPerson.keys)
+        if (person != node.person &&
+            !node.forgotten.contains(person) &&
+            !node.blocked.contains(person))
+          person,
+    ]..sort((a, b) => name(a).toLowerCase().compareTo(name(b).toLowerCase())),
   );
 
   /// [friendsByName] narrowed by the search box and filter.

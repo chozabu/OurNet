@@ -170,6 +170,10 @@ class _MonthViewState extends State<MonthView> {
     double height,
   ) {
     final scheme = Theme.of(context).colorScheme;
+    final timed = <Occurrence>[], spanning = <Occurrence>[];
+    for (final o in all) {
+      (isBar(o) ? spanning : timed).add(o);
+    }
     final lead = c.weekNumbers ? 28.0 : 0.0;
     return Column(
       children: [
@@ -180,7 +184,7 @@ class _MonthViewState extends State<MonthView> {
             children: [
               for (var w = 0; w < weeks; w++)
                 Expanded(
-                  child: _week(context, days.sublist(w * 7, w * 7 + 7), all, lead, scheme),
+                  child: _week(context, days.sublist(w * 7, w * 7 + 7), timed, spanning, lead, scheme),
                 ),
             ],
           ),
@@ -192,12 +196,13 @@ class _MonthViewState extends State<MonthView> {
   Widget _week(
     BuildContext context,
     List<DateTime> week,
-    List<Occurrence> all,
+    List<Occurrence> timed,
+    List<Occurrence> spanning,
     double lead,
     ColorScheme scheme,
   ) {
     final today = DateTime.now();
-    final bars = layoutBars(all, week);
+    final bars = layoutBars(spanning, week);
     return LayoutBuilder(
       builder: (context, constraints) {
         final cellWidth = (constraints.maxWidth - lead) / 7;
@@ -251,7 +256,7 @@ class _MonthViewState extends State<MonthView> {
                     ),
                   ),
                 for (final day in week)
-                  Expanded(child: _cell(context, day, today, all, lines, barLimit, bars, scheme)),
+                  Expanded(child: _cell(context, day, today, timed, lines, barLimit, bars, scheme)),
               ],
             ),
             for (final bar in bars)
@@ -296,7 +301,7 @@ class _MonthViewState extends State<MonthView> {
     final next = addDays(day, 1);
     final timed = [
       for (final o in all)
-        if (!isBar(o) && !o.start.isBefore(day) && o.start.isBefore(next)) o,
+        if (!o.start.isBefore(day) && o.start.isBefore(next)) o,
     ];
     final hiddenBars = bars
         .where((b) => b.lane >= barLimit && dateOnly(b.occurrence.start).compareTo(next) < 0 && !dateOnly(b.occurrence.lastMoment).isBefore(day))
@@ -568,14 +573,26 @@ class YearView extends StatelessWidget {
     final year = controller.focus.year;
     final all = controller.occurrences(DateTime(year), DateTime(year + 1));
     final busy = <DateTime>{};
+    final first = DateTime.utc(year), until = DateTime.utc(year + 1);
     for (final o in all) {
-      busy.addAll(o.days);
+      final start = dateKey(o.start), last = dateKey(o.lastMoment);
+      for (
+        var d = start.isBefore(first) ? first : start;
+        d.isBefore(until) && !d.isAfter(last);
+        d = d.add(const Duration(days: 1))
+      ) {
+        busy.add(d);
+      }
     }
     final scheme = Theme.of(context).colorScheme;
     final today = DateTime.now();
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 900 ? 4 : constraints.maxWidth >= 560 ? 3 : 2;
+        final columns = constraints.maxWidth >= 900
+            ? 4
+            : constraints.maxWidth >= 560
+            ? 3
+            : 2;
         final width = (constraints.maxWidth - 24) / columns;
         return SingleChildScrollView(
           padding: const EdgeInsets.all(12),
@@ -596,7 +613,9 @@ class YearView extends StatelessWidget {
                             child: Text(
                               monthNames[m - 1],
                               style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                                color: today.year == year && today.month == m ? scheme.primary : null,
+                                color: today.year == year && today.month == m
+                                    ? scheme.primary
+                                    : null,
                               ),
                             ),
                           ),
@@ -621,73 +640,66 @@ class YearView extends StatelessWidget {
     DateTime today,
     ColorScheme scheme,
   ) {
-    final days = monthGridDays(DateTime(year, month), controller.firstWeekday);
+    final days = monthGridDays(DateTime.utc(year, month), controller.firstWeekday, utc: true);
     final weeks = monthWeeks(DateTime(year, month), controller.firstWeekday);
-    return Column(
+    return Table(
       children: [
-        Row(
+        TableRow(
           children: [
             for (var i = 0; i < 7; i++)
-              Expanded(
-                child: Text(
-                  weekdayShort(days[i].weekday).substring(0, 1),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant),
-                ),
+              Text(
+                weekdayShort(days[i].weekday).substring(0, 1),
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant),
               ),
           ],
         ),
         for (var w = 0; w < weeks; w++)
-          Row(
+          TableRow(
             children: [
               for (final day in days.sublist(w * 7, w * 7 + 7))
-                Expanded(
-                  child: day.month != month
-                      ? const SizedBox(height: 24)
-                      : InkWell(
-                          onTap: () => onOpenDay(day),
-                          customBorder: const CircleBorder(),
-                          child: Container(
-                            height: 24,
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                              color: sameDay(day, today) ? scheme.primary : null,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                Text(
-                                  '${day.day}',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: sameDay(day, today)
-                                        ? scheme.onPrimary
-                                        : scheme.onSurface,
-                                  ),
-                                ),
-                                if (busy.contains(day) && !sameDay(day, today))
-                                  Positioned(
-                                    bottom: 1,
-                                    child: Container(
-                                      width: 4,
-                                      height: 4,
-                                      decoration: BoxDecoration(
-                                        color: scheme.primary,
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                  ),
-                              ],
+                day.month != month
+                    ? const SizedBox(height: 24)
+                    : InkWell(
+                        onTap: () => onOpenDay(DateTime(day.year, day.month, day.day)),
+                        customBorder: const CircleBorder(),
+                        child: Container(
+                          height: 24,
+                          alignment: Alignment.center,
+                          decoration: sameDay(day, today)
+                              ? BoxDecoration(color: scheme.primary, shape: BoxShape.circle)
+                              : null,
+                          child: CustomPaint(
+                            foregroundPainter: busy.contains(day) && !sameDay(day, today)
+                                ? _BusyDot(scheme.primary) : null,
+                            child: Text(
+                              '${day.day}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: sameDay(day, today) ? scheme.onPrimary : scheme.onSurface,
+                              ),
                             ),
                           ),
                         ),
-                ),
+                      ),
             ],
           ),
       ],
     );
   }
+}
+
+/// A decoration on the native day label; it needs no layout or hit target.
+class _BusyDot extends CustomPainter {
+  final Color color;
+  const _BusyDot(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) =>
+      canvas.drawCircle(Offset(size.width / 2, size.height - 3), 2, Paint()..color = color);
+
+  @override
+  bool shouldRepaint(_BusyDot old) => color != old.color;
 }
 
 /// The schedule view: days with something on, in order, as a list that loads

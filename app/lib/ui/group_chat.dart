@@ -321,7 +321,7 @@ extension _GroupChat on _OurNetAppState {
     final body = attachment ? '' : (p['text'] ?? '').toString();
     final reactions = messageUpdates.reactionsFor(
       Everyday.reactionTarget(item),
-      _groupPeople(feed),
+      memo('groupPeople/${feed.space}', () => _groupPeople(feed)),
     );
     final highlighted = highlightedMessage == o.id;
     final bubble = AnimatedContainer(

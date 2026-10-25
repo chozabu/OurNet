@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:developer' show Timeline;
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' show FramePhase;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
@@ -16,14 +18,26 @@ class PhaseRecorder {
   final _delays = <double>[];
   Timer? _timer;
   final _clock = Stopwatch();
-  int _last = 0;
+  int _last = 0, _started = 0, _priorFrames = 0;
+  double _priorMax = 0;
 
-  void _onTimings(List<FrameTiming> timings) => _timings.addAll(timings);
+  void _onTimings(List<FrameTiming> timings) {
+    for (final t in timings) {
+      // Delivery is batched: a callback can contain frames from before start.
+      if (t.timestampInMicroseconds(FramePhase.buildStart) < _started) {
+        _priorFrames++;
+        _priorMax = max(_priorMax, max(t.buildDuration.inMicroseconds, t.rasterDuration.inMicroseconds) / 1000);
+      } else {
+        _timings.add(t);
+      }
+    }
+  }
 
   int? _uiCpuTicks;
 
   void start() {
     _uiCpuTicks = uiThreadCpuTicks();
+    _started = Timeline.now;
     SchedulerBinding.instance.addTimingsCallback(_onTimings);
     _clock.start();
     _last = _clock.elapsedMicroseconds;
@@ -63,6 +77,8 @@ class PhaseRecorder {
         'uiThreadCpuMs': (ticks - _uiCpuTicks!) * 10,
       'wallMs': _clock.elapsedMilliseconds,
       'frames': _timings.length,
+      'priorPhaseFrames': _priorFrames,
+      'priorPhaseFrameStageMaxMs': _priorMax,
       'framesOverBudget': stage.where((v) => v > frameBudgetMs).length,
       'framesOverTwoBudgets': stage.where((v) => v > 2 * frameBudgetMs).length,
       'frameStageMs': summary(stage),

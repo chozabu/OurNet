@@ -238,41 +238,7 @@ class _TimeGridState extends State<TimeGrid> {
                   height: 24 * TimeGrid.hourHeight,
                   child: Stack(
                     children: [
-                      for (var h = 0; h < 24; h++)
-                        Positioned(
-                          top: h * TimeGrid.hourHeight,
-                          left: 0,
-                          right: 0,
-                          child: Row(
-                            children: [
-                              SizedBox(
-                                width: TimeGrid.gutter,
-                                height: 1,
-                                child: h == 0
-                                    ? null
-                                    : OverflowBox(
-                                        maxHeight: 20,
-                                        alignment: Alignment.topRight,
-                                        child: Padding(
-                                          padding: const EdgeInsets.only(right: 6, top: 0),
-                                          child: Transform.translate(
-                                            offset: const Offset(0, -9),
-                                            child: Text(
-                                              formatHour(context, h),
-                                              textAlign: TextAlign.right,
-                                              style: TextStyle(
-                                                fontSize: 10,
-                                                color: scheme.onSurfaceVariant,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                              ),
-                              Expanded(child: Divider(height: 1, color: scheme.outlineVariant)),
-                            ],
-                          ),
-                        ),
+                      const Positioned.fill(child: _HourLines()),
                       for (var i = 0; i < days.length; i++)
                         Positioned(
                           left: TimeGrid.gutter + i * columnWidth,
@@ -799,5 +765,33 @@ class _TimeGridState extends State<TimeGrid> {
         ),
       ),
     );
+  }
+}
+
+/// Static grid furniture survives paging, incoming events and drag updates.
+class _HourLines extends StatelessWidget {
+  const _HourLines();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Stack(children: [
+      for (var h = 1; h < 24; h++)
+        Positioned(
+          top: h * TimeGrid.hourHeight - 9,
+          left: 0,
+          width: TimeGrid.gutter - 6,
+          height: 20,
+          child: Text(formatHour(context, h), textAlign: TextAlign.right,
+              style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant)),
+        ),
+      for (var h = 0; h < 24; h++)
+        Positioned(
+          top: h * TimeGrid.hourHeight,
+          left: TimeGrid.gutter,
+          right: 0,
+          child: Divider(height: 1, color: scheme.outlineVariant),
+        ),
+    ]);
   }
 }

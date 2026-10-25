@@ -6,6 +6,7 @@ import 'package:ournet/ui/app.dart';
 import 'package:ournet/ui/calendar_dates.dart';
 import 'package:ournet/ui/calendar_flows.dart';
 import 'package:ournet/ui/calendar_page.dart';
+import 'package:ournet/ui/calendar_month.dart';
 import 'package:ournet/ui/event_links.dart';
 import 'package:ournet/ui/message_text.dart';
 import 'package:ournet_core/ournet_core.dart';
@@ -114,6 +115,22 @@ void main() {
       expect(by['Overnight']!.lastColumn, 2);
     });
 
+    test('date labels match local days through leap years and clock changes', () {
+      for (final year in [2024, 2026, 2027]) {
+        for (final month in [2, 3, 10]) {
+          for (var first = 1; first <= 7; first++) {
+            final date = DateTime(year, month);
+            final labels = monthGridDays(date, first, utc: true);
+            expect(labels, monthGridDays(date, first).map(dateKey).toList());
+            expect(labels.take(monthWeeks(date, first) * 7).where((d) => d.month == month).length,
+                DateTime.utc(year, month + 1, 0).day);
+          }
+        }
+      }
+      expect(daysBetween(DateTime(2026, 3, 29), DateTime(2026, 3, 30)), 1);
+      expect(daysBetween(DateTime(2026, 10, 25), DateTime(2026, 10, 26)), 1);
+    });
+
     test('weeks and months', () {
       expect(startOfWeek(DateTime(2026, 10, 14), 1), DateTime(2026, 10, 12));
       expect(startOfWeek(DateTime(2026, 10, 14), 7), DateTime(2026, 10, 11));
@@ -170,6 +187,46 @@ void main() {
         body: CalendarPage(controller: c, flows: flows ?? CalendarFlows(c)),
       ),
     );
+
+    testWidgets('every view can be selected from the scrolling menu', (tester) async {
+      wide(tester);
+      final (node, _) = await friends(0);
+      final c = controllerFor(node);
+      await tester.runAsync(() async {
+        await c.calendar.create(Calendar.personal, EventDraft(
+          title: 'Clock change weekend', allDay: true,
+          start: DateTime(2020, 3, 28), end: DateTime(2020, 3, 30),
+        ));
+        await c.refresh();
+      });
+      c.go(DateTime(2020, 3));
+      await tester.pumpWidget(host(c));
+      await typeSteady(tester);
+      await tester.tap(find.descendant(of: find.byType(Table).first, matching: find.text('15')));
+      expect(c.focus, DateTime(2020, 3, 15));
+      expect(c.focus.isUtc, isFalse);
+      await tester.pumpAndSettle();
+      for (final view in CalendarView.values) {
+        await tester.tap(find.byTooltip('View'));
+        await tester.pumpAndSettle();
+        final option = find.widgetWithText(PopupMenuItem<CalendarView>, view.label);
+        await tester.ensureVisible(option);
+        await tester.pumpAndSettle();
+        await tester.tap(option);
+        await tester.pumpAndSettle();
+        expect(c.view, view);
+        if (view == CalendarView.year) {
+          final year = find.byType(YearView);
+          expect(find.descendant(of: year, matching: find.byWidgetPredicate(
+            (w) => w is CustomPaint && w.foregroundPainter != null && w.child is Text,
+          )), findsNWidgets(2));
+          await tester.tap(find.descendant(of: year, matching: find.text('15')).first);
+          expect(c.focus, DateTime(2020, 1, 15));
+          expect(c.focus.isUtc, isFalse);
+        }
+      }
+      await done(tester);
+    });
 
     testWidgets('typing a sentence makes an event that can be opened and undone', (tester) async {
       wide(tester);

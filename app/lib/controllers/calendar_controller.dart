@@ -132,18 +132,24 @@ class CalendarController extends ChangeNotifier {
     notifyListeners();
   }
 
+  (CalendarView, int, int, int, int, bool)? _daysKey;
+  List<DateTime> _days = const [];
+
   /// The days a time grid shows for the current view and focus.
   List<DateTime> get gridDays {
+    final key = (view, focus.year, focus.month, focus.day, firstWeekday, showWeekends);
+    if (_daysKey == key) return _days;
+    _daysKey = key;
     final day = dateOnly(focus);
     switch (view) {
       case CalendarView.day:
-        return [day];
+        return _days = [day];
       case CalendarView.threeDays:
-        return [for (var i = 0; i < 3; i++) addDays(day, i)];
+        return _days = [for (var i = 0; i < 3; i++) addDays(day, i)];
       default:
         final start = startOfWeek(day, firstWeekday);
         final week = [for (var i = 0; i < 7; i++) addDays(start, i)];
-        return showWeekends ? week : week.where((d) => d.weekday < 6).toList();
+        return _days = showWeekends ? week : week.where((d) => d.weekday < 6).toList();
     }
   }
 

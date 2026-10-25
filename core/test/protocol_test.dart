@@ -359,19 +359,13 @@ void main() {
     expect(bytes(all).length, lessThanOrEqualTo(Node.maxPageBytes));
     await b.receive(a.identity.device, all);
     expect(b.store.count, all.length);
-    // The remaining item proves the items alone summed to exactly the limit.
-    // b's receipts go back, so the two agree on what they already share.
-    await a.receive(
-      b.identity.device,
-      await b.offer(
-        a.identity.device,
-        a.inventoryAfter(peerDevice: b.identity.device),
-      ),
-    );
+    // Check only omitted objects: receipt reconciliation can itself need
+    // multiple byte-limited pages and is separate from this size boundary.
+    final sent = {for (final item in all) SignedObject.fromJson(item['object']).id};
     final rest = await a.offer(b.identity.device, {
       ...b.inventoryAfter(peerDevice: a.identity.device),
       'subscriptions': ['general'],
-    });
+    }, only: [for (final o in a.store.objects(kind: 'post')) if (!sent.contains(o.id)) o.id]);
     expect(rest, hasLength(1));
     expect(itemsSize(all) + itemsSize(rest), Node.maxPageBytes);
   });

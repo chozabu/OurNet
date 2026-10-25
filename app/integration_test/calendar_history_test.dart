@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:ournet/ui/app.dart';
+import 'package:ournet/controllers/calendar_controller.dart';
+import 'package:ournet/ui/calendar_month.dart';
+import 'package:ournet/ui/calendar_grid.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'perf_support.dart';
 
@@ -97,9 +100,18 @@ void main() {
         final views = PhaseRecorder(budget)..start();
         for (final view in ['Month', 'Year', 'Schedule', 'Week']) {
           await tester.tap(find.byTooltip('View'));
-          await tester.pump(const Duration(milliseconds: 200));
-          await tester.tap(find.text(view).last);
-          await tester.pump(const Duration(milliseconds: 300));
+          await tester.pumpAndSettle();
+          final option = find.widgetWithText(PopupMenuItem<CalendarView>, view);
+          await tester.ensureVisible(option);
+          await tester.pumpAndSettle();
+          await tester.tap(option, warnIfMissed: true);
+          await tester.pumpAndSettle();
+          expect(find.byType(switch (view) {
+            'Month' => MonthView,
+            'Year' => YearView,
+            'Schedule' => ScheduleView,
+            _ => TimeGrid,
+          }), findsOneWidget);
         }
         final viewMetrics = await views.stop();
 

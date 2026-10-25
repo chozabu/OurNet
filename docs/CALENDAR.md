@@ -91,3 +91,14 @@ years of events as on a new one.
   `tool/check.ps1 -Performance` runs it.
 - A refresh must stay proportional to what arrived: read through
   `Calendar.refresh()` and the in-memory index, never by scanning history.
+
+- The range projection replaces only changed entries in its ordered index,
+  including duration counts for overlap queries. Membership and blocking
+  changes reconsider all valid versions; RSVP arrivals do not rebuild the event index.
+- Sidebar and Year grids use UTC date keys as labels, converting selections
+  back to local dates. Keep event instants and query boundaries in local time;
+  do not use those label keys as scheduled times. Year markers are clipped to
+  the displayed year before expanding days.
+- Counted daily/default-weekly recurrences can skip earlier periods without
+  caching occurrences. Preserve the full-walk equivalence tests (including DST
+  folds and fractional starts) when extending this to other repeat patterns.

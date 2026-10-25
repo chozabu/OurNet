@@ -136,6 +136,37 @@ void main() {
       }
     });
 
+    test('counted range skips match a complete walk, including clock changes', () {
+      for (final first in [monday, DateTime(2026, 3, 28, 1, 30),
+          DateTime(2026, 10, 24, 1, 30), monday.add(const Duration(microseconds: 123)),
+          DateTime.utc(2026, 7, 1, 9), DateTime.utc(2026, 10, 25, 0, 30).toLocal(),
+          DateTime.utc(2026, 10, 25, 1, 30).toLocal()]) {
+        for (final interval in [1, 3]) {
+          for (final count in [1, 2, 40]) {
+            for (final until in [null, DateTime(first.year, first.month, first.day + 24).millisecondsSinceEpoch]) {
+              for (final rule in [
+                Repeat('daily', interval: interval, count: count, until: until),
+                Repeat('weekly', interval: interval, count: count, until: until),
+                Repeat('weekly', days: [1, 3, 5], interval: interval, count: count, until: until),
+              ]) {
+                final complete = rule.occurrences(first).toList();
+                for (final offset in [-10, 0, 1, 13, 29, 41, 150]) {
+                  final from = DateTime(first.year, first.month, first.day + offset, 12);
+                  expect(rule.occurrences(first, from: from).where((d) => !d.isBefore(from)),
+                      complete.where((d) => !d.isBefore(from)), reason: '${rule.toJson()} $first $from');
+                }
+              }
+            }
+          }
+        }
+      }
+      const maximum = Repeat('weekly', count: Repeat.maxCount);
+      final last = maximum.occurrences(monday).last;
+      expect(maximum.occurrences(monday, from: last).where((d) => !d.isBefore(last)), [last]);
+      final after = DateTime(last.year, last.month, last.day + 1);
+      expect(maximum.occurrences(monday, from: after).where((d) => !d.isBefore(after)), isEmpty);
+    });
+
     test('rules round-trip and bad ones are refused', () {
       const rule = Repeat('weekly', interval: 2, days: [1, 5], count: 6);
       expect(Repeat.fromJson(rule.toJson())!.toJson(), rule.toJson());
@@ -282,6 +313,31 @@ void main() {
       final cal = calendarOf(a);
       await cal.refresh();
       expect(cal.between(DateTime(2026, 10, 12), DateTime(2026, 10, 13)), isEmpty);
+    });
+
+    test('a warm index replaces tied starts, durations, repeats and deletions', () async {
+      final cal = calendarOf((await friends(1)).single);
+      final start = DateTime(2026, 10, 12, 9);
+      final end = start.add(const Duration(days: 20));
+      await cal.create(Calendar.personal, draft('Short', start));
+      await cal.create(Calendar.personal, draft('Long', start, length: const Duration(days: 10)));
+      List<Occurrence> all() => cal.between(start, end);
+      expect(titles(all()), unorderedEquals(['Short', 'Long']));
+      expect(cal.between(start.subtract(const Duration(microseconds: 1)), start), isEmpty);
+      expect(cal.between(start, start.add(const Duration(microseconds: 1))), hasLength(2));
+      final long = all().singleWhere((o) => o.event.title == 'Long');
+      await cal.update(long, EventDraft.of(long)..end = start.add(const Duration(hours: 1)));
+      expect(cal.between(start.add(const Duration(days: 1)), end), isEmpty);
+      final short = all().singleWhere((o) => o.event.title == 'Short');
+      await cal.update(short, EventDraft.of(short)..repeat = const Repeat('daily', count: 3));
+      expect(all(), hasLength(4));
+      final series = all().firstWhere((o) => o.repeats);
+      await cal.update(series, EventDraft.of(series)..repeat = null);
+      expect(all(), hasLength(2));
+      await cal.delete(all().singleWhere((o) => o.event.title == 'Long'));
+      expect(titles(all()), ['Short']);
+      await cal.restoreEvent(cal.deleted().single);
+      expect(titles(all()), unorderedEquals(['Short', 'Long']));
     });
 
     test('invalid events are refused', () async {
@@ -461,6 +517,14 @@ void main() {
       expect(titles(ca.between(range[0], range[1], calendars: {space})), [
         'Wall night (bring chalk)',
       ]);
+
+      // Permission changes must reconsider older versions in a warm index.
+      a.block(b.person, true);
+      await ca.refresh();
+      expect(titles(ca.between(range[0], range[1], calendars: {space})), ['Wall night']);
+      a.block(b.person, false);
+      await ca.refresh();
+      expect(titles(ca.between(range[0], range[1], calendars: {space})), ['Wall night (bring chalk)']);
     });
 
     test('answers to an event are counted per person and occurrence', () async {

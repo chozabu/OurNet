@@ -136,8 +136,9 @@ notes, as after a large Keep import; the notes list loads in pages, so the
 budgets are the same.
 Results are written by the integration driver to
 `app/build/integration_response_data.json`, including results from failed timing
-gates. Startup frame callbacks are flushed before the interaction and pending
-frame callbacks are collected afterward; the engine batches these callbacks.
+gates. The responsiveness journey flushes startup callbacks before interaction.
+Shared phase reports use frame-start timestamps to separate late pre-phase
+samples; pending callbacks are collected afterward because the engine batches them.
 
 `check.ps1 -Performance` compiles `integration_test/performance_test.dart` once
 for all six journeys, then saves the combined report as
@@ -914,3 +915,73 @@ still fails the calendar p95 gate, 20.413 ms against 16.667 ms; no budget change
 Report: `build/git-polish-final-check.log` and
 `app/build/performance_test-windows.json`. Physical Android timing remains
 unavailable. The native profile wrapper restored `native-dev`.
+
+### Calendar CPU work and phase attribution (25 October 2026)
+
+The calendar had avoidable CPU work even with incremental database reads.
+Counted daily/default-weekly series replayed earlier periods for every range
+query; they now report skipped periods while keeping the existing wall-clock
+walker. Full-walk equivalence tests cover intervals, count/end limits, fractional
+starts and both sides of the London clock fold. One Windows AOT diagnostic
+(1,000 queries of a 40-occurrence weekly series) took 951.151 ms before and
+132.724 ms after, with identical occurrence results. This is not an app-wide
+speedup claim.
+
+The range projection now replaces changed entries in an ordered index instead
+of revalidating and sorting history. Duration counts keep overlap seeks correct
+when an event shrinks or disappears. Sidebar/Year labels use UTC date keys;
+selection converts them to local dates. Year expansion is clipped to the viewed
+year, month events are classified once, and unchanged hour/toolbar controls keep
+their widget subtrees. Busy dots are decorations on native text/ink controls.
+Desktop/phone captures passed; the changed Year body/toolbar and hour-label
+regions matched the earlier captures pixel-for-pixel.
+
+The same reuse applies to friend-device grouping and group-chat membership
+sets per UI build. Chat date labels reuse the calendar-day difference helper,
+avoiding local-midnight construction and 23/25-hour day arithmetic.
+
+Two harness issues were also exposed. The Year menu target could be missed;
+the journey now scrolls the typed menu item into view and asserts the resulting
+view. Timing callbacks can arrive after their frames: an isolated run delivered
+three pre-paging frames late, including a 113.618 ms sample. Shared phase reports
+now separate these by actual frame-start timestamp, recording `priorPhaseFrames`
+and `priorPhaseFrameStageMaxMs`. A synthetic regression confirms a current-phase
+45 ms frame is still counted. Timing thresholds and operation boundaries remain
+the same.
+
+Both isolated columns below use the corrected menu selection and timestamp
+attribution, 3,000 events plus 12 incoming events, Windows profile mode, release
+native code, a 60 Hz display and no concurrent builds/tests. The original calendar
+runtime was temporarily substituted for the baseline and then restored. These
+are individual runs on the same machine; physical Android timing is unvalidated.
+
+| Milliseconds | Original calendar | Optimised calendar | Limit (<) |
+| --- | ---: | ---: | ---: |
+| Paging frame-stage p95 | 16.779 | 9.955 | 16.667 |
+| View-switch frame-stage p99 | 34.398 | 22.868 | 33.333 |
+| View-switch maximum event-loop delay | 211.586 | 81.799 | 100 |
+| Typing/update frame-stage p95 | 15.657 | 10.321 | 16.667 |
+
+Reports: `app/build/performance-calendar-attributed-baseline.json` and
+`app/build/performance-calendar-phase-attributed.json`. Earlier reports without
+phase attribution can mix startup samples into paging and are not directly
+comparable to these columns. Late pre-phase counters describe only samples
+received after attachment, not every startup frame.
+
+A separate protocol size-test fixture assumed receipt proofs would fit in one
+return page. Under some generated identity orders, an already-held object was
+legitimately re-offered. Its remainder check now requests only omitted IDs,
+retaining the encoded-page limit, receiver acceptance, single omitted item and
+exact total-size assertions. Twenty generated-identity runs passed; protocol
+runtime code was not changed.
+
+Final qualification: analysis is clean; 453 core, 110 transport and 301 app tests
+passed (plus opt-in skips). `tool/check.ps1 -Performance` completed those checks
+but stalled fetching unchanged dependencies. Its equivalent enforced Windows
+profile performance phase then ran with `--no-pub` and passed all 10 tests.
+The final calendar opened in 226 ms; paging frame-stage p95/p99 was
+9.913/12.127 ms, view-switch p99 was 22.757 ms, maximum view-switch event-loop
+delay was 73.240 ms, and typing/update p95 was 11.636 ms. Reports are
+`build/calendar-qualification.log`, `build/calendar-qualification-performance.log`
+and `app/build/performance-calendar-qualified-full-suite.json`. The native
+wrapper restored `native-dev`. No budgets were changed.

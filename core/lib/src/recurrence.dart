@@ -95,15 +95,24 @@ class Repeat {
   /// The occurrences in order, as wall-clock times, beginning with [first].
   ///
   /// With [from], occurrences that end the period before it may be skipped
-  /// (a series that has run for years is not walked from its start), except
-  /// where a [count] makes the number of earlier ones matter. Always lazy:
+  /// (a series that has run for years is not walked from its start). Counted
+  /// daily and default-weekly rules account for skipped periods too. Always lazy:
   /// the caller stops reading at the end of what it shows.
   Iterable<DateTime> occurrences(DateTime first, {DateTime? from}) sync* {
     final end = until == null ? null : DateTime.fromMillisecondsSinceEpoch(until!);
     var produced = 0;
-    final skip = count == null && from != null;
+    final uniform = interval > 0 && (count ?? 0) <= maxCount &&
+        (freq == 'daily' || freq == 'weekly' && days.isEmpty);
+    final skip = from != null && (count == null || uniform);
+    void skipped(int periods) {
+      if (periods > 0) {
+        // The first candidate can precede first (fractional seconds or an
+        // ambiguous local time), and would not have consumed the count.
+        produced = periods - (_at(first, first.year, first.month, first.day).isBefore(first) ? 1 : 0);
+      }
+    }
     var guard = 0;
-    for (final date in _walk(first, skip ? from : null)) {
+    for (final date in _walk(first, skip ? from : null, count != null && skip ? skipped : null)) {
       if (++guard > 200000) return;
       if (date.isBefore(first)) continue;
       if (end != null && date.isAfter(end)) return;
@@ -113,7 +122,7 @@ class Repeat {
     }
   }
 
-  Iterable<DateTime> _walk(DateTime first, DateTime? from) sync* {
+  Iterable<DateTime> _walk(DateTime first, DateTime? from, [void Function(int)? skipped]) sync* {
     final n = interval;
     switch (freq) {
       case 'daily':
@@ -122,6 +131,7 @@ class Repeat {
           final days = _dayNumber(from) - _dayNumber(first);
           k = days > 2 * n ? days ~/ n - 1 : 0;
         }
+        skipped?.call(k);
         while (true) {
           yield _at(first, first.year, first.month, first.day + k * n);
           k++;
@@ -135,6 +145,7 @@ class Repeat {
           final weeks = (_dayNumber(from) - _dayNumber(first)) ~/ 7;
           k = weeks > 2 * n ? weeks ~/ n - 1 : 0;
         }
+        skipped?.call(k);
         while (true) {
           for (final d in picked) {
             yield _at(first, first.year, first.month, start + k * n * 7 + d - 1);

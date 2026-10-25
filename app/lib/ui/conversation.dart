@@ -109,11 +109,7 @@ extension _ConversationPages on _OurNetAppState {
   String chatTime(int created) {
     final t = DateTime.fromMillisecondsSinceEpoch(created).toLocal();
     final now = DateTime.now();
-    final days = DateTime(
-      now.year,
-      now.month,
-      now.day,
-    ).difference(DateTime(t.year, t.month, t.day)).inDays;
+    final days = daysBetween(t, now);
     if (days <= 0) {
       return '${t.hour.toString().padLeft(2, '0')}:'
           '${t.minute.toString().padLeft(2, '0')}';

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'everyday.dart';
 import 'ics.dart';
 import 'model.dart';
@@ -341,9 +342,8 @@ class Calendar {
   /// Changes whenever anything shown may have changed.
   int get version => _index.version;
 
-  /// Lays the calendar out for range queries now, so that the first query
-  /// after a change (which would otherwise do it, in the middle of drawing a
-  /// frame) finds it done. Call it after [refresh], outside a build.
+  /// Builds the range index outside a frame. Event arrivals update it in
+  /// place; permission changes may need a full rebuild.
   void warm() => _index.snapshot;
 
   /// Whether the first read of history has finished.
@@ -564,8 +564,7 @@ class Calendar {
   Future<SignedObject> _put(Change change, String calendar, Json data) async {
     await refresh();
     final entry = data['event'] as String;
-    // Read from the index, not the snapshot: laying the snapshot out costs
-    // the whole calendar, which an import of thousands must not pay per event.
+    // Imports need the prior version without constructing the range index.
     change.parts.add((calendar, entry, _index.latest(calendar, entry)));
     final audience = await _audience(calendar);
     final payload = {...data}
@@ -731,7 +730,7 @@ class Calendar {
     for (final o in _index.snapshot.overridesOf(
       master.calendar,
       master.entry,
-    )) {
+    ).toList()) {
       if (o.deleted) continue;
       if (from != null) {
         final key = o.instance ?? '';
@@ -814,7 +813,7 @@ class Calendar {
     for (final o in _index.snapshot.overridesOf(
       master.calendar,
       master.entry,
-    )) {
+    ).toList()) {
       await _put(change, calendar, {
         ..._base(o),
         'event': '$entry~${o.instance}',
@@ -914,7 +913,7 @@ class Calendar {
   Future<int> shareAll() async {
     await refresh();
     var count = 0;
-    for (final e in _index.snapshot.latest(personal)) {
+    for (final e in _index.snapshot.latest(personal).toList()) {
       if (e.deleted && !e.isOverride) continue;
       await node.publish(
         eventKind,
@@ -988,63 +987,87 @@ class Calendar {
 
 // ---------------------------------------------------------------------------
 
-/// What the index knows at one moment, laid out for answering range queries
-/// without walking every event.
+/// The latest valid events, indexed by entry and start time. Updates replace
+/// one entry; range queries skip directly to the first possible overlap.
 class _Snapshot {
   final byEntry = <String, CalEvent>{};
-  final deletedEvents = <CalEvent>[];
-  final masters = <CalEvent>[];
-  final simple = <CalEvent>[];
-  final _overrides = <String, List<CalEvent>>{};
-  final calendars = <String>{};
-  final Map<String, List<CalEvent>> _latestBy;
-  final _all = <String, CalEvent>{};
-  int _maxSpan = 0;
+  final _deleted = <String, CalEvent>{};
+  final _masters = <String, CalEvent>{};
+  final _simple = SplayTreeMap<(int, String), CalEvent>((a, b) {
+    final time = a.$1.compareTo(b.$1);
+    return time != 0 ? time : a.$2.compareTo(b.$2);
+  });
+  final _spans = SplayTreeMap<int, int>();
+  final _overrides = <String, Map<String, CalEvent>>{};
+  final _latestBy = <String, Map<String, CalEvent>>{};
 
-  _Snapshot(this._latestBy) {
-    for (final list in _latestBy.values) {
-      for (final e in list) {
-        _all['${e.calendar}|${e.entry}'] = e;
+  Iterable<CalEvent> get deletedEvents => _deleted.values;
+  Iterable<CalEvent> get masters => _masters.values;
+  Iterable<CalEvent> get simple => _simple.values;
+  Iterable<String> get calendars => _latestBy.keys;
+
+  _Snapshot(Iterable<CalEvent> events) {
+    for (final e in events) {
+      update(e.calendar, e.entry, e);
+    }
+  }
+
+  void update(String calendar, String entry, CalEvent? next) {
+    final latest = _latestBy[calendar] ??= {};
+    final previous = latest[entry];
+    if (identical(previous, next)) return;
+    latest.remove(entry);
+    if (previous != null) _place(previous, false);
+    if (next != null) {
+      latest[entry] = next;
+      _place(next, true);
+    }
+  }
+
+  void _place(CalEvent e, bool add) {
+    final key = '${e.calendar}|${e.entry}';
+    void store(Map<String, CalEvent> map) {
+      if (add) {
+        map[key] = e;
+      } else {
+        map.remove(key);
       }
     }
-    for (final entry in _latestBy.entries) {
-      for (final e in entry.value) {
-        if (e.isOverride) {
-          (_overrides['${e.calendar}|${e.series}'] ??= []).add(e);
-        }
-      }
-    }
-    for (final entry in _latestBy.entries) {
-      for (final e in entry.value) {
-        if (e.isOverride) continue;
-        if (e.deleted) {
-          deletedEvents.add(e);
-          continue;
-        }
-        calendars.add(e.calendar);
-        byEntry['${e.calendar}|${e.entry}'] = e;
-        if (e.repeat != null) {
-          masters.add(e);
+    if (e.isOverride) {
+      store(_overrides['${e.calendar}|${e.series}'] ??= {});
+    } else if (e.deleted) {
+      store(_deleted);
+    } else {
+      store(byEntry);
+      if (e.repeat != null) {
+        store(_masters);
+      } else {
+        final at = (e.start.millisecondsSinceEpoch, key);
+        if (add) {
+          _simple[at] = e;
         } else {
-          simple.add(e);
-          final span = e.end.difference(e.start).inMilliseconds;
-          if (span > _maxSpan) _maxSpan = span;
+          _simple.remove(at);
+        }
+        final span = e.end.isBefore(e.start) ? 0 : e.end.difference(e.start).inMilliseconds;
+        final count = (_spans[span] ?? 0) + (add ? 1 : -1);
+        if (count == 0) {
+          _spans.remove(span);
+        } else {
+          _spans[span] = count;
         }
       }
     }
-    simple.sort((a, b) => a.start.compareTo(b.start));
   }
 
   /// The newest valid version of an entry, deleted or not.
   CalEvent? version(String calendar, String entry) =>
-      _all['$calendar|$entry'];
+      _latestBy[calendar]?[entry];
 
-  /// The newest valid version of each entry in a calendar, deletions too.
   Iterable<CalEvent> latest(String calendar) =>
-      _latestBy[calendar] ?? const [];
+      _latestBy[calendar]?.values ?? const [];
 
-  List<CalEvent> overridesOf(String calendar, String series) =>
-      _overrides['$calendar|$series'] ?? const [];
+  Iterable<CalEvent> overridesOf(String calendar, String series) =>
+      _overrides['$calendar|$series']?.values ?? const [];
 
   void collect(
     DateTime from,
@@ -1052,29 +1075,18 @@ class _Snapshot {
     Set<String> allowed,
     List<Occurrence> out,
   ) {
-    // Simple events are sorted by start: begin where an event that ran as long
-    // as the longest could still reach [from].
-    var lo = 0, hi = simple.length;
-    final earliest = from.subtract(Duration(milliseconds: _maxSpan));
-    while (lo < hi) {
-      final mid = (lo + hi) >> 1;
-      if (simple[mid].start.isBefore(earliest)) {
-        lo = mid + 1;
-      } else {
-        hi = mid;
-      }
-    }
-    for (var i = lo; i < simple.length; i++) {
-      final e = simple[i];
+    final earliest = from.millisecondsSinceEpoch - (_spans.lastKey() ?? 0);
+    var key = _simple.firstKeyAfter((earliest, ''));
+    while (key != null) {
+      final e = _simple[key]!;
       if (!e.start.isBefore(to)) break;
-      if (!allowed.contains(e.calendar)) continue;
-      if (_overlaps(e.start, e.end, from, to)) {
+      if (allowed.contains(e.calendar) && _overlaps(e.start, e.end, from, to)) {
         out.add(Occurrence(e, e, '', e.start, e.end));
       }
+      key = _simple.firstKeyAfter(key);
     }
     for (final master in masters) {
-      if (!allowed.contains(master.calendar)) continue;
-      _expand(master, from, to, out);
+      if (allowed.contains(master.calendar)) _expand(master, from, to, out);
     }
   }
 
@@ -1229,10 +1241,12 @@ class _Index {
     final target = node.store.insertionCursor;
     final slice = TimeSlice();
     var changed = false;
+    final dirty = <(String, String)>{};
     final blocked = '${node.blocked.toList()..sort()}';
     if (blocked != _blocked) {
       // Blocking someone stores nothing, so nothing arrives to notice it.
       _blocked = blocked;
+      _snapshot = null;
       changed = true;
     }
     // Objects that could not be read yet may be readable after a key grant.
@@ -1246,7 +1260,7 @@ class _Index {
     }
     if (granted) {
       for (final o in _unreadable.values.toList()) {
-        if (await _take(o)) changed = true;
+        if (await _take(o, dirty)) changed = true;
       }
     }
     while (true) {
@@ -1255,7 +1269,7 @@ class _Index {
       for (final (cursor, o) in page) {
         _eventCursor = cursor;
         await slice.pause();
-        if (await _take(o)) changed = true;
+        if (await _take(o, dirty)) changed = true;
       }
     }
     while (true) {
@@ -1264,25 +1278,26 @@ class _Index {
       for (final (cursor, o) in page) {
         _rsvpCursor = cursor;
         await slice.pause();
-        if (await _take(o)) changed = true;
+        if (await _take(o, dirty)) changed = true;
       }
     }
     final rooms = await Everyday(node).rooms();
     final signature = await _roomSignature(rooms);
     if (signature != _rooms) {
       _rooms = signature;
+      _snapshot = null;
       _roomMap = {for (final r in rooms) r.object.space: r};
       changed = true;
     }
     _settled = target;
     loaded = true;
-    if (changed) {
-      _snapshot = null;
-      version++;
+    for (final (calendar, entry) in dirty) {
+      _snapshot?.update(calendar, entry, latest(calendar, entry));
     }
+    if (changed) version++;
   }
 
-  Future<bool> _take(SignedObject o) async {
+  Future<bool> _take(SignedObject o, Set<(String, String)> dirty) async {
     if (o.isPublic || !node.visible(o)) return false;
     final p = await node.content(o);
     if (p == null) {
@@ -1310,6 +1325,7 @@ class _Index {
       ..add(e)
       ..sort((a, b) => CalEvent.newer(a, b) ? -1 : 1);
     if (list.length > _kept) list.removeRange(_kept, list.length);
+    dirty.add((e.calendar, e.entry));
     return true;
   }
 
@@ -1331,16 +1347,11 @@ class _Index {
         : members.contains(o.author);
   }
 
-  _Snapshot _build() {
-    final latest = <String, List<CalEvent>>{};
-    for (final calendar in _versions.entries) {
-      for (final versions in calendar.value.values) {
-        final winner = versions.where(_valid).firstOrNull;
-        if (winner != null) (latest[calendar.key] ??= []).add(winner);
-      }
-    }
-    return _Snapshot(latest);
-  }
+  _Snapshot _build() => _Snapshot([
+    for (final calendar in _versions.values)
+      for (final versions in calendar.values)
+        if (versions.where(_valid).firstOrNull case final winner?) winner,
+  ]);
 
   /// The newest valid version of an entry, deleted or not.
   CalEvent? latest(String calendar, String entry) =>
