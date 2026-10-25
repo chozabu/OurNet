@@ -83,6 +83,14 @@ Nothing per frame touches the UI isolate except the stream reads. The
 maps the pointer to the remote output, captures keys while focused and
 shows the stream's figures.
 
+### Viewing on Android (`DesktopDecoder.kt`)
+
+Android views (it does not serve): each frame goes over a method channel to
+a hardware `MediaCodec` H.264 decoder in low-latency mode, which renders
+straight into a Flutter `SurfaceProducer` texture; nothing is read back.
+Touch works as the mouse: a finger down is the left button held, so a tap
+clicks and a drag drags. There is no keyboard on Android yet.
+
 ## Permission
 
 The same as Remote Input: **own devices only**, and receiving starts off.
@@ -144,5 +152,5 @@ In rough order of value:
   loss and RTT rather than only skipping frames.
 - Moving the stream pump off the UI isolate (or into one native iroh, phase
   4 of PLUGINS.md).
-- Receivers on other platforms; Android as a viewer (MediaCodec).
+- Receivers on other platforms; a keyboard and right-click on Android.
 - Friends' access with a per-friend allow list.

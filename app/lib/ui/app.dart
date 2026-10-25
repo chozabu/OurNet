@@ -2037,7 +2037,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                 members: await everyday.members(room),
               ),
           ];
-    if (Platform.isWindows) _desktops = RemoteDesktops(network, plugins);
+    // Windows serves and views; Android views.
+    if (Platform.isWindows || Platform.isAndroid) {
+      _desktops = RemoteDesktops(network, plugins);
+    }
     _pluginNotices = plugins.notices.listen((n) {
       if (n.kind == 'log') return;
       notice(

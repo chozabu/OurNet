@@ -42,8 +42,12 @@ class RemoteDesktops {
 
   /// Opens a view of [device] for [plugin]; see [Plugins.openDesktop].
   String open(String plugin, String device, Json options) {
-    if (!desktopAvailable || !Platform.isWindows) {
-      throw StateError('Viewing a desktop needs Windows for now');
+    final preview = device == network.node.identity.device;
+    if (preview && !(desktopAvailable && Platform.isWindows)) {
+      throw StateError('Previewing this screen needs Windows for now');
+    }
+    if (!Platform.isAndroid && !(desktopAvailable && Platform.isWindows)) {
+      throw StateError('Viewing a desktop needs Windows or Android for now');
     }
     if (_views.length >= maxViews) {
       // The oldest goes: a plugin that forgot to close its views.
@@ -204,21 +208,28 @@ class DesktopSession extends ChangeNotifier {
 
   static const maxKeys = 16;
 
+  /// Android decodes with MediaCodec straight into its texture
+  /// (`DesktopDecoder.kt`); Windows with the native decoder, which the
+  /// runner's texture reads.
+  static bool get _platformDecoder => Platform.isAndroid;
+
   Future<void> _run() async {
     try {
-      final decoder = _decoder = DesktopDecoder.open();
-      if (decoder == null) throw StateError('No decoder on this device');
-      final texture = await _channel.invokeMapMethod<String, Object?>(
-        'create',
-        {
+      final Map<String, Object?>? texture;
+      if (_platformDecoder) {
+        texture = await _channel.invokeMapMethod<String, Object?>('create');
+      } else {
+        final decoder = _decoder = DesktopDecoder.open();
+        if (decoder == null) throw StateError('No decoder on this device');
+        texture = await _channel.invokeMapMethod<String, Object?>('create', {
           'view': decoder.handle,
           'bind': DesktopDecoder.bindAddress,
           'lock': DesktopDecoder.lockAddress,
           'close': DesktopDecoder.closeAddress,
-        },
-      );
-      // The texture closes the decoder once Flutter has let it go.
-      decoder.handOver();
+        });
+        // The texture closes the decoder once Flutter has let it go.
+        decoder.handOver();
+      }
       _texture = texture?['handle'] as int?;
       textureId = texture?['texture'] as int?;
       if (_closed) {
@@ -251,7 +262,7 @@ class DesktopSession extends ChangeNotifier {
         switch (type) {
           case DesktopFrame.video when body.length >= 13:
             framesReceived++;
-            if (!decoder.push(body)) _keyframe();
+            _push(body);
             // Acknowledged on arrival: the served side keeps at most a few
             // frames on the way, so a slow link never queues latency.
             _datagram([DesktopDatagram.ack, ...body.sublist(0, 4)]);
@@ -259,6 +270,7 @@ class DesktopSession extends ChangeNotifier {
             final j = jsonDecode(utf8.decode(body));
             if (j is Map && j['retrying'] == null) {
               info = {...info, ...j.cast<String, Object?>()};
+              _resize();
               notifyListeners();
             }
           case DesktopFrame.error:
@@ -281,6 +293,68 @@ class DesktopSession extends ChangeNotifier {
   }
 
   void _keyframe() => _datagram([DesktopDatagram.keyframe]);
+
+  /// Hands a video frame's body to the decoder.
+  void _push(Uint8List body) {
+    if (!_platformDecoder) {
+      if (_decoder?.push(body) == false) _keyframe();
+      return;
+    }
+    final handle = _texture;
+    if (handle == null) return;
+    unawaited(
+      _channel
+          .invokeMethod<bool>('frame', {
+            'handle': handle,
+            'key': body[12] & 1 != 0,
+            'data': Uint8List.sublistView(body, 13),
+          })
+          .then((queued) {
+            if (queued == false) _keyframe();
+          }, onError: (Object _) {}),
+    );
+  }
+
+  (int, int)? _size;
+
+  /// Tells a platform decoder the stream's size, which it needs to start.
+  void _resize() {
+    final w = info['width'], h = info['height'], handle = _texture;
+    if (!_platformDecoder || w is! num || h is! num || handle == null) return;
+    if (_size == (w.toInt(), h.toInt())) return;
+    _size = (w.toInt(), h.toInt());
+    unawaited(
+      _channel
+          .invokeMethod<void>('size', {
+            'handle': handle,
+            'width': w.toInt(),
+            'height': h.toInt(),
+          })
+          .catchError((Object _) {}),
+    );
+  }
+
+  bool _asking = false;
+
+  /// A platform decoder's figures, one question at a time.
+  Future<void> _platformStatus() async {
+    final handle = _texture;
+    if (_asking || handle == null) return;
+    _asking = true;
+    try {
+      final s = await _channel.invokeMapMethod<String, Object?>('status', {
+        'handle': handle,
+      });
+      if (s == null || _closed) return;
+      if (s['wantsKey'] == true) _keyframe();
+      decoded = (s['decoded'] as num?)?.toInt() ?? decoded;
+      decodeMicros = (s['decodeMicros'] as num?)?.toInt() ?? decodeMicros;
+    } catch (_) {
+      // Gone with the view.
+    } finally {
+      _asking = false;
+    }
+  }
 
   void _datagram(List<int> data) {
     _link?.datagram(data);
@@ -310,6 +384,7 @@ class DesktopSession extends ChangeNotifier {
   }
 
   void _beat() {
+    if (_platformDecoder) unawaited(_platformStatus());
     final status = _decoder?.status;
     if (status != null) {
       if (status.wantsKey) _keyframe();

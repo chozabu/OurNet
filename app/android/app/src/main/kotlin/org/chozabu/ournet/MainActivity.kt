@@ -123,6 +123,7 @@ class MainActivity : FlutterActivity() {
         WidgetStore.receiveLaunch(applicationContext, intent)
         SystemSpeech.attach(applicationContext, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/speech"))
         FriendVpn.attach(this, MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/vpn"))
+        DesktopDecoder.attach(engine)
         MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/clipboard").setMethodCallHandler { call, result ->
             if (call.method != "image") result.notImplemented()
             else worker.execute {
