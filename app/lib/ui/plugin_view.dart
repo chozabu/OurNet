@@ -8,6 +8,8 @@ import 'package:rfw/formats.dart' show parseLibraryFile;
 import 'package:rfw/rfw.dart';
 
 import 'plugin_widgets.dart';
+import 'git_network.dart';
+import 'git_code_browser.dart';
 import 'plugin_markdown.dart';
 
 /// One surface of a plugin: its RFW widget (from the package's `ui.rfwtxt`)
@@ -285,6 +287,9 @@ LocalWidgetLibrary ournetWidgets({
   MarkdownRepositoryFile? repositoryFile,
 }) => LocalWidgetLibrary(<String, LocalWidgetBuilder>{
   ...pluginLayoutWidgets(),
+  'CommitNetwork': commitNetworkWidget,
+  'CodeBrowser': gitCodeWidget,
+  'GitLocationInput': gitLocationWidget,
   // The picture attached to one of the plugin's objects, by `object` ID;
   // `height` limits it.
   'Picture': (context, source) =>

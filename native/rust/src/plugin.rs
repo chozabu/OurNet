@@ -41,7 +41,7 @@ use ournet::plugin::{
 type Post = unsafe extern "C" fn(handle: u64, data: *mut u8, len: usize);
 
 /// Bumped when the message protocol or the WIT world changes.
-const HOST_VERSION: u32 = 4;
+const HOST_VERSION: u32 = 5;
 
 /// CPU time one call into a plugin may use, excluding time spent waiting on
 /// the host. A plugin over it is stopped: it has looped, not worked.
@@ -1191,28 +1191,20 @@ impl Running {
         post(self.store.data().handle, &header, reply_body.as_deref());
     }
 
-    /// Fires the timers that are due; returns how long until the next one.
+    /// Fires at most one due timer before returning to the call queue. A timer
+    /// that rearms itself must not starve events, reloads or stop requests.
     fn timers(&mut self) -> Option<Duration> {
-        loop {
-            let now = Instant::now();
-            let next = self
-                .store
-                .data()
-                .timers
-                .iter()
-                .min_by_key(|(_, due)| **due)
-                .map(|(t, d)| (*t, *d));
-            match next {
-                Some((token, due)) if due <= now => {
-                    self.store.data_mut().timers.remove(&token);
-                    let _ = self.run(|p, s| p.call_on_timer(s, token));
-                }
-                Some((_, due)) => return Some(due - now),
-                None => return None,
+        let now = Instant::now();
+        let next = self.store.data().timers.iter()
+            .min_by_key(|(_, due)| **due).map(|(token, due)| (*token, *due));
+        match next {
+            Some((token, due)) if due <= now => {
+                self.store.data_mut().timers.remove(&token);
+                let _ = self.run(|p, s| p.call_on_timer(s, token));
+                self.plugin.as_ref().map(|_| Duration::ZERO)
             }
-            if self.plugin.is_none() {
-                return None;
-            }
+            Some((_, due)) => Some(due - now),
+            None => None,
         }
     }
 

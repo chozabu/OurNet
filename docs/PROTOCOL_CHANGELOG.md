@@ -616,3 +616,18 @@ Device labels are inside the root-signed certificate, so a label cannot be
 blanked when a certificate is shared with a friend: the signature would fail,
 and every object carries its author's certificate anyway. Hiding labels needs a
 certificate format whose signature covers the label separately.
+## Git collaboration and native browser widgets (25 October 2026)
+
+Git plugin 0.5 adds optional `parent`/`parentCreated` repository fields and
+`copiedFrom` push provenance. Fork contents remain ordinary signed push records
+with the same encrypted attachment format. New `x.git.pull` and
+`x.git.pull_event` kinds describe pinned proposals, review/discussion records and
+authorized state changes. Proposals bind to a target repository creation epoch;
+reviews name the proposed commit. Merge publication checks the displayed head
+and target ref and uses the existing push conflict semantics. Public proposals
+are published in the author's public Git space; private proposals keep the
+target's sharing audience. Older plugins ignore the new kinds/fields.
+
+Host API 0.5 declares the native `CodeBrowser`, `CommitNetwork` and
+`GitLocationInput` UI widgets. It retains all older WIT interfaces; no peer ALPN
+or required network capability/version floor changes.

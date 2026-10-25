@@ -516,3 +516,14 @@ must detect a missing derived index and rebuild it from durable signed objects.
 Git 0.4 declares API 0.4 so older apps refuse it with an API-version message
 rather than linking an unsupported import. Old plugin components continue to
 link on the new host. No network capability floor or file-payload format changes.
+## Native Git browser widgets (host API 0.5)
+
+`CodeBrowser` takes `text`, `repository`, `commit`, `path`, optional `line`,
+`entries: [{name, dir}]` and `onOpen` (`{name, dir}`). It parses syntax off the
+UI isolate, renders visible code rows lazily, and provides find/copy controls.
+`GitLocationInput` validates a copied repository/commit/path URL and calls
+`onOpen` with `{repo, commit, path, line}`; it does not launch arbitrary URLs.
+`CommitNetwork` takes `nodes: [{sha, repo, lane, title, author, at, parents,
+labels}]`, `lanes: [{name}]`, and `onCommit` (`{sha, repo}`). The plugin computes
+the graph's bounded window on its worker; the native widget pans/zooms and
+renders that window. Packages using these widgets declare API `0.5`.

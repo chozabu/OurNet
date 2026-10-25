@@ -107,6 +107,7 @@ void main() {
     expect(PluginManifest.parse({...manifest({}), 'api': '0.2'}).api, '0.2');
     expect(PluginManifest.parse({...manifest({}), 'api': '0.3'}).api, '0.3');
     expect(PluginManifest.parse({...manifest({}), 'api': '0.4'}).api, '0.4');
+    expect(PluginManifest.parse({...manifest({}), 'api': '0.5'}).api, '0.5');
     expect(
       () => PluginManifest.parse({...manifest({}), 'api': '99.9'}),
       throwsFormatException,

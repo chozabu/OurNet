@@ -365,50 +365,245 @@ void main() {
     );
   }, skip: skip);
 
-  test('Markdown links and image blobs stay pinned to their repository commit', () async {
-    final (_, plugins, _) = await device();
-    final url = await createRepo(plugins, 'markdown');
-    final work = '${temp.path}/markdown';
-    await ok(['init', work]);
-    File('$work/README.md').writeAsStringSync('# Readme\n[Guide](docs/guide.md)\n![Picture](docs/pic.png)\n');
-    Directory('$work/docs').createSync();
-    File('$work/docs/guide.md').writeAsStringSync('# Guide\n[Back](../README.md)\n');
-    File('$work/docs/pic.png').writeAsBytesSync([1, 2, 3, 4]);
-    await ok(['add', '.'], dir: work);
-    await ok(['commit', '-m', 'Markdown and image'], dir: work);
-    final first = (await git(['rev-parse', 'HEAD'], dir: work)).stdout.toString().trim();
-    await ok(['push', url, 'main'], dir: work);
-    final shown = await until(plugins, (d) => d['markdownCommit'] == first && '${d['readme']}'.contains('# Readme'));
-    expect(shown['markdownDirectory'], '');
-    Future<Uint8List> blob(String commit, String path) async {
-      final answer = await plugins.local('git', Uint8List.fromList(utf8.encode('${jsonEncode({
-        'op': 'blob', 'repo': url, 'commit': commit, 'path': path,
-      })}\n')));
-      return Uint8List.sublistView(answer, answer.indexOf(10) + 1);
-    }
-    expect(await blob(first, 'docs/pic.png'), [1, 2, 3, 4]);
-    await expectLater(blob(first, '../private'), throwsStateError);
-    await expectLater(blob(first, 'docs'), throwsStateError);
-    plugins.event('git', 'Git', 'markdownLink', {'target': 'docs/guide.md', 'commit': first});
-    final guide = await until(plugins, (d) => d['mode'] == 'file' && (d['file'] as Map?)?['name'] == 'guide.md');
-    expect((guide['file'] as Map)['markdown'], true);
-    expect(guide['markdownDirectory'], 'docs');
-    expect(guide['markdownCommit'], first);
-    File('$work/docs/pic.png').writeAsBytesSync([5, 6, 7, 8]);
-    await ok(['add', '.'], dir: work);
-    await ok(['commit', '-m', 'Replace picture'], dir: work);
-    final second = (await git(['rev-parse', 'HEAD'], dir: work)).stdout.toString().trim();
-    await ok(['push', url, 'main'], dir: work);
-    await until(plugins, (d) => !'${(d['repo'] as Map?)?['notice']}'.contains('Reading'));
-    expect(await blob(first, 'docs/pic.png'), [1, 2, 3, 4]);
-    // Wait for the new commit's derived object index, independently of UI focus.
-    final deadline = DateTime.now().add(const Duration(seconds: 20));
-    while (true) {
-      try { expect(await blob(second, 'docs/pic.png'), [5, 6, 7, 8]); break; }
-      on StateError { if (DateTime.now().isAfter(deadline)) rethrow; await Future<void>.delayed(const Duration(milliseconds: 20)); }
-    }
-    expect(plugins.surface('git', 'Git')['markdownCommit'], first);
-  }, skip: skip);
+  test(
+    'Markdown links and image blobs stay pinned to their repository commit',
+    () async {
+      final (_, plugins, _) = await device();
+      final url = await createRepo(plugins, 'markdown');
+      final work = '${temp.path}/markdown';
+      await ok(['init', work]);
+      File('$work/README.md').writeAsStringSync(
+        '# Readme\n[Guide](docs/guide.md)\n![Picture](docs/pic.png)\n',
+      );
+      Directory('$work/docs').createSync();
+      File(
+        '$work/docs/guide.md',
+      ).writeAsStringSync('# Guide\n[Back](../README.md)\n');
+      File('$work/docs/pic.png').writeAsBytesSync([1, 2, 3, 4]);
+      await ok(['add', '.'], dir: work);
+      await ok(['commit', '-m', 'Markdown and image'], dir: work);
+      final first = (await git([
+        'rev-parse',
+        'HEAD',
+      ], dir: work)).stdout.toString().trim();
+      await ok(['push', url, 'main'], dir: work);
+      final shown = await until(
+        plugins,
+        (d) =>
+            d['markdownCommit'] == first &&
+            '${d['readme']}'.contains('# Readme'),
+      );
+      expect(shown['markdownDirectory'], '');
+      Future<Uint8List> blob(String commit, String path) async {
+        final answer = await plugins.local(
+          'git',
+          Uint8List.fromList(
+            utf8.encode(
+              '${jsonEncode({'op': 'blob', 'repo': url, 'commit': commit, 'path': path})}\n',
+            ),
+          ),
+        );
+        return Uint8List.sublistView(answer, answer.indexOf(10) + 1);
+      }
+
+      expect(await blob(first, 'docs/pic.png'), [1, 2, 3, 4]);
+      await expectLater(blob(first, '../private'), throwsStateError);
+      await expectLater(blob(first, 'docs'), throwsStateError);
+      plugins.event('git', 'Git', 'markdownLink', {
+        'target': 'docs/guide.md',
+        'commit': first,
+      });
+      final guide = await until(
+        plugins,
+        (d) =>
+            d['mode'] == 'file' && (d['file'] as Map?)?['name'] == 'guide.md',
+      );
+      expect((guide['file'] as Map)['markdown'], true);
+      expect(guide['markdownDirectory'], 'docs');
+      expect(guide['markdownCommit'], first);
+      File('$work/docs/pic.png').writeAsBytesSync([5, 6, 7, 8]);
+      await ok(['add', '.'], dir: work);
+      await ok(['commit', '-m', 'Replace picture'], dir: work);
+      final second = (await git([
+        'rev-parse',
+        'HEAD',
+      ], dir: work)).stdout.toString().trim();
+      await ok(['push', url, 'main'], dir: work);
+      await until(
+        plugins,
+        (d) => !'${(d['repo'] as Map?)?['notice']}'.contains('Reading'),
+      );
+      expect(await blob(first, 'docs/pic.png'), [1, 2, 3, 4]);
+      // Wait for the new commit's derived object index, independently of UI focus.
+      final deadline = DateTime.now().add(const Duration(seconds: 20));
+      while (true) {
+        try {
+          expect(await blob(second, 'docs/pic.png'), [5, 6, 7, 8]);
+          break;
+        } on StateError {
+          if (DateTime.now().isAfter(deadline)) rethrow;
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      }
+      expect(plugins.surface('git', 'Git')['markdownCommit'], first);
+      plugins.event('git', 'Git', 'entry', {'name': 'pic.png', 'dir': false});
+      final picture = await until(
+        plugins,
+        (d) => (d['file'] as Map?)?['name'] == 'pic.png',
+      );
+      expect(picture['markdownCommit'], first);
+      plugins.event('git', 'Git', 'crumb', {'depth': 0});
+      final pinned = await until(plugins, (d) => d['mode'] == 'repo');
+      expect(pinned['markdownCommit'], first);
+      plugins.event('git', 'Git', 'branch', {'ref': 'refs/heads/main'});
+      await until(plugins, (d) => d['markdownCommit'] == second);
+    },
+    skip: skip,
+  );
+
+  test(
+    'fork, pull request, review, comparison, network and fast-forward merge',
+    () async {
+      final (_, plugins, _) = await device();
+      final upstream = await createRepo(plugins, 'upstream');
+      final work = '${temp.path}/upstream';
+      await ok(['init', work]);
+      File('$work/README.md').writeAsStringSync('# Original\n');
+      await ok(['add', '.'], dir: work);
+      await ok(['commit', '-m', 'Original'], dir: work);
+      final base = (await git([
+        'rev-parse',
+        'HEAD',
+      ], dir: work)).stdout.toString().trim();
+      await ok(['push', upstream, 'main'], dir: work);
+      await until(
+        plugins,
+        (d) => d['markdownCommit'] == base && d['readme'] == '# Original\n',
+      );
+      plugins.event('git', 'Git', 'forkName', {'value': 'my-fork'});
+      plugins.event('git', 'Git', 'fork', {});
+      plugins.event('git', 'Git', 'copyPause', {});
+      await until(plugins, (d) => d['copyPaused'] == true);
+      await plugins.restart('git');
+      await until(
+        plugins,
+        (_) => plugins['git']?.status == PluginStatus.running,
+      );
+      plugins.open('git', 'Git', {'scope': 'personal'});
+      await until(plugins, (d) => d['copyPaused'] == true);
+      plugins.event('git', 'Git', 'copyResume', {});
+      final fork = await until(
+        plugins,
+        (d) =>
+            (d['repo'] as Map?)?['name'] == 'my-fork' &&
+            d['copyProgress'] == '' &&
+            d['readme'] == '# Original\n',
+      );
+      final forkUrl = (fork['repo'] as Map)['url'] as String;
+      expect((fork['repo'] as Map)['parent'], isNotEmpty);
+      final clone = '${temp.path}/fork-clone';
+      await ok(['clone', forkUrl, clone]);
+      File(
+        '$clone/README.md',
+      ).writeAsStringSync('# Original\nFork contribution\n');
+      await ok(['add', '.'], dir: clone);
+      await ok(['commit', '-m', 'Fork contribution'], dir: clone);
+      final head = (await git([
+        'rev-parse',
+        'HEAD',
+      ], dir: clone)).stdout.toString().trim();
+      await ok(['push', 'origin', 'main'], dir: clone);
+      await until(plugins, (d) => d['markdownCommit'] == head);
+      plugins.event('git', 'Git', 'tab', {'tab': 'pulls'});
+      await until(plugins, (d) => d['tab'] == 'pulls');
+      plugins.event('git', 'Git', 'pullTitle', {
+        'value': 'Bring the contribution upstream',
+      });
+      plugins.event('git', 'Git', 'pullBody', {
+        'value': '**Reason:** improve the readme.',
+      });
+      plugins.event('git', 'Git', 'newPull', {});
+      final pr = await until(plugins, (d) => d['pullSelected'] == true);
+      final pull = pr['pull'] as Map;
+      expect(pull['head'], head);
+      expect(pull['base'], base);
+      expect(pull['status'], 'open');
+      final id = pull['id'] as String;
+      plugins.event('git', 'Git', 'commentDraft', {
+        'value': 'Reviewed the exact proposed commit.',
+      });
+      plugins.event('git', 'Git', 'pullAction', {
+        'action': 'approve',
+        'head': head,
+      });
+      await until(
+        plugins,
+        (d) =>
+            (d['comments'] as List?)?.any(
+              (c) => (c as Map)['action'] == 'approve',
+            ) ==
+            true,
+      );
+      plugins.event('git', 'Git', 'pullDiff', {});
+      final diff = await until(plugins, (d) => d['mode'] == 'commit');
+      expect('${diff['diff']}', contains('+Fork contribution'));
+      plugins.event('git', 'Git', 'back', {});
+      plugins.event('git', 'Git', 'pullMerge', {'head': head, 'base': base});
+      await until(
+        plugins,
+        (d) =>
+            d['copyProgress'] == '' &&
+            d['mode'] == 'repo' &&
+            d['tab'] == 'code' &&
+            d['markdownCommit'] == head &&
+            (d['repo'] as Map?)?['url'] == upstream,
+      );
+      final remote = await git(['ls-remote', upstream, 'refs/heads/main']);
+      expect(remote.stdout.toString(), startsWith(head));
+      plugins.event('git', 'Git', 'tab', {'tab': 'pulls'});
+      plugins.event('git', 'Git', 'pullOpen', {'id': id});
+      await until(plugins, (d) => (d['pull'] as Map?)?['status'] == 'merged');
+      plugins.event('git', 'Git', 'tab', {'tab': 'network'});
+      final graph = await until(
+        plugins,
+        (d) =>
+            d['networkLoading'] == false &&
+            (d['networkNodes'] as List?)?.isNotEmpty == true,
+      );
+      expect((graph['networkForks'] as List).length, 2);
+      expect('${graph['networkNodes']}', contains(base));
+      expect('${graph['networkNodes']}', contains(head));
+      plugins.event('git', 'Git', 'tab', {'tab': 'compare'});
+      plugins.event('git', 'Git', 'compareBase', {'value': base});
+      plugins.event('git', 'Git', 'compareHead', {'value': head});
+      plugins.event('git', 'Git', 'compare', {});
+      final comparison = await until(plugins, (d) => d['mode'] == 'commit');
+      expect('${comparison['diff']}', contains('+Fork contribution'));
+      await plugins.restart('git');
+      await until(
+        plugins,
+        (_) => plugins['git']?.status == PluginStatus.running,
+      );
+      plugins.open('git', 'Git', {'scope': 'personal'});
+      await until(plugins, (d) => d['mode'] == 'list');
+      plugins.event('git', 'Git', 'open', {'key': Uri.parse(upstream).host});
+      plugins.event('git', 'Git', 'tab', {'tab': 'pulls'});
+      plugins.event('git', 'Git', 'pullOpen', {'id': id});
+      await until(plugins, (d) => (d['pull'] as Map?)?['status'] == 'merged');
+      plugins.event('git', 'Git', 'tab', {'tab': 'settings'});
+      plugins.event('git', 'Git', 'deleteName', {'value': 'upstream'});
+      plugins.event('git', 'Git', 'delete', {});
+      await until(plugins, (d) => d['mode'] == 'list');
+      final surviving = '${temp.path}/surviving-fork';
+      await ok(['clone', forkUrl, surviving]);
+      expect(
+        File('$surviving/README.md').readAsStringSync(),
+        contains('Fork contribution'),
+      );
+    },
+    skip: skip,
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 
   test('deletion retires old pushes and the same name starts fresh', () async {
     final (node, plugins, _) = await device();

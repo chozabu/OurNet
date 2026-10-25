@@ -14,6 +14,9 @@
 
 mod diff;
 mod pack;
+mod collaboration;
+mod workflow;
+mod network;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::rc::Rc;
@@ -34,6 +37,8 @@ const MAX_PACK: usize = 16 * 1024 * 1024;
 /// Time an indexing step may take before it yields, in milliseconds.
 const STEP_MS: u64 = 16;
 const INDEX_TIMER: u64 = 1;
+const COPY_TIMER: u64 = 3;
+const COLLAB_TIMER:u64=5;
 /// Packs not here yet are asked for again after this, in milliseconds.
 const RETRY_MS: u32 = 30_000;
 const RETRY_TIMER: u64 = 2;
@@ -87,6 +92,10 @@ fn valid_ref(name: &str) -> bool {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Repo {
+    #[serde(default)]
+    parent: String,
+    #[serde(default)]
+    parent_at:u64,
     key: String,
     name: String,
     space: String,
@@ -227,13 +236,14 @@ impl pack::Source for FilePack {
 /// Object locations are indexed on disk; only recent range windows live here.
 struct Objects {
     key: String,
+    other_keys: Vec<String>,
     sources: Vec<FilePack>,
     reading: BTreeSet<Sha>,
 }
 
 impl Objects {
     fn load(key: &str, _pushes: &[Push]) -> Self {
-        Self { key: key.into(), sources: Vec::new(), reading: BTreeSet::new() }
+        Self { key: key.into(), other_keys:Vec::new(), sources: Vec::new(), reading: BTreeSet::new() }
     }
 
     fn read(&mut self, sha: &Sha) -> Option<(u8, Vec<u8>)> {
@@ -244,7 +254,11 @@ impl Objects {
     }
 
     fn read_inner(&mut self, sha: &Sha) -> Option<(u8, Vec<u8>)> {
-        let record = index::get(&format!("objects/{}", self.key), &pack::hex(sha)).ok()??;
+        let mut found=None;
+        for key in std::iter::once(&self.key).chain(self.other_keys.iter()) {
+            if let Some(record)=index::get(&format!("objects/{key}"),&pack::hex(sha)).ok().flatten() { found=Some((key.clone(),record)); break; }
+        }
+        let (record_key,record)=found?;
         if record.len() < 17 { return None; }
         let offset = u64::from_be_bytes(record[..8].try_into().ok()?);
         let size = u64::from_be_bytes(record[8..16].try_into().ok()?);
@@ -254,7 +268,7 @@ impl Objects {
             self.sources.push(source.clone());
             source
         } else {
-            let source = FilePack::new(id, size, &self.key);
+            let source = FilePack::new(id, size, &record_key);
             if self.sources.len() >= 4 { self.sources.remove(0); }
             self.sources.push(source.clone());
             source
@@ -312,6 +326,10 @@ enum Tab {
     Commits,
     Pushes,
     Settings,
+    Pulls,
+    Network,
+    Compare,
+    Fork,
 }
 
 struct CommitPage {
@@ -363,12 +381,24 @@ struct Git {
     draft_name: String,
     draft_description: String,
     error: String,
+    fork_name: String,
+    copy_job: Option<workflow::CopyJob>,
+    pull_target: String, pull_base_ref: String, pull_title: String, pull_body: String,
+    pull_selected: String, pull_cursor: String, pull_next: String,
+    comment_cursor: String, comment_next: String, comment_draft: String,
+    compare_base: String, compare_head: String, compare_source: String,
+    comparison: Option<(String,String,String)>,
+    graph: Option<network::Graph>,
+    network_offset:usize, network_has_more:bool,
+    jump_line:usize,
+    pending_collaboration:VecDeque<(String,String)>,
 }
 
 impl Git {
     fn load_pushes(&mut self, key: &str) -> &mut Vec<Push> {
         if !self.pushes.contains_key(key) {
             let mut list: Vec<Push> = store::keys(&format!("push/{key}/")).iter().filter_map(|k| store::get_json(k)).collect();
+            if self.repos.get(key).is_some_and(|r|r.place==Where::Personal){list.retain(|p|p.author==self.me);}
             list.sort_by(|a, b| (a.created, &a.id).cmp(&(b.created, &b.id)));
             self.push_positions.insert(key.into(), list.iter().enumerate().map(|(i, p)| (p.id.clone(), i)).collect());
             self.pushes.insert(key.to_string(), list);
@@ -431,6 +461,8 @@ impl Git {
     }
 
     fn take(&mut self, o: &Object) -> Option<String> {
+        if where_of(&o.space)==Where::Personal&&o.author!=self.me{return None;}
+        if o.kind == collaboration::PULL || o.kind == collaboration::EVENT { return self.take_collaboration(o); }
         let p = o.json();
         let name = p["repo"].as_str().or(p["name"].as_str())?.to_string();
         if !valid_name(&name) || !Self::may_write(&o.space, &o.author) {
@@ -489,7 +521,13 @@ impl Git {
                     repo.owner = o.author.clone();
                 }
                 repo.deleted = false;
+                if o.created >= repo.metadata_at {
+                    repo.parent = p["parent"].as_str().unwrap_or("").into();
+                    repo.parent_at=p["parentCreated"].as_u64().unwrap_or(0);
+                }
                 self.save_repos();
+                self.pending_collaboration.push_back((key.clone(),String::new()));
+                ournet_plugin::timer::set(COLLAB_TIMER,10);
             }
             PUSH => {
                 let repo = self.repo_for(&o.space, &name, &o.author, o.created);
@@ -538,6 +576,9 @@ impl Git {
                     if let Some(state) = self.ref_cache.get_mut(&key) { state.apply(&incoming); }
                 } else {
                     self.ref_cache.remove(&key);
+                }
+                if let Some(source)=p["copiedFrom"].as_str() {
+                    let _=index::put(&format!("copied/{key}"),&[(source.into(),vec![1])]);
                 }
                 self.save_push(&key, &o.id);
                 self.save_repos();
@@ -672,7 +713,7 @@ impl Git {
             store::remove(&key);
         }
         let mut found = Vec::new();
-        for kind in [REPO, PUSH, DELETE] {
+        for kind in [REPO, PUSH, DELETE, collaboration::PULL, collaboration::EVENT] {
             let mut before: Option<Object> = None;
             loop {
                 let page = ournet_plugin::query(kind, None, before.as_ref(), 500);
@@ -916,6 +957,10 @@ impl Git {
         let progress = self.indexing.as_ref().filter(|(key,_,_)| self.repo.as_ref() == Some(key)).map(|(_,_,ix)| ix.progress()).unwrap_or_default();
         let mut data = json!({
             "indexProgress": progress,
+            "error": self.error,
+            "forkName": self.fork_name,
+            "copyPaused":self.copy_job.as_ref().is_some_and(|j|j.paused),
+            "copyProgress": self.copy_job.as_ref().map(|j| if j.paused {"Repository copy paused".to_string()} else if j.checking { "Checking merge ancestry…".to_string() } else { format!("Copying repository: {} packs published",j.copied) }).unwrap_or_default(),
             "mode": match self.mode {
                 Mode::List => "list",
                 Mode::New => "new",
@@ -1019,6 +1064,8 @@ impl Git {
         let url = format!("ournet://{}/{}", repo.key, repo.name);
         data["repo"] = json!({
             "name": repo.name,
+            "key": repo.key,
+            "parent": repo.parent,
             "description": repo.description,
             "owner": repo.owner,
             "url": url,
@@ -1031,6 +1078,10 @@ impl Git {
             Tab::Commits => "commits",
             Tab::Pushes => "pushes",
             Tab::Settings => "settings",
+            Tab::Pulls => "pulls",
+            Tab::Network => "network",
+            Tab::Compare => "compare",
+            Tab::Fork => "fork",
         }
         .into();
         let filter = self.branch_filter.to_lowercase();
@@ -1060,9 +1111,12 @@ impl Git {
         match self.mode {
             Mode::Repo => match self.tab {
                 Tab::Code => self.show_code(data, tip),
+                Tab::Pulls => self.show_pulls(data, &key),
+                Tab::Network => self.show_network(data, &key),
+                Tab::Compare => { data["compareBase"]=self.compare_base.clone().into(); data["compareHead"]=self.compare_head.clone().into(); data["compareSource"]=self.compare_source.clone().into(); },
                 Tab::Commits => self.show_commits(data, tip),
                 Tab::Pushes => self.show_pushes(data, &key),
-                Tab::Settings => {},
+                Tab::Settings | Tab::Fork => {},
             },
             Mode::File => self.show_file(data, tip),
             Mode::Commit => self.show_commit(data),
@@ -1319,9 +1373,11 @@ impl Git {
         };
         data["markdownDirectory"] = self.path.join("/").into();
         data["markdownCommit"] = at.map(|s| pack::hex(&s)).unwrap_or_default().into();
-        let entry = at
-            .and_then(|t| self.tree_at(t, &self.path.clone()))
-            .and_then(|entries| entries.into_iter().find(|e| e.name == name));
+        let siblings=at.and_then(|t|self.tree_at(t,&self.path.clone())).unwrap_or_default();
+        data["siblings"]=siblings.iter().map(|e|json!({"name":e.name,"dir":e.is_dir()})).collect::<Vec<_>>().into();
+        data["jumpLine"]=self.jump_line.into();
+        data["filePath"]=self.path.iter().cloned().chain(std::iter::once(name.clone())).collect::<Vec<_>>().join("/").into();
+        let entry = siblings.into_iter().find(|e| e.name == name);
         let key = self.repo.clone().unwrap();
         let objects = self.open_objects(&key);
         let (text, note) = match entry.and_then(|e| objects.read(&e.sha)) {
@@ -1346,7 +1402,10 @@ impl Git {
         let key = self.repo.clone().unwrap();
         let Some(sha) = self.commit.as_deref().and_then(pack::unhex) else { return };
         let limit = self.diff_shown.max(1500);
+        let comparison = self.comparison.clone();
+        let family = self.family(&key);
         let objects = self.open_objects(&key);
+        if comparison.is_some() { objects.other_keys=family; }
         let Some(c) = objects.commit(&sha) else {
             data["commit"] = json!({"title": "Not here yet", "body": "", "short": "", "author": "", "at": 0});
             data["diff"] = json!([]);
@@ -1362,7 +1421,18 @@ impl Git {
             "at": c.committer.time * 1000,
             "parents": c.parents.iter().map(|p| pack::hex(p)[..7].to_string()).collect::<Vec<_>>().join(", "),
         });
-        let parent_tree = c.parents.first().and_then(|p| objects.commit(p)).and_then(|p| p.tree);
+        if let Some((_,base,head))=&comparison {
+            data["commit"]["title"]=format!("Comparing {} → {}",&base[..7],&head[..7]).into();
+            data["commit"]["body"]="Exact base and proposed-head snapshots".into();
+            if pack::unhex(base).and_then(|s|objects.commit(&s)).and_then(|c|c.tree)
+                .and_then(|tree|objects.read(&tree)).is_none() {
+                data["commit"]["title"]="Comparison unavailable: base snapshot is not here yet".into();
+                data["diff"]=json!([]);data["files"]=json!([]);data["moreDiff"]=false.into();return;
+            }
+        }
+        let parent_tree = if let Some((_,base,_))=&comparison {
+            pack::unhex(base).and_then(|s|objects.commit(&s)).and_then(|c|c.tree)
+        } else { c.parents.first().and_then(|p| objects.commit(p)).and_then(|p| p.tree) };
         let mut changes = Vec::new();
         let truncated = diff_trees(&mut |sha| objects.tree(sha), parent_tree, c.tree, "", limit + 1, &mut changes);
         let mut lines: Vec<Value> = Vec::new();
@@ -1424,6 +1494,12 @@ impl Git {
 
     fn open_repo(&mut self, key: &str) {
         self.repo = Some(key.to_string());
+        self.comparison=None; self.graph=None; self.network_offset=0;
+        self.pull_selected.clear(); self.pull_cursor.clear(); self.comment_cursor.clear();
+        self.fork_name=self.repos.get(key).map(|r|format!("{}-fork-{}",&r.name[..r.name.len().min(80)],&self.me[..self.me.len().min(6)])).unwrap_or_default();
+        self.pull_target=self.repos.get(key).map(|r|if r.parent.is_empty(){key.into()}else{r.parent.clone()}).unwrap_or_default();
+        self.pull_base_ref="refs/heads/main".into();
+        self.compare_base="main".into(); self.compare_head="main".into(); self.compare_source=key.into();
         self.mode = Mode::Repo;
         self.tab = Tab::Code;
         self.branch = None;
@@ -1686,6 +1762,8 @@ fn split(payload: &[u8]) -> (Value, &[u8]) {
 
 impl Plugin for Git {
     fn init(&mut self) {
+        self.copy_job=collaboration::get("operations","copy").and_then(|v|ournet_plugin::serde_json::from_value(v).ok()).flatten();
+        if self.copy_job.is_some() { ournet_plugin::timer::set(COPY_TIMER,10); }
         self.me = ournet_plugin::me();
         let disk_format = index::get("control", "format").ok().flatten();
         if store::get("format").as_deref() != Some(FORMAT) || disk_format.as_deref() != Some(FORMAT) {
@@ -1693,7 +1771,18 @@ impl Plugin for Git {
             let _ = index::put("control", &[("format".into(), FORMAT.to_vec())]);
         }
         self.repos = store::get_json("repos").unwrap_or_default();
+        if let Some(mut job)=self.copy_job.take(){
+            if job.checking{
+                let _=index::clear(&format!("ancestry/{}",job.pull));job.pending.clear();
+                let head=job.head.clone();let _=self.pending(&mut job,&head);
+            }
+            self.copy_job=Some(job);
+            let _=collaboration::put("operations","copy",&ournet_plugin::serde_json::to_value(&self.copy_job).unwrap_or(Value::Null));
+        }
+
         self.followed = store::get_json("followed").unwrap_or_default();
+        for key in self.repos.keys() {self.pending_collaboration.push_back((key.clone(),String::new()));}
+        ournet_plugin::timer::set(COLLAB_TIMER,10);
         // A pack that stopped the plugin mid-read is not read again.
         if let Some(id) = store::get("indexing") {
             let id = String::from_utf8_lossy(&id).to_string();
@@ -1755,7 +1844,7 @@ impl Plugin for Git {
         let opened = context.object.and_then(|id| ournet_plugin::get(&id)).and_then(|o| {
             let p = o.json();
             let name = p["repo"].as_str().or(p["name"].as_str())?.to_string();
-            Some(repo_key(&o.space, &name))
+            if o.kind==collaboration::PULL {Some(name)} else {Some(repo_key(&o.space, &name))}
         });
         match opened.filter(|key| self.repos.contains_key(key)) {
             Some(key) => self.open_repo(&key),
@@ -1787,11 +1876,61 @@ impl Plugin for Git {
             "previousBranches" => { self.branch_offset = self.branch_offset.saturating_sub(50); self.show(); },
             "morePushes" => { self.pushes_shown += 30; self.show(); },
             "open" => self.open_repo(&text("key")),
+            "copyPause" => {if let Some(j)=self.copy_job.as_mut(){j.paused=true;}let _=collaboration::put("operations","copy",&ournet_plugin::serde_json::to_value(&self.copy_job).unwrap_or(Value::Null));self.show();}
+            "copyResume" => {if let Some(j)=self.copy_job.as_mut(){j.paused=false;}let _=collaboration::put("operations","copy",&ournet_plugin::serde_json::to_value(&self.copy_job).unwrap_or(Value::Null));ournet_plugin::timer::set(COPY_TIMER,1);self.show();}
+            "forkName" => { self.fork_name=text("value"); }
+            "fork" => { self.error=self.fork().err().unwrap_or_default(); self.show(); }
+            "pullTarget" => { self.pull_target=text("value"); }
+            "pullBaseRef" => { self.pull_base_ref=text("value"); }
+            "pullTitle" => { self.pull_title=text("value"); }
+            "pullBody" => { self.pull_body=text("value"); }
+            "commentDraft" => { self.comment_draft=text("value"); }
+            "newPull" => { self.error=self.new_pull().err().unwrap_or_default(); self.show(); }
+            "pullOpen" => { self.pull_selected=text("id"); self.comment_cursor.clear(); self.show(); }
+            "pullNext" => { self.pull_cursor=self.pull_next.clone(); self.show(); }
+            "pullFirst" => { self.pull_cursor.clear(); self.show(); }
+            "commentNext" => { self.comment_cursor=self.comment_next.clone(); self.show(); }
+            "commentFirst" => { self.comment_cursor.clear(); self.show(); }
+            "pullAction" => { self.error=self.pull_action(&text("action"),&text("head")).err().unwrap_or_default(); self.show(); }
+            "pullMerge" => { self.error=self.merge_pull(&text("head"),&text("base")).err().unwrap_or_default(); self.show(); }
+            "pullDiff" => {
+                if let Some(p)=collaboration::Pull::load(&self.pull_selected) {
+                    self.comparison=Some((p.source,p.base,p.head.clone())); self.commit=Some(p.head);
+                    self.mode=Mode::Commit; self.diff_shown=1500; self.show();
+                }
+            }
+            "location" => {
+                let result=(||->Result<(),String>{
+                    let key=self.resolve(&text("repo"))?;
+                    let mut path=repository_path(&text("path"))?;
+                    let file=path.pop().ok_or("No file path")?;
+                    if pack::unhex(&text("commit")).is_none(){return Err("Invalid commit".into());}
+                    self.repo=Some(key);self.path=path;self.file=Some(file);self.commit=Some(text("commit"));
+                    self.comparison=None;self.jump_line=args["line"].as_u64().unwrap_or(1) as usize;self.mode=Mode::File;Ok(())
+                })(); self.error=result.err().unwrap_or_default();self.show();
+            }
+            "compareBase" => { self.compare_base=text("value"); }
+            "compareHead" => { self.compare_head=text("value"); }
+            "compareSource" => { self.compare_source=text("value"); }
+            "compare" => { self.error=self.compare().err().unwrap_or_default(); self.show(); }
+            "networkBranchesNext" => {self.network_offset+=50; self.graph=None; self.show();}
+            "networkBranchesPrevious" => {self.network_offset=self.network_offset.saturating_sub(50); self.graph=None; self.show();}
+            "networkMore" => { self.graph_more(); self.show(); }
+            "networkRefresh" => { self.graph=None; self.show(); }
+            "networkCommit" => {
+                let key=text("repo"); if self.repos.contains_key(&key) { self.repo=Some(key); }
+                self.comparison=None; self.commit=Some(text("sha")); self.mode=Mode::Commit; self.show();
+            }
+            "upstream" => { if let Some(parent)=self.repo.as_ref().and_then(|k|self.repos.get(k)).map(|r|r.parent.clone()) { if self.repos.contains_key(&parent) { self.open_repo(&parent); } } }
             "tab" => {
                 self.tab = match text("tab").as_str() {
                     "commits" => Tab::Commits,
                     "pushes" => Tab::Pushes,
                     "settings" => Tab::Settings,
+                    "pulls" => Tab::Pulls,
+                    "network" => Tab::Network,
+                    "compare" => Tab::Compare,
+                    "fork" => Tab::Fork,
                     _ => Tab::Code,
                 };
                 self.mode = Mode::Repo;
@@ -1799,6 +1938,7 @@ impl Plugin for Git {
                 self.show();
             }
             "branch" => {
+                self.commit=None;self.comparison=None;self.jump_line=0;
                 self.branch = Some(text("ref"));
                 self.branches_open = false;
                 self.branch_filter.clear();
@@ -1808,12 +1948,12 @@ impl Plugin for Git {
                 self.show();
             }
             "entry" => {
+                self.jump_line=0;
                 if args["dir"].as_bool() == Some(true) {
                     self.path.push(text("name"));
                     self.mode = Mode::Repo;
                 } else {
                     self.file = Some(text("name"));
-                    self.commit = None;
                     self.mode = Mode::File;
                 }
                 self.show();
@@ -1843,12 +1983,12 @@ impl Plugin for Git {
                 let depth = args["depth"].as_u64().unwrap_or(0) as usize;
                 self.path.truncate(depth);
                 self.file = None;
-                self.commit = None;
                 self.mode = Mode::Repo;
                 self.tab = Tab::Code;
                 self.show();
             }
             "commit" => {
+                self.comparison=None;
                 self.commit = Some(text("sha"));
                 self.diff_shown = 1500;
                 self.mode = Mode::Commit;
@@ -1889,6 +2029,17 @@ impl Plugin for Git {
     }
 
     fn on_timer(&mut self, token: u64) {
+        if token == COLLAB_TIMER {
+            if let Some((key,cursor))=self.pending_collaboration.pop_front() {
+                let (ids,next)=collaboration::page(&format!("deferred-pulls/{key}"),&cursor,10);
+                for id in ids {if let Some(o)=id.as_str().and_then(ournet_plugin::get) {self.take_collaboration(&o);}}
+                if !next.is_empty(){self.pending_collaboration.push_back((key,next));}
+            }
+            if !self.pending_collaboration.is_empty(){ournet_plugin::timer::set(COLLAB_TIMER,10);}
+            self.show();
+        }
+        if token == network::GRAPH_TIMER { self.graph_step(); }
+        if token == COPY_TIMER { self.copy_step(); }
         if token == INDEX_TIMER {
             self.index_step();
         }

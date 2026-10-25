@@ -1,35 +1,178 @@
 {
   "id": "git",
   "name": "Git",
-  "version": "0.4.1",
-  "api": "0.4",
+  "version": "0.5.0",
+  "api": "0.5",
   "description": "Git repositories for yourself, a group, or friends in public: push and clone with ordinary git (git-remote-ournet), browse files, commits and changes here. Friends can clone while you are offline, and every push is signed by who made it.",
-  "grants": ["objects", "identity", "local"],
+  "grants": [
+    "objects",
+    "identity",
+    "local"
+  ],
   "kinds": {
     "repo": {
-      "name": {"type": "string", "max": 100, "required": true},
-      "description": {"type": "string", "max": 500}
+      "name": {
+        "type": "string",
+        "max": 100,
+        "required": true
+      },
+      "description": {
+        "type": "string",
+        "max": 500
+      },
+      "parent": {
+        "type": "string",
+        "max": 100
+      },
+      "parentCreated": {
+        "type": "int",
+        "min": 0
+      }
     },
     "delete": {
-      "repo": {"type": "string", "max": 100, "required": true}
+      "repo": {
+        "type": "string",
+        "max": 100,
+        "required": true
+      }
     },
     "push": {
-      "repo": {"type": "string", "max": 100, "required": true},
-      "refs": {"type": "map", "max": 24000, "required": true},
-      "old": {"type": "map", "max": 24000},
-      "size": {"type": "int", "min": 0},
-      "objects": {"type": "int", "min": 0},
-      "force": {"type": "bool"},
-      "head": {"type": "string", "max": 4096}
+      "repo": {
+        "type": "string",
+        "max": 100,
+        "required": true
+      },
+      "refs": {
+        "type": "map",
+        "max": 24000,
+        "required": true
+      },
+      "old": {
+        "type": "map",
+        "max": 24000
+      },
+      "size": {
+        "type": "int",
+        "min": 0
+      },
+      "objects": {
+        "type": "int",
+        "min": 0
+      },
+      "force": {
+        "type": "bool"
+      },
+      "head": {
+        "type": "string",
+        "max": 4096
+      },
+      "copiedFrom": {
+        "type": "string",
+        "max": 128
+      }
+    },
+    "pull": {
+      "repo": {
+        "type": "string",
+        "max": 100,
+        "required": true
+      },
+      "source": {
+        "type": "string",
+        "max": 100,
+        "required": true
+      },
+      "title": {
+        "type": "string",
+        "max": 200,
+        "required": true
+      },
+      "body": {
+        "type": "string",
+        "max": 12000
+      },
+      "baseRef": {
+        "type": "string",
+        "max": 4096,
+        "required": true
+      },
+      "headRef": {
+        "type": "string",
+        "max": 4096,
+        "required": true
+      },
+      "base": {
+        "type": "string",
+        "max": 40,
+        "required": true
+      },
+      "head": {
+        "type": "string",
+        "max": 40,
+        "required": true
+      },
+      "targetCreated": {
+        "type": "int",
+        "min": 0,
+        "required": true
+      },
+      "sourceCreated": {
+        "type": "int",
+        "min": 0,
+        "required": true
+      }
+    },
+    "pull_event": {
+      "pull": {
+        "type": "string",
+        "max": 128,
+        "required": true
+      },
+      "action": {
+        "type": "string",
+        "max": 32,
+        "required": true
+      },
+      "body": {
+        "type": "string",
+        "max": 12000
+      },
+      "head": {
+        "type": "string",
+        "max": 40
+      }
     }
   },
   "search": {
-    "repo": {"title": "name", "text": "description", "key": "name"}
+    "repo": {
+      "title": "name",
+      "text": "description",
+      "key": "name"
+    },
+    "pull": {
+      "title": "title",
+      "text": "body",
+      "key": "repo"
+    }
   },
   "activity": {
-    "push": {"title": "repo", "key": "repo", "says": "pushed to a repository"}
+    "push": {
+      "title": "repo",
+      "key": "repo",
+      "says": "pushed to a repository"
+    },
+    "pull": {
+      "title": "title",
+      "key": "repo",
+      "says": "opened a pull request"
+    }
   },
   "sections": [
-    {"name": "git", "title": "Git", "icon": "source", "surface": "Git"}
+    {
+      "name": "git",
+      "title": "Git",
+      "icon": "source",
+      "surface": "Git"
+    }
   ]
 }

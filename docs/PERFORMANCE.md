@@ -870,3 +870,29 @@ profile suite still failed the calendar frame-stage p95 gate: 23.969 ms against
 16.667 ms. Reports are `app/build/performance_test-windows.json` and
 `build/git-range-check.log`. Budgets remain unchanged; physical Android timing
 was not available. The native profile wrapper restored `native-dev`.
+### Git collaboration/browser 0.5 qualification (25 October 2026)
+
+`tool/check.ps1 -Performance` passed core (451), transport (110) and app (298)
+tests with clean analysis. Rust Git tests passed (17). The real-Git integration
+covers fork/clone/push, pause/restart/resume, pinned PR review and diff, merge
+publication, network traversal, PR state after restart, and cloning the fork
+after upstream deletion. Browser tests cover phone/desktop widths, syntax/text
+preservation, search, immutable line locations, and graph node selection.
+
+The new Windows profile journey uses 10,000 code lines and a 128-node graph
+window. It passes the existing p95/p99 frame and event-loop budgets: opening/
+typing, code scrolling and network panning have frame-stage p95 values of
+3.786/5.199/2.490 ms and p99 values of 18.504/6.309/3.145 ms respectively.
+This qualifies the bounded UI window, not arbitrary kernel/Unreal fork networks.
+The complete performance suite still fails the calendar frame-stage p95 gate
+(18.752 ms against 16.667 ms). Reports: `build/git-workflow-final-check.log` and
+`app/build/performance_test-windows.json`. No timing assertion was relaxed.
+Physical Android timing was not available. The wrapper restored `native-dev`.
+
+Earlier checks found a transport direct-path assertion returning null under
+parallel load; its isolated rerun and full 110-test rerun passed. They also
+exposed the existing reminder-label DST bug on the clock-change date: date
+arithmetic now constructs adjacent calendar dates, with March/October coverage.
+The fork pause regression exposed timer starvation in the native plugin host;
+it now returns to the call queue after each timer callback. The paused-copy
+restart test passes with that fix.

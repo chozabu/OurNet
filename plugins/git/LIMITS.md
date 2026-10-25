@@ -44,6 +44,13 @@ are qualification targets; neither complete repository has been tested here yet.
 
 These must be addressed before claiming universal large-project support:
 
+- Collaboration 0.5 supports exact-snapshot comparisons and verified
+  fast-forward merges. Three-way merge/conflict UI, merge-base comparisons,
+  inline review threads and automatic OS routing of copied file links remain
+  unimplemented. Network/discussion pages have no fixed total-history limit,
+  but still need large real-world fork-network qualification. Discovery is
+  limited to signed repositories/proposals this device is authorized to receive.
+
 - Decoded-object previews currently have a 16 MiB working-object budget. Large
   raw blobs do not fail the index, but oversized delta results/bases can lack a
   preview. Giant commit/tree objects and forward REF deltas still require a

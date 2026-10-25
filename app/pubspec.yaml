@@ -55,6 +55,7 @@ dependencies:
   flutter_widget_from_html_core: ^0.17.4
   html: ^0.15.7
   flutter_svg: ^2.3.0
+  highlight: ^0.7.0
 dev_dependencies:
   integration_test:
     sdk: flutter

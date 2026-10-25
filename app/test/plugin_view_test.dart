@@ -764,6 +764,24 @@ void main() {
     await rig.untilText('README.md');
     await rig.untilMarkdown('Hello from');
     await rig.shot('git-code');
+    await tester.ensureVisible(find.text('Network'));
+    await tester.tap(find.text('Network'));
+    await rig.untilText('Repository network');
+    await rig.until(
+      () => rig.plugins.surface('git', 'Git')['networkLoading'] == false,
+    );
+    expect(
+      (rig.plugins.surface('git', 'Git')['networkNodes'] as List).length,
+      2,
+    );
+    await rig.shot('git-network');
+    await tester.ensureVisible(find.text('Pull requests'));
+    await tester.tap(find.text('Pull requests'));
+    await rig.untilText('Propose changes from this branch');
+    await rig.shot('git-pulls');
+    await tester.ensureVisible(find.text('Code'));
+    await tester.tap(find.text('Code'));
+    await rig.untilText('README.md');
     await tester.tap(find.widgetWithText(OutlinedButton, 'main'));
     await rig.untilText('Find a branch or tag');
     await tester.enterText(

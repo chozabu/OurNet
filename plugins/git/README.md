@@ -82,6 +82,52 @@ Git subprocesses. The branch picker pages its search results.
 These are structural improvements, not a claim that every Git feature or kernel/
 Unreal-sized repository has been validated. See [the limits audit](LIMITS.md).
 
+## Forks, pull requests and network (0.5)
+
+Requires app host API 0.5. Older hosts refuse this package; older plugins still
+understand the ordinary repository/push records used for fork contents.
+
+**Fork** creates an independent repository containing the history known to this
+device. Personal repositories stay personal, group forks stay in that group,
+and public forks go in the forker's own public space. The signed metadata names
+the upstream and its creation epoch, so deleting and recreating the same name
+does not silently attach old forks or requests to a new project. Copying runs in
+background steps, supports pause/resume and restart, and reuses encrypted chunks.
+Each copied pack has an idempotency marker. A changed or recreated target stops
+the copy. Deleting upstream does not delete the fork's independent push records.
+
+Open **Pull requests** in a fork, choose the upstream URL/key and full target
+branch ref, and submit a title/Markdown description. Requests pin exact base and
+head commits. Discussions, approvals, requests for changes, head updates and
+close/reopen actions are separately signed. Reviews name their commit; the UI
+refuses approval if the proposed head changed since it was displayed. Threads
+and discussions are paged from disk, with authority checks and out-of-order
+delivery recovery. Public proposals live in the proposer's public space, so
+discovery follows the existing friend/follow model rather than a global server.
+
+**Merge fast-forward** is available to target maintainers. It checks ancestry
+incrementally, imports source packs without moving target refs, then advances
+the reviewed ref only if both the displayed proposal and target still match.
+Merged requests cannot be reopened. Diverged branches require a real local Git
+merge: fetch upstream into your clone, merge its target branch into your proposed
+branch, push, and use **Update proposed head** before requesting review again.
+The app does not yet create arbitrary three-way merge commits or resolve conflicts.
+
+**Compare** accepts refs or commit IDs from a repository or its visible forks.
+It compares exact snapshots (not an automatic three-dot merge-base comparison).
+The file viewer adds a lazy folder sidebar, line numbers, background syntax
+highlighting, find-in-file, file copying and immutable line-location links.
+Paste a copied location into Compare's **Open a copied Git location** field;
+opening these URLs through the operating system is not wired up yet.
+
+**Network** shows commit-parent connections, branch/owner lanes and visible
+forks. Pan/zoom the graph and select a commit to inspect its changes. Commit
+windows and branch lanes are paged; the traversal queue/visited state live on
+disk. Missing commits are labelled and can be retried by refreshing after sync.
+This is the network visible to this device, not a claim to discover private or
+unreachable forks. Full kernel/Unreal qualification, LFS, SHA-256, ref/push metadata
+scaling, inline review threads and three-way merge UI remain separate work.
+
 ## How it works
 
 | Kind | Holds |
