@@ -50,11 +50,11 @@ DateTime? nextReminder(Json reminder, [DateTime? now]) {
 }
 
 /// "Tomorrow, 08:00", "Mon 21 Sep, 18:00" and so on, with a repeat suffix.
-String describeReminder(BuildContext context, Json reminder) {
+String describeReminder(BuildContext context, Json reminder, {DateTime? now}) {
   final localizations = MaterialLocalizations.of(context);
   final at = DateTime.fromMillisecondsSinceEpoch(reminder['at'] as int);
-  final shown = nextReminder(reminder) ?? at;
-  final today = DateUtils.dateOnly(DateTime.now());
+  final shown = nextReminder(reminder, now) ?? at;
+  final today = DateUtils.dateOnly(now ?? DateTime.now());
   final day = DateUtils.dateOnly(shown);
   final time = localizations.formatTimeOfDay(
     TimeOfDay.fromDateTime(shown),
@@ -62,9 +62,9 @@ String describeReminder(BuildContext context, Json reminder) {
   );
   final date = day == today
       ? 'Today'
-      : day == today.add(const Duration(days: 1))
+      : day == DateTime(today.year, today.month, today.day + 1)
       ? 'Tomorrow'
-      : day == today.subtract(const Duration(days: 1))
+      : day == DateTime(today.year, today.month, today.day - 1)
       ? 'Yesterday'
       : localizations.formatMediumDate(shown);
   final repeat = reminder['repeat'] as String? ?? 'none';

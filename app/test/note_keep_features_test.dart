@@ -14,6 +14,39 @@ import 'features_test.dart' show settled;
 import 'note_editor_test.dart' show settleNotes, flush, editorState, itemField;
 
 void main() {
+  testWidgets('reminder date labels use calendar days across clock changes', (
+    tester,
+  ) async {
+    for (final today in [
+      DateTime(2026, 3, 29, 12),
+      DateTime(2026, 10, 25, 12),
+    ]) {
+      final tomorrow = DateTime(today.year, today.month, today.day + 1, 8);
+      final yesterday = DateTime(today.year, today.month, today.day - 1, 8);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Column(
+              children: [
+                Text(
+                  describeReminder(context, {
+                    'at': tomorrow.millisecondsSinceEpoch,
+                  }, now: today),
+                ),
+                Text(
+                  describeReminder(context, {
+                    'at': yesterday.millisecondsSinceEpoch,
+                  }, now: today),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      expect(find.textContaining('Tomorrow'), findsOneWidget);
+      expect(find.textContaining('Yesterday'), findsOneWidget);
+    }
+  });
   const never = Duration(days: 1);
 
   Future<(Node, Notes, DraftStore)> setUpEditor(
