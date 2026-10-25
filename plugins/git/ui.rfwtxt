@@ -96,6 +96,10 @@ widget GitNew = SingleChildScrollView(
   ),
 );
 
+widget RepoTab = switch args.selected {
+ true: ElevatedButton(onPressed: event "tab" {tab: args.tab}, child: Text(text: args.label)),
+ default: TextButton(onPressed: event "tab" {tab: args.tab}, child: Text(text: args.label)),
+};
 widget RepoHeader = Column(
   crossAxisAlignment: "stretch",
   children: [
@@ -104,11 +108,14 @@ widget RepoHeader = Column(
       child: Row(
         children: [
           TextButton(onPressed: event "back" { }, child: Text(text: "‹")),
-          Expanded(child: Text(text: data.repo.name, style: { fontSize: 22.0, fontWeight: "w600" })),
-          PersonName(person: data.repo.owner),
+          Expanded(child: Column(crossAxisAlignment: "start", children: [
+            Text(text: data.repo.name, style: { fontSize: 24.0, fontWeight: "w600" }),
+            PersonName(person: data.repo.owner),
+          ])),
         ],
       ),
     ),
+    SizedBox(height: 8.0),
     switch data.repo.description {
       "": SizedBoxShrink(),
       default: Padding(padding: [16.0, 0.0, 16.0, 4.0], child: Text(text: data.repo.description)),
@@ -117,9 +124,12 @@ widget RepoHeader = Column(
       padding: [16.0, 4.0, 16.0, 0.0],
       child: Row(children: [OutlinedButton(onPressed: event "clone" { }, child: Text(text: "Code ▾")), SizedBox(width: 8.0), OutlinedButton(onPressed: event "tab" {tab: "fork"}, child: Text(text: "Fork"))]),
     ),
-    Padding(padding: [16.0, 4.0, 16.0, 4.0], child: CopyableText(label: "Repository URL", text: data.repo.url)),
+
     switch data.cloneOpen {
-      true: Padding(padding: [16.0, 4.0, 16.0, 4.0], child: CopyableText(label: "Clone command", text: data.repo.clone)),
+      true: Card(child: Padding(padding: [16.0, 12.0, 16.0, 12.0], child: Column(crossAxisAlignment: "stretch", children: [
+ CopyableText(label: "Repository URL", text: data.repo.url), SizedBox(height: 8.0),
+ CopyableText(label: "Clone command", text: data.repo.clone),
+ ]))),
       default: SizedBoxShrink(),
     },
     switch data.indexProgress {
@@ -130,15 +140,14 @@ widget RepoHeader = Column(
       padding: [8.0, 4.0, 8.0, 0.0],
       child: SingleChildScrollView(scrollDirection: "horizontal", child: Row(
         children: [
-          TextButton(onPressed: event "tab" { tab: "code" }, child: Text(text: "Code")),
-          TextButton(onPressed: event "tab" { tab: "commits" }, child: Text(text: "Commits")),
-          TextButton(onPressed: event "tab" { tab: "pushes" }, child: Text(text: "Activity")),
-          TextButton(onPressed: event "tab" { tab: "pulls" }, child: Text(text: "Pull requests")),
-          TextButton(onPressed: event "tab" { tab: "network" }, child: Text(text: "Network")),
-          TextButton(onPressed: event "tab" { tab: "compare" }, child: Text(text: "Compare")),
-          TextButton(onPressed: event "tab" { tab: "settings" }, child: Text(text: "Settings")),
-          SizedBox(width: 12.0),
-          Text(text: data.branch, style: { fontWeight: "w600" }),
+          RepoTab(tab: "code", label: "Code", selected: switch data.tab {"code": true, default: false}),
+          RepoTab(tab: "commits", label: "Commits", selected: switch data.tab {"commits": true, default: false}),
+          RepoTab(tab: "pushes", label: "Activity", selected: switch data.tab {"pushes": true, default: false}),
+          RepoTab(tab: "pulls", label: "Pull requests", selected: switch data.tab {"pulls": true, default: false}),
+          RepoTab(tab: "network", label: "Network", selected: switch data.tab {"network": true, default: false}),
+          RepoTab(tab: "compare", label: "Compare", selected: switch data.tab {"compare": true, default: false}),
+          RepoTab(tab: "settings", label: "Settings", selected: switch data.tab {"settings": true, default: false}),
+
         ],
       )),
     ),
@@ -257,9 +266,9 @@ widget GitCode = ListView(
     ),
     switch data.hasLast {
       false: SizedBoxShrink(),
-      default: ListTile(
+      default: Card(child: ListTile(
         dense: true,
-        title: Text(text: data.last.title),
+        title: Text(text: data.last.title, style: {fontWeight: "w600"}),
         subtitle: Row(
           children: [
             Text(text: data.last.author),
@@ -270,7 +279,7 @@ widget GitCode = ListView(
           ],
         ),
         onTap: event "commit" { sha: data.last.sha },
-      ),
+      )),
     },
     switch data.missing {
       true: Padding(padding: [16.0, 8.0, 16.0, 8.0], child: Text(text: "These files have not arrived here yet.")),
@@ -286,6 +295,7 @@ widget GitCode = ListView(
         trailing: ElevatedButton(onPressed: event "install" { }, child: Text(text: "Install as plugin")),
       ),
     },
+    SizedBox(height: 8.0),
     ...for entry in data.entries:
       ListTile(
         dense: true,
@@ -295,12 +305,16 @@ widget GitCode = ListView(
       ),
     switch data.readme {
       "": SizedBoxShrink(),
-      default: Padding(
-        padding: [16.0, 12.0, 16.0, 24.0],
-        child: Markup(text: data.readme, repository: data.repo.url,
-          commit: data.markdownCommit, directory: data.markdownDirectory,
-          onLink: event "markdownLink" { commit: data.markdownCommit }),
-      ),
+      default: Card(child: Padding(
+        padding: [20.0, 16.0, 20.0, 24.0],
+        child: Column(crossAxisAlignment: "stretch", children: [
+          Text(text: "README", style: {fontSize: 13.0, fontWeight: "w600"}),
+          Divider(), SizedBox(height: 8.0),
+          Markup(text: data.readme, repository: data.repo.url,
+            commit: data.markdownCommit, directory: data.markdownDirectory,
+            onLink: event "markdownLink" { commit: data.markdownCommit }),
+        ]),
+      )),
     },
   ],
 );
@@ -477,7 +491,9 @@ widget GitCompare = ListView(children: [
     Text(text: "Compare branches or commits", style: {fontSize: 20.0, fontWeight: "w600"}),
     Text(text: "Compare exact snapshots in this repository or one of its forks."),
     TextInput(label: "Base ref or commit", value: data.compareBase, onChanged: event "compareBase" {}),
+    SizedBox(height: 12.0),
     TextInput(label: "Head repository URL or key", value: data.compareSource, onChanged: event "compareSource" {}),
+    SizedBox(height: 12.0),
     TextInput(label: "Head ref or commit", value: data.compareHead, onChanged: event "compareHead" {}),
     Row(children: [ElevatedButton(onPressed: event "compare" {}, child: Text(text: "Compare changes"))]),
     Divider(), GitLocationInput(onOpen: event "location" {}),
@@ -488,30 +504,46 @@ widget GitFork = SingleChildScrollView(padding: [16.0, 8.0, 16.0, 16.0],
   child: Column(crossAxisAlignment: "stretch", children: [
     Text(text: "Fork this repository", style: {fontSize: 20.0, fontWeight: "w600"}),
     Text(text: "Creates an independent copy of the history known to this device within the same sharing audience. Public forks go in your own public space. Group forks stay in the group. Personal forks stay personal."),
+    SizedBox(height: 12.0),
     TextInput(label: "Fork name", value: data.forkName, maxLength: 100, onChanged: event "forkName" {}),
     Row(children: [ElevatedButton(onPressed: event "fork" {}, child: Text(text: "Create fork"))]),
   ]),
 );
 
-widget GitPulls = ListView(children: [
+widget GitPulls { detailsOpen: false } = ListView(children: [
   Padding(padding: [16.0, 8.0, 16.0, 16.0], child: Column(crossAxisAlignment: "stretch", children: [
-    Text(text: "Pull requests", style: {fontSize: 20.0, fontWeight: "w600"}),
-    ...for p in data.pulls: ListTile(title: Text(text: p.title), subtitle: Row(children: [
+    Wrap(spacing: 12.0, crossAxisAlignment: "center", children: [
+ Text(text: "Pull requests", style: {fontSize: 22.0, fontWeight: "w600"}),
+ switch data.pullSelected {true: TextButton(onPressed: event "pullList" {}, child: Text(text: "All requests")), default: SizedBoxShrink()},
+ ElevatedButton(onPressed: event "pullCompose" {}, child: Text(text: "New pull request")),
+ ]), SizedBox(height: 12.0),
+ switch data.pullComposing {false: switch data.pullSelected {false: Column(crossAxisAlignment: "stretch", children: [
+    switch data.pullsEmpty {true: Padding(padding: [8.0, 32.0, 8.0, 32.0], child: Column(children: [Text(text: "No pull requests yet", style: {fontSize: 18.0, fontWeight: "w600"}), SizedBox(height: 8.0), Text(text: "Propose a change from a branch or fork to start a discussion.")])), default: SizedBoxShrink()},
+    ...for p in data.pulls: Card(child: ListTile(title: Text(text: p.title, style: {fontWeight: "w600"}), subtitle: Wrap(children: [
       Text(text: p.status), Text(text: " · "), PersonName(person: p.author),
-    ]), onTap: event "pullOpen" {id: p.id}),
+    ]), onTap: event "pullOpen" {id: p.id})),
     Wrap(children: [
       TextButton(onPressed: event "pullFirst" {}, child: Text(text: "Newest requests")),
       switch data.morePulls {true: TextButton(onPressed: event "pullNext" {}, child: Text(text: "Older requests")), default: SizedBoxShrink()},
     ]),
-    switch data.pullSelected {
+    ]), default: SizedBoxShrink()}, default: SizedBoxShrink()},
+    switch data.pullComposing {false: switch data.pullSelected {
       true: Column(crossAxisAlignment: "stretch", children: [
-        Divider(), Text(text: data.pull.title, style: {fontSize: 22.0, fontWeight: "w600"}),
-        Text(text: data.pull.status), PersonName(person: data.pull.author),
-        Text(text: data.pull.source), Text(text: data.pull.headRef), Text(text: "proposes changes into"), Text(text: data.pull.baseRef),
+        Text(text: data.pull.title, style: {fontSize: 22.0, fontWeight: "w600"}),
+        SizedBox(height: 8.0),
+        Wrap(spacing: 12.0, crossAxisAlignment: "center", children: [Text(text: data.pull.status, style: {fontWeight: "w600"}), PersonName(person: data.pull.author)]),
+        SizedBox(height: 12.0),
+        Wrap(spacing: 8.0, children: [Text(text: data.pull.headLabel, style: {fontWeight: "w600"}), Text(text: "→"), Text(text: data.pull.baseLabel, style: {fontWeight: "w600"})]),
+        Text(text: data.pull.sourceName), SizedBox(height: 16.0),
         Markup(text: data.pull.body),
-        CopyableText(label: "Proposal base commit", text: data.pull.base),
-        CopyableText(label: "Current target commit", text: data.pull.currentBase),
-        CopyableText(label: "Reviewed head commit", text: data.pull.head),
+        TextButton(onPressed: set state.detailsOpen = switch state.detailsOpen {true: false, default: true}, child: Text(text: switch state.detailsOpen {true: "Hide commit details ▴", default: "Commit details ▾"})),
+        switch state.detailsOpen {true: Column(crossAxisAlignment: "stretch", children: [
+          CopyableText(label: "Source repository", text: data.pull.source),
+          CopyableText(label: "Proposal base commit", text: data.pull.base),
+          CopyableText(label: "Current target commit", text: data.pull.currentBase),
+          CopyableText(label: "Reviewed head commit", text: data.pull.head),
+        ]), default: SizedBoxShrink()},
+        SizedBox(height: 12.0),
         Wrap(children: [
           OutlinedButton(onPressed: event "pullDiff" {}, child: Text(text: "Files changed")),
           OutlinedButton(onPressed: event "pullAction" {head: data.pull.head, action: "approve"}, child: Text(text: "Approve reviewed commit")),
@@ -540,13 +572,23 @@ widget GitPulls = ListView(children: [
         TextInput(label: "Comment or review", value: data.commentDraft, lines: 4, maxLength: 12000, onChanged: event "commentDraft" {}),
         Wrap(children: [ElevatedButton(onPressed: event "pullAction" {head: data.pull.head, action: "comment"}, child: Text(text: "Comment"))]),
       ]), default: SizedBoxShrink(),
-    },
-    Divider(), Text(text: "Propose changes from this branch", style: {fontSize: 18.0, fontWeight: "w600"}),
+    }, default: SizedBoxShrink()},
+    switch data.pullComposing {true: Column(crossAxisAlignment: "stretch", children: [
+    TextButton(onPressed: event "pullCancel" {}, child: Text(text: "‹ Back to requests")),
+    SizedBox(height: 12.0),
+    Text(text: "Propose changes from this branch", style: {fontSize: 18.0, fontWeight: "w600"}),
+    SizedBox(height: 12.0),
+    switch data.pullFormError {"": SizedBoxShrink(), default: Padding(padding: [0.0, 0.0, 0.0, 12.0], child: Text(text: data.pullFormError))},
     TextInput(label: "Target repository URL or key", value: data.pullTarget, onChanged: event "pullTarget" {}),
+    SizedBox(height: 12.0),
     TextInput(label: "Target branch ref", value: data.pullBaseRef, onChanged: event "pullBaseRef" {}),
+    SizedBox(height: 12.0),
     TextInput(label: "Pull request title", value: data.pullTitle, maxLength: 200, onChanged: event "pullTitle" {}),
+    SizedBox(height: 12.0),
     TextInput(label: "Pull request description", value: data.pullBody, lines: 4, maxLength: 12000, onChanged: event "pullBody" {}),
+    SizedBox(height: 16.0),
     Wrap(children: [ElevatedButton(onPressed: event "newPull" {}, child: Text(text: "Create pull request"))]),
+    ]), default: SizedBoxShrink()},
   ])),
 ]);
 

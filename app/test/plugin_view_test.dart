@@ -82,16 +82,18 @@ class Rig {
             child: SizedBox(
               width: size.width,
               height: size.height,
-              child: PluginView(
-                plugins: plugins,
-                plugin: id,
-                surface: surface,
-                context: context,
-                nameOf: (p) => p == node.person ? 'You' : 'Friend',
-                avatar: (p, size) => CircleAvatar(radius: size / 2),
-                pickFile: pickFile,
-                image: image,
-                object: object,
+              child: Material(
+                child: PluginView(
+                  plugins: plugins,
+                  plugin: id,
+                  surface: surface,
+                  context: context,
+                  nameOf: (p) => p == node.person ? 'You' : 'Friend',
+                  avatar: (p, size) => CircleAvatar(radius: size / 2),
+                  pickFile: pickFile,
+                  image: image,
+                  object: object,
+                ),
               ),
             ),
           ),
@@ -728,6 +730,8 @@ void main() {
     await rig.shot('git-new-repo');
     final repo = rig.plugins.surface('git', 'Git')['repo'] as Map;
     final url = repo['url'] as String;
+    await tester.tap(find.text('Code ▾'));
+    await rig.untilText('Clone command');
     expect(
       find.byWidgetPredicate((w) => w is SelectableText && w.data == url),
       findsOneWidget,
@@ -735,8 +739,6 @@ void main() {
     await tester.tap(find.byTooltip('Copy repository url'));
     await tester.pump();
     expect(copied, url);
-    await tester.tap(find.text('Code ▾'));
-    await rig.untilText('Clone command');
     await tester.tap(find.byTooltip('Copy clone command'));
     await tester.pump();
     expect(copied, 'git clone $url');
@@ -777,8 +779,74 @@ void main() {
     await rig.shot('git-network');
     await tester.ensureVisible(find.text('Pull requests'));
     await tester.tap(find.text('Pull requests'));
+    await rig.untilText('New pull request');
+    expect(find.text('Target branch ref'), findsNothing);
+    await tester.tap(find.text('New pull request'));
     await rig.untilText('Propose changes from this branch');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Pull request title'),
+      'A draft proposal',
+    );
+    await tester.ensureVisible(find.text('Create pull request'));
+    await tester.pump();
+    await tester.tap(find.text('Create pull request'));
+    await rig.until(
+      () => (rig.plugins.surface('git', 'Git')['pullFormError'] as String).isNotEmpty,
+    );
+    expect(rig.plugins.surface('git', 'Git')['pullComposing'], isTrue);
+    await tester.ensureVisible(find.text('‹ Back to requests'));
+    await tester.pump();
+    await tester.tap(find.text('‹ Back to requests'));
+    await rig.until(() => find.text('Target branch ref').evaluate().isEmpty);
+    await tester.tap(find.text('New pull request'));
+    await rig.untilText('Propose changes from this branch');
+    expect(find.widgetWithText(TextField, 'A draft proposal'), findsOneWidget);
+    await tester.tap(find.text('‹ Back to requests'));
+    await rig.until(() => find.text('Target branch ref').evaluate().isEmpty);
     await rig.shot('git-pulls');
+    final repositoryRecord = rig.node.store.allOf(kind: 'x.git.repo').single;
+    final proposal = await tester.runAsync(
+      () => rig.node.publish(
+        'x.git.pull',
+        {
+          'repo': repo['key'],
+          'source': repo['key'],
+          'title': 'Improve the project documentation',
+          'body': 'A clearer introduction and setup instructions.',
+          'baseRef': 'refs/heads/main',
+          'headRef': 'refs/heads/docs',
+          'base': pack.$1,
+          'head': pack.$1,
+          'targetCreated': repositoryRecord.created,
+          'sourceCreated': repositoryRecord.created,
+        },
+        space: 'x.git',
+        audience: [rig.node.person],
+      ),
+    );
+    await rig.untilText('Improve the project documentation');
+    await tester.tap(find.text('Improve the project documentation'));
+    await rig.untilText('Files changed');
+    expect(find.text('Proposal base commit'), findsNothing);
+    await tester.tap(find.text('Commit details ▾'));
+    await rig.untilText('Proposal base commit');
+    await tester.tap(find.text('Hide commit details ▴'));
+    await rig.until(() => find.text('Proposal base commit').evaluate().isEmpty);
+    expect(
+      (rig.plugins.surface('git', 'Git')['pull'] as Map)['id'],
+      proposal!.id,
+    );
+    await rig.shot('git-pull-conversation');
+    await tester.tap(find.text('All requests'));
+    await rig.until(
+      () => rig.plugins.surface('git', 'Git')['pullSelected'] == false,
+    );
+    tester.view.physicalSize = const Size(390, 700);
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    await rig.shot('git-pulls-phone');
+    tester.view.physicalSize = const Size(800, 600);
+    await tester.pump();
     await tester.ensureVisible(find.text('Code'));
     await tester.tap(find.text('Code'));
     await rig.untilText('README.md');

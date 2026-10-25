@@ -255,6 +255,7 @@ impl Git {
         data["pulls"]=ids.iter().filter_map(|v|Pull::load(v.as_str()?)).filter(|p|self.repos.get(key).is_some_and(|r|p.target_created==r.created)).map(|p|json!({
             "id":p.id,"title":p.title,"author":p.author,"status":p.status,"at":p.created,
         })).collect::<Vec<_>>().into();
+        data["pullsEmpty"]=data["pulls"].as_array().is_some_and(|p|p.is_empty()).into();
         self.pull_next=next; data["morePulls"]=(!self.pull_next.is_empty()).into();
         data["pullSelected"]=false.into();
         if let Some(p)=Pull::load(&self.pull_selected).filter(|p|p.repo==key&&self.repos.get(key).is_some_and(|r|r.created==p.target_created)) {
@@ -265,7 +266,10 @@ impl Git {
             data["pullSelected"]=true.into(); data["pullCanManage"]=((writable||p.author==self.me)&&p.status!="merged").into();
             data["pullCanMerge"]=(writable&&p.status=="open").into();
             let current_base=self.ref_state_cached(key).refs.get(&p.base_ref).cloned().unwrap_or_default();
-            data["pull"]=json!({"currentBase":current_base,"id":p.id,"title":p.title,"body":p.body,"author":p.author,
+            let source_name=self.repos.get(&p.source).map(|r|r.name.clone()).unwrap_or_else(|| "Source repository unavailable".into());
+            let head_label=p.head_ref.strip_prefix("refs/heads/").unwrap_or(&p.head_ref);
+            let base_label=p.base_ref.strip_prefix("refs/heads/").unwrap_or(&p.base_ref);
+            data["pull"]=json!({"sourceName":source_name,"headLabel":head_label,"baseLabel":base_label,"currentBase":current_base,"id":p.id,"title":p.title,"body":p.body,"author":p.author,
                 "status":p.status,"base":p.base,"head":p.head,"baseRef":p.base_ref,"headRef":p.head_ref,
                 "source":self.repos.get(&p.source).map(|r|format!("{} / {}",r.owner,r.name)).unwrap_or(p.source),});
         }

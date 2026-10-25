@@ -896,3 +896,21 @@ arithmetic now constructs adjacent calendar dates, with March/October coverage.
 The fork pause regression exposed timer starvation in the native plugin host;
 it now returns to the call queue after each timer callback. The paused-copy
 restart test passes with that fix.
+
+
+### Git interface polish (25 October 2026)
+
+Git 0.5.1 keeps the existing Material theme while separating the request list,
+conversation and creation form. The real-host widget regression covers URL and
+clone-command copying, rejected creation with retained drafts, expandable commit
+details, and a 390-pixel phone viewport. Desktop and phone captures are in
+`build/git-polish-shots`; `build/git-polish-final-ui.log` passes.
+
+`tool/check.ps1 -Performance` completed analysis cleanly and passed 451 core,
+110 transport and 298 app tests. Its Windows Git journey passes existing gates:
+frame-stage p95 is 3.768 ms opening/typing, 5.144 ms scrolling code and 2.445 ms
+panning the network (10,000 source lines and 128 graph commits). The full suite
+still fails the calendar p95 gate, 20.413 ms against 16.667 ms; no budget changed.
+Report: `build/git-polish-final-check.log` and
+`app/build/performance_test-windows.json`. Physical Android timing remains
+unavailable. The native profile wrapper restored `native-dev`.

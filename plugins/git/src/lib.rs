@@ -384,6 +384,8 @@ struct Git {
     fork_name: String,
     copy_job: Option<workflow::CopyJob>,
     pull_target: String, pull_base_ref: String, pull_title: String, pull_body: String,
+    pull_composing: bool,
+    pull_form_error: String,
     pull_selected: String, pull_cursor: String, pull_next: String,
     comment_cursor: String, comment_next: String, comment_draft: String,
     compare_base: String, compare_head: String, compare_source: String,
@@ -1073,6 +1075,8 @@ impl Git {
             "notice": notice.join(" "),
             "mine": Self::may_write(&repo.space, &self.me),
         });
+        data["pullComposing"] = self.pull_composing.into();
+        data["pullFormError"] = self.pull_form_error.clone().into();
         data["tab"] = match self.tab {
             Tab::Code => "code",
             Tab::Commits => "commits",
@@ -1495,7 +1499,7 @@ impl Git {
     fn open_repo(&mut self, key: &str) {
         self.repo = Some(key.to_string());
         self.comparison=None; self.graph=None; self.network_offset=0;
-        self.pull_selected.clear(); self.pull_cursor.clear(); self.comment_cursor.clear();
+        self.pull_composing=false; self.pull_selected.clear(); self.pull_cursor.clear(); self.comment_cursor.clear();
         self.fork_name=self.repos.get(key).map(|r|format!("{}-fork-{}",&r.name[..r.name.len().min(80)],&self.me[..self.me.len().min(6)])).unwrap_or_default();
         self.pull_target=self.repos.get(key).map(|r|if r.parent.is_empty(){key.into()}else{r.parent.clone()}).unwrap_or_default();
         self.pull_base_ref="refs/heads/main".into();
@@ -1885,8 +1889,11 @@ impl Plugin for Git {
             "pullTitle" => { self.pull_title=text("value"); }
             "pullBody" => { self.pull_body=text("value"); }
             "commentDraft" => { self.comment_draft=text("value"); }
-            "newPull" => { self.error=self.new_pull().err().unwrap_or_default(); self.show(); }
-            "pullOpen" => { self.pull_selected=text("id"); self.comment_cursor.clear(); self.show(); }
+            "pullCompose" => { self.pull_form_error.clear(); self.pull_composing=true; self.show(); }
+            "pullCancel" => { self.pull_composing=false; self.show(); }
+            "newPull" => { self.pull_form_error=self.new_pull().err().unwrap_or_default(); if self.pull_form_error.is_empty() { self.pull_composing=false; } self.show(); }
+            "pullList" => { self.pull_composing=false; self.pull_selected.clear(); self.show(); }
+            "pullOpen" => { self.pull_composing=false; self.pull_selected=text("id"); self.comment_cursor.clear(); self.show(); }
             "pullNext" => { self.pull_cursor=self.pull_next.clone(); self.show(); }
             "pullFirst" => { self.pull_cursor.clear(); self.show(); }
             "commentNext" => { self.comment_cursor=self.comment_next.clone(); self.show(); }

@@ -4,6 +4,15 @@ Git repositories shared the way everything else in OurNet is: as signed
 objects that sync to an audience, so a friend can clone while you are
 offline, and every push says who made it.
 
+## Git 0.5.1 interface polish
+
+Repository navigation highlights the current tab. The Code menu groups the selectable,
+copyable repository URL and clone command; the latest commit and README have separate
+Material surfaces. Pull requests have a dedicated creation view with retained drafts,
+a list empty state, and a focused conversation view. Commit details can be expanded
+when reviewing exact SHAs. Failed creation keeps the form and draft visible.
+
+
 ```
 git clone ournet://3f9c01ab7e/my-project
 cd my-project
