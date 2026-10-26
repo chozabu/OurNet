@@ -167,11 +167,16 @@ something the above leaves open:
   one on a public post, is not shown.
 - **Reshares**: a post whose embedded original fails verification is not
   shown at all (rather than shown without it).
-- **Activity** lists friends' posts, and comments only on the person's own
-  wall (comments elsewhere would be noise). Sealed ones are opened for their
-  preview line; a post this device cannot open gets no row.
-- **Unread**: `seen/<id>` marks on posts and comments; the Wall item in the
-  navigation counts what others wrote in the loaded feed until it is opened.
+- **No Wall section (changed 2026-10-26, Alex).** The wall lives in Activity
+  instead: an `ActivitySection.wall` filter, one row per post (key
+  `wall|<post>`, own posts included, unlike other own writes) drawn as the
+  full post card from the app's `WallFeed`, and the composer at the top of
+  Activity. Comments join their post's row (only comments on the person's
+  own wall, as before), so a post is never both a card and a summary row.
+  `ScopedSection.wall` and `Destination.wall` are gone; Activity's badge
+  counts wall rows like any other.
+- **Unread**: `seen/<id>` marks on posts and comments, set when Activity is
+  looked at.
 - **App**: contact details are a bottom sheet without tabs, so "Posts" is a
   button there (and "Your posts" on the profile page) opening the wall as a
   page with Follow/Unfollow and Copy link. Post titles are supported by the

@@ -8,8 +8,8 @@ import 'features_test.dart' show settled;
 import 'scope_helpers.dart';
 
 void main() {
-  testWidgets('the Wall shows friends\' posts, posts to friends and takes '
-      'comments', (tester) async {
+  testWidgets('Activity shows friends\' wall posts as cards, posts to friends '
+      'and takes comments', (tester) async {
     wide(tester);
     final (node, [friend]) = await friends(1);
     await tester.runAsync(() async {
@@ -22,10 +22,13 @@ void main() {
       OurNetApp(
         node: node,
         enablePlatform: false,
-        initialTab: Destination.wall,
+        initialTab: Destination.activity,
       ),
     );
     await settled(tester);
+    // Walls are in Activity, not a section of their own.
+    expect(find.widgetWithText(ListTile, 'Wall'), findsNothing);
+    expect(find.byType(WallPostCard), findsNWidgets(2));
     expect(find.text('Back from the hills'), findsOneWidget);
     expect(find.text('Photos soon'), findsOneWidget);
     // Only a public post can be shared on.
@@ -39,6 +42,14 @@ void main() {
     await pickScope(tester, 'All');
     await settled(tester);
 
+    // The Wall filter hides the cards and the composer with them.
+    await tester.tap(find.widgetWithText(FilterChip, 'Wall'));
+    await settled(tester);
+    expect(find.byType(WallPostCard), findsNothing);
+    expect(find.byType(WallComposer), findsNothing);
+    await tester.tap(find.widgetWithText(FilterChip, 'Wall'));
+    await settled(tester);
+
     // A post of one's own, to friends by default.
     await tester.enterText(
       find.widgetWithText(TextField, 'What is new?'),
@@ -46,7 +57,14 @@ void main() {
     );
     await tester.tap(find.widgetWithText(FilledButton, 'Post'));
     await settled(tester);
-    expect(find.text('Hello everyone'), findsOneWidget);
+    // One's own post shows in Activity too, as a card.
+    expect(
+      find.ancestor(
+        of: find.text('Hello everyone'),
+        matching: find.byType(WallPostCard),
+      ),
+      findsOneWidget,
+    );
     final mine = node.store.objects(kind: Walls.postKind, author: node.person);
     expect(Walls.sealed(mine.single.data['payload'] as Json), isTrue);
 

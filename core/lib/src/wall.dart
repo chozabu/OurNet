@@ -593,6 +593,9 @@ abstract class WallView {
     return ordered;
   }
 
+  /// Whether the wall's owner hid (or deleted) [id].
+  bool hidden(String id) => _hidden.contains(id);
+
   /// The post this view holds as [id], with its comments.
   WallPost? post(String id) {
     posts;

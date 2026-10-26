@@ -155,10 +155,7 @@ enum Destination {
 
   /// A plugin's section: which one is [_OurNetAppState.pluginSection].
   plugin(17, 'Plugin', Icons.extension_outlined),
-  plugins(18, 'Plugins', Icons.extension_outlined),
-
-  /// People's posts for their friends: see docs/WALL.md.
-  wall(19, 'Wall', Icons.article_outlined);
+  plugins(18, 'Plugins', Icons.extension_outlined);
 
   final int id;
   final String title;
@@ -169,7 +166,6 @@ enum Destination {
   /// own: picking one as the scope shows its content in these (docs/SCOPES.md).
   static const navigation = [
     activity,
-    wall,
     notes,
     calendar,
     maps,
@@ -188,7 +184,6 @@ enum Destination {
     forums => ScopedSection.forums,
     files => ScopedSection.files,
     activity => ScopedSection.activity,
-    wall => ScopedSection.wall,
     _ => null,
   };
 
@@ -296,8 +291,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   late final CoalescedTask _activityRefresh;
   StreamSubscription<Set<String>>? _activityChanges;
 
-  /// Followed walls merged (docs/WALL.md), kept current for the badge.
+  /// Followed walls merged (docs/WALL.md): the posts Activity shows as cards.
   late final WallFeed wallFeed = WallFeed(node);
+  bool wallLoadingMore = false;
   late final CoalescedTask _wallRefresh;
   StreamSubscription<Set<String>>? _wallChanges;
 
@@ -1686,7 +1682,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                           Destination.forums => countBadge(forumsUnread()),
                           Destination.messages => countBadge(chatsUnread()),
                           Destination.activity => countBadge(activityUnseen()),
-                          Destination.wall => countBadge(wallUnseen()),
                           _ => null,
                         },
                         selected: tab == d,
@@ -1961,7 +1956,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     // A group's content, in whichever section is open.
     if (section != null &&
         section != ScopedSection.activity &&
-        section != ScopedSection.wall &&
         section != ScopedSection.maps &&
         activeRoom != null) {
       return everydayPage(context);
@@ -1994,7 +1988,6 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     Destination.settings => settings(context),
     Destination.notes => everydayPage(context),
     Destination.activity => activityPage(context),
-    Destination.wall => wallSection(context),
     Destination.groups => groupsPage(context),
     Destination.search => searchPage(context),
     Destination.calendar =>

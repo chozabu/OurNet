@@ -11,7 +11,18 @@ import 'wall.dart';
 
 /// The kinds of thing the activity feed shows, each a filter of its own.
 /// `plugins` holds what plugins list under `activity` in their manifests.
-enum ActivitySection { posts, notes, calendar, files, people, chat, plugins }
+enum ActivitySection {
+  posts,
+
+  /// Posts on followed walls, one row per post (see docs/WALL.md).
+  wall,
+  notes,
+  calendar,
+  files,
+  people,
+  chat,
+  plugins,
+}
 
 /// One thing that changed: what arrived about it on one day, merged.
 class ActivityItem {
@@ -40,6 +51,9 @@ class ActivityEntry {
 
   /// The group it belongs to, if any (its room's space).
   final String? group;
+
+  /// For a wall row: the post it is about, which its comments join.
+  final String? post;
   final bool public;
 
   /// When the newest of it arrived.
@@ -61,6 +75,7 @@ class ActivityEntry {
     this.space, {
     this.group,
     this.public = false,
+    this.post,
   });
 
   static const kept = 4;
@@ -300,8 +315,12 @@ class Activity {
   /// Adds [o] to its row; returns the row, or null if it shows nowhere.
   Future<ActivityEntry?> _take(int at, SignedObject o) async {
     if (!_taken.add(o.id) || !node.visible(o)) return null;
-    // What this device did itself is not news to it.
-    if (o.certificate.device == node.identity.device) return null;
+    // What this device did itself is not news to it, except a wall post:
+    // the feed is where it is read, beside friends' posts.
+    if (o.certificate.device == node.identity.device &&
+        o.kind != Walls.postKind) {
+      return null;
+    }
     final needsContent = o.kind != 'note_op' && o.kind != 'message';
     var data = needsContent ? await node.content(o) : null;
     if (needsContent && data == null) return null;
@@ -327,7 +346,13 @@ class Activity {
         ? node.registry.activityOf(o.kind)
         : null;
     final thing = listing?.key == null ? '' : '|${listing!.keyOf(o, data!)}';
-    final key = section == ActivitySection.notes && o.kind == 'note_op'
+    // A wall post is a row of its own, which comments on it join.
+    final post = section == ActivitySection.wall
+        ? (o.kind == Walls.postKind ? o.id : data!['post'] as String)
+        : null;
+    final key = post != null
+        ? 'wall|$post'
+        : section == ActivitySection.notes && o.kind == 'note_op'
         ? 'note|$space|$day'
         : '${section.name}|${o.kind}|$space$thing|$day';
     final entry = _entries[key] ??= ActivityEntry(
@@ -336,6 +361,7 @@ class Activity {
       space,
       group: group,
       public: public,
+      post: post,
     );
     entry._add(ActivityItem(o, data, author, at));
     return entry;
@@ -378,7 +404,7 @@ class Activity {
       case PublicChats.messageKind:
         return (ActivitySection.chat, o.space, null);
       case Walls.postKind || Walls.commentKind:
-        return (ActivitySection.posts, o.space, null);
+        return (ActivitySection.wall, o.space, null);
     }
     if (node.registry.activityOf(o.kind) != null) {
       return (ActivitySection.plugins, o.space, pluginGroup(o));

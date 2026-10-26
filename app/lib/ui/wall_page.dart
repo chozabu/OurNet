@@ -52,9 +52,7 @@ class _WallPageState extends State<WallPage> {
   Node get node => widget.wall.node;
   WallView get view => widget.view;
   StreamSubscription<Set<String>>? _changes;
-  final _composer = TextEditingController();
-  var _audience = WallAudience.friends;
-  bool _posting = false, _loadingMore = false;
+  bool _loadingMore = false;
   bool _refreshing = false, _again = false;
   late final _votes = ForumVotes(node);
 
@@ -104,23 +102,7 @@ class _WallPageState extends State<WallPage> {
   @override
   void dispose() {
     unawaited(_changes?.cancel());
-    _composer.dispose();
     super.dispose();
-  }
-
-  Future<void> _post() async {
-    final text = _composer.text.trim();
-    if (text.isEmpty) return;
-    setState(() => _posting = true);
-    try {
-      await view.publish(text, audience: _audience);
-      _composer.clear();
-      await _refresh();
-    } catch (e) {
-      widget.wall.notice('Could not post: ${_reason(e)}');
-    } finally {
-      if (mounted) setState(() => _posting = false);
-    }
   }
 
   Future<void> _more() async {
@@ -153,7 +135,11 @@ class _WallPageState extends State<WallPage> {
         if (index == 0) return widget.header ?? const SizedBox.shrink();
         if (index == 1) {
           return widget.composer
-              ? _composerCard(context)
+              ? WallComposer(
+                  wall: widget.wall,
+                  view: view,
+                  posted: () => unawaited(_refresh()),
+                )
               : const SizedBox.shrink();
         }
         if (index == posts.length + 2) return _footer(context, posts.isEmpty);
@@ -170,7 +156,84 @@ class _WallPageState extends State<WallPage> {
     );
   }
 
-  Widget _composerCard(BuildContext context) => Card(
+  Widget _footer(BuildContext context, bool empty) {
+    if (!view.loaded) {
+      return const Padding(
+        padding: EdgeInsets.all(32),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (empty && view.exhausted) {
+      return Padding(
+        padding: const EdgeInsets.all(32),
+        child: Text(
+          'No posts yet. Friends\' posts show here, and your own; '
+          'friends-only posts are for the friends you have when you post.',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+      );
+    }
+    if (view.exhausted) return const SizedBox(height: 24);
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Center(
+        child: _loadingMore
+            ? const CircularProgressIndicator()
+            : OutlinedButton(
+                onPressed: _more,
+                child: const Text('Show earlier'),
+              ),
+      ),
+    );
+  }
+}
+
+/// A box for posting on this person's own wall, to friends (the default)
+/// or publicly. [posted] is called once a post is written.
+class WallComposer extends StatefulWidget {
+  final WallContext wall;
+  final WallView view;
+  final VoidCallback posted;
+  const WallComposer({
+    super.key,
+    required this.wall,
+    required this.view,
+    required this.posted,
+  });
+
+  @override
+  State<WallComposer> createState() => _WallComposerState();
+}
+
+class _WallComposerState extends State<WallComposer> {
+  final _composer = TextEditingController();
+  var _audience = WallAudience.friends;
+  bool _posting = false;
+
+  @override
+  void dispose() {
+    _composer.dispose();
+    super.dispose();
+  }
+
+  Future<void> _post() async {
+    final text = _composer.text.trim();
+    if (text.isEmpty) return;
+    setState(() => _posting = true);
+    try {
+      await widget.view.publish(text, audience: _audience);
+      _composer.clear();
+      widget.posted();
+    } catch (e) {
+      widget.wall.notice('Could not post: ${_reason(e)}');
+    } finally {
+      if (mounted) setState(() => _posting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Card(
     child: Padding(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -226,38 +289,6 @@ class _WallPageState extends State<WallPage> {
       ),
     ),
   );
-
-  Widget _footer(BuildContext context, bool empty) {
-    if (!view.loaded) {
-      return const Padding(
-        padding: EdgeInsets.all(32),
-        child: Center(child: CircularProgressIndicator()),
-      );
-    }
-    if (empty && view.exhausted) {
-      return Padding(
-        padding: const EdgeInsets.all(32),
-        child: Text(
-          'No posts yet. Friends\' posts show here, and your own; '
-          'friends-only posts are for the friends you have when you post.',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.bodyMedium,
-        ),
-      );
-    }
-    if (view.exhausted) return const SizedBox(height: 24);
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Center(
-        child: _loadingMore
-            ? const CircularProgressIndicator()
-            : OutlinedButton(
-                onPressed: _more,
-                child: const Text('Show earlier'),
-              ),
-      ),
-    );
-  }
 }
 
 String _reason(Object e) => e is StateError ? e.message : '$e';
@@ -280,6 +311,9 @@ class WallPostCard extends StatefulWidget {
   final WallPost post;
   final ForumVotes votes;
   final VoidCallback changed;
+
+  /// Marks it new, as the activity feed marks what arrived since last seen.
+  final bool highlight;
   const WallPostCard({
     super.key,
     required this.wall,
@@ -287,6 +321,7 @@ class WallPostCard extends StatefulWidget {
     required this.post,
     required this.votes,
     required this.changed,
+    this.highlight = false,
   });
 
   @override
@@ -406,6 +441,7 @@ class _WallPostCardState extends State<WallPostCard> {
     ];
     final liked = likes[node.person] == 1;
     return Card(
+      color: widget.highlight ? colors.secondaryContainer : null,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
         child: Column(

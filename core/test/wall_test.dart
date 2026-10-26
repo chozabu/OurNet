@@ -338,31 +338,45 @@ void main() {
     expect(Walls.following(a, b.person), isTrue);
   });
 
-  test('wall posts and comments show in activity', () async {
+  test('each wall post is an activity row, which comments join', () async {
     final a = await person(), b = await person();
     await befriend(a, b);
     final mine = Wall(a, a.person);
-    await mine.publish('Hello friends');
+    final hello = await mine.publish('Hello friends');
     await syncPair(a, b);
     final theirs = Wall(b, a.person);
     await theirs.refresh();
     await theirs.comment(theirs.posts.single, 'Hi!');
+    final later = await mine.publish('Later', audience: WallAudience.public);
     await syncPair(a, b);
+    // New friends have rows of their own.
+    Iterable<ActivityEntry> walls(Activity a) =>
+        a.entries.where((e) => e.section == ActivitySection.wall);
     final feed = Activity(b);
     await feed.refresh();
-    // New friends have rows of their own.
-    Iterable<ActivityEntry> posts(Activity a) =>
-        a.entries.where((e) => e.section == ActivitySection.posts);
-    final post = posts(feed).single;
-    expect(post.section, ActivitySection.posts);
-    expect(post.public, isFalse);
+    expect({for (final e in walls(feed)) e.post: e.public}, {
+      hello.id: false,
+      later.id: true,
+    });
+    final post = walls(feed).firstWhere((e) => e.post == hello.id);
+    // What B wrote on this device is not news to it.
     expect(post.items.single.data!['text'], 'Hello friends');
+
+    // The owner's own posts are there too, and the comment joins its post.
     final mineFeed = Activity(a);
     await mineFeed.refresh();
-    final comment = posts(mineFeed).single;
-    expect(comment.items.single.object.kind, Walls.commentKind);
-    expect(comment.items.single.data!['text'], 'Hi!');
-    expect(comment.people, [b.person]);
+    expect(walls(mineFeed), hasLength(2));
+    final row = walls(mineFeed).firstWhere((e) => e.post == hello.id);
+    expect(
+      row.items.map((i) => i.object.kind),
+      unorderedEquals([Walls.commentKind, Walls.postKind]),
+    );
+    final comment = row.items.firstWhere(
+      (i) => i.object.kind == Walls.commentKind,
+    );
+    expect(comment.data!['text'], 'Hi!');
+    expect(comment.author, b.person);
+    expect(row.byOthers(a.person), isTrue);
   });
 
   test('wall links', () {

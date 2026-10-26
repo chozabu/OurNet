@@ -10,14 +10,15 @@ when someone shares it on their own wall.
 
 ## Where it is
 
-- **Wall** in the navigation (under Activity) shows every wall you follow,
-  merged, with a box at the top for posting on your own. The scope picker
-  narrows it: **Personal** shows friends-only posts, **Public** public ones.
+- **Activity** is where walls are read: posts from every wall you follow,
+  your own included, appear there as cards, newest arrival first, with their
+  comments. A box at the top posts on your own wall. The **Wall** filter
+  chip turns them (and the box) off; the scope picker narrows them:
+  **Personal** shows friends-only posts, **Public** public ones. A comment on
+  one of your posts brings that post back to the top.
 - **Posts** in a person's details (tap their name anywhere) opens their wall
   on its own, with **Follow** / **Following**. **Your posts** on your profile
   opens yours.
-- Activity lists friends' posts ("Sam posted on their wall") and comments on
-  your posts ("Jo and 2 more commented on your post"), a row per wall per day.
 
 ## Who sees a post
 
