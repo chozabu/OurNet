@@ -63,6 +63,49 @@ bool _roomPost(Json p) =>
     (p['copyOf'] == null || p['copyOf'] is String) &&
     (p['sent'] == null || p['sent'] is int);
 
+/// A person's posts for their friends, with comments: see `Wall`. Who may
+/// write each kind, and where, is checked by `Walls.accepted`.
+const wallModule = Module(
+  'wall',
+  kinds: {
+    'wall_post': _wallPost,
+    'wall_comment': _wallComment,
+    'wall_hide': _forumHide,
+    'wall_key': _wallKey,
+  },
+);
+
+/// Public (`text`, optional `title` and `share`), or sealed with a wall key.
+bool _wallPost(Json p) => p['box'] != null
+    ? _wallSealed(p) && p['text'] == null
+    : _text(p['text'], 20000) &&
+          (p['title'] == null || _text(p['title'], 200)) &&
+          (p['share'] == null ||
+              p['share'] is Map && (p['share'] as Map)['object'] is Map);
+
+/// On `post`: in the clear (`text`, optional `parent`) on a public post, or
+/// sealed with the post's epoch key.
+bool _wallComment(Json p) =>
+    _text(p['post'], 128) &&
+    (p['box'] != null
+        ? _wallSealed(p) && p['text'] == null
+        : _text(p['text'], 20000));
+
+bool _wallSealed(Json p) =>
+    p['epoch'] is int &&
+    p['epoch'] >= 0 &&
+    p['epoch'] < 9007199254740991 &&
+    _text(p['box'], 200000) &&
+    (p['aead'] == null || p['aead'] == aeadAlgorithm);
+
+/// A wall's key for one epoch: 32 bytes, base64.
+bool _wallKey(Json p) =>
+    p['epoch'] is int &&
+    p['epoch'] >= 0 &&
+    p['epoch'] < 9007199254740991 &&
+    p['key'] is String &&
+    (p['key'] as String).length == 44;
+
 /// Votes and delegations on posts: see `Voting`.
 const votingModule = Module(
   'voting',

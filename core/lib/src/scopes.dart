@@ -38,7 +38,10 @@ enum ScopedSection implements Section {
   maps({ScopeKind.personal, ScopeKind.group}),
 
   /// What happened lately, across the other sections (docs/ACTIVITY.md).
-  activity({ScopeKind.personal, ScopeKind.group, ScopeKind.public});
+  activity({ScopeKind.personal, ScopeKind.group, ScopeKind.public}),
+
+  /// People's posts for their friends, and public walls (docs/WALL.md).
+  wall({ScopeKind.personal, ScopeKind.public});
 
   @override
   final Set<ScopeKind> scopes;

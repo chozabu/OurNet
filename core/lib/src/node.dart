@@ -13,6 +13,7 @@ import 'connections.dart';
 import 'listings.dart';
 import 'group_access.dart';
 import 'registry.dart';
+import 'wall.dart';
 
 /// What a person chose about someone else, kept alike on all their devices.
 /// Blocking and disconnecting are independent: each choice settles one of
@@ -46,6 +47,9 @@ class Node {
 
   /// Group keys this device holds and whom each group's objects may reach.
   late final groups = GroupAccess(this);
+
+  /// Wall keys this device holds, and handing this person's own out.
+  late final wallKeys = WallKeys(this);
 
   /// What features and plugins contribute at run time: plugin kinds and their
   /// checks, live request handlers, navigation sections.
@@ -138,6 +142,10 @@ class Node {
     // Friends' listings of public forums and chats (see Listings) travel as
     // a followed space, so builds without them are never offered any.
     subscriptions.add(Listings.home);
+    // This person's own wall, and their friends' unless they stopped
+    // following one: see [followWall].
+    subscriptions.add(Walls.space(person));
+    _followWalls();
     blocked.addAll((store.setting('blocked') as List? ?? []).cast<String>());
     forgotten.addAll(
       (store.setting('forgotten') as List? ?? []).cast<String>(),
@@ -191,6 +199,7 @@ class Node {
         forgotten.contains(certificate.person)) {
       await setContactState(certificate.person, ContactState.friend);
     }
+    _followWalls();
     notify();
   }
 
@@ -199,6 +208,11 @@ class Node {
   /// Builds before it ignore it and keep their own block list.
   Future<void> setContactState(String other, ContactState state) async {
     if (other == person) throw StateError('That is you');
+    // A friend who goes no longer reads what is posted to friends: the next
+    // friends-only post uses a new wall key, which they are not given.
+    final removed =
+        connections.mine().contains(other) &&
+        (state == ContactState.blocked || state == ContactState.forgotten);
     final object = await publish(
       'contact_state',
       {'person': other, 'state': state.name},
@@ -206,6 +220,7 @@ class Node {
       audience: [person],
     );
     _applyContactState(other, state, object.created);
+    if (removed) await wallKeys.rotate();
   }
 
   void _applyContactState(String other, ContactState state, int at) {
@@ -243,7 +258,70 @@ class Node {
     store.set('contactStates', states);
     store.set('blocked', blocked.toList()..sort());
     store.set('forgotten', forgotten.toList()..sort());
+    _followWalls();
     notify();
+  }
+
+  /// Peers refuse an inventory that follows more spaces than this.
+  static const maxSubscriptions = 256;
+
+  /// Friends' walls are followed by default only while fewer spaces than
+  /// this are, leaving room for forums and chats.
+  static const autoFollowLimit = 224;
+
+  /// Friends' walls followed because they are friends: kept in memory and
+  /// worked out again as friends change, never stored.
+  final _friendWalls = <String>{};
+
+  /// Follows friends' walls, and stops following those of people who are
+  /// no longer friends, except where followed on purpose. True if any
+  /// changed.
+  bool _followWalls() {
+    final want = <String>{
+      for (final friend in connections.mine())
+        if (store.setting('wallUnfollowed/$friend') != true)
+          Walls.space(friend),
+    };
+    var changed = false;
+    final stored = store.subscribedSpaces();
+    for (final space in _friendWalls.difference(want).toList()) {
+      _friendWalls.remove(space);
+      if (!stored.contains(space) && subscriptions.remove(space)) {
+        changed = true;
+      }
+    }
+    for (final space in want.toList()..sort()) {
+      if (_friendWalls.contains(space)) continue;
+      if (subscriptions.contains(space)) {
+        _friendWalls.add(space);
+        continue;
+      }
+      if (subscriptions.length >= autoFollowLimit) break;
+      _friendWalls.add(space);
+      subscriptions.add(space);
+      changed = true;
+    }
+    return changed;
+  }
+
+  /// Follows or stops following [other]'s wall. A friend's is followed by
+  /// default, so stopping is remembered; anyone else's is followed only on
+  /// purpose. This person's own wall is always followed.
+  void followWall(String other, bool enabled) {
+    if (other == person) return;
+    final space = Walls.space(other);
+    if (enabled) {
+      if (!subscriptions.contains(space) &&
+          subscriptions.length >= maxSubscriptions) {
+        throw StateError('You follow too many walls, forums and chats');
+      }
+      store.set('wallUnfollowed/$other', null);
+      subscribe(space, true);
+    } else {
+      store.set('wallUnfollowed/$other', true);
+      _friendWalls.remove(space);
+      subscribe(space, false);
+    }
   }
 
   void subscribe(String space, bool enabled) {
@@ -882,6 +960,7 @@ class Node {
     if (!revoked.add(proof['device'])) return;
     store.addRevoked(proof['device']);
     _withdrawRevokedEvidence();
+    _followWalls();
   }
 
   /// Whether [device] is certified as [person]'s, by a certificate this node
@@ -1210,6 +1289,7 @@ class Node {
           store.putContact(c, now());
         }
       });
+      _followWalls();
       notify();
     }
     return added;
@@ -1667,6 +1747,8 @@ class Node {
         blocked.contains(o.author)) {
       return 0;
     }
+    // Only a wall's owner posts on it: see [Walls.accepted].
+    if (!Walls.accepted(o)) return 0;
     if (o.hasExpiry && o.expires <= now()) return 0;
     if (!o.isPublic &&
         !o.audience.contains(person) &&
@@ -1829,7 +1911,14 @@ class Node {
 
   /// Kinds whose read marks [shareReadState] carries: direct messages
   /// (`read/`), and forum posts and group chat (`seen/`).
-  static const _readKinds = {'message', 'post', 'room_post', 'room_item'};
+  static const _readKinds = {
+    'message',
+    'post',
+    'room_post',
+    'room_item',
+    Walls.postKind,
+    Walls.commentKind,
+  };
 
   ({int upTo, Set<String> unread})? _historyRead;
   bool _historyReadLoaded = false;
@@ -1870,7 +1959,13 @@ class Node {
       ...store.unreadMessageIds(person, limit: maxReadStateUnread),
     ];
     for (final (id, kind, space, created) in store.unseen(
-      const ['post', 'room_post', 'room_item'],
+      const [
+        'post',
+        'room_post',
+        'room_item',
+        Walls.postKind,
+        Walls.commentKind,
+      ],
       person,
       limit: maxReadStateUnread,
     )) {

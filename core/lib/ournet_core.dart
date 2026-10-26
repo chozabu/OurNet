@@ -52,3 +52,4 @@ export 'src/listings.dart';
 export 'src/links.dart';
 export 'src/storage_report.dart';
 export 'src/activity.dart';
+export 'src/wall.dart';

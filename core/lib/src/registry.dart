@@ -34,6 +34,7 @@ class Module {
 const builtinModules = <Module>[
   notesModule,
   forumsModule,
+  wallModule,
   votingModule,
   listingsModule,
   pluginReleasesModule,

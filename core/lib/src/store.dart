@@ -957,6 +957,8 @@ class Store {
     'file',
     'message',
     'chat_msg',
+    'wall_post',
+    'wall_comment',
   ];
 
   /// How late an object may arrive and still count as news: one created
@@ -987,7 +989,8 @@ class Store {
       ''');
     }
     db.execute('''
-      CREATE TRIGGER IF NOT EXISTS arrival_added_1 AFTER INSERT ON objects
+      DROP TRIGGER IF EXISTS arrival_added_1;
+      CREATE TRIGGER IF NOT EXISTS arrival_added_2 AFTER INSERT ON objects
       WHEN NEW.kind IN ($kinds) BEGIN
         INSERT OR IGNORE INTO arrivals VALUES(NEW.id,
           CASE WHEN NEW.created > $_nowMs - $lateArrival THEN $_nowMs
