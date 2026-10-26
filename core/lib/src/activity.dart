@@ -7,10 +7,22 @@ import 'notes.dart';
 import 'public_chats.dart';
 import 'scopes.dart';
 import 'store.dart';
+import 'wall.dart';
 
 /// The kinds of thing the activity feed shows, each a filter of its own.
 /// `plugins` holds what plugins list under `activity` in their manifests.
-enum ActivitySection { posts, notes, calendar, files, people, chat, plugins }
+enum ActivitySection {
+  posts,
+
+  /// Posts on followed walls, one row per post (see docs/WALL.md).
+  wall,
+  notes,
+  calendar,
+  files,
+  people,
+  chat,
+  plugins,
+}
 
 /// One thing that changed: what arrived about it on one day, merged.
 class ActivityItem {
@@ -39,6 +51,9 @@ class ActivityEntry {
 
   /// The group it belongs to, if any (its room's space).
   final String? group;
+
+  /// For a wall row: the post it is about, which its comments join.
+  final String? post;
   final bool public;
 
   /// When the newest of it arrived.
@@ -60,6 +75,7 @@ class ActivityEntry {
     this.space, {
     this.group,
     this.public = false,
+    this.post,
   });
 
   static const kept = 4;
@@ -211,6 +227,7 @@ class Activity {
     final slice = TimeSlice();
     final touched = <ActivityEntry>{};
     var scanned = 0;
+    await node.wallKeys.refresh();
     while (!_exhausted && _entries.length < want && scanned < maxScanned) {
       final page = node.store.arrivals(before: _oldest, limit: 256);
       if (page.isEmpty) {
@@ -229,6 +246,7 @@ class Activity {
 
   Future<void> _catchUp() async {
     final slice = TimeSlice();
+    await node.wallKeys.refresh();
     final touched = <ActivityEntry>{};
     while (true) {
       final page = node.store.arrivals(after: _newest, limit: 256);
@@ -297,11 +315,23 @@ class Activity {
   /// Adds [o] to its row; returns the row, or null if it shows nowhere.
   Future<ActivityEntry?> _take(int at, SignedObject o) async {
     if (!_taken.add(o.id) || !node.visible(o)) return null;
-    // What this device did itself is not news to it.
-    if (o.certificate.device == node.identity.device) return null;
+    // What this device did itself is not news to it, except a wall post:
+    // the feed is where it is read, beside friends' posts.
+    if (o.certificate.device == node.identity.device &&
+        o.kind != Walls.postKind) {
+      return null;
+    }
     final needsContent = o.kind != 'note_op' && o.kind != 'message';
-    final data = needsContent ? await node.content(o) : null;
+    var data = needsContent ? await node.content(o) : null;
     if (needsContent && data == null) return null;
+    var public = o.isPublic;
+    if (Walls.kinds.contains(o.kind)) {
+      final opened = await _wall(o, data!);
+      if (opened == null) return null;
+      // A friends-only post travels as a public object but is not public.
+      public = o.isPublic && !Walls.sealed(data);
+      data = opened;
+    }
     final author =
         (data?['history'] == true ? data!['originalAuthor'] as String? : null) ??
         o.author;
@@ -316,7 +346,13 @@ class Activity {
         ? node.registry.activityOf(o.kind)
         : null;
     final thing = listing?.key == null ? '' : '|${listing!.keyOf(o, data!)}';
-    final key = section == ActivitySection.notes && o.kind == 'note_op'
+    // A wall post is a row of its own, which comments on it join.
+    final post = section == ActivitySection.wall
+        ? (o.kind == Walls.postKind ? o.id : data!['post'] as String)
+        : null;
+    final key = post != null
+        ? 'wall|$post'
+        : section == ActivitySection.notes && o.kind == 'note_op'
         ? 'note|$space|$day'
         : '${section.name}|${o.kind}|$space$thing|$day';
     final entry = _entries[key] ??= ActivityEntry(
@@ -324,7 +360,8 @@ class Activity {
       section,
       space,
       group: group,
-      public: o.isPublic,
+      public: public,
+      post: post,
     );
     entry._add(ActivityItem(o, data, author, at));
     return entry;
@@ -366,11 +403,32 @@ class Activity {
         return peer == null ? null : (ActivitySection.chat, 'dm:$peer', null);
       case PublicChats.messageKind:
         return (ActivitySection.chat, o.space, null);
+      case Walls.postKind || Walls.commentKind:
+        return (ActivitySection.wall, o.space, null);
     }
     if (node.registry.activityOf(o.kind) != null) {
       return (ActivitySection.plugins, o.space, pluginGroup(o));
     }
     return null;
+  }
+
+  /// What a wall post or comment says, opened if it is sealed; null when it
+  /// is not shown: not the wall owner's post, a comment on someone else's
+  /// wall, or sealed with a key this device does not hold.
+  Future<Json?> _wall(SignedObject o, Json payload) async {
+    if (!Walls.accepted(o)) return null;
+    if (o.kind == Walls.commentKind && o.space != Walls.space(node.person)) {
+      return null;
+    }
+    if (!Walls.sealed(payload)) return payload;
+    final plain = await node.wallKeys.open(o, payload);
+    return plain == null
+        ? null
+        : {
+            for (final e in payload.entries)
+              if (e.key != 'box') e.key: e.value,
+            ...plain,
+          };
   }
 
   /// The group a plugin's object belongs to: one shared with several

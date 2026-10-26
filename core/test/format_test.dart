@@ -72,10 +72,13 @@ void main() {
       old.close();
 
       final node = Node(alice, Store(path: path));
+      // Their own wall and their friend's are followed without being stored.
+      final walls = {Walls.space(alice.person), Walls.space(bob.person)};
       expect(node.store.db.select('PRAGMA user_version').first[0], 2);
       expect(node.contacts.keys, [bob.device]);
       expect(node.contacts[bob.device]!.label, 'Bob');
-      expect(node.subscriptions, {'general', 'garden', '_listing'});
+      expect(node.subscriptions, {'general', 'garden', '_listing', ...walls});
+      expect(node.store.subscribedSpaces(), {'general', 'garden'});
       expect(node.revoked, {carol.device});
       // The moved keys are gone from settings; others stay.
       expect(node.store.setting('contacts'), isNull);
@@ -87,7 +90,7 @@ void main() {
       // Reopening at version 2 changes nothing.
       final again = Node(alice, Store(path: path));
       expect(again.contacts.keys, [bob.device]);
-      expect(again.subscriptions, {'general', 'garden', '_listing'});
+      expect(again.subscriptions, {'general', 'garden', '_listing', ...walls});
       await again.close();
     });
 
@@ -109,11 +112,12 @@ void main() {
 
     test('a new profile starts on general, and can leave it', () async {
       final node = Node(await LocalIdentity.create(), Store());
-      expect(node.subscriptions, {'general', '_listing'});
+      final wall = Walls.space(node.person);
+      expect(node.subscriptions, {'general', '_listing', wall});
       node.subscribe('general', false);
       node.subscribe('garden', true);
       final reloaded = Node(node.identity, node.store);
-      expect(reloaded.subscriptions, {'garden', '_listing'});
+      expect(reloaded.subscriptions, {'garden', '_listing', wall});
     });
 
     test('contacts, revocations and learned devices persist as rows', () async {

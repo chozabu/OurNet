@@ -14,6 +14,7 @@ import '../services/map_tiles.dart';
 import 'map_page.dart';
 import 'place_links.dart';
 import 'plugin_view.dart';
+import 'wall_page.dart';
 import 'transfers_view.dart';
 import 'plugins_page.dart';
 import 'remote_session_banner.dart';
@@ -131,6 +132,7 @@ part 'activity.dart';
 part 'scopes.dart';
 part 'public_chat.dart';
 part 'browse.dart';
+part 'wall_section.dart';
 
 /// Places in the app. [id] is saved as the last destination; keep it stable.
 enum Destination {
@@ -288,6 +290,12 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   late final Activity activity = Activity(node, notes: notes);
   late final CoalescedTask _activityRefresh;
   StreamSubscription<Set<String>>? _activityChanges;
+
+  /// Followed walls merged (docs/WALL.md): the posts Activity shows as cards.
+  late final WallFeed wallFeed = WallFeed(node);
+  bool wallLoadingMore = false;
+  late final CoalescedTask _wallRefresh;
+  StreamSubscription<Set<String>>? _wallChanges;
 
   /// The activity feed's sections switched off, saved.
   Set<ActivitySection> activityHidden = {ActivitySection.chat};
@@ -731,6 +739,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       _activityRefresh.schedule,
     );
     _activityRefresh.schedule();
+    _wallRefresh = CoalescedTask(() async {
+      if (await wallFeed.refresh()) redraw();
+    }, (e) => notice('Wall: $e'));
+    _wallChanges = node.onChangesTo(Walls.kinds, _wallRefresh.schedule);
+    _wallRefresh.schedule();
     _dataRefresh = CoalescedTask(() async {
       await messageUpdates.catchUp();
       await forumVotes.catchUp();
@@ -787,7 +800,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     );
     if (widget.enablePlatform) {
       _keyGrants = CoalescedTask(
-        () => node.shareKeys(),
+        () async {
+          await node.shareKeys();
+          // Wall keys too, for a device linked since they were made.
+          await node.wallKeys.shareOwn();
+        },
         (e) => network.log('Could not share keys with your devices: $e'),
         delay: const Duration(seconds: 2),
       )..schedule();
@@ -1425,6 +1442,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _friendList?.close();
     _activityChanges?.cancel();
     _activityRefresh.close();
+    _wallChanges?.cancel();
+    _wallRefresh.close();
     _groupInvites?.close();
     _readTimer?.cancel();
     typing

@@ -1,11 +1,13 @@
 part of 'app.dart';
 
-/// The activity feed: what happened lately across forums, notes, calendars,
-/// files and friends, one row per thing per day, newest arrival first. Each
-/// row opens the thing where it lives. See docs/ACTIVITY.md.
+/// The activity feed: what happened lately across forums, walls, notes,
+/// calendars, files and friends, one row per thing per day (per post for
+/// walls, shown as the post itself), newest arrival first. Each row opens
+/// the thing where it lives. See docs/ACTIVITY.md.
 extension _ActivityPage on _OurNetAppState {
   static const _sectionLabels = {
     ActivitySection.posts: 'Posts',
+    ActivitySection.wall: 'Wall',
     ActivitySection.notes: 'Notes',
     ActivitySection.calendar: 'Calendar',
     ActivitySection.files: 'Files',
@@ -16,6 +18,7 @@ extension _ActivityPage on _OurNetAppState {
 
   static const _sectionIcons = {
     ActivitySection.posts: Icons.forum_outlined,
+    ActivitySection.wall: Icons.article_outlined,
     ActivitySection.notes: Icons.note_alt_outlined,
     ActivitySection.calendar: Icons.calendar_month_outlined,
     ActivitySection.files: Icons.folder_outlined,
@@ -47,7 +50,8 @@ extension _ActivityPage on _OurNetAppState {
     return [
       for (final e in activity.entries)
         if (!activityHidden.contains(e.section) &&
-            e.inScope(scope, group: group))
+            e.inScope(scope, group: group) &&
+            (e.section != ActivitySection.wall || wallRowShown(e)))
           e,
     ];
   });
@@ -66,14 +70,18 @@ extension _ActivityPage on _OurNetAppState {
   Widget activityPage(BuildContext context) {
     // What was new when the page opened stays marked while it is open.
     final floor = activityFloor ??= activity.seen;
-    if (activity.loaded && activity.unseen() > 0) {
+    if (activity.loaded &&
+        (activity.unseen() > 0 || wallFeed.loaded && wallFeed.unseen() > 0)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || tab != Destination.activity) return;
         activity.markSeen();
+        // Wall posts and comments read here are read on other devices too.
+        wallFeed.markSeen();
         redraw();
       });
     }
     final rows = activityRows();
+    readWallBack(rows);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -101,11 +109,19 @@ extension _ActivityPage on _OurNetAppState {
           child: !activity.loaded
               ? const Center(child: CircularProgressIndicator())
               : rows.isEmpty && activity.exhausted
-              ? empty(
-                  'Nothing yet',
-                  'Forum posts, changes to shared notes, events, files and '
-                      'new friends show here as they arrive.',
-                  Icons.dynamic_feed_outlined,
+              ? Column(
+                  children: [
+                    if (activityComposer) activityWallComposer(),
+                    Expanded(
+                      child: empty(
+                        'Nothing yet',
+                        'Your friends\' posts, forum posts, changes to shared '
+                            'notes, events, files and new friends show here '
+                            'as they arrive.',
+                        Icons.dynamic_feed_outlined,
+                      ),
+                    ),
+                  ],
                 )
               : activityList(context, rows, floor),
         ),
@@ -119,12 +135,10 @@ extension _ActivityPage on _OurNetAppState {
     int floor,
   ) {
     // Day headings, and a line where what had been seen before begins.
-    final rows = <Object>[];
+    final rows = <Object>[if (activityComposer) 'composer'];
     int? day;
     var dividerShown = false;
-    final anyNew = entries.any(
-      (e) => e.at > floor && e.byOthers(node.person),
-    );
+    final anyNew = entries.any((e) => e.at > floor && e.byOthers(node.person));
     for (final e in entries) {
       if (anyNew && !dividerShown && e.at <= floor) {
         rows.add('seen');
@@ -168,19 +182,27 @@ extension _ActivityPage on _OurNetAppState {
             ],
           ),
         ),
-        'more' => activity.exhausted
-            ? const SizedBox(height: 24)
-            : Padding(
-                padding: const EdgeInsets.all(16),
-                child: Center(
-                  child: activityLoadingMore
-                      ? const CircularProgressIndicator()
-                      : OutlinedButton(
-                          onPressed: loadMoreActivity,
-                          child: const Text('Show earlier'),
-                        ),
+        'composer' => activityWallComposer(),
+        'more' =>
+          activity.exhausted
+              ? const SizedBox(height: 24)
+              : Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Center(
+                    child: activityLoadingMore
+                        ? const CircularProgressIndicator()
+                        : OutlinedButton(
+                            onPressed: loadMoreActivity,
+                            child: const Text('Show earlier'),
+                          ),
+                  ),
                 ),
-              ),
+        final ActivityEntry e when e.section == ActivitySection.wall =>
+          activityWallCard(
+            context,
+            e,
+            fresh: e.at > floor && e.byOthers(node.person),
+          ),
         final ActivityEntry e => activityTile(
           context,
           e,
@@ -239,6 +261,11 @@ extension _ActivityPage on _OurNetAppState {
       return e.public ? '$name · Public' : name;
     }
     return switch (kind) {
+      Walls.postKind || Walls.commentKind => switch (Walls.ownerOf(e.space)) {
+        final owner? when owner == node.person => 'Your wall',
+        final owner? => '${name(owner)}\'s wall',
+        _ => 'A wall',
+      },
       'post' => forumName(e.space),
       PublicChats.messageKind => publicChats.info(e.space)?.name ?? e.space,
       'message' => 'Direct messages',
@@ -287,9 +314,21 @@ extension _ActivityPage on _OurNetAppState {
             : n == 1
             ? 'saved a note'
             : 'saved $n notes';
+      case ActivitySection.wall:
+        // A row is one post: the post, and comments on this person's own.
+        final comments = e.items
+            .where((i) => i.object.kind == Walls.commentKind)
+            .length;
+        return comments == 0
+            ? 'posted on their wall'
+            : comments == 1
+            ? 'commented on your post'
+            : 'commented $comments times on your post';
       case ActivitySection.posts:
         if (n > 1) return 'posted $n times';
-        return first.data?['title'] is String ? 'started a discussion' : 'replied';
+        return first.data?['title'] is String
+            ? 'started a discussion'
+            : 'replied';
       case ActivitySection.calendar:
         final events = {for (final i in e.items) i.data?['event']}.length;
         return events > 1 || n > e.items.length
@@ -460,6 +499,8 @@ extension _ActivityPage on _OurNetAppState {
       return;
     }
     switch (o.kind) {
+      case Walls.postKind || Walls.commentKind:
+        if (Walls.ownerOf(o.space) case final owner?) openWall(owner);
       case 'note_op':
         await openNote(e.space);
       case 'message':

@@ -279,6 +279,35 @@ extension _ContactDetails on _OurNetAppState {
                   ],
                 ),
                 const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    // Their wall: what they post for friends, or publicly.
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(sheet);
+                        openWall(person);
+                      },
+                      icon: const Icon(Icons.article_outlined),
+                      label: Text(me ? 'Your posts' : 'Posts'),
+                    ),
+                    if (!me && !Walls.following(node, person))
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          try {
+                            node.followWall(person, true);
+                          } catch (e) {
+                            notice('$e');
+                          }
+                          Navigator.pop(sheet);
+                        },
+                        icon: const Icon(Icons.add),
+                        label: const Text('Follow posts'),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
                 if (!me)
                   Wrap(
                     spacing: 8,

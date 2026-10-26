@@ -3,6 +3,7 @@ import 'locations.dart';
 import 'model.dart';
 import 'node.dart';
 import 'notes.dart' show orderBetween;
+import 'wall.dart';
 
 /// Personal note state: pins, archive, labels, reminders and manual order.
 /// It is encrypted to this person's own devices and syncs between them, but
@@ -129,10 +130,11 @@ class NoteState {
     }
     if (node.store.setting('followMigrated') != true) {
       node.store.set('followMigrated', true);
-      // Internal spaces are not forums, and a profile still on the default
-      // has chosen nothing worth recording: a fresh one writes nothing here.
+      // Internal spaces and walls (followed as friends are) are not forums,
+      // and a profile still on the default has chosen nothing worth
+      // recording: a fresh one writes nothing here.
       final followed = node.subscriptions
-          .where((s) => !s.startsWith('_'))
+          .where((s) => !s.startsWith('_') && Walls.ownerOf(s) == null)
           .toList()
         ..sort();
       if (canonical(followed) != canonical(const ['general'])) {

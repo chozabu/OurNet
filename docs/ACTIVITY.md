@@ -1,9 +1,12 @@
 # Activity
 
 **Activity**, first in the main navigation, answers "what happened while I was
-away?": forum posts, changes to shared notes and lists, calendar events, files
-and new friends, with chat available as a filter. It is a way to get to
-things, not a place to interact: each row opens the thing in its normal view.
+away?": friends' wall posts, forum posts, changes to shared notes and lists,
+calendar events, files and new friends, with chat available as a filter. It is
+mostly a way to get to things: each row opens the thing in its normal view.
+Walls are the exception: Activity is where they are read and written, so a
+wall post is shown as the post itself (comments, likes, sharing), and a box
+at the top posts on your own wall (see docs/WALL.md).
 
 ## What a row is
 
@@ -13,6 +16,7 @@ every object:
 | Section | One row per | Reads like |
 | --- | --- | --- |
 | Posts | forum (public or a group's) per day | "Sam started a discussion", "Sam and Jo posted 4 times" |
+| Wall | post on a followed wall (yours included); comments on your posts join their post's row and bring it up | the post itself, as a card with its comments |
 | Notes | note per day; a group's lists, your inbox | "Jo changed “Packing list” · 7 edits" |
 | Calendar | calendar per day | "Jo added or changed an event" |
 | Files | group, drive or public space per day | "Sam shared 3 files", with a thumbnail |
@@ -53,7 +57,15 @@ at its creation time, so it does not flood today.
 Activity is a scoped section (`ScopedSection.activity`, every scope): in All it
 is everything; with a group picked it is that group's front page; Personal and
 Public show their part. Section chips filter on top; which are off is saved
-(`activityHidden`), with Chat off until switched on.
+(`activityHidden`), with Chat off until switched on. Turning off Wall also
+hides the posting box, as does a group's scope: walls belong to no group.
+Personal shows friends-only wall posts, Public public ones.
+
+Wall cards come from a `WallFeed` (followed walls merged, paged like the
+feed): when Activity names a post the feed has not read back to, the feed
+reads one more page after the frame, and the row is drawn as a plain row
+until then. Rows for walls no longer followed, and posts their owner hid,
+are left out.
 
 The navigation badge counts rows from others that arrived since the page was
 last looked at, in the scope and filters on screen. Looking at the page marks
@@ -66,7 +78,8 @@ them seen (`activitySeen`, an arrival time).
   (`Store.activityKinds`). It holds object IDs and times only, never content,
   and is never synced. A row is removed with its object. On first creation it
   is filled from the last 30 days of those kinds, with creation times.
-  Changing the kinds means a new trigger name (`arrival_added_N`).
+  Changing the kinds means a new trigger name (`arrival_added_N`, now 2 for
+  wall posts and comments) and dropping the previous one.
 - **`Activity` (core).** Reads arrivals newest first, a page at a time, and
   merges them into rows in memory. The first load reads back about 40 rows
   (at most 2,048 objects), "Show earlier" reads further, and `refresh` takes in

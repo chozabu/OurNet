@@ -50,6 +50,8 @@ class PublicNames {
       !space.startsWith('_') &&
       !isPluginSpace(space) &&
       !space.startsWith('chat:') &&
+      // A person's wall: see `Walls`.
+      !space.startsWith('wall:') &&
       !reserved.contains(space) &&
       !RegExp(r'[\x00-\x1f]').hasMatch(space);
 
