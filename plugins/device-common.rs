@@ -72,6 +72,7 @@ impl Client {
             self.status = "Device selected".into();
         }
     }
+    #[allow(dead_code)] // Remote Desktop sends to friends too, with its own.
     pub fn send(&mut self, value: &Value) {
         if self.pending.is_some() {
             return;

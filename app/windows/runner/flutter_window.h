@@ -8,6 +8,7 @@
 
 #include "desktop_texture.h"
 #include "noise_suppression.h"
+#include "pointer_lock.h"
 #include "system_speech.h"
 #include "system_tray.h"
 #include "win32_window.h"
@@ -39,6 +40,7 @@ class FlutterWindow : public Win32Window {
   // RNNoise in the call microphone hook.
   std::unique_ptr<NoiseSuppression> noise_suppression_;
   std::unique_ptr<DesktopTextures> desktop_textures_;
+  std::unique_ptr<PointerLock> pointer_lock_;
 
   // The notification area icon, and closing into it.
   std::unique_ptr<SystemTray> tray_;

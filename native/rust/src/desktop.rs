@@ -36,11 +36,28 @@ type Notify = unsafe extern "C" fn(context: *mut c_void);
 pub const VIDEO: u8 = 1;
 pub const INFO: u8 = 2;
 pub const ERROR: u8 = 3;
+/// `[u16 w][u16 h][i16 hot x][i16 hot y][RGBA…]`, in source pixels.
+pub const CURSOR_SHAPE: u8 = 4;
+/// `[i32 x][i32 y][u8 visible]`: the pointer's top left, in source pixels.
+pub const CURSOR_AT: u8 = 5;
+/// The other device's clipboard text, UTF-8.
+pub const CLIPBOARD: u8 = 6;
+/// `[u32 rate][u8 channels][i16 samples…]`: 10 ms of what it plays.
+pub const AUDIO: u8 = 7;
 
 /// Datagram types, viewer to server.
 pub const INPUT: u8 = 1;
 pub const ACK: u8 = 2;
 pub const KEYFRAME: u8 = 3;
+/// [INPUT] with relative mouse movement and key repeats (see [InputState]).
+pub const INPUT2: u8 = 4;
+
+/// Control messages, viewer to server, on a reliable stream of their own:
+/// `[type][u32 length][body]`.
+pub const CONTROL_TEXT: u8 = 1;
+pub const CONTROL_CLIPBOARD: u8 = 2;
+pub const CONTROL_DISPLAY: u8 = 3;
+pub const CONTROL_TAP: u8 = 4;
 
 /// Video frame flags.
 pub const KEY: u8 = 1;
@@ -72,11 +89,28 @@ pub struct Config {
     pub inflight: u32,
     /// Use the software encoder even where hardware is present (tests).
     pub software: bool,
+    /// Send what this device plays.
+    pub audio: bool,
+    /// Send this device's clipboard text as it changes, and accept the
+    /// viewer's.
+    pub clipboard: bool,
+    /// Lower the bit rate when the link cannot keep up, and raise it back.
+    pub adapt: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { fps: 60, kbps: 20_000, width: 1920, display: 0, inflight: 2, software: false }
+        Config {
+            fps: 60,
+            kbps: 20_000,
+            width: 1920,
+            display: 0,
+            inflight: 2,
+            software: false,
+            audio: false,
+            clipboard: false,
+            adapt: true,
+        }
     }
 }
 
@@ -125,40 +159,66 @@ pub struct InputState {
     pub hwheel: i32,
     /// USB HID keyboard usages (page 7) held.
     pub keys: Vec<u16>,
+    /// Running totals of relative pointer movement (pointer lock), in the
+    /// viewer's mouse counts.
+    pub rel_x: i32,
+    pub rel_y: i32,
+    /// Running count of key repeats, and the key they repeat.
+    pub repeats: u32,
+    pub repeat_key: u16,
 }
 
 impl InputState {
-    /// `[1][u32 seq][u16 x][u16 y][u8 buttons][i32 wheel][i32 hwheel][u8 n][n × u16]`.
+    /// `[1][u32 seq][u16 x][u16 y][u8 buttons][i32 wheel][i32 hwheel][u8 n][n × u16]`,
+    /// or [INPUT2]: the same with `[i32 rel x][i32 rel y][u32 repeats][u16 key]`
+    /// before the key count.
     pub fn parse(data: &[u8]) -> Option<InputState> {
-        if data.len() < 19 || data[0] != INPUT {
+        let extra = match data.first() {
+            Some(&INPUT) => 0,
+            Some(&INPUT2) => 14,
+            _ => return None,
+        };
+        if data.len() < 19 + extra {
             return None;
         }
         let u16_at = |i: usize| u16::from_le_bytes([data[i], data[i + 1]]);
         let i32_at = |i: usize| i32::from_le_bytes(data[i..i + 4].try_into().unwrap());
-        let n = data[18] as usize;
-        if n > MAX_KEYS || data.len() != 19 + 2 * n {
+        let n = data[18 + extra] as usize;
+        if n > MAX_KEYS || data.len() != 19 + extra + 2 * n {
             return None;
         }
-        Some(InputState {
+        let mut state = InputState {
             seq: u32::from_le_bytes(data[1..5].try_into().unwrap()),
             x: u16_at(5),
             y: u16_at(7),
             buttons: data[9] & 0x1f,
             wheel: i32_at(10),
             hwheel: i32_at(14),
-            keys: (0..n).map(|k| u16_at(19 + 2 * k)).collect(),
-        })
+            keys: (0..n).map(|k| u16_at(19 + extra + 2 * k)).collect(),
+            ..Default::default()
+        };
+        if extra > 0 {
+            state.rel_x = i32_at(18);
+            state.rel_y = i32_at(22);
+            state.repeats = i32_at(26) as u32;
+            state.repeat_key = u16_at(30);
+        }
+        Some(state)
     }
 
     #[cfg(test)]
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = vec![INPUT];
+        let mut out = vec![INPUT2];
         out.extend_from_slice(&self.seq.to_le_bytes());
         out.extend_from_slice(&self.x.to_le_bytes());
         out.extend_from_slice(&self.y.to_le_bytes());
         out.push(self.buttons);
         out.extend_from_slice(&self.wheel.to_le_bytes());
         out.extend_from_slice(&self.hwheel.to_le_bytes());
+        out.extend_from_slice(&self.rel_x.to_le_bytes());
+        out.extend_from_slice(&self.rel_y.to_le_bytes());
+        out.extend_from_slice(&self.repeats.to_le_bytes());
+        out.extend_from_slice(&self.repeat_key.to_le_bytes());
         out.push(self.keys.len() as u8);
         for k in &self.keys {
             out.extend_from_slice(&k.to_le_bytes());
@@ -177,6 +237,10 @@ pub enum Action {
     HWheel(i32),
     /// A set-1 scan code (0xE0xx for extended keys), down or up.
     Key(u16, bool),
+    /// Relative pointer movement, in mouse counts.
+    Relative(i32, i32),
+    /// Text typed as Unicode keystrokes (a phone's keyboard).
+    Text(String),
 }
 
 /// The state last applied, and what changes from it.
@@ -213,6 +277,11 @@ impl Applied {
         if (next.x, next.y) != (last.x, last.y) {
             actions.push(Action::Move(next.x, next.y));
         }
+        let dx = next.rel_x.wrapping_sub(last.rel_x).clamp(-10_000, 10_000);
+        let dy = next.rel_y.wrapping_sub(last.rel_y).clamp(-10_000, 10_000);
+        if (dx, dy) != (0, 0) {
+            actions.push(Action::Relative(dx, dy));
+        }
         // Keys released first, so a chord changing hands never overlaps.
         for k in &last.keys {
             if !next.keys.contains(k) {
@@ -241,6 +310,16 @@ impl Applied {
         let hwheel = next.hwheel.wrapping_sub(last.hwheel).clamp(-1200, 1200);
         if hwheel != 0 {
             actions.push(Action::HWheel(hwheel));
+        }
+        // A held key the viewer's keyboard repeats: down again, as a
+        // keyboard does. Only for keys still held, at most a burst at once.
+        let repeats = next.repeats.wrapping_sub(last.repeats).min(30);
+        if repeats > 0 && next.keys.contains(&next.repeat_key) {
+            if let Some(scan) = scan_code(next.repeat_key) {
+                for _ in 0..repeats {
+                    actions.push(Action::Key(scan, true));
+                }
+            }
         }
         self.last = Some(next);
         actions
@@ -406,7 +485,15 @@ struct Capture {
     /// Newest frame ID the viewer has received.
     acked: AtomicU32,
     keyframe: AtomicBool,
-    input: Mutex<Option<Sender<InputState>>>,
+    input: Mutex<Option<Sender<InputJob>>>,
+    /// The output to capture; a change rebuilds the pipeline on it.
+    display: std::sync::atomic::AtomicUsize,
+    /// Clipboard text from the viewer, and the last clipboard text either
+    /// side sent, so a copy is not sent back where it came from.
+    clipboard: Mutex<Option<String>>,
+    synced: Mutex<String>,
+    /// Bit rate the adaptation last chose, kbit/s.
+    kbps: AtomicU32,
     /// When each frame not yet acknowledged was captured, oldest first.
     sent: Mutex<VecDeque<(u32, Instant)>>,
     /// From capture to the viewer's ack, smoothed: what the person feels,
@@ -415,6 +502,10 @@ struct Capture {
 }
 
 impl Capture {
+    fn job(&self, job: InputJob) -> bool {
+        self.input.lock().ok().and_then(|i| i.as_ref().map(|i| i.send(job).is_ok())).unwrap_or(false)
+    }
+
     fn acked(&self, id: u32) {
         // Newest wins; IDs wrap.
         let newer = self
@@ -481,6 +572,9 @@ struct View {
     /// Microseconds the last frame took to decode and convert.
     decode_us: AtomicU64,
     error: Mutex<String>,
+    /// Sound from the other device: its format, what waits to play, and
+    /// the player's stop.
+    audio: Mutex<Option<(Arc<Mutex<(u32, u8, crate::desktop_audio::Jitter)>>, Arc<AtomicBool>)>>,
 }
 
 impl View {
@@ -522,11 +616,25 @@ fn run_view(view: Arc<View>, frames: Receiver<Vec<u8>>) {
     }
 }
 
-fn run_input(capture: Arc<Capture>, states: Receiver<InputState>, geometry: Arc<Mutex<Option<Geometry>>>) {
+/// What the input thread applies, in the order it arrives.
+pub enum InputJob {
+    State(InputState),
+    /// Text typed on the viewer's (phone) keyboard.
+    Text(String),
+    /// A key pressed and released (a phone keyboard's Enter or Backspace).
+    Tap(u16),
+}
+
+fn run_input(capture: Arc<Capture>, states: Receiver<InputJob>, geometry: Arc<Mutex<Option<Geometry>>>) {
     let mut applied = Applied::default();
     loop {
         let actions = match states.recv_timeout(INPUT_STALE) {
-            Ok(state) => applied.apply(state),
+            Ok(InputJob::State(state)) => applied.apply(state),
+            Ok(InputJob::Text(text)) => vec![Action::Text(text)],
+            Ok(InputJob::Tap(usage)) => match scan_code(usage) {
+                Some(scan) => vec![Action::Key(scan, true), Action::Key(scan, false)],
+                None => Vec::new(),
+            },
             Err(RecvTimeoutError::Timeout) if applied.holding() => applied.release(),
             Err(RecvTimeoutError::Timeout) => {
                 if capture.stop.load(Ordering::Relaxed) {
@@ -603,6 +711,20 @@ fn inject(actions: &[Action], geometry: Geometry) {
                 mouse(0, 0, data, flags)
             }
             Action::Wheel(n) => mouse(0, 0, n, MOUSEEVENTF_WHEEL),
+            Action::Relative(dx, dy) => mouse(dx, dy, 0, MOUSEEVENTF_MOVE),
+            Action::Text(ref text) => {
+                for unit in text.encode_utf16().take(16384) {
+                    let key = |flags| INPUT {
+                        r#type: INPUT_KEYBOARD,
+                        Anonymous: INPUT_0 {
+                            ki: KEYBDINPUT { wVk: 0, wScan: unit, dwFlags: flags, time: 0, dwExtraInfo: 0 },
+                        },
+                    };
+                    events.push(key(KEYEVENTF_UNICODE));
+                    events.push(key(KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+                }
+                continue;
+            }
             Action::HWheel(n) => mouse(0, 0, n, MOUSEEVENTF_HWHEEL),
             Action::Key(scan, down) => {
                 let mut flags = KEYEVENTF_SCANCODE;
@@ -649,6 +771,22 @@ fn run_capture(handle: u64, post: Post, config: Config, capture: Arc<Capture>, g
     post_to(post, handle, Vec::new());
 }
 
+/// The next second's bit rate. A link that holds frames back (capture
+/// waited on acknowledgements for a tenth of the second) or whose
+/// acknowledgements take twice as long as when idle is congested: a quarter
+/// off. One that kept up raises it a tenth, back towards what was asked.
+pub fn adapt(kbps: u32, max: u32, blocked_ms: u32, latency_us: u64, base_us: u64) -> u32 {
+    let floor = 1000.min(max);
+    let slow = base_us != u64::MAX && latency_us > base_us * 2 + 15_000;
+    if blocked_ms > 100 || slow {
+        (kbps * 3 / 4).max(floor)
+    } else if blocked_ms < 20 {
+        (kbps + kbps / 10 + 100).min(max)
+    } else {
+        kbps
+    }
+}
+
 /// Figures the capture reports once a second.
 struct Stats {
     began: Instant,
@@ -658,12 +796,14 @@ struct Stats {
     skipped: u32,
     /// Capture, conversion and encoding of the latest frame.
     encode_ms: f64,
+    /// Milliseconds this second spent waiting for acknowledgements.
+    blocked_ms: u32,
 }
 
 impl Stats {
     fn new() -> Stats {
         let now = Instant::now();
-        Stats { began: now, last: now, frames: 0, bytes: 0, skipped: 0, encode_ms: 0.0 }
+        Stats { began: now, last: now, frames: 0, bytes: 0, skipped: 0, encode_ms: 0.0, blocked_ms: 0 }
     }
 
     /// The figures, when a second has passed since the last.
@@ -678,6 +818,7 @@ impl Stats {
             "latency": (latency_us as f64 / 100.0).round() / 10.0,
             "skipped": self.skipped,
             "encodeMs": (self.encode_ms * 100.0).round() / 100.0,
+            "blockedMs": self.blocked_ms,
         });
         if let (Value::Object(o), Value::Object(f)) = (&mut out, fields) {
             o.extend(f);
@@ -686,6 +827,7 @@ impl Stats {
         self.frames = 0;
         self.bytes = 0;
         self.skipped = 0;
+        self.blocked_ms = 0;
         Some(out)
     }
 }
@@ -754,6 +896,7 @@ mod win {
         output: IDXGIOutput1,
         rect: RECT,
         luid: LUID,
+        name: String,
     }
 
     /// Attached outputs, primary first, and the virtual desktop's bounds.
@@ -775,8 +918,10 @@ mod win {
                 desktop.top = desktop.top.min(r.top);
                 desktop.right = desktop.right.max(r.right);
                 desktop.bottom = desktop.bottom.max(r.bottom);
+                let end = desc.DeviceName.iter().position(|&c| c == 0).unwrap_or(desc.DeviceName.len());
+                let name = String::from_utf16_lossy(&desc.DeviceName[..end]).trim_start_matches(r"\\.\").to_string();
                 if let Ok(output) = output.cast::<IDXGIOutput1>() {
-                    found.push(Output { adapter: adapter.clone(), output, rect: r, luid });
+                    found.push(Output { adapter: adapter.clone(), output, rect: r, luid, name });
                 }
             }
         }
@@ -1210,6 +1355,15 @@ mod win {
             }
         }
 
+        /// Changes the bit rate while streaming, where the encoder allows.
+        fn set_bitrate(&self, kbps: u32) {
+            if let Some(codec) = &self.codec {
+                unsafe {
+                    let _ = codec.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &variant_u32(kbps * 1000));
+                }
+            }
+        }
+
         /// Encodes one frame and returns what the encoder gave back.
         fn encode(&mut self, gpu: &Gpu, texture: &ID3D11Texture2D, time: i64, duration: i64, key: bool) -> Result<Vec<(Vec<u8>, bool)>> {
             let mut out = Vec::new();
@@ -1320,10 +1474,16 @@ mod win {
 
     fn pipeline(handle: u64, post: Post, config: &Config, capture: &Capture, geometry: &Mutex<Option<Geometry>>, ids: &mut u32, stats: &mut Stats) -> Result<Pipeline> {
         let (mut list, desktop) = outputs()?;
-        if config.display >= list.len() {
-            return Err(format!("There is no display {}", config.display + 1));
+        let displays: Vec<Value> = list
+            .iter()
+            .map(|o| json!({"name": o.name, "width": o.rect.right - o.rect.left, "height": o.rect.bottom - o.rect.top}))
+            .collect();
+        let mut display = capture.display.load(Ordering::Relaxed);
+        if display >= list.len() {
+            display = 0;
+            capture.display.store(0, Ordering::Relaxed);
         }
-        let out = list.swap_remove(config.display);
+        let out = list.swap_remove(display);
         if let Ok(mut g) = geometry.lock() {
             *g = Some(Geometry {
                 output: (out.rect.left, out.rect.top, out.rect.right, out.rect.bottom),
@@ -1355,6 +1515,7 @@ mod win {
         let fields = json!({
             "width": size.0, "height": size.1, "sourceWidth": source.0, "sourceHeight": source.1,
             "encoder": encoder.name, "hardware": encoder.hardware, "maxFps": config.fps,
+            "displays": displays, "display": display, "audio": config.audio, "clipboard": config.clipboard,
         });
         post_to(post, handle, framed(INFO, &[fields.to_string().as_bytes()]));
         let interval = Duration::from_secs_f64(1.0 / config.fps as f64);
@@ -1363,18 +1524,49 @@ mod win {
         let mut slot = 0usize;
         let mut last: Option<usize> = None;
         let mut first = true;
+        let mut pointer = (i32::MIN, i32::MIN, false);
+        let mut shape = Vec::new();
+        let mut clipboard_at = Instant::now();
+        let mut clipboard_seq = 0;
+        let mut kbps = capture.kbps.load(Ordering::Relaxed).min(config.kbps);
+        encoder.set_bitrate(kbps);
+        // The lowest acknowledgement time seen: what an idle link costs.
+        let mut base_latency = u64::MAX;
         loop {
             if capture.stop.load(Ordering::Relaxed) {
                 return Ok(Pipeline::Stopped);
             }
-            if let Some(report) = stats.report(fields.clone(), capture.latency_us.load(Ordering::Relaxed)) {
+            if capture.display.load(Ordering::Relaxed) != display {
+                return Ok(Pipeline::Again);
+            }
+            if stats.last.elapsed() >= Duration::from_secs(1) {
+                let latency = capture.latency_us.load(Ordering::Relaxed);
+                if latency > 0 {
+                    base_latency = base_latency.min(latency);
+                }
+                if config.adapt {
+                    let next = adapt(kbps, config.kbps, stats.blocked_ms, latency, base_latency);
+                    if next != kbps {
+                        kbps = next;
+                        encoder.set_bitrate(kbps);
+                        capture.kbps.store(kbps, Ordering::Relaxed);
+                    }
+                }
+            }
+            let mut fields = fields.clone();
+            fields["targetKbps"] = json!(kbps);
+            if let Some(report) = stats.report(fields, capture.latency_us.load(Ordering::Relaxed)) {
                 post_to(post, handle, framed(INFO, &[report.to_string().as_bytes()]));
+            }
+            if config.clipboard {
+                sync_clipboard(handle, post, capture, &mut clipboard_at, &mut clipboard_seq);
             }
             // Never more than `inflight` frames on the way: capture waits
             // instead, so a slow link costs frames, not latency.
             let acked = capture.acked.load(Ordering::Relaxed);
             if ids.wrapping_sub(acked) >= config.inflight && *ids != 0 {
                 thread::sleep(Duration::from_millis(1));
+                stats.blocked_ms += 1;
                 continue;
             }
             let now = Instant::now();
@@ -1388,6 +1580,21 @@ mod win {
             let key = capture.keyframe.swap(false, Ordering::Relaxed) || first;
             match acquired {
                 Ok(()) => {
+                    if info.LastMouseUpdateTime != 0 {
+                        let at = (info.PointerPosition.Position.x, info.PointerPosition.Position.y, info.PointerPosition.Visible.as_bool());
+                        if at != pointer {
+                            pointer = at;
+                            post_to(post, handle, framed(CURSOR_AT, &[&at.0.to_le_bytes(), &at.1.to_le_bytes(), &[at.2 as u8]]));
+                        }
+                    }
+                    if info.PointerShapeBufferSize > 0 {
+                        if let Some(bytes) = pointer_shape(&duplication, info.PointerShapeBufferSize) {
+                            if bytes != shape {
+                                post_to(post, handle, framed(CURSOR_SHAPE, &[&bytes]));
+                                shape = bytes;
+                            }
+                        }
+                    }
                     let texture = resource.and_then(|r| r.cast::<ID3D11Texture2D>().ok());
                     // A pointer move alone changes no pixels.
                     let fresh = info.LastPresentTime != 0 || first;
@@ -1448,6 +1655,65 @@ mod win {
                 post_to(post, handle, framed(VIDEO, &[&ids.to_le_bytes(), &micros.to_le_bytes(), &[flags], &bytes]));
             }
         }
+    }
+
+    /// The pointer's shape as `[u16 w][u16 h][i16 hot x][i16 hot y][RGBA…]`.
+    fn pointer_shape(duplication: &IDXGIOutputDuplication, size: u32) -> Option<Vec<u8>> {
+        use crate::desktop_os::{shape_rgba, ShapeKind};
+        let mut buffer = vec![0u8; size as usize];
+        let mut needed = 0;
+        let mut info = DXGI_OUTDUPL_POINTER_SHAPE_INFO::default();
+        unsafe { duplication.GetFramePointerShape(size, buffer.as_mut_ptr() as *mut c_void, &mut needed, &mut info) }.ok()?;
+        let kind = match info.Type {
+            1 => ShapeKind::Monochrome,
+            2 => ShapeKind::Color,
+            4 => ShapeKind::MaskedColor,
+            _ => return None,
+        };
+        let (w, rows) = (info.Width as usize, info.Height as usize);
+        let h = if kind == ShapeKind::Monochrome { rows / 2 } else { rows };
+        if w == 0 || h == 0 || w > 256 || h > 256 {
+            return None;
+        }
+        let rgba = shape_rgba(kind, &buffer, w, h, info.Pitch as usize)?;
+        let mut out = Vec::with_capacity(8 + rgba.len());
+        out.extend_from_slice(&(w as u16).to_le_bytes());
+        out.extend_from_slice(&(h as u16).to_le_bytes());
+        out.extend_from_slice(&(info.HotSpot.x as i16).to_le_bytes());
+        out.extend_from_slice(&(info.HotSpot.y as i16).to_le_bytes());
+        out.extend_from_slice(&rgba);
+        Some(out)
+    }
+
+    /// Twice a second: sends this device's clipboard text when it changed
+    /// here, and takes the viewer's. Text one side sent is not sent back.
+    fn sync_clipboard(handle: u64, post: Post, capture: &Capture, at: &mut Instant, seq: &mut u32) {
+        use crate::desktop_os::{clipboard_sequence, clipboard_text, set_clipboard_text};
+        let incoming = capture.clipboard.lock().ok().and_then(|mut c| c.take());
+        if let Some(text) = incoming {
+            if set_clipboard_text(&text) {
+                *seq = clipboard_sequence();
+                if let Ok(mut synced) = capture.synced.lock() {
+                    *synced = text;
+                }
+            }
+        }
+        if at.elapsed() < Duration::from_millis(500) {
+            return;
+        }
+        *at = Instant::now();
+        let now = clipboard_sequence();
+        if now == *seq {
+            return;
+        }
+        *seq = now;
+        let Some(text) = clipboard_text(MAX_CLIPBOARD) else { return };
+        let Ok(mut synced) = capture.synced.lock() else { return };
+        if text.is_empty() || *synced == text {
+            return;
+        }
+        post_to(post, handle, framed(CLIPBOARD, &[text.as_bytes()]));
+        *synced = text;
     }
 
     // ── decoder ──
@@ -1815,6 +2081,10 @@ pub unsafe extern "C" fn ournet_desktop_capture_start(post: Post, config: *const
             acked: AtomicU32::new(0),
             keyframe: AtomicBool::new(true),
             input: Mutex::new(Some(input)),
+            display: std::sync::atomic::AtomicUsize::new(config.display),
+            clipboard: Mutex::new(None),
+            synced: Mutex::new(String::new()),
+            kbps: AtomicU32::new(config.kbps),
             sent: Mutex::new(VecDeque::new()),
             latency_us: AtomicU64::new(0),
         });
@@ -1828,6 +2098,27 @@ pub unsafe extern "C" fn ournet_desktop_capture_start(post: Post, config: *const
             .spawn(move || {
                 let _ = catch_unwind(AssertUnwindSafe(|| run_input(c, states, g)));
             });
+        if config.audio {
+            let (stop, c) = (Arc::new(AtomicBool::new(false)), capture.clone());
+            let st = stop.clone();
+            let _ = thread::Builder::new().name("ournet-desktop-sound".into()).spawn(move || {
+                // Stops with the capture; a device without sound sends none.
+                let watcher = {
+                    let (st, c) = (st.clone(), c.clone());
+                    thread::spawn(move || {
+                        while !c.stop.load(Ordering::Relaxed) {
+                            thread::sleep(Duration::from_millis(100));
+                        }
+                        st.store(true, Ordering::Relaxed);
+                    })
+                };
+                let _ = catch_unwind(AssertUnwindSafe(|| {
+                    crate::desktop_audio::capture(stop, |chunk| post_to(post, handle, framed(AUDIO, &[&chunk])))
+                }));
+                st.store(true, Ordering::Relaxed);
+                let _ = watcher.join();
+            });
+        }
         let started = thread::Builder::new().name("ournet-desktop-capture".into()).spawn(move || {
             let c = capture.clone();
             let result = catch_unwind(AssertUnwindSafe(|| run_capture(handle, post, config, capture, geometry)));
@@ -1853,13 +2144,8 @@ pub unsafe extern "C" fn ournet_desktop_capture_datagram(handle: u64, data: *con
     let data = bytes(data, len);
     let Some(capture) = capture(handle) else { return 0 };
     match data.first() {
-        Some(&INPUT) => match InputState::parse(data) {
-            Some(state) => capture
-                .input
-                .lock()
-                .ok()
-                .and_then(|i| i.as_ref().map(|i| i.send(state).is_ok()))
-                .unwrap_or(false) as i32,
+        Some(&INPUT) | Some(&INPUT2) => match InputState::parse(data) {
+            Some(state) => capture.job(InputJob::State(state)) as i32,
             None => 0,
         },
         Some(&ACK) if data.len() == 5 => {
@@ -1873,6 +2159,38 @@ pub unsafe extern "C" fn ournet_desktop_capture_datagram(handle: u64, data: *con
         _ => 0,
     }
 }
+
+/// A control message from the viewer's reliable stream: `[type][u32
+/// length][body]`, see the `CONTROL_` types.
+#[no_mangle]
+pub unsafe extern "C" fn ournet_desktop_capture_control(handle: u64, data: *const u8, len: usize) -> i32 {
+    let data = bytes(data, len);
+    let Some(capture) = capture(handle) else { return 0 };
+    if data.len() < 5 || u32::from_le_bytes(data[1..5].try_into().unwrap()) as usize != data.len() - 5 {
+        return 0;
+    }
+    let body = &data[5..];
+    let text = || String::from_utf8_lossy(body).into_owned();
+    let ok = match data[0] {
+        CONTROL_TEXT if body.len() <= 16384 => capture.job(InputJob::Text(text())),
+        CONTROL_TAP if body.len() == 2 => capture.job(InputJob::Tap(u16::from_le_bytes([body[0], body[1]]))),
+        CONTROL_CLIPBOARD if body.len() <= MAX_CLIPBOARD => {
+            if let Ok(mut c) = capture.clipboard.lock() {
+                *c = Some(text());
+            }
+            true
+        }
+        CONTROL_DISPLAY if body.len() == 1 => {
+            capture.display.store(body[0] as usize, Ordering::Relaxed);
+            true
+        }
+        _ => false,
+    };
+    ok as i32
+}
+
+/// Clipboard text sent either way, at most.
+pub const MAX_CLIPBOARD: usize = 256 * 1024;
 
 /// Stops a capture; it posts its end (an empty message) once stopped, and
 /// everything held is released.
@@ -1902,6 +2220,7 @@ pub extern "C" fn ournet_desktop_view_open() -> u64 {
             wants_key: AtomicBool::new(false),
             decode_us: AtomicU64::new(0),
             error: Mutex::new(String::new()),
+            audio: Mutex::new(None),
         });
         let v = view.clone();
         if thread::Builder::new()
@@ -2005,6 +2324,50 @@ pub unsafe extern "C" fn ournet_desktop_view_error(handle: u64, out: *mut u8, ca
     n
 }
 
+/// Queues sound for a view: an [AUDIO] frame's body. The player starts with
+/// the first and keeps at most 120 ms waiting.
+#[no_mangle]
+pub unsafe extern "C" fn ournet_desktop_view_audio(handle: u64, data: *const u8, len: usize) -> i32 {
+    use crate::desktop_audio::{play, Jitter};
+    let data = bytes(data, len);
+    let Some(view) = view(handle) else { return 0 };
+    if data.len() < 5 || (data.len() - 5) % 2 != 0 {
+        return 0;
+    }
+    let rate = u32::from_le_bytes(data[0..4].try_into().unwrap());
+    let channels = data[4];
+    if !(8000..=192_000).contains(&rate) || !(1..=2).contains(&channels) {
+        return 0;
+    }
+    let samples: Vec<i16> = data[5..].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+    let Ok(mut audio) = view.audio.lock() else { return 0 };
+    // A new format starts a new player.
+    if audio.as_ref().is_some_and(|(q, _)| q.lock().map(|q| (q.0, q.1) != (rate, channels)).unwrap_or(true)) {
+        if let Some((_, stop)) = audio.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+    }
+    if audio.is_none() {
+        let per_ms = rate as usize * channels as usize / 1000;
+        let queue = Arc::new(Mutex::new((rate, channels, Jitter::new(40 * per_ms, 120 * per_ms))));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (q, st) = (queue.clone(), stop.clone());
+        let started = thread::Builder::new().name("ournet-desktop-audio".into()).spawn(move || {
+            let _ = catch_unwind(AssertUnwindSafe(|| play(st, q)));
+        });
+        if started.is_err() {
+            return 0;
+        }
+        *audio = Some((queue, stop));
+    }
+    if let Some((queue, _)) = audio.as_ref() {
+        if let Ok(mut q) = queue.lock() {
+            q.2.push(&samples);
+        }
+    }
+    1
+}
+
 /// Closes a view: its decoder finishes the frame in hand and exits.
 #[no_mangle]
 pub extern "C" fn ournet_desktop_view_close(handle: u64) -> i32 {
@@ -2016,6 +2379,9 @@ pub extern "C" fn ournet_desktop_view_close(handle: u64) -> i32 {
             }
             if let Ok(mut f) = view.frames.lock() {
                 f.take();
+            }
+            if let Some((_, stop)) = view.audio.lock().ok().and_then(|mut a| a.take()) {
+                stop.store(true, Ordering::Relaxed);
             }
             1
         }
@@ -2029,7 +2395,7 @@ mod tests {
 
     #[test]
     fn input_state_round_trips_and_refuses_malformed() {
-        let state = InputState { seq: 7, x: 100, y: 65535, buttons: 5, wheel: -240, hwheel: 120, keys: vec![0x04, 0xe1] };
+        let state = InputState { seq: 7, x: 100, y: 65535, buttons: 5, wheel: -240, hwheel: 120, keys: vec![0x04, 0xe1], rel_x: -5, rel_y: 9, repeats: 3, repeat_key: 0x04 };
         let bytes = state.encode();
         assert_eq!(InputState::parse(&bytes), Some(state));
         assert_eq!(InputState::parse(&bytes[..bytes.len() - 1]), None);
@@ -2037,12 +2403,13 @@ mod tests {
         many.keys = vec![0x04; 17];
         assert_eq!(InputState::parse(&many.encode()), None);
         assert_eq!(InputState::parse(&[ACK, 0, 0, 0, 0]), None);
+        assert_eq!(InputState::parse(&bytes[..20]), None);
     }
 
     #[test]
     fn applying_states_injects_only_differences_and_never_sticks() {
         let mut applied = Applied::default();
-        let s = |seq, x, buttons, wheel, keys: &[u16]| InputState { seq, x, y: 0, buttons, wheel, hwheel: 0, keys: keys.to_vec() };
+        let s = |seq, x, buttons, wheel, keys: &[u16]| InputState { seq, x, y: 0, buttons, wheel, hwheel: 0, keys: keys.to_vec(), ..Default::default() };
         // The first state sets the wheel without scrolling.
         assert_eq!(applied.apply(s(1, 10, 0, 480, &[])), vec![Action::Move(10, 0)]);
         assert_eq!(
@@ -2061,6 +2428,36 @@ mod tests {
         let mut wrap = Applied::default();
         wrap.apply(s(u32::MAX, 0, 0, 0, &[]));
         assert_eq!(wrap.apply(s(0, 1, 0, 0, &[])), vec![Action::Move(1, 0)]);
+    }
+
+    #[test]
+    fn relative_movement_and_repeats_apply_as_differences() {
+        let mut applied = Applied::default();
+        let s = |seq, rel_x, rel_y, repeats, keys: &[u16]| InputState {
+            seq, rel_x, rel_y, repeats, repeat_key: 0x04, keys: keys.to_vec(), ..Default::default()
+        };
+        // The first sets the totals without moving or repeating.
+        assert_eq!(applied.apply(s(1, 100, 50, 7, &[])), vec![Action::Move(0, 0)]);
+        assert_eq!(applied.apply(s(2, 103, 48, 7, &[0x04])), vec![Action::Relative(3, -2), Action::Key(0x1e, true)]);
+        // Two repeats of a held key; a lost state's movement comes with the next.
+        assert_eq!(applied.apply(s(4, 110, 48, 9, &[0x04])), vec![Action::Relative(7, 0), Action::Key(0x1e, true), Action::Key(0x1e, true)]);
+        // Repeats of a key no longer held do nothing.
+        assert_eq!(applied.apply(s(5, 110, 48, 12, &[])), vec![Action::Key(0x1e, false)]);
+        // The older format still parses, without relative movement.
+        let mut old = InputState { seq: 9, x: 5, keys: vec![0x04], ..Default::default() }.encode();
+        old.drain(18..32);
+        old[0] = INPUT;
+        assert_eq!(InputState::parse(&old).map(|s| (s.x, s.rel_x, s.keys)), Some((5, 0, vec![0x04])));
+    }
+
+    #[test]
+    fn bit_rate_backs_off_under_congestion_and_recovers() {
+        assert_eq!(adapt(20_000, 20_000, 300, 5_000, 4_000), 15_000);
+        assert_eq!(adapt(20_000, 20_000, 0, 60_000, 4_000), 15_000);
+        assert_eq!(adapt(1_100, 20_000, 500, 0, u64::MAX), 1_000);
+        assert_eq!(adapt(10_000, 20_000, 5, 5_000, 4_000), 11_100);
+        assert_eq!(adapt(19_900, 20_000, 0, 5_000, 4_000), 20_000);
+        assert_eq!(adapt(10_000, 20_000, 50, 5_000, 4_000), 10_000);
     }
 
     #[test]
@@ -2180,12 +2577,13 @@ mod tests {
         }
         let (tx, rx) = mpsc::channel();
         *SINK.lock().unwrap() = Some(tx);
-        let config = format!(r#"{{"fps":60,"kbps":15000,"width":1920,"software":{software}}}"#);
+        let config = format!(r#"{{"fps":60,"kbps":15000,"width":1920,"software":{software},"audio":true}}"#);
         let handle = unsafe { ournet_desktop_capture_start(sink, config.as_ptr(), config.len()) };
         assert_ne!(handle, 0);
         let view = ournet_desktop_view_open();
         let began = Instant::now();
         let mut video = 0;
+        let mut sound = 0;
         let mut info = Value::Null;
         let mut poked = Instant::now();
         while began.elapsed() < Duration::from_secs(4) {
@@ -2208,6 +2606,7 @@ mod tests {
                         ournet_desktop_capture_datagram(handle, [ACK, id as u8, (id >> 8) as u8, (id >> 16) as u8, (id >> 24) as u8].as_ptr(), 5);
                     }
                 }
+                AUDIO => sound += 1,
                 INFO => {
                     info = serde_json::from_slice(body).unwrap();
                     eprintln!("{info}");
@@ -2222,7 +2621,7 @@ mod tests {
         unsafe { ournet_desktop_view_status(view, status.as_mut_ptr()) };
         let mut error = [0u8; 512];
         let n = unsafe { ournet_desktop_view_error(view, error.as_mut_ptr(), error.len()) };
-        eprintln!("info {info}\nvideo frames {video}, decoded {status:?}, error {:?}", String::from_utf8_lossy(&error[..n]));
+        eprintln!("info {info}\nsound chunks {sound}\nvideo frames {video}, decoded {status:?}, error {:?}", String::from_utf8_lossy(&error[..n]));
         assert!(video > 0, "no frames captured");
         assert!(status[0] > 0, "nothing decoded");
         assert_eq!((status[1], status[2]), (info["width"].as_u64().unwrap(), info["height"].as_u64().unwrap()));

@@ -1,5 +1,8 @@
 package org.chozabu.ournet
 
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Build
@@ -176,6 +179,46 @@ class DesktopDecoder private constructor(
         }
     }
 
+    private var track: AudioTrack? = null
+    private var trackFormat = 0 to 0
+    private var written = 0L
+
+    /**
+     * Plays 16-bit PCM from the other device. At most ~120 ms waits in the
+     * track: past that a chunk is skipped, so sound never lags the picture.
+     */
+    fun audio(rate: Int, channels: Int, pcm: ByteArray) = handler.post {
+        if (closed || rate !in 8000..192000 || channels !in 1..2) return@post
+        if (trackFormat != rate to channels) {
+            track?.release()
+            val mask = if (channels == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
+            val min = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT)
+            track = try {
+                AudioTrack.Builder()
+                    .setAudioAttributes(AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE).build())
+                    .setAudioFormat(AudioFormat.Builder()
+                        .setSampleRate(rate).setChannelMask(mask)
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+                    .setBufferSizeInBytes(maxOf(min, rate * channels * 2 / 5))
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .apply { if (Build.VERSION.SDK_INT >= 26) setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY) }
+                    .build().also { it.play() }
+            } catch (e: Exception) {
+                null
+            }
+            trackFormat = rate to channels
+            written = 0
+        }
+        val t = track ?: return@post
+        val frames = pcm.size / (2 * channels)
+        val queued = written - (t.playbackHeadPosition.toLong() and 0xffffffffL)
+        if (queued > rate * 120L / 1000) return@post
+        t.write(pcm, 0, frames * 2 * channels, AudioTrack.WRITE_NON_BLOCKING)
+        written += frames
+    }
+
     fun status(): Map<String, Any> {
         val key = wantsKey
         wantsKey = false
@@ -191,6 +234,8 @@ class DesktopDecoder private constructor(
         closed = true
         handler.post {
             stop()
+            track?.release()
+            track = null
             producer.release()
             thread.quitSafely()
         }
@@ -223,6 +268,17 @@ class DesktopDecoder private constructor(
                         result.success(data != null && decoders[handle]?.push(data, key) == true)
                     }
                     "status" -> result.success(decoders[handle]?.status())
+                    "audio" -> {
+                        val data = call.argument<ByteArray>("data")
+                        if (data != null) {
+                            decoders[handle]?.audio(
+                                call.argument<Number>("rate")?.toInt() ?: 0,
+                                call.argument<Number>("channels")?.toInt() ?: 0,
+                                data,
+                            )
+                        }
+                        result.success(null)
+                    }
                     "dispose" -> {
                         decoders.remove(handle)?.close()
                         result.success(null)

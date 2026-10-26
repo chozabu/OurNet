@@ -30,6 +30,8 @@ void main(List<String> args) async {
       crate.resolve('src/device.rs'),
       crate.resolve('src/denoise.rs'),
       crate.resolve('src/desktop.rs'),
+      crate.resolve('src/desktop_os.rs'),
+      crate.resolve('src/desktop_audio.rs'),
       crate.resolve('wit/plugin.wit'),
     ]);
     if (triple == null || !await _installed(triple)) {

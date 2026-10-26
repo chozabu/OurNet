@@ -328,7 +328,9 @@ enum Caller {
 
 /// Capabilities that act on this device for whoever is asking: a live
 /// request may reach them only from one of this person's own devices.
-const OWN_DEVICE_ONLY: [&str; 5] = ["system-monitor", "process-control", "remote-input", "clipboard-write", "remote-desktop"];
+/// `remote-desktop` is not among them: a friend's admission goes to the
+/// person at this device to allow or decline, each time, in Dart.
+const OWN_DEVICE_ONLY: [&str; 4] = ["system-monitor", "process-control", "remote-input", "clipboard-write"];
 
 /// How often an ongoing remote session is reported to Dart, at most.
 const SESSION_REPORT: Duration = Duration::from_secs(1);
@@ -1450,12 +1452,14 @@ mod tests {
     fn device_capabilities_serve_only_own_devices() {
         let friend = Caller::Remote { device: "friend".into(), own: false };
         let mine = Caller::Remote { device: "laptop".into(), own: true };
-        for capability in ["system-monitor", "process-control", "remote-input", "clipboard-write", "remote-desktop"] {
+        for capability in ["system-monitor", "process-control", "remote-input", "clipboard-write"] {
             assert!(admit(&friend, capability).is_err());
             assert_eq!(admit(&mine, capability), Ok(Some("laptop".into())));
             assert_eq!(admit(&Caller::Local, capability), Ok(None));
         }
-        // Other capabilities are the plugin's own business.
+        // Other capabilities are the plugin's own business; a friend's
+        // remote desktop is the person's, asked by Dart.
         assert_eq!(admit(&friend, "objects"), Ok(Some("friend".into())));
+        assert_eq!(admit(&friend, "remote-desktop"), Ok(Some("friend".into())));
     }
 }

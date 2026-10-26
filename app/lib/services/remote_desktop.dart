@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data' show BytesBuilder;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -108,6 +110,9 @@ class RemoteDesktops {
         'width': _bounded(request['width'], 320, 7680, 1920),
         'display': _bounded(request['display'], 0, 15, 0),
         'inflight': _bounded(request['inflight'], 1, 8, 2),
+        'audio': request['audio'] != false,
+        // Clipboard text only ever goes between this person's own devices.
+        'clipboard': request['clipboard'] == true && plugins.ownDevice(peer),
       },
       (message) {
         if (message.isEmpty) {
@@ -123,7 +128,7 @@ class RemoteDesktops {
     if (capture == null) throw StateError('Screen capture is unavailable');
     (_serving[plugin] ??= {}).add(capture);
     var heard = DateTime.now();
-    StreamSubscription<Uint8List>? datagrams;
+    StreamSubscription<Uint8List>? datagrams, controls;
     Timer? watch;
     try {
       await stream.accept({'v': 1});
@@ -132,6 +137,7 @@ class RemoteDesktops {
         heard = DateTime.now();
         capture.datagram(data);
       });
+      controls = stream.controls.listen(capture.control);
       watch = Timer.periodic(const Duration(seconds: 1), (_) {
         final silent = DateTime.now().difference(heard) > viewerSilence;
         if (silent || !network.node.allowedPeer(peer)) {
@@ -144,11 +150,9 @@ class RemoteDesktops {
     } finally {
       watch?.cancel();
       capture.stop();
-      await ended.future.timeout(
-        const Duration(seconds: 3),
-        onTimeout: () {},
-      );
+      await ended.future.timeout(const Duration(seconds: 3), onTimeout: () {});
       unawaited(datagrams?.cancel());
+      unawaited(controls?.cancel());
       _serving[plugin]?.remove(capture);
       if (error != null) debugPrint('Desktop capture for $peer: $error');
     }
@@ -194,6 +198,17 @@ class DesktopSession extends ChangeNotifier {
   /// Pictures the decoder has produced.
   int decoded = 0;
 
+  /// The other device's pointer: its shape (with hot spot, in source
+  /// pixels) and where it is. Separate from the rest so moving it redraws
+  /// only the pointer.
+  final cursor = ValueNotifier<DesktopCursor?>(null);
+
+  /// Whether its sound plays here.
+  bool sound = true;
+
+  /// Pointer lock: movement goes as relative counts (games).
+  bool locked = false;
+
   DesktopDecoder? _decoder;
   int? _texture;
   DesktopViewing? _link;
@@ -203,6 +218,7 @@ class DesktopSession extends ChangeNotifier {
 
   // Input, as state: see `InputState` in native/rust/src/desktop.rs.
   int _seq = 0, _x = 0, _y = 0, _buttons = 0, _wheel = 0, _hwheel = 0;
+  int _relX = 0, _relY = 0, _repeats = 0, _repeatKey = 0;
   final _keys = <int>{};
   DateTime _sent = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -239,6 +255,8 @@ class DesktopSession extends ChangeNotifier {
       final request = {
         for (final key in const ['fps', 'kbps', 'width', 'display'])
           if (options[key] is num) key: options[key],
+        'audio': options['audio'] != false && !preview,
+        'clipboard': options['clipboard'] != false && !preview,
       };
       final Stream<(int, Uint8List)> frames;
       if (preview) {
@@ -276,6 +294,22 @@ class DesktopSession extends ChangeNotifier {
           case DesktopFrame.error:
             final j = jsonDecode(utf8.decode(body));
             error = j is Map ? '${j['error']}' : '$j';
+          case DesktopFrame.cursorShape when body.length >= 8:
+            unawaited(_shape(body));
+          case DesktopFrame.cursorAt when body.length >= 9:
+            final d = ByteData.sublistView(body);
+            cursor.value = (cursor.value ?? const DesktopCursor()).at(
+              d.getInt32(0, Endian.little),
+              d.getInt32(4, Endian.little),
+              body[8] != 0,
+            );
+          case DesktopFrame.clipboard:
+            final text = utf8.decode(body, allowMalformed: true);
+            _remoteClipboard = text;
+            _localClipboard = text;
+            unawaited(Clipboard.setData(ClipboardData(text: text)));
+          case DesktopFrame.audio when body.length > 5:
+            if (sound) _audio(body);
         }
       }
       if (!_closed) {
@@ -293,6 +327,138 @@ class DesktopSession extends ChangeNotifier {
   }
 
   void _keyframe() => _datagram([DesktopDatagram.keyframe]);
+
+  Future<void> _shape(Uint8List body) async {
+    final d = ByteData.sublistView(body);
+    final w = d.getUint16(0, Endian.little), h = d.getUint16(2, Endian.little);
+    if (w == 0 || h == 0 || body.length < 8 + w * h * 4) return;
+    final done = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      Uint8List.sublistView(body, 8, 8 + w * h * 4),
+      w,
+      h,
+      ui.PixelFormat.rgba8888,
+      done.complete,
+    );
+    final image = await done.future;
+    if (_closed) return;
+    cursor.value = (cursor.value ?? const DesktopCursor()).shaped(
+      image,
+      d.getInt16(4, Endian.little),
+      d.getInt16(6, Endian.little),
+    );
+  }
+
+  final _pending = BytesBuilder(copy: false);
+  int _pendingRate = 0, _pendingChannels = 0;
+
+  /// Plays a sound chunk: on Windows through the native player, on Android
+  /// gathered into 20 ms for the platform's.
+  void _audio(Uint8List body) {
+    if (!_platformDecoder) {
+      _decoder?.audio(body);
+      return;
+    }
+    final handle = _texture;
+    if (handle == null) return;
+    final d = ByteData.sublistView(body);
+    final rate = d.getUint32(0, Endian.little), channels = body[4];
+    if (rate != _pendingRate || channels != _pendingChannels) {
+      _pending.clear();
+      _pendingRate = rate;
+      _pendingChannels = channels;
+    }
+    _pending.add(Uint8List.sublistView(body, 5));
+    if (_pending.length < rate * channels * 2 ~/ 50) return;
+    unawaited(
+      _channel
+          .invokeMethod<void>('audio', {
+            'handle': handle,
+            'rate': rate,
+            'channels': channels,
+            'data': _pending.takeBytes(),
+          })
+          .catchError((Object _) {}),
+    );
+  }
+
+  /// Turns sound here on or off.
+  void setSound(bool on) {
+    sound = on;
+    notifyListeners();
+  }
+
+  // Clipboard text last seen on each side, so a copy is not sent back.
+  String? _remoteClipboard, _localClipboard;
+  int _beats = 0;
+
+  /// On desktop, this device's clipboard follows to the other as it
+  /// changes (checked each second while the view is open). A phone sends
+  /// it only when asked ([sendClipboard]): reading its clipboard unasked
+  /// would tell the person each time.
+  Future<void> _watchClipboard() async {
+    if (Platform.isAndroid || info['clipboard'] != true) return;
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+    if (text == null || text == _localClipboard) return;
+    _localClipboard = text;
+    if (text != _remoteClipboard) _sendClipboardText(text);
+  }
+
+  /// Sends this device's clipboard text to the other device.
+  Future<bool> sendClipboard() async {
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+    if (text == null || text.isEmpty || info['clipboard'] != true) return false;
+    _localClipboard = text;
+    _sendClipboardText(text);
+    return true;
+  }
+
+  void _sendClipboardText(String text) {
+    final bytes = utf8.encode(text);
+    if (bytes.length > 256 * 1024) return;
+    _remoteClipboard = text;
+    unawaited(_link?.control(DesktopControl.clipboard, bytes));
+  }
+
+  /// Text typed here (a phone's keyboard), entered there as typed.
+  void text(String text) {
+    if (text.isEmpty) return;
+    unawaited(_link?.control(DesktopControl.text, utf8.encode(text)));
+  }
+
+  /// A key pressed and released there, by USB HID usage.
+  void tap(int usage) => unawaited(
+    _link?.control(DesktopControl.tap, [usage & 0xff, (usage >> 8) & 0xff]),
+  );
+
+  /// Shows output [index] of the other device.
+  void selectDisplay(int index) {
+    unawaited(_link?.control(DesktopControl.display, [index]));
+    info = {...info, 'display': index};
+    notifyListeners();
+  }
+
+  /// Relative movement while the pointer is locked, in mouse counts.
+  void relative(int dx, int dy) {
+    if (dx == 0 && dy == 0) return;
+    _relX = (_relX + dx).toSigned(32);
+    _relY = (_relY + dy).toSigned(32);
+    _sendInput();
+  }
+
+  /// The keyboard here repeated a held key.
+  void repeat(int usage) {
+    if (!_keys.contains(usage)) return;
+    _repeats = (_repeats + 1) & 0xffffffff;
+    _repeatKey = usage;
+    _sendInput();
+  }
+
+  void setLocked(bool on) {
+    if (locked == on) return;
+    locked = on;
+    notifyListeners();
+  }
 
   /// Hands a video frame's body to the decoder.
   void _push(Uint8List body) {
@@ -385,6 +551,7 @@ class DesktopSession extends ChangeNotifier {
 
   void _beat() {
     if (_platformDecoder) unawaited(_platformStatus());
+    if (++_beats % 10 == 0) unawaited(_watchClipboard());
     final status = _decoder?.status;
     if (status != null) {
       if (status.wantsKey) _keyframe();
@@ -408,24 +575,30 @@ class DesktopSession extends ChangeNotifier {
     if (link == null || state != DesktopState.streaming) return;
     _seq = (_seq + 1) & 0xffffffff;
     final keys = _keys.take(maxKeys).toList();
-    final data = ByteData(19 + 2 * keys.length)
-      ..setUint8(0, DesktopDatagram.input)
+    final data = ByteData(33 + 2 * keys.length)
+      ..setUint8(0, DesktopDatagram.input2)
       ..setUint32(1, _seq, Endian.little)
       ..setUint16(5, _x, Endian.little)
       ..setUint16(7, _y, Endian.little)
       ..setUint8(9, _buttons)
       ..setInt32(10, _wheel, Endian.little)
       ..setInt32(14, _hwheel, Endian.little)
-      ..setUint8(18, keys.length);
+      ..setInt32(18, _relX, Endian.little)
+      ..setInt32(22, _relY, Endian.little)
+      ..setUint32(26, _repeats, Endian.little)
+      ..setUint16(30, _repeatKey, Endian.little)
+      ..setUint8(32, keys.length);
     for (var i = 0; i < keys.length; i++) {
-      data.setUint16(19 + 2 * i, keys[i], Endian.little);
+      data.setUint16(33 + 2 * i, keys[i], Endian.little);
     }
     link.datagram(data.buffer.asUint8List());
     _sent = DateTime.now();
   }
 
-  /// The pointer over the remote output, 0–1 each way.
+  /// The pointer over the remote output, 0–1 each way. Ignored while the
+  /// pointer is locked, when only relative movement counts.
   void pointer(double x, double y) {
+    if (locked) return;
     final nx = (x.clamp(0.0, 1.0) * 65535).round();
     final ny = (y.clamp(0.0, 1.0) * 65535).round();
     if (nx == _x && ny == _y) return;
@@ -482,6 +655,8 @@ class DesktopSession extends ChangeNotifier {
     _decoder?.close();
     state = DesktopState.ended;
     notifyListeners();
+    cursor.value?.image?.dispose();
+    cursor.value = null;
   }
 
   void _disposeTexture() {
@@ -493,6 +668,47 @@ class DesktopSession extends ChangeNotifier {
       _channel
           .invokeMethod<void>('dispose', {'handle': handle})
           .catchError((Object _) {}),
+    );
+  }
+}
+
+/// The other device's pointer, as `DesktopView` draws it.
+@immutable
+class DesktopCursor {
+  final ui.Image? image;
+  final int hotX, hotY;
+
+  /// The shape's top left, in the source's pixels.
+  final int x, y;
+  final bool visible;
+
+  const DesktopCursor({
+    this.image,
+    this.hotX = 0,
+    this.hotY = 0,
+    this.x = 0,
+    this.y = 0,
+    this.visible = false,
+  });
+
+  DesktopCursor at(int x, int y, bool visible) => DesktopCursor(
+    image: image,
+    hotX: hotX,
+    hotY: hotY,
+    x: x,
+    y: y,
+    visible: visible,
+  );
+
+  DesktopCursor shaped(ui.Image image, int hotX, int hotY) {
+    this.image?.dispose();
+    return DesktopCursor(
+      image: image,
+      hotX: hotX,
+      hotY: hotY,
+      x: x,
+      y: y,
+      visible: visible,
     );
   }
 }

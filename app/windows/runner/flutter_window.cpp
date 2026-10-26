@@ -38,6 +38,8 @@ bool FlutterWindow::OnCreate() {
       FlutterDesktopRegistrarGetTextureRegistrar(
           flutter_controller_->engine()->GetRegistrarForPlugin(
               "OurNetDesktopTextures")));
+  pointer_lock_ = std::make_unique<PointerLock>(
+      flutter_controller_->engine()->messenger(), GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   // Started with Windows, OurNet waits in the notification area.
@@ -59,6 +61,7 @@ void FlutterWindow::OnDestroy() {
   speech_ = nullptr;
   noise_suppression_ = nullptr;
   desktop_textures_ = nullptr;
+  pointer_lock_ = nullptr;
   tray_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
@@ -74,6 +77,13 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   // Before Flutter, which would otherwise treat closing as quitting.
   if (tray_) {
     if (auto result = tray_->HandleMessage(hwnd, message, wparam, lparam)) {
+      return *result;
+    }
+  }
+
+  if (pointer_lock_) {
+    if (auto result =
+            pointer_lock_->HandleMessage(hwnd, message, wparam, lparam)) {
       return *result;
     }
   }

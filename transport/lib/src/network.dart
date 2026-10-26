@@ -2234,6 +2234,31 @@ class DesktopServing {
     }
   }
 
+  /// The viewer's control messages, `[type][u32 length][body]` each, in
+  /// order: from the one stream of its own the viewer opens for them.
+  Stream<Uint8List> get controls async* {
+    try {
+      final recv = await _connection.acceptUni();
+      final reader = _FrameReader(recv);
+      while (!_closed) {
+        final (type, body) = await reader.next(maxControl);
+        yield (BytesBuilder(copy: false)
+              ..addByte(type)
+              ..add(
+                (ByteData(4)..setUint32(0, body.length, Endian.little)).buffer
+                    .asUint8List(),
+              )
+              ..add(body))
+            .takeBytes();
+      }
+    } catch (_) {
+      // Closed, or the viewer sent none.
+    }
+  }
+
+  /// The largest control message: clipboard text.
+  static const maxControl = 512 * 1024;
+
   /// Resolves when the viewer's connection closes.
   Future<void> get done => _connection.closed().then((_) {});
 
@@ -2327,6 +2352,23 @@ class DesktopViewing {
     }
   }
 
+  iroh.SendStream? _controls;
+  Future<void> _controlling = Future.value();
+
+  /// Sends a control message reliably and in order, on a stream of its own
+  /// opened with the first.
+  Future<void> control(int type, List<int> body) {
+    if (_closed) return Future.value();
+    final head = ByteData(5)
+      ..setUint8(0, type)
+      ..setUint32(1, body.length, Endian.little);
+    return _controlling = _controlling.then((_) async {
+      if (_closed) return;
+      final send = _controls ??= await _connection.openUni();
+      await send.writeAll([...head.buffer.asUint8List(), ...body]);
+    }).catchError((Object _) {});
+  }
+
   /// Sends one datagram to the served side; false if it could not go.
   bool datagram(List<int> data) {
     if (_closed) return false;
@@ -2345,5 +2387,35 @@ class DesktopViewing {
     _closed = true;
     _closedHook();
     _connection.close();
+  }
+}
+
+/// Reads `[type][u32 length][body]` frames from a stream.
+class _FrameReader {
+  _FrameReader(this._recv);
+  final iroh.RecvStream _recv;
+  Uint8List _pending = Uint8List(0);
+
+  Future<Uint8List> _take(int n) async {
+    while (_pending.length < n) {
+      final chunk = await _recv.read(256 * 1024);
+      if (chunk == null) throw StateError('Stream ended');
+      _pending = _pending.isEmpty
+          ? chunk
+          : (BytesBuilder(copy: false)
+                  ..add(_pending)
+                  ..add(chunk))
+                .takeBytes();
+    }
+    final out = Uint8List.sublistView(_pending, 0, n);
+    _pending = Uint8List.sublistView(_pending, n);
+    return out;
+  }
+
+  Future<(int, Uint8List)> next(int max) async {
+    final head = await _take(5);
+    final length = ByteData.sublistView(head).getUint32(1, Endian.little);
+    if (length > max) throw StateError('Frame too large');
+    return (head[0], await _take(length));
   }
 }

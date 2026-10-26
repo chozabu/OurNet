@@ -1,6 +1,6 @@
 {
-  "id":"remote-desktop", "name":"Remote Desktop", "version":"0.1.0", "api":"0.6",
-  "description":"See and control your own Windows devices' screens with low latency: hardware H.264 video, mouse and keyboard, full view for games. Receiving is off until you turn it on, and stays as you set it. Only your own devices can connect.",
+  "id":"remote-desktop", "name":"Remote Desktop", "version":"0.2.0", "api":"0.6",
+  "description":"See and control your own Windows devices' screens with low latency: hardware H.264 video, sound, mouse and keyboard, pointer lock and full view for games. Receiving is off until you turn it on, and stays as you set it. Your own devices connect; a friend can ask, and you decide each time.",
   "grants":["identity","live","remote-desktop"],
   "sections":[{"name":"desktop","title":"Remote Desktop","icon":"devices","surface":"RemoteDesktop","scopes":["personal"]}]
 }

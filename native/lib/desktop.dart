@@ -29,6 +29,18 @@ external int _captureStart(
 )
 external int _captureDatagram(int handle, Pointer<Uint8> data, int length);
 
+@Native<Int32 Function(Uint64, Pointer<Uint8>, Size)>(
+  symbol: 'ournet_desktop_capture_control',
+  isLeaf: true,
+)
+external int _captureControl(int handle, Pointer<Uint8> data, int length);
+
+@Native<Int32 Function(Uint64, Pointer<Uint8>, Size)>(
+  symbol: 'ournet_desktop_view_audio',
+  isLeaf: true,
+)
+external int _viewAudio(int handle, Pointer<Uint8> data, int length);
+
 @Native<Int32 Function(Uint64)>(symbol: 'ournet_desktop_capture_stop', isLeaf: true)
 external int _captureStop(int handle);
 
@@ -82,11 +94,42 @@ typedef _PostFunction = Void Function(Uint64, Pointer<Uint8>, Size);
 /// `[type][u32 length][body]`.
 abstract final class DesktopFrame {
   static const video = 1, info = 2, error = 3;
+
+  /// `[u16 w][u16 h][i16 hot x][i16 hot y][RGBA…]`, in source pixels.
+  static const cursorShape = 4;
+
+  /// `[i32 x][i32 y][u8 visible]`: the pointer's top left, source pixels.
+  static const cursorAt = 5;
+
+  /// The served device's clipboard text, UTF-8.
+  static const clipboard = 6;
+
+  /// `[u32 rate][u8 channels][i16…]`: 10 ms of what it plays.
+  static const audio = 7;
+}
+
+/// Control messages from the viewer, on a reliable stream of their own:
+/// `[type][u32 length][body]`.
+abstract final class DesktopControl {
+  /// Text typed on the viewer (a phone's keyboard), UTF-8.
+  static const text = 1;
+
+  /// The viewer's clipboard text, UTF-8.
+  static const clipboard = 2;
+
+  /// `[u8 display]`: which output to show.
+  static const display = 3;
+
+  /// `[u16 HID usage]`: a key pressed and released.
+  static const tap = 4;
 }
 
 /// Datagram types from the viewer.
 abstract final class DesktopDatagram {
   static const input = 1, ack = 2, keyframe = 3;
+
+  /// [input] with relative movement and key repeats: the current one.
+  static const input2 = 4;
 }
 
 /// Whether this build can capture and view desktops.
@@ -147,6 +190,10 @@ final class DesktopCapture {
 
   /// Stops capturing; everything held on this device is released. The
   /// capture still posts its end.
+  /// A control message from the viewer, framed (see [DesktopControl]).
+  bool control(Uint8List message) =>
+      !_ended && _captureControl(_handle, message.address, message.length) == 1;
+
   void stop() {
     if (!_ended) _captureStop(_handle);
   }
@@ -198,6 +245,11 @@ final class DesktopDecoder {
     final n = _viewError(handle, out.address, out.length);
     return utf8.decode(Uint8List.sublistView(out, 0, n), allowMalformed: true);
   }
+
+  /// Queues sound: an audio frame's body. It plays on this device's
+  /// default output with a short buffer.
+  bool audio(Uint8List body) =>
+      !_closed && _viewAudio(handle, body.address, body.length) == 1;
 
   /// Closes the decoder: after this the handle names nothing.
   void close() {

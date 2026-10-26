@@ -12,6 +12,8 @@ mod tun;
 mod device;
 mod denoise;
 mod desktop;
+mod desktop_os;
+mod desktop_audio;
 
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, Tag};

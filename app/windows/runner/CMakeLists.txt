@@ -11,6 +11,7 @@ add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
   "noise_suppression.cpp"
+  "pointer_lock.cpp"
   "system_speech.cpp"
   "system_tray.cpp"
   "voice_capture.cpp"

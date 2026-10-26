@@ -350,6 +350,17 @@ class Plugins {
   /// stops, or the person stops remote sessions.
   void Function(String plugin)? stopDesktops;
 
+  /// Asks the person at this device whether [device], one of friend
+  /// [person]'s, may see this screen and use its mouse and keyboard now.
+  /// Every desktop session from a friend asks; none is remembered. Null
+  /// (no one to ask): friends are refused. It should give up on its own
+  /// within [desktopAsk], the plugin's import waiting meanwhile.
+  Future<bool> Function(String plugin, String device, String person)?
+  confirmDesktop;
+
+  /// How long a friend's request waits for an answer.
+  static const desktopAsk = Duration(seconds: 25);
+
   /// How long a device a plugin admitted may take to open its stream.
   static const desktopAdmission = Duration(seconds: 15);
 
@@ -357,9 +368,10 @@ class Plugins {
   final _desktopAdmitted = <(String, String), DateTime>{};
 
   /// Whether [device] may open a desktop stream served for [plugin] now:
-  /// the plugin runs with `remote-desktop`, admitted the device in the last
-  /// [desktopAdmission] (each admission is used once), and the device is
-  /// one of this person's own. Called by the network for each stream.
+  /// the plugin runs with `remote-desktop` and admitted the device in the
+  /// last [desktopAdmission] (each admission is used once), which for a
+  /// friend's device the person here allowed ([confirmDesktop]). Called by
+  /// the network for each stream.
   bool admitDesktop(String device, String plugin) {
     final until = _desktopAdmitted.remove((plugin, device));
     final running = _running[plugin];
@@ -368,7 +380,7 @@ class Plugins {
         running != null &&
         running.plugin.status == PluginStatus.running &&
         running.plugin.granted.contains('remote-desktop') &&
-        ownDevice(device);
+        node.allowedPeer(device);
   }
 
   /// A desktop stream served for [plugin] to [device] is still going: shown
@@ -2071,9 +2083,20 @@ class Plugins {
         ];
       case 'remote-desktop.admit':
         final device = '${args['device']}';
-        // The native host has refused anyone else's device already.
         if (!ownDevice(device)) {
-          throw StateError('remote-desktop is only for your own devices');
+          // A friend: only if the person here says yes, now. The plugin
+          // cannot answer for them.
+          final person = node.contacts[device]?.person;
+          final ask = confirmDesktop;
+          if (person == null || !node.allowedPeer(device) || ask == null) {
+            throw StateError('remote-desktop is only for your own devices');
+          }
+          final allowed = await ask(
+            plugin.id,
+            device,
+            person,
+          ).timeout(desktopAsk, onTimeout: () => false);
+          if (!allowed) throw StateError('Declined on that device');
         }
         final now = DateTime.now();
         _desktopAdmitted.removeWhere((_, until) => now.isAfter(until));
@@ -2088,8 +2111,8 @@ class Plugins {
           throw StateError('Remote desktop does not run on this device');
         }
         final device = '${args['device']}';
-        if (device != node.identity.device && !ownDevice(device)) {
-          throw StateError('remote-desktop is only for your own devices');
+        if (device != node.identity.device && !node.allowedPeer(device)) {
+          throw StateError('Not one of your devices or friends');
         }
         final options = jsonDecode('${args['options']}');
         return open(plugin.id, device, options is Map ? options.cast() : {});

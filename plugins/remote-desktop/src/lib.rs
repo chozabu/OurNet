@@ -1,7 +1,9 @@
-//! Remote Desktop: another of your devices' screen, with mouse and keyboard
-//! (docs/REMOTE_DESKTOP.md). The host captures, encodes, streams, decodes
-//! and injects input; this plugin keeps the receiving switch, asks the
-//! chosen device to admit this one, and opens and closes the view.
+//! Remote Desktop: another of your devices' screen, or a friend's, with
+//! mouse and keyboard (docs/REMOTE_DESKTOP.md). The host captures, encodes,
+//! streams, decodes and injects input; this plugin keeps the receiving
+//! switches, asks the chosen device to admit this one, and opens and closes
+//! the view. A friend's request also asks the person at that device, each
+//! time, in the app: this plugin cannot answer for them.
 use std::collections::BTreeMap;
 
 use ournet_plugin::{desktop, json, store, timer, ui, Context, Plugin, Value};
@@ -27,6 +29,8 @@ struct RemoteDesktop {
     client: common::Client,
     /// Receiving side.
     receiving: bool,
+    /// Friends may ask to connect (the person here still decides each time).
+    friends: bool,
     viewers: BTreeMap<String, u64>,
     /// Viewing side.
     quality: String,
@@ -52,8 +56,15 @@ impl RemoteDesktop {
 
     fn show(&self) {
         self.client.show(SURFACE, false);
-        let rows = common::devices();
+        let mut rows = common::devices();
+        let friends = friend_devices();
+        let mut options = common::Client::options(&rows, false);
+        options.extend(friends.iter().map(|d| {
+            json!({"value": d["id"], "label": d["name"], "detail": d["state"], "icon": "share"})
+        }));
+        rows.extend(friends);
         let names: Vec<_> = self.viewers.keys().map(|d| common::name_of(&rows, d)).collect();
+        let target = rows.iter().find(|d| d["id"] == self.client.target.as_str());
         let (remote_label, remote_tone) = match self.remote {
             _ if self.client.target.is_empty() => ("Choose a device", "off"),
             None => ("Permission unknown", "off"),
@@ -70,7 +81,22 @@ impl RemoteDesktop {
                 } else {
                     format!("Being viewed and controlled by {}", names.join(", "))
                 },
-                "receiveLabel": if self.receiving { "Allowing your devices to connect" } else { "Not accepting connections" },
+                "receiveLabel": match (self.receiving, self.friends) {
+                    (true, true) => "Allowing your devices, and friends who ask",
+                    (true, false) => "Allowing your devices to connect",
+                    _ => "Not accepting connections",
+                },
+                "friends": self.friends,
+                "deviceOptions": options,
+                "deviceLabel": match target {
+                    Some(d) => d["name"].clone(),
+                    None if self.client.target.is_empty() => json!("Choose a device"),
+                    None => json!("Unavailable"),
+                },
+                "deviceDetail": match target {
+                    Some(d) => d["state"].clone(),
+                    None => json!(format!("{} devices available", rows.len())),
+                },
                 "viewing": self.session.is_some(),
                 "session": self.session.clone().unwrap_or_default(),
                 "viewingName": if self.viewing == ournet_plugin::this_device() {
@@ -91,7 +117,10 @@ impl RemoteDesktop {
     }
 
     fn save(&self) {
-        let _ = store::set_json("settings", &json!({"receiving": self.receiving, "quality": self.quality}));
+        let _ = store::set_json(
+            "settings",
+            &json!({"receiving": self.receiving, "friends": self.friends, "quality": self.quality}),
+        );
     }
 
     fn options(&self) -> Value {
@@ -117,12 +146,24 @@ impl RemoteDesktop {
         }
     }
 
+    /// Sends [value] to the chosen device, one request at a time. Unlike
+    /// the device plugins' client, the device may be a friend's.
+    fn send(&mut self, value: &Value) {
+        if self.client.pending.is_some() || self.client.target.is_empty() {
+            return;
+        }
+        let id = ournet_plugin::send(&self.client.target, value.to_string().as_bytes());
+        self.client.pending = Some((id, ournet_plugin::now()));
+        self.client.link = common::Link::Waiting;
+        self.client.status = "Waiting for device…".into();
+    }
+
     fn ask_status(&mut self) {
         if self.client.target.is_empty() || self.client.pending.is_some() {
             return;
         }
         self.status_at = ournet_plugin::now();
-        self.client.send(&json!({"op": "status"}));
+        self.send(&json!({"op": "status"}));
         self.status_request = self.client.pending.map(|p| p.0);
     }
 }
@@ -131,6 +172,7 @@ impl Plugin for RemoteDesktop {
     fn init(&mut self) {
         let saved: Value = store::get_json("settings").unwrap_or_default();
         self.receiving = saved["receiving"] == true;
+        self.friends = saved["friends"] == true;
         self.quality = saved["quality"].as_str().unwrap_or("balanced").into();
         timer::set(1, 1000);
         self.show();
@@ -149,15 +191,27 @@ impl Plugin for RemoteDesktop {
                 }
                 self.save();
             }
+            "friends" => {
+                self.friends = args["value"].as_bool().unwrap_or(!self.friends);
+                self.save();
+            }
             // From the remote-session banner's Stop.
             "disable" => {
                 self.receiving = false;
+                self.friends = false;
                 self.viewers.clear();
                 self.save();
             }
             "select" => {
                 let device = args["value"].as_str().unwrap_or("").to_string();
-                self.client.select(&device);
+                if common::own(&device) {
+                    self.client.select(&device);
+                } else if friend_devices().iter().any(|d| d["id"] == device.as_str()) {
+                    self.client.target = device;
+                    self.client.pending = None;
+                    self.client.link = common::Link::Idle;
+                    self.client.status = "Friend's device selected: they are asked each time".into();
+                }
                 self.remote = None;
                 self.ask_status();
             }
@@ -173,7 +227,7 @@ impl Plugin for RemoteDesktop {
                     self.starting = true;
                 } else {
                     self.starting = true;
-                    self.client.send(&json!({"op": "start"}));
+                    self.send(&json!({"op": "start"}));
                 }
             }
             "preview" => {
@@ -195,17 +249,22 @@ impl Plugin for RemoteDesktop {
     }
 
     fn on_request(&mut self, from: &str, payload: &[u8]) -> Result<Vec<u8>, String> {
-        if !common::own(from) {
-            return Err("Remote Desktop accepts only your own devices".into());
-        }
+        let own = common::own(from);
+        let accepts = self.receiving && (own || self.friends);
         let v: Value = serde_json::from_slice(payload).map_err(|_| "Invalid request")?;
         match v["op"].as_str() {
             // Says only whether this device accepts; touches nothing.
-            Some("status") => Ok(json!({"receiving": self.receiving}).to_string().into_bytes()),
+            Some("status") => Ok(json!({"receiving": accepts}).to_string().into_bytes()),
             Some("start") => {
-                if !self.receiving {
-                    return Err("Allow remote desktop on that device first".into());
+                if !accepts {
+                    return Err(if own || !self.receiving {
+                        "Allow remote desktop on that device first"
+                    } else {
+                        "That device does not take requests from friends"
+                    }
+                    .into());
                 }
+                // For a friend, this waits while the person there decides.
                 desktop::admit()?;
                 let first = !self.viewers.contains_key(from);
                 self.viewers.insert(from.to_string(), ournet_plugin::now());
@@ -237,7 +296,7 @@ impl Plugin for RemoteDesktop {
             }
             // A connect pressed while the question was out goes now.
             if self.starting {
-                self.client.send(&json!({"op": "start"}));
+                self.send(&json!({"op": "start"}));
             }
         } else if self.starting {
             self.starting = false;
@@ -286,3 +345,20 @@ impl Plugin for RemoteDesktop {
 }
 
 ournet_plugin::plugin!(RemoteDesktop);
+
+/// Friends' devices running this plugin, for the device menu.
+fn friend_devices() -> Vec<Value> {
+    let me = ournet_plugin::me();
+    ournet_plugin::contacts()
+        .into_iter()
+        .filter(|c| c.person != me)
+        .flat_map(|c| {
+            let person = if c.name.is_empty() { "A friend".to_string() } else { c.name.clone() };
+            c.devices.into_iter().filter(|d| d.has_plugin).map(move |d| {
+                let device = if d.name.is_empty() { d.id.chars().take(8).collect() } else { d.name };
+                json!({"id": d.id, "name": format!("{person} · {device}"),
+                    "state": if d.online {"Friend · online"} else {"Friend · not seen recently"}, "online": d.online})
+            })
+        })
+        .collect()
+}

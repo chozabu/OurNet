@@ -43,7 +43,7 @@ widget Setup = ListView(
 
 widget Connect = Panel(
   title: "View a device", icon: "devices",
-  subtitle: "Choose one of your devices running Remote Desktop with receiving allowed.",
+  subtitle: "Choose one of your devices, or a friend's, running Remote Desktop with receiving allowed.",
   child: Column(crossAxisAlignment: "stretch", children: [
     Choice(label: data.deviceLabel, detail: data.deviceDetail, icon: "computer",
       options: data.deviceOptions, onSelected: event "select" {}),
@@ -68,11 +68,14 @@ widget Connect = Panel(
 
 widget Receive = Panel(
   title: "Receive on this device", icon: "shield",
-  subtitle: "Off until you turn it on. Only your own devices can connect.",
+  subtitle: "Off until you turn it on. Your own devices connect; friends only ask.",
   child: Column(crossAxisAlignment: "stretch", children: [
     Toggle(label: "Allow remote desktop", icon: "computer",
       detail: "Your other devices may see this screen and use its mouse and keyboard.",
       value: data.receiving, onChanged: event "receiving" {}),
+    Toggle(label: "Let friends ask", icon: "share",
+      detail: "A friend can ask to connect; you allow or decline each time on this device. Clipboard text stays here.",
+      value: data.friends, onChanged: event "friends" {}),
     SizedBox(height: 6.0),
     Wrap(spacing: 6.0, runSpacing: 6.0, children: [
       switch data.viewed {

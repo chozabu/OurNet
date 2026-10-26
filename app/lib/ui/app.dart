@@ -2019,6 +2019,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
           ..nameOf = name
           ..follow = notes.state.subscribe
           ..openTun = openPluginInterface
+          ..confirmDesktop = confirmDesktop
           ..writeClipboard = (text) {
             return Clipboard.setData(ClipboardData(text: text));
           }
@@ -2108,6 +2109,55 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   /// A virtual network interface for a plugin granted `tun`: Android's
   /// VpnService, which asks the person first, or on Windows the network
   /// helper service, installed once after Windows asks (see [WindowsTun]).
+  /// A friend's device asks to see this screen and use its mouse and
+  /// keyboard (Remote Desktop): the person here decides, each time. No
+  /// answer in time is no.
+  Future<bool> confirmDesktop(
+    String plugin,
+    String device,
+    String person,
+  ) async {
+    if (!mounted) return false;
+    final who = name(person);
+    final where = plugins?.deviceName(device) ?? 'a device';
+    final answer = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        // Gives up before the request does.
+        final timer = Timer(
+          Plugins.desktopAsk - const Duration(seconds: 2),
+          () {
+            if (context.mounted) Navigator.of(context).pop(false);
+          },
+        );
+        return PopScope(
+          onPopInvokedWithResult: (_, _) => timer.cancel(),
+          child: AlertDialog(
+            icon: const Icon(Icons.screen_share_outlined),
+            title: Text('Let $who see this screen?'),
+            content: Text(
+              '$who ($where) asks to see this screen and use its mouse and '
+              'keyboard through Remote Desktop. You can stop it at any time '
+              'from the banner at the top. Clipboard text stays here.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Decline'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Allow this time'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    return answer == true;
+  }
+
   Future<Json> openPluginInterface(String plugin, Json settings) async {
     if (Platform.isAndroid) {
       try {

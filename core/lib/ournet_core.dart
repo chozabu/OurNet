@@ -16,6 +16,7 @@ export 'package:ournet_native/noise_suppression.dart' show NoiseSuppression;
 export 'package:ournet_native/desktop.dart'
     show
         DesktopCapture,
+        DesktopControl,
         DesktopDecoder,
         DesktopDatagram,
         DesktopFrame,

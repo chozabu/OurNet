@@ -41,6 +41,7 @@ void main() {
 
   test('a desktop stream carries frames out and datagrams back', () async {
     final heard = <List<int>>[];
+    final received = <List<int>>[];
     final gotDatagram = Completer<void>();
     nb.serveDesktop = (peer, request, stream) async {
       expect(peer, a.identity.device);
@@ -57,6 +58,12 @@ void main() {
       });
       await gotDatagram.future.timeout(const Duration(seconds: 10));
       await sub.cancel();
+      // Control messages come reliably, in order, whole.
+      final controls = await stream.controls
+          .take(3)
+          .toList()
+          .timeout(const Duration(seconds: 10));
+      received.addAll(controls);
     };
     final viewing = await na.openDesktop(b.identity.device, {
       'plugin': 'remote-desktop',
@@ -67,6 +74,10 @@ void main() {
       const Duration(milliseconds: 50),
       (_) => viewing.datagram([2, 1, 0, 0, 0]),
     );
+    final big = List.filled(200 * 1024, 7);
+    unawaited(viewing.control(1, 'hello'.codeUnits));
+    unawaited(viewing.control(2, big));
+    unawaited(viewing.control(3, [1]));
     await for (final (type, body) in viewing.frames) {
       frames.add((type, body.length));
       if (type == 1) expect(body.every((x) => x == body[0]), isTrue);
@@ -77,6 +88,11 @@ void main() {
       (2, 11),
     ]);
     expect(heard.first, [2, 1, 0, 0, 0]);
+    expect(received, [
+      frame(1, 'hello'.codeUnits),
+      frame(2, big),
+      frame(3, [1]),
+    ]);
   }, timeout: const Timeout(Duration(seconds: 60)));
 
   test('a refused desktop stream says why, and unserved is unknown', () async {
