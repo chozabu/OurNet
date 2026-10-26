@@ -847,6 +847,8 @@ extension _Scopes on _OurNetAppState {
         'Maps show you and the friends sharing their location with you. '
             'They are not split by group yet.',
       ScopedSection.activity => 'Activity covers every scope.',
+      ScopedSection.wall =>
+        'Walls are for friends or public; a group has its forum.',
     };
     return Center(
       child: SingleChildScrollView(

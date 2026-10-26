@@ -175,6 +175,11 @@ extension _BrowsePages on _OurNetAppState {
   Future<void> followObjectLink(ObjectLink link) async {
     // Links can sit on pages above the app's own, such as a note.
     noteNavigator.currentState?.popUntil((route) => route.isFirst);
+    // A wall opens as a page, which offers to follow it.
+    if (link.type == 'wall') {
+      if (Walls.ownerOf(link.space) case final owner?) openWall(owner);
+      return;
+    }
     final isChat = link.type == 'message';
     try {
       if (isChat) {

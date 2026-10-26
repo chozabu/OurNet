@@ -14,6 +14,7 @@ import '../services/map_tiles.dart';
 import 'map_page.dart';
 import 'place_links.dart';
 import 'plugin_view.dart';
+import 'wall_page.dart';
 import 'transfers_view.dart';
 import 'plugins_page.dart';
 import 'remote_session_banner.dart';
@@ -131,6 +132,7 @@ part 'activity.dart';
 part 'scopes.dart';
 part 'public_chat.dart';
 part 'browse.dart';
+part 'wall_section.dart';
 
 /// Places in the app. [id] is saved as the last destination; keep it stable.
 enum Destination {
@@ -153,7 +155,10 @@ enum Destination {
 
   /// A plugin's section: which one is [_OurNetAppState.pluginSection].
   plugin(17, 'Plugin', Icons.extension_outlined),
-  plugins(18, 'Plugins', Icons.extension_outlined);
+  plugins(18, 'Plugins', Icons.extension_outlined),
+
+  /// People's posts for their friends: see docs/WALL.md.
+  wall(19, 'Wall', Icons.article_outlined);
 
   final int id;
   final String title;
@@ -164,6 +169,7 @@ enum Destination {
   /// own: picking one as the scope shows its content in these (docs/SCOPES.md).
   static const navigation = [
     activity,
+    wall,
     notes,
     calendar,
     maps,
@@ -182,6 +188,7 @@ enum Destination {
     forums => ScopedSection.forums,
     files => ScopedSection.files,
     activity => ScopedSection.activity,
+    wall => ScopedSection.wall,
     _ => null,
   };
 
@@ -288,6 +295,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   late final Activity activity = Activity(node, notes: notes);
   late final CoalescedTask _activityRefresh;
   StreamSubscription<Set<String>>? _activityChanges;
+
+  /// Followed walls merged (docs/WALL.md), kept current for the badge.
+  late final WallFeed wallFeed = WallFeed(node);
+  late final CoalescedTask _wallRefresh;
+  StreamSubscription<Set<String>>? _wallChanges;
 
   /// The activity feed's sections switched off, saved.
   Set<ActivitySection> activityHidden = {ActivitySection.chat};
@@ -731,6 +743,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       _activityRefresh.schedule,
     );
     _activityRefresh.schedule();
+    _wallRefresh = CoalescedTask(() async {
+      if (await wallFeed.refresh()) redraw();
+    }, (e) => notice('Wall: $e'));
+    _wallChanges = node.onChangesTo(Walls.kinds, _wallRefresh.schedule);
+    _wallRefresh.schedule();
     _dataRefresh = CoalescedTask(() async {
       await messageUpdates.catchUp();
       await forumVotes.catchUp();
@@ -787,7 +804,11 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     );
     if (widget.enablePlatform) {
       _keyGrants = CoalescedTask(
-        () => node.shareKeys(),
+        () async {
+          await node.shareKeys();
+          // Wall keys too, for a device linked since they were made.
+          await node.wallKeys.shareOwn();
+        },
         (e) => network.log('Could not share keys with your devices: $e'),
         delay: const Duration(seconds: 2),
       )..schedule();
@@ -1425,6 +1446,8 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     _friendList?.close();
     _activityChanges?.cancel();
     _activityRefresh.close();
+    _wallChanges?.cancel();
+    _wallRefresh.close();
     _groupInvites?.close();
     _readTimer?.cancel();
     typing
@@ -1663,6 +1686,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
                           Destination.forums => countBadge(forumsUnread()),
                           Destination.messages => countBadge(chatsUnread()),
                           Destination.activity => countBadge(activityUnseen()),
+                          Destination.wall => countBadge(wallUnseen()),
                           _ => null,
                         },
                         selected: tab == d,
@@ -1937,6 +1961,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     // A group's content, in whichever section is open.
     if (section != null &&
         section != ScopedSection.activity &&
+        section != ScopedSection.wall &&
         section != ScopedSection.maps &&
         activeRoom != null) {
       return everydayPage(context);
@@ -1969,6 +1994,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     Destination.settings => settings(context),
     Destination.notes => everydayPage(context),
     Destination.activity => activityPage(context),
+    Destination.wall => wallSection(context),
     Destination.groups => groupsPage(context),
     Destination.search => searchPage(context),
     Destination.calendar =>

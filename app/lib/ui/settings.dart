@@ -35,6 +35,11 @@ extension _SettingsPages on _OurNetAppState {
             }),
             child: const Text('Edit display name'),
           ),
+          OutlinedButton.icon(
+            onPressed: () => openWall(node.person),
+            icon: const Icon(Icons.article_outlined),
+            label: const Text('Your posts'),
+          ),
           OutlinedButton(
             onPressed: savingAvatar
                 ? null

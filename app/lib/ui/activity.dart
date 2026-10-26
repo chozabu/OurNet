@@ -239,6 +239,11 @@ extension _ActivityPage on _OurNetAppState {
       return e.public ? '$name · Public' : name;
     }
     return switch (kind) {
+      Walls.postKind || Walls.commentKind => switch (Walls.ownerOf(e.space)) {
+        final owner? when owner == node.person => 'Your wall',
+        final owner? => '${name(owner)}\'s wall',
+        _ => 'A wall',
+      },
       'post' => forumName(e.space),
       PublicChats.messageKind => publicChats.info(e.space)?.name ?? e.space,
       'message' => 'Direct messages',
@@ -287,6 +292,11 @@ extension _ActivityPage on _OurNetAppState {
             : n == 1
             ? 'saved a note'
             : 'saved $n notes';
+      case ActivitySection.posts when first.object.kind == Walls.commentKind:
+        // Only comments on this person's own wall are listed.
+        return n == 1 ? 'commented on your post' : 'commented on your posts';
+      case ActivitySection.posts when first.object.kind == Walls.postKind:
+        return n == 1 ? 'posted on their wall' : 'posted $n times';
       case ActivitySection.posts:
         if (n > 1) return 'posted $n times';
         return first.data?['title'] is String ? 'started a discussion' : 'replied';
@@ -460,6 +470,8 @@ extension _ActivityPage on _OurNetAppState {
       return;
     }
     switch (o.kind) {
+      case Walls.postKind || Walls.commentKind:
+        if (Walls.ownerOf(o.space) case final owner?) openWall(owner);
       case 'note_op':
         await openNote(e.space);
       case 'message':
