@@ -285,12 +285,84 @@ browse what exists instead of being sent an address.
 
 Links are text, as for chats. Besides `ournet://chat/<name or address>`,
 `ournet://forum/<name or address>` is a forum, `ournet://post/<space>/<id>`
-(optional `?title=`) a forum post and `ournet://message/<space>/<id>` a message
-in a public chat. A device not yet in the space joins it, then opens the link;
+(optional `?title=`) a forum post, `ournet://message/<space>/<id>` a message
+in a public chat and `ournet://wall/<person>` (optional `/<id>`) a person's
+wall or a post on it (see Walls). A device not yet in the space joins it, then
+opens the link (a wall link opens the wall and offers to follow it);
 a post not held yet shows once it has synced. Links to things only some people
 can read (a note, a group message) are resolved only against what a device
 holds and show as unavailable to anyone else, as event links do; they are not
 implemented yet.
+
+## Walls
+
+A person's wall (`core/lib/src/wall.dart`, user view in `docs/WALL.md`) is
+the space `wall:<person>`, the owner's person ID. Posts, comments and hides
+there have an empty audience and travel like public forum posts, by
+subscription, so friends who follow a wall carry it for each other.
+
+| Kind | Who | Payload |
+|---|---|---|
+| `wall_post` | the owner | Public: `{text, title?, share?}`. Friends-only: `{epoch, box}`. |
+| `wall_comment` | anyone | `{post, text, parent?}` on a public post; `{post, epoch, box}` on a sealed one, the post's epoch. |
+| `wall_hide` | the owner | `{object}`: hides a comment, or deletes their own post. |
+| `wall_key` | the owner | Private: `{epoch, key}`, 32 random bytes in base64. |
+
+Limits: `text` 20,000 characters, `title` 200, `epoch` a non-negative
+integer, `box` a string (an optional `aead` may name the cipher, as
+elsewhere). A `wall_post`, `wall_hide` or `wall_key` whose author is not the
+person in its space, a wall kind outside a `wall:` space, or one with the
+wrong audience (keys private, the rest public) is dropped on receipt and
+never shown (`Walls.accepted`).
+
+**Sealing.** `box` is ChaCha20-Poly1305 under the wall key for `epoch`,
+nonce, ciphertext and tag concatenated and base64url-encoded, over the
+canonical JSON of `{text, title?}` for a post and `{text, parent?}` for a
+comment. The associated data is `ournet/wall/1/<owner>/<epoch>/<kind>`,
+followed by `/<post>` for a comment, so a box cannot be moved to another
+wall, epoch, kind or post. A reader tries every key it holds for the epoch.
+
+**Keys.** The owner starts epoch 0 with their first friends-only post, and
+hands the current epoch's key to friends lacking it whenever they post to
+friends: `wall_key` records in the wall's space, each to at most 63 friends
+and 128 devices besides the owner's own (who are always in the audience, so
+the key reaches their devices too). A device that cannot open its own
+person's keys waits for another of their devices to re-share them
+(`WallKeys.shareOwn`, run with key grants) instead of starting an epoch.
+A new epoch starts when:
+
+- a friend is removed or blocked (`contact_state` `forgotten` or `blocked`),
+  on the device where that was done; their key stays with them, so they keep
+  reading what they were given, and nothing new;
+- a friend is about to be given the key who was not given the current one
+  while others were: someone who became a friend since. They read from then
+  on, not what came before.
+
+Two devices that start the same epoch at once write two keys; new posts use
+the one from the record with the lower ID, and readers try both.
+
+**Following.** A wall is followed through the subscription set. A device
+follows its person's own wall and every friend's, in memory, without storing
+them, unless the person stopped following that friend's wall
+(`wallUnfollowed/<person>` setting); friends' walls are added only while
+fewer than 224 spaces are followed, since peers refuse an inventory listing
+more than 256. Anyone else's wall is followed on purpose, by link, and stored
+like a forum. Walls are never advertised in `_listing`. A follower who is not
+a friend receives sealed posts too and cannot open them: wall followers learn
+the timing and size of friends-only posts and comments, and who wrote the
+comments (an accepted leak).
+
+**Reshares.** `share` is `{object}`, the full signed object of a public
+`wall_post` (itself no reshare, in its author's wall) or forum `post`. It is
+verified as an object in its own right; a post whose embedded original does
+not verify is not shown. A reshare of a reshare embeds the original.
+
+**Likes** on public posts are forum votes (`vote`, `{object, value}`, public,
+in the wall's space). Friends-only posts have none yet: a public vote would
+show who reacted to a post its readers alone should know of.
+
+**Read state.** Wall posts and comments use `seen/<id>` marks, carried to a
+newly linked device by `read_state` like forum posts.
 
 ## Locations
 

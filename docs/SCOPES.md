@@ -42,6 +42,7 @@ should check it too. The calendar does, refusing public events (see below).
 | Files | ✓ (drive, attachments) | ✓ | ✓ |
 | Maps | ✓ | ✓ (saved places and lists) | – |
 | Activity | ✓ | ✓ | ✓ |
+| Wall | ✓ (friends-only posts) | – | ✓ (public posts) |
 
 All is always allowed. When a scope does not allow a section, the section
 stays in the navigation (so it doesn't shift when the scope changes) and

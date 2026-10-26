@@ -13,6 +13,7 @@ every object:
 | Section | One row per | Reads like |
 | --- | --- | --- |
 | Posts | forum (public or a group's) per day | "Sam started a discussion", "Sam and Jo posted 4 times" |
+| Posts (walls) | wall per day: friends' posts, and comments on your own | "Sam posted on their wall", "Jo and 2 more commented on your post" |
 | Notes | note per day; a group's lists, your inbox | "Jo changed “Packing list” · 7 edits" |
 | Calendar | calendar per day | "Jo added or changed an event" |
 | Files | group, drive or public space per day | "Sam shared 3 files", with a thumbnail |
@@ -66,7 +67,8 @@ them seen (`activitySeen`, an arrival time).
   (`Store.activityKinds`). It holds object IDs and times only, never content,
   and is never synced. A row is removed with its object. On first creation it
   is filled from the last 30 days of those kinds, with creation times.
-  Changing the kinds means a new trigger name (`arrival_added_N`).
+  Changing the kinds means a new trigger name (`arrival_added_N`, now 2 for
+  wall posts and comments) and dropping the previous one.
 - **`Activity` (core).** Reads arrivals newest first, a page at a time, and
   merges them into rows in memory. The first load reads back about 40 rows
   (at most 2,048 objects), "Show earlier" reads further, and `refresh` takes in

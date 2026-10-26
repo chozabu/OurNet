@@ -7,6 +7,19 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: Walls
+
+Additive: new kinds `wall_post`, `wall_comment`, `wall_hide` (public) and
+`wall_key` (private) in `wall:<person>` spaces (PROTOCOL.md, Walls). No ALPN,
+field meaning or required peer capability changes. Older builds store and
+relay the public kinds for spaces they follow (they follow no walls, so in
+practice they are offered none) and drop `wall_key` like any private object
+not for them. Subscriptions now include `wall:` spaces, so inventories list
+the walls a device follows; their number is capped (224 by default, 256 in
+all) under the limit every build enforces. The activity arrival trigger is
+renamed `arrival_added_2` (wall posts and comments added); the old one is
+dropped. New links: `ournet://wall/<person>[/<post>]`.
+
 ## Unreleased: Git plugin 0.4 range-backed browsing
 
 Additive local host API 0.4: `file-ranges` and `index-store`, both covered by the
