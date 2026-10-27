@@ -344,7 +344,12 @@ extension _ContactDetails on _OurNetAppState {
                             'Invited ${_dateTime(sent.created)} · send again',
                           ),
                         ),
-                      if (people.contains(person))
+                      // Someone who is not a friend is written to through
+                      // the friends in between: see [DistantMessages].
+                      if (!me &&
+                          (people.contains(person) ||
+                              (canChat(person) &&
+                                  node.distant.route(person).isNotEmpty))) ...[
                         FilledButton.icon(
                           onPressed: () {
                             Navigator.pop(sheet);
@@ -353,6 +358,15 @@ extension _ContactDetails on _OurNetAppState {
                           icon: const Icon(Icons.chat_bubble_outline),
                           label: const Text('Message'),
                         ),
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            Navigator.pop(sheet);
+                            unawaited(writeMail(context, person));
+                          },
+                          icon: const Icon(Icons.mail_outline),
+                          label: const Text('Write mail'),
+                        ),
+                      ],
                       OutlinedButton.icon(
                         onPressed: () {
                           Navigator.pop(sheet);
@@ -568,6 +582,75 @@ extension _ContactDetails on _OurNetAppState {
       await node.connections.request(person, text: text);
       if (network.running) unawaited(network.syncAll());
       notice('Request sent to ${name(person)}');
+    });
+  }
+
+  /// Writes [person] a message with a subject, which reads as mail. To
+  /// someone who is not a friend it travels through friends, unread by them.
+  Future<void> writeMail(BuildContext context, String person) async {
+    final route = node.distant.isDistant(person)
+        ? node.distant.route(person)
+        : const <String>[];
+    final subject = TextEditingController();
+    final body = TextEditingController();
+    final send = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Mail to ${name(person)}'),
+        content: SizedBox(
+          width: 560,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (route.isNotEmpty)
+                Text(
+                  'Not a contact. It travels through '
+                  '${route.map(name).join(', ')}, who pass it on without '
+                  'being able to read it.',
+                ),
+              TextField(
+                controller: subject,
+                autofocus: true,
+                maxLength: DistantMessages.maxTitle,
+                decoration: const InputDecoration(labelText: 'Subject'),
+              ),
+              TextField(
+                controller: body,
+                minLines: 6,
+                maxLines: 16,
+                maxLength: 20000,
+                decoration: const InputDecoration(
+                  labelText: 'Message',
+                  alignLabelWithHint: true,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
+    final title = subject.text, text = body.text;
+    Future<void>.delayed(const Duration(seconds: 1), () {
+      subject.dispose();
+      body.dispose();
+    });
+    if (send != true || text.trim().isEmpty) return;
+    act(() async {
+      await sendMessage(node, person, text, title: title);
+      if (network.running) unawaited(network.syncAll());
+      notice('Sent to ${name(person)}');
+      openConversation(person);
     });
   }
 

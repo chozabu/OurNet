@@ -166,7 +166,7 @@ extension _SocialPages on _OurNetAppState {
   }
 
   Widget messages(BuildContext context) {
-    contact = people.contains(contact)
+    contact = contact != null && canChat(contact!)
         ? contact
         : chatOrder().active.firstOrNull ?? people.firstOrNull;
     return browsePane(
@@ -245,7 +245,7 @@ extension _SocialPages on _OurNetAppState {
                   ? const <String>[]
                   : publicChats.joined;
               final friends = scope != ScopeKind.public;
-              if ((!friends || people.isEmpty) &&
+              if ((!friends || (people.isEmpty && distantPeers.isEmpty)) &&
                   rooms.isEmpty &&
                   chats.isEmpty) {
                 return friends
@@ -271,8 +271,32 @@ extension _SocialPages on _OurNetAppState {
               final order = friends
                   ? chatOrder()
                   : (active: const <String>[], archived: const <String>[]);
+              final requests = friends
+                  ? [
+                      for (final d in distantPeers)
+                        if (!d.accepted) d.person,
+                    ]
+                  : const <String>[];
               return ListView(
                 children: [
+                  // Messages from people who are not friends wait here until
+                  // answered: see [DistantMessages].
+                  if (requests.isNotEmpty)
+                    ListTile(
+                      leading: const Icon(Icons.mark_email_unread_outlined),
+                      title: Text(
+                        showChatRequests
+                            ? 'Hide message requests'
+                            : 'Message requests (${requests.length})',
+                      ),
+                      subtitle: showChatRequests
+                          ? null
+                          : const Text('From people who are not your friends'),
+                      onTap: () =>
+                          update(() => showChatRequests = !showChatRequests),
+                    ),
+                  if (showChatRequests)
+                    for (final person in requests) chatTile(context, person),
                   for (final entry in chatEntries(order, rooms, chats: chats))
                     switch (entry) {
                       final String person => chatTile(context, person),
@@ -729,7 +753,7 @@ extension _SocialPages on _OurNetAppState {
   }
 
   Widget messageDetail(BuildContext context, {VoidCallback? back}) {
-    if (contact == null || !people.contains(contact)) {
+    if (contact == null || !canChat(contact!)) {
       return empty(
         'Choose a conversation',
         'Select a friend to send a private message.',
@@ -741,6 +765,9 @@ extension _SocialPages on _OurNetAppState {
     final scroll = conversations.scrollFor(peer);
     final objects = conversations.messages(peer);
     final helpers = messageHelpers(node, peer);
+    // Not a friend: messages travel through friends, and calls and files,
+    // which need their devices admitted here, are not offered.
+    final distant = node.distant.isDistant(peer);
     final unreadCount = node.store.conversationUnread(node.person, peer: peer);
     // Where reading resumes, fixed while the chat stays open.
     if (unreadMarkerPeer != peer) {
@@ -816,6 +843,17 @@ extension _SocialPages on _OurNetAppState {
                                           fontStyle: FontStyle.italic,
                                         ),
                                   )
+                                else if (distant)
+                                  Text(
+                                    'Not a contact · via '
+                                    '${node.distant.route(peer).map(name).join(', ')}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: scheme.onSurfaceVariant,
+                                        ),
+                                  )
                                 else if (reachText(peer) case final reach?)
                                   // Nothing sent here arrives until one of
                                   // their devices is back.
@@ -846,18 +884,20 @@ extension _SocialPages on _OurNetAppState {
                     onPressed: () => update(() => searchingConversation = true),
                     icon: const Icon(Icons.search),
                   ),
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    tooltip: 'Video call',
-                    onPressed: () => startCall(true),
-                    icon: const Icon(Icons.videocam_outlined),
-                  ),
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    tooltip: 'Voice call',
-                    onPressed: () => startCall(false),
-                    icon: const Icon(Icons.call_outlined),
-                  ),
+                  if (!distant) ...[
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: 'Video call',
+                      onPressed: () => startCall(true),
+                      icon: const Icon(Icons.videocam_outlined),
+                    ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: 'Voice call',
+                      onPressed: () => startCall(false),
+                      icon: const Icon(Icons.call_outlined),
+                    ),
+                  ],
                   PopupMenuButton<String>(
                     tooltip: 'Conversation options',
                     onSelected: (action) {
@@ -896,21 +936,22 @@ extension _SocialPages on _OurNetAppState {
                           ),
                         ),
                       ),
-                      PopupMenuItem(
-                        value: 'helper',
-                        child: ListTile(
-                          leading: Icon(
-                            helpers.isEmpty
-                                ? Icons.cloud_outlined
-                                : Icons.cloud_done_outlined,
-                          ),
-                          title: Text(
-                            helpers.isEmpty
-                                ? 'Optional text forwarding'
-                                : 'Text forwarding · ${name(helpers.first)}',
+                      if (!distant)
+                        PopupMenuItem(
+                          value: 'helper',
+                          child: ListTile(
+                            leading: Icon(
+                              helpers.isEmpty
+                                  ? Icons.cloud_outlined
+                                  : Icons.cloud_done_outlined,
+                            ),
+                            title: Text(
+                              helpers.isEmpty
+                                  ? 'Optional text forwarding'
+                                  : 'Text forwarding · ${name(helpers.first)}',
+                            ),
                           ),
                         ),
-                      ),
                       const PopupMenuItem(
                         value: 'places',
                         child: ListTile(
@@ -1018,6 +1059,7 @@ extension _SocialPages on _OurNetAppState {
         Expanded(child: history),
         if (voiceProgress[peer] case final progress?) progressBar(progress),
         if (attachProgress[peer] case final progress?) progressBar(progress),
+        if (distant) distantBar(context, peer),
         if (messageErrors[peer] case final error?)
           Material(
             color: scheme.errorContainer,
@@ -1046,16 +1088,65 @@ extension _SocialPages on _OurNetAppState {
             child: compose(
               context,
               sendConversationMessage,
-              attach: attachProgress.containsKey(peer)
+              attach: distant || attachProgress.containsKey(peer)
                   ? null
                   : () => unawaited(pickConversationFiles()),
-              voice: voiceProgress.containsKey(peer)
+              voice: distant || voiceProgress.containsKey(peer)
                   ? null
                   : () => unawaited(sendVoiceMessage(context)),
             ),
           ),
         ),
       ],
+    );
+  }
+
+  /// Above the composer in a conversation with someone who is not a
+  /// friend: a request to answer or turn down, or how many more messages
+  /// can go before they answer.
+  Widget distantBar(BuildContext context, String peer) {
+    final scheme = Theme.of(context).colorScheme;
+    final request = distantPeers.any((d) => d.person == peer && !d.accepted);
+    final left = node.distant.remaining(peer);
+    final text = request
+        ? '${name(peer)} is not your friend. Reply to accept, or turn this '
+              'down.'
+        : left == null
+        ? null
+        : left <= 0
+        ? 'Wait for ${name(peer)} to reply before sending more.'
+        : 'You can send $left more '
+              '${left == 1 ? 'message' : 'messages'} until ${name(peer)} '
+              'replies.';
+    if (text == null) return const SizedBox.shrink();
+    return Material(
+      color: scheme.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                text,
+                style: TextStyle(color: scheme.onSecondaryContainer),
+              ),
+            ),
+            if (request) ...[
+              TextButton(
+                onPressed: () {
+                  node.distant.ignore(peer);
+                  update(() => contact = null);
+                },
+                child: const Text('Ignore'),
+              ),
+              TextButton(
+                onPressed: () => unawaited(setBlocked(peer, true)),
+                child: const Text('Block'),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 

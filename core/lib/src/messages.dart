@@ -208,11 +208,17 @@ class MessageUpdates {
     List<String> audience,
     Json fields,
   ) async {
+    // To someone who is not a friend: through friends, as the message went.
+    final distant = audience.where(node.distant.isDistant).toList();
     final object = await node.publish(
       kind,
       {'object': target, ...fields},
       space: '_messages',
       audience: audience,
+      via: [for (final p in distant) ...node.distant.route(p)],
+      recipients: [
+        for (final p in distant) ...await node.distant.devicesOf(p),
+      ],
     );
     await catchUp();
     node.notify();

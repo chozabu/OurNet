@@ -7,6 +7,19 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: Messages beyond friends
+
+Additive: `message` payloads may carry `title` (a subject, at most 200
+characters) and `devices` (the sender's certificates, at most 32); builds
+without them ignore both, though a `title` longer than 200 or a malformed
+`devices` is now refused. Messages to someone not a friend set `via` to the
+chain between, as `connect` does (PROTOCOL.md, Friend lists). Older builds
+already relay such objects when named in `via` and store them when addressed
+to them; their chat lists show only friends, so they hide the conversation.
+Readers write `read` for such messages to their own person only. Devices now
+take at most 200 objects a day per non-friend author they are offered only as
+a carrier. No ALPN or peer capability changes.
+
 ## Unreleased: Walls
 
 Additive: new kinds `wall_post`, `wall_comment`, `wall_hide` (public) and

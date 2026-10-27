@@ -44,6 +44,29 @@ starting, and Android only keeps the microphone while the app is in front or
 "Stay connected" is on. See [PROTOCOL.md](PROTOCOL.md#group-calls) for the
 messages.
 
+## Messages beyond friends
+
+Anyone reachable through a chain of friends can be messaged, as RetroShare's
+distant chat and mail allow. **Message** (and **Write mail**, which adds a
+subject) on a person's details sends to them through the friends in between,
+who carry it without being able to read it, as a request to connect travels.
+Nothing is admitted: the two never sync directly, and calls, files and voice
+messages, which need that, are not offered. The conversation header says
+"Not a contact · via Sam, Priya".
+
+Messages from someone you have not written to wait under **Message
+requests** at the top of the chat list. Reply to accept; **Ignore** hides
+the request until they write again; **Block** drops everything from them.
+A sender can write three messages before the other person first answers,
+and each carrier passes on at most 200 a day from any one non-friend. The
+carriers can see who wrote to whom and when: OurNet is not an anonymity
+tool. See [PROTOCOL.md](PROTOCOL.md#independent-objects) and
+`core/lib/src/distant.dart`.
+
+Not yet: a carrier keeps what it carries until storage rules for carriers
+land (CONNECTIVITY.md, friend carriers), and the route is fixed when a
+message is signed.
+
 ## Direction
 
 Prioritise reliability, ease of use and independence from mandatory servers.

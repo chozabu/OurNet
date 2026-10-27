@@ -651,6 +651,17 @@ class Store {
       if (get(row['id'] as String) case final object?) object,
   ];
 
+  /// How many messages between [owner] and [peer] [author] wrote, counting
+  /// no further than [limit]: cheap enough to ask per conversation.
+  int messagesBy(String owner, String peer, String author, {int limit = 1}) =>
+      _select(
+            'SELECT COUNT(*) AS n FROM (SELECT 1 FROM message_peers p '
+            'JOIN objects o ON o.id=p.id '
+            'WHERE p.owner=? AND p.peer=? AND o.author=? LIMIT ?)',
+            [owner, peer, author, limit],
+          ).first['n']
+          as int;
+
   /// Arrival order, independent of signed wall clocks. Used by derived views
   /// to consume new immutable records without revisiting retained history.
   List<(int, SignedObject)> objectsAfter(String kind, int cursor) => [

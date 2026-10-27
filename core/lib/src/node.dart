@@ -10,6 +10,7 @@ import 'blob_worker.dart';
 import 'locations.dart';
 import 'avatars.dart';
 import 'connections.dart';
+import 'distant.dart';
 import 'listings.dart';
 import 'group_access.dart';
 import 'registry.dart';
@@ -44,6 +45,9 @@ class Node {
 
   /// Who is friends with whom, and asking someone new to connect.
   late final connections = Connections(this);
+
+  /// Direct messages to people who are not friends, through friends.
+  late final distant = DistantMessages(this);
 
   /// Group keys this device holds and whom each group's objects may reach.
   late final groups = GroupAccess(this);
@@ -1747,6 +1751,8 @@ class Node {
         blocked.contains(o.author)) {
       return 0;
     }
+    // Carried for someone who is not a friend: see [DistantMessages.mayCarry].
+    if (!distant.mayCarry(o)) return 0;
     // Only a wall's owner posts on it: see [Walls.accepted].
     if (!Walls.accepted(o)) return 0;
     if (o.hasExpiry && o.expires <= now()) return 0;
@@ -2037,13 +2043,16 @@ class Node {
       all.sort((a, b) => b.created.compareTo(a.created));
       for (var start = 0; start < all.length; start += 200) {
         final page = all.skip(start).take(200).toList();
+        // Someone who is not a friend is not told (their devices are not
+        // admitted here, and the delivery receipt tells them enough); this
+        // person's other devices still are.
         await publish(
           'read',
           {
             'object': page.first.id,
             if (page.length > 1) 'objects': [for (final o in page) o.id],
           },
-          audience: [author],
+          audience: [distant.isDistant(author) ? person : author],
           space: '_messages',
         );
         store.batch(() {

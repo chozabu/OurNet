@@ -539,6 +539,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   bool settingsSearching = false;
   String networkFilter = 'all';
   bool showArchivedChats = false;
+  bool showChatRequests = false;
 
   /// The oldest message unread when [unreadMarkerPeer]'s chat was opened.
   String? unreadMarkerPeer, unreadMarker;
@@ -1046,7 +1047,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   }
 
   void openConversation(String person) {
-    if (!people.contains(person)) return;
+    if (!canChat(person)) return;
     // Opening a chat with new messages (e.g. from a notification) shows them:
     // a retained scroll position or held-back arrivals would hide them, and
     // unseen messages are never built, so never marked read.
@@ -1536,6 +1537,19 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       // their devices known; they are not offered as a friend.
       .where((p) => p != node.person && !node.forgotten.contains(p))
       .toList();
+
+  /// Conversations with people who are not friends, read once per build:
+  /// see [DistantMessages].
+  List<DistantPeer> get distantPeers =>
+      memo('distantPeers', node.distant.conversations);
+
+  /// Whether a direct conversation with [person] can be shown: a friend, or
+  /// someone else reached through friends.
+  bool canChat(String person) =>
+      people.contains(person) ||
+      (node.distant.isDistant(person) &&
+          !node.blocked.contains(person) &&
+          !node.forgotten.contains(person));
 
   /// Visible unread objects of [kind], queried once per build.
   List<SignedObject> unreadObjects(String kind) => memo(

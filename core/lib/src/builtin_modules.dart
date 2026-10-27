@@ -279,10 +279,19 @@ const messagesModule = Module(
   },
 );
 
+/// `title` (a subject, so it reads as mail) and `devices` (the sender's
+/// certificates, on messages to someone not a friend) are optional: see
+/// `DistantMessages`.
 bool _message(Json p) =>
     (p['text'] is String || p['chunks'] is List) &&
     (p['reply'] == null || p['reply'] is String) &&
-    (p['forwarded'] == null || p['forwarded'] is bool);
+    (p['forwarded'] == null || p['forwarded'] is bool) &&
+    (p['title'] == null ||
+        p['title'] is String && (p['title'] as String).length <= 200) &&
+    (p['devices'] == null ||
+        p['devices'] is List &&
+            (p['devices'] as List).length <= 32 &&
+            (p['devices'] as List).every((c) => c is Map));
 
 bool _file(Json p) => p['chunks'] is List;
 

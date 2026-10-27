@@ -15,19 +15,32 @@ List<String> messageHelpers(Node node, String recipient) {
       : const [];
 }
 
-/// Sends [text] to [recipient], optionally as a reply to message [reply].
+/// Sends [text] to [recipient], optionally as a reply to message [reply] or
+/// with a subject ([title], so it reads as mail). Someone who is not a
+/// friend is reached through friends: see [DistantMessages].
 Future<SignedObject> sendMessage(
   Node node,
   String recipient,
   String text, {
   String? reply,
-}) => node.publish(
-  'message',
-  {'text': text.trim(), 'reply': ?reply},
-  space: '_messages',
-  audience: [recipient],
-  via: messageHelpers(node, recipient),
-);
+  String? title,
+}) {
+  final content = {
+    'text': text.trim(),
+    'reply': ?reply,
+    if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
+  };
+  if (node.distant.isDistant(recipient)) {
+    return node.distant.send(recipient, content);
+  }
+  return node.publish(
+    'message',
+    content,
+    space: '_messages',
+    audience: [recipient],
+    via: messageHelpers(node, recipient),
+  );
+}
 
 /// Sends another message's [payload] on to [recipient] as a new message.
 /// Attachments keep their chunks and key, so nothing is re-encrypted; the
@@ -35,7 +48,16 @@ Future<SignedObject> sendMessage(
 Future<SignedObject> forwardMessage(Node node, String recipient, Json payload) {
   final copy = Map<String, dynamic>.of(payload)
     ..remove('reply')
+    ..remove('devices')
     ..['forwarded'] = true;
+  if (node.distant.isDistant(recipient)) {
+    // Attachments are fetched from their sender's devices, which someone
+    // who is not a friend cannot reach.
+    if (copy['chunks'] != null) {
+      throw StateError('Files can only be sent to friends');
+    }
+    return node.distant.send(recipient, copy);
+  }
   return node.publish(
     'message',
     copy,
