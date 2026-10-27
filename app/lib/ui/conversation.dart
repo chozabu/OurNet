@@ -91,13 +91,17 @@ extension _ConversationPages on _OurNetAppState {
         int latest(String p) => recent[p]?.created ?? 0;
         final pins = chatRowState().pinned;
         bool pinned(String p) => pins.contains(p);
-        final sorted = people.toList()
-          ..sort((a, b) {
-            final pin = (pinned(b) ? 1 : 0) - (pinned(a) ? 1 : 0);
-            if (pin != 0) return pin;
-            final time = latest(b).compareTo(latest(a));
-            return time != 0 ? time : name(a).compareTo(name(b));
-          });
+        final sorted =
+            [
+              ...people,
+              for (final d in distantPeers)
+                if (d.accepted) d.person,
+            ]..sort((a, b) {
+              final pin = (pinned(b) ? 1 : 0) - (pinned(a) ? 1 : 0);
+              if (pin != 0) return pin;
+              final time = latest(b).compareTo(latest(a));
+              return time != 0 ? time : name(a).compareTo(name(b));
+            });
         final active = <String>[], archived = <String>[];
         for (final p in sorted) {
           final at = node.store.setting('chatArchived/$p');
@@ -882,6 +886,14 @@ extension _ConversationPages on _OurNetAppState {
                 Text(
                   '$error · Verified chunks are kept for retry.',
                   style: text.bodySmall?.copyWith(color: scheme.error),
+                ),
+              if (p['title'] case final String title when title.isNotEmpty)
+                // A subject: it reads as mail.
+                Text(
+                  title,
+                  style: text.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               // Like WhatsApp: the time shares the last line when it fits,
               // otherwise it wraps below, right-aligned.

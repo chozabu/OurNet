@@ -125,6 +125,23 @@ relayed back the same way. A device admits the devices in an answer only when
 it holds the named request, written by its own person to the answerer, and
 only once per answer. Nothing is admitted from a request alone.
 
+A direct message to someone outside one's contacts is an ordinary private
+`message` in `_messages`, audience that person, sent the way a `connect`
+request is: encrypted to the devices their list (or profile) names, `via`
+the people on the chain between (or, when the reader knows no chain, the
+people who carried the sender's newest message), with no expiry. Its payload
+adds `devices` (the sender's certificates, at most 32) so the reader can
+answer without the sender's list, and may add `title` (a subject, at most
+200 characters) on any message, so it reads as mail. Nothing is admitted:
+answers, reactions, edits and deletions travel the same way, and a reader
+writes `read` only to its own person, since the sender's devices are not
+admitted there; the reader's receipt reaches the sender through the
+carriers. A sender writes at most three messages before the other person
+first answers, and a device takes at most 200 objects a day from each
+author who is neither its own person nor a friend when it is offered them
+only as one of the people in `via`. The people in `via` see who wrote to
+whom, when, and the size; not what.
+
 A group member who is not its owner asks the owner to add people with a
 private `room_add` in the room's space, audience the owner: `epoch`, `people`
 (at most 16) and `certificates` (their devices, since the owner may not know
