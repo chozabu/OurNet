@@ -34,6 +34,7 @@ class SystemTray {
   void RemoveIcon();
   void UpdateTip();
   void ShowWindow();
+  void Flash(bool on);
   void ShowMenu(POINT at);
   void Quit();
   void Hint(const std::wstring& title, const std::wstring& text);

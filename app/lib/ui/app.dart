@@ -1174,6 +1174,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
       if (ringing != _ringing) {
         _ringing = ringing;
         if (ringing && Platform.isAndroid) unawaited(_takePushCallAction());
+        if (Platform.isWindows) {
+          unawaited(SystemTray.flash(ringing).catchError((Object _) {}));
+        }
         unawaited(
           (ringing
                   ? notifications.incomingCall(

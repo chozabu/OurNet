@@ -204,11 +204,13 @@ class Notifications {
       );
       return;
     }
-    onTap?.call();
     final payload = response.payload ?? '';
     final split = payload.indexOf(':');
     final key = payload.substring(split + 1);
-    switch (split < 0 ? payload : payload.substring(0, split)) {
+    final kind = split < 0 ? payload : payload.substring(0, split);
+    // Declining from a Windows notification leaves OurNet where it was.
+    if (payload != 'call:decline') onTap?.call();
+    switch (kind) {
       case 'chat':
         onOpenChat?.call(key);
       case 'forum':
@@ -222,7 +224,8 @@ class Notifications {
       case 'event':
         onOpenEvent?.call(key);
       case 'call':
-        onCallOpen?.call(response.actionId);
+        // Windows passes a button's arguments (`call:answer`) as the payload.
+        onCallOpen?.call(split < 0 ? response.actionId : key);
     }
   }
 
@@ -712,7 +715,15 @@ class Notifications {
             ),
           ],
         ),
-        windows: const WindowsNotificationDetails(),
+        // Stays up as a call until answered or ended; the app rings itself.
+        windows: WindowsNotificationDetails(
+          scenario: WindowsNotificationScenario.incomingCall,
+          audio: WindowsNotificationAudio.silent(),
+          actions: const [
+            WindowsAction(content: 'Decline', arguments: 'call:decline'),
+            WindowsAction(content: 'Answer', arguments: 'call:answer'),
+          ],
+        ),
       ),
     );
   }

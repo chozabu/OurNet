@@ -231,6 +231,9 @@ SystemTray::SystemTray(flutter::BinaryMessenger* messenger, HWND window)
     } else if (method == "show") {
       ShowWindow();
       result->Success();
+    } else if (method == "flash") {
+      Flash(Argument<bool>(arguments, "on", true));
+      result->Success();
     } else if (method == "hint") {
       Hint(Wide(Argument<std::string>(arguments, "title", "")),
            Wide(Argument<std::string>(arguments, "text", "")));
@@ -403,6 +406,16 @@ void SystemTray::ShowWindow() {
     ::ShowWindow(window_, SW_SHOW);
   }
   SetForegroundWindow(window_);
+}
+
+void SystemTray::Flash(bool on) {
+  // Already in front: nothing to draw attention to.
+  if (on && GetForegroundWindow() == window_) return;
+  FLASHWINFO info{sizeof(info)};
+  info.hwnd = window_;
+  // Until OurNet comes to the front, or the call stops ringing.
+  info.dwFlags = on ? FLASHW_ALL | FLASHW_TIMERNOFG : FLASHW_STOP;
+  FlashWindowEx(&info);
 }
 
 void SystemTray::ShowMenu(POINT at) {

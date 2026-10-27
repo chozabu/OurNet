@@ -51,6 +51,11 @@ abstract final class SystemTray {
   /// Brings the window back, from hidden or minimised.
   static Future<void> show() => _channel.invokeMethod<void>('show');
 
+  /// Flashes the taskbar button until OurNet comes to the front, or stops.
+  /// Windows only.
+  static Future<void> flash(bool on) =>
+      _channel.invokeMethod<void>('flash', {'on': on});
+
   /// A short message from the icon.
   static Future<void> hint(String title, String text) =>
       _channel.invokeMethod<void>('hint', {'title': title, 'text': text});
