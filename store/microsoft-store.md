@@ -97,9 +97,10 @@ Signed content with visible provenance
 **Images:**
 - Store logos: `store/ournet-icon-512.png` (1:1, 300x300 is enough).
 - Screenshots: `store/screenshots-windows/*.png` are the Windows app at
-  1920x1080 and are the ones to submit. `store/screenshots-windows/raw/`
-  holds the unframed window captures behind them.
-  `store/screenshots/*.png` are the Android app at 1080x1920, kept for Play.
+  1920x1080 and are the ones to submit; `store/screenshots/*.png` are the
+  phone layout at 1080x1920, for Play. Both are drawn with made-up people by
+  `app/test/store_shots_test.dart` and framed by `tool/store_shots.py`
+  (its docstring has the two commands).
 - Hero image (optional, 16:9, 1920x1080): not yet made.
   `store/ournet-feature-1024x500.png` is the wrong ratio.
 
