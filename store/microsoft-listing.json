@@ -1,0 +1,15 @@
+{
+  "description": "OurNet is a friend-to-friend app for chatting, planning and sharing with the people you trust. It connects your devices to your friends' devices directly, with no company platform in between.\n\n• Chat one-to-one and in private groups, with voice and video calls\n• Forums for your groups\n• Personal and shared group calendars\n• A map of friends who choose to share where they are\n• Share files and photos, and keep a private drive in sync across your PC and phone\n• Notes and checklists, with voice notes transcribed on your device\n• Add apps and games as plugins, such as a wiki, a microblog and noughts and crosses\n\nYou have one identity that your friends recognise, across Windows and Android. Everything you receive is signed, so you can see who wrote it and who passed it along.\n\nThere is no sign-up and no OurNet server. Devices connect peer-to-peer and encrypt what they send; when a direct connection is impossible, encrypted traffic may pass through a relay that cannot read it. OurNet can stay in the notification area so messages still arrive (optional, in Settings).\n\nOurNet is an early release and open source. The encryption has not yet been independently audited.",
+  "features": [
+    "Direct and group chat with no central server",
+    "Voice and video calls",
+    "Forums for your groups",
+    "Personal and shared group calendars",
+    "Friend map with opt-in location sharing",
+    "File and photo sharing, private drive sync",
+    "Notes, checklists and voice notes",
+    "Plugins for extra apps and games",
+    "Signed content with visible provenance"
+  ],
+  "releaseNotes": "Shared calendars, a friend map, forums and plugins, with new screenshots."
+}

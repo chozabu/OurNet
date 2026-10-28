@@ -48,46 +48,10 @@ Expect a rating of about 12+ / PEGI 12 with "Users Interact" and "Shares Locatio
 > Notes, messages and files shared directly between your own devices and the
 > people you trust. No servers, no accounts.
 
-**Description:**
-
-> OurNet is a serverless app for notes and messaging. It shares your data
-> directly between your own devices and the people you trust, with no company
-> platform in between.
->
-> • Notes and checklists, with voice notes transcribed on your device
-> • One-to-one and group conversations, with voice and video calls
-> • Share files and photos with friends, or keep a private drive in sync across
->   your own PC and phone
-> • Private groups with shared lists, visible only to the people you choose
-> • One identity your friends recognise, across Windows and Android
-> • Everything you receive is signed, so you can see who wrote it and who
->   passed it along
->
-> There is no sign-up and no OurNet server. Devices connect peer-to-peer and
-> encrypt what they send. When a direct connection is impossible, encrypted
-> traffic may pass through a relay that cannot read it.
->
-> OurNet can stay in the notification area when you close the window, so
-> messages still arrive, and it can start when you sign in. Both are optional,
-> in Settings.
->
-> OurNet is an early release. The encryption has not yet been independently
-> audited.
-
-**What's new in this version:** First Microsoft Store release.
-
-**Product features** (one per line, up to 20):
-
-```
-Notes and checklists
-Voice notes with on-device transcription
-Direct and group messaging
-Voice and video calls
-File and photo sharing
-Private drive sync across your devices
-No accounts and no central server
-Signed content with visible provenance
-```
+**Description, product features and what's new** are in
+`store/microsoft-listing.json`. `python tool/store_listing.py` sends them,
+with the screenshots, as a new submission (same package); `--dry` checks
+without committing. Last sent 2026-10-28.
 
 **Search terms** (up to 7): `peer to peer`, `private messaging`, `notes`,
 `friend to friend`, `encrypted`, `file sharing`, `serverless`
