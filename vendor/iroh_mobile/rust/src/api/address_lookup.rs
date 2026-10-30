@@ -6,16 +6,15 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use flutter_rust_bridge::{frb, DartFnFuture};
 use iroh::address_lookup::{AddressLookup, EndpointData, EndpointInfo, Error as LookupError, Item};
 use iroh::endpoint::presets;
 use iroh::{Endpoint as IrohEndpoint, EndpointId, RelayUrl, SecretKey, TransportAddr};
 use n0_future::boxed::BoxStream;
 
-use crate::api::endpoint::{map_relay_mode, Endpoint};
+use crate::api::endpoint::{bind_with, map_relay_mode, Endpoint};
 use crate::api::key::{to_arr32, EndpointAddrParts};
-use crate::runtime::rt;
 
 type ResolveFn = Arc<dyn Fn(Vec<u8>) -> DartFnFuture<Option<EndpointAddrParts>> + Send + Sync>;
 
@@ -86,21 +85,13 @@ pub async fn endpoint_bind_with_address_lookup(
     let lookup = DartAddressLookup {
         resolve: Arc::new(resolve),
     };
-    let inner = rt()
-        .spawn(async move {
-            let mut builder = IrohEndpoint::builder(presets::N0)
-                .relay_mode(relay_mode)
-                .alpns(alpns)
-                .address_lookup(lookup);
-            if let Some(sk) = sk {
-                builder = builder.secret_key(sk);
-            }
-            let ep = builder.bind().await?;
-            Ok::<IrohEndpoint, anyhow::Error>(ep)
-        })
-        .await
-        .map_err(|e| anyhow!("endpoint bind task panicked: {e}"))??;
-    Ok(Endpoint { inner })
+    let mut builder = IrohEndpoint::builder(presets::N0)
+        .relay_mode(relay_mode)
+        .address_lookup(lookup);
+    if let Some(sk) = sk {
+        builder = builder.secret_key(sk);
+    }
+    bind_with(builder, alpns).await
 }
 
 /// Present only in libraries built with the change above: OurNet looks this symbol up before

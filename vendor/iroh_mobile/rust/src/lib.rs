@@ -7,4 +7,6 @@
 mod android;
 pub mod api;
 mod frb_generated;
+#[cfg(feature = "friend-relay")]
+pub mod friend_relay;
 mod runtime;

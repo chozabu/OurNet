@@ -23,6 +23,40 @@ use crate::runtime::rt;
 #[frb(opaque)]
 pub struct Endpoint {
     pub(crate) inner: IrohEndpoint,
+    #[allow(dead_code)]
+    pub(crate) relay: Relay,
+}
+
+/// The endpoint's friend relay (OurNet, `src/friend_relay.rs`).
+#[cfg(feature = "friend-relay")]
+pub(crate) type Relay = Option<std::sync::Arc<crate::friend_relay::FriendRelay>>;
+#[cfg(not(feature = "friend-relay"))]
+pub(crate) type Relay = ();
+
+/// Binds `builder` accepting `alpns`, on the shared runtime. With friend relays, adds the
+/// friend transport, its path selector and the link ALPN first (OurNet change).
+pub(crate) async fn bind_with(
+    builder: iroh::endpoint::Builder,
+    #[allow(unused_mut)] mut alpns: Vec<Vec<u8>>,
+) -> Result<Endpoint> {
+    rt().spawn(async move {
+        #[cfg(feature = "friend-relay")]
+        let (builder, relay) = {
+            let (builder, relay) =
+                crate::friend_relay::install(builder, &mut alpns, Default::default());
+            (builder, Some(relay))
+        };
+        #[cfg(not(feature = "friend-relay"))]
+        let relay = ();
+        let inner = builder.alpns(alpns).bind().await?;
+        #[cfg(feature = "friend-relay")]
+        if let Some(relay) = &relay {
+            relay.bound(inner.clone());
+        }
+        Ok::<Endpoint, anyhow::Error>(Endpoint { inner, relay })
+    })
+    .await
+    .map_err(|e| anyhow!("endpoint bind task panicked: {e}"))?
 }
 
 /// Maps the Dart-side relay-mode discriminant (+ custom URLs) onto iroh's `RelayMode`.
@@ -58,20 +92,11 @@ pub async fn endpoint_bind(
         Some(bytes) => Some(SecretKey::from_bytes(&to_arr32(&bytes)?)),
         None => None,
     };
-    let inner = rt()
-        .spawn(async move {
-            let mut builder = IrohEndpoint::builder(presets::N0)
-                .relay_mode(relay_mode)
-                .alpns(alpns);
-            if let Some(sk) = sk {
-                builder = builder.secret_key(sk);
-            }
-            let ep = builder.bind().await?;
-            Ok::<IrohEndpoint, anyhow::Error>(ep)
-        })
-        .await
-        .map_err(|e| anyhow!("endpoint bind task panicked: {e}"))??;
-    Ok(Endpoint { inner })
+    let mut builder = IrohEndpoint::builder(presets::N0).relay_mode(relay_mode);
+    if let Some(sk) = sk {
+        builder = builder.secret_key(sk);
+    }
+    bind_with(builder, alpns).await
 }
 
 impl Endpoint {
@@ -99,7 +124,11 @@ impl Endpoint {
 
     /// Replaces the set of accepted ALPN protocols (affects new inbound connections only).
     #[frb(sync)]
-    pub fn set_alpns(&self, alpns: Vec<Vec<u8>>) {
+    pub fn set_alpns(&self, #[allow(unused_mut)] mut alpns: Vec<Vec<u8>>) {
+        #[cfg(feature = "friend-relay")]
+        if self.relay.is_some() && !alpns.iter().any(|a| a == crate::friend_relay::FWD_ALPN) {
+            alpns.push(crate::friend_relay::FWD_ALPN.to_vec());
+        }
         self.inner.set_alpns(alpns);
     }
 
@@ -112,7 +141,12 @@ impl Endpoint {
     /// Connects to a remote endpoint over the given ALPN protocol, returning an established
     /// [`Connection`]. Mirrors `iroh::Endpoint::connect`.
     pub async fn connect(&self, addr: EndpointAddrParts, alpn: Vec<u8>) -> Result<Connection> {
-        let target = build_endpoint_addr(&addr)?;
+        #[allow(unused_mut)]
+        let mut target = build_endpoint_addr(&addr)?;
+        #[cfg(feature = "friend-relay")]
+        if let Some(relay) = &self.relay {
+            relay.add_routes(&mut target);
+        }
         let ep = self.inner.clone();
         let conn = rt()
             .spawn(async move {
@@ -121,25 +155,50 @@ impl Endpoint {
             })
             .await
             .map_err(|e| anyhow!("connect task panicked: {e}"))??;
+        self.watch(&conn);
         Ok(Connection::wrap(conn))
     }
 
+    /// Lets the friend relay drop this connection's friend path once a direct one is stable.
+    fn watch(&self, _conn: &iroh::endpoint::Connection) {
+        #[cfg(feature = "friend-relay")]
+        if let Some(relay) = &self.relay {
+            relay.watch(_conn);
+        }
+    }
+
     /// Accepts the next inbound connection, collapsing the lazy `Accept -> Incoming -> Accepting ->
-    /// Connection` chain. Resolves to `None` once the endpoint is closed.
+    /// Connection` chain. Resolves to `None` once the endpoint is closed. Friend relay links
+    /// (OurNet) are taken here and never returned.
     pub async fn accept(&self) -> Result<Option<Connection>> {
         let ep = self.inner.clone();
+        #[cfg(feature = "friend-relay")]
+        let relay = self.relay.clone();
         let maybe = rt()
             .spawn(async move {
-                let Some(incoming) = ep.accept().await else {
-                    return Ok::<Option<Connection>, anyhow::Error>(None);
-                };
-                let connecting = incoming.accept()?;
-                let conn = connecting.await?;
-                Ok(Some(Connection::wrap(conn)))
+                loop {
+                    let Some(incoming) = ep.accept().await else {
+                        return Ok::<Option<iroh::endpoint::Connection>, anyhow::Error>(None);
+                    };
+                    let connecting = incoming.accept()?;
+                    let conn = connecting.await?;
+                    #[cfg(feature = "friend-relay")]
+                    if conn.alpn() == crate::friend_relay::FWD_ALPN {
+                        match &relay {
+                            Some(relay) => relay.accept_link(conn),
+                            None => conn.close(0u32.into(), b"unsupported"),
+                        }
+                        continue;
+                    }
+                    return Ok(Some(conn));
+                }
             })
             .await
             .map_err(|e| anyhow!("accept task panicked: {e}"))??;
-        Ok(maybe)
+        Ok(maybe.map(|conn| {
+            self.watch(&conn);
+            Connection::wrap(conn)
+        }))
     }
 
     /// Accepts the next inbound connection as an unaccepted [`Incoming`], letting the caller
@@ -198,6 +257,10 @@ impl Endpoint {
 
     /// Closes the endpoint gracefully, tearing down connections and background tasks.
     pub async fn close(&self) {
+        #[cfg(feature = "friend-relay")]
+        if let Some(relay) = &self.relay {
+            relay.closed();
+        }
         let inner = self.inner.clone();
         // JoinError only if the task panics; closing is best-effort.
         let _ = rt().spawn(async move { inner.close().await }).await;

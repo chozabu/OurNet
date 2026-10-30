@@ -1833,6 +1833,8 @@ dependencies = [
  "iroh-dns",
  "jni 0.22.4",
  "n0-future",
+ "n0-watcher",
+ "noq-udp",
  "postcard",
  "rustls-platform-verifier",
  "tokio",
