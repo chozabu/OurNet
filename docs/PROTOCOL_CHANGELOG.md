@@ -7,7 +7,7 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
-## Unreleased: Addresses from friends
+## 0.2.60: Addresses from friends
 
 Additive: friend relay links (`ournet/fwd/1`) gain datagram kind 5, the
 address a friend sees the link come from (FRIEND_RELAY.md, "Public addresses
