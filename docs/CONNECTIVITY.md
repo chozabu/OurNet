@@ -91,6 +91,7 @@ fact of friendship.
 | 5 | Own relays, shared in contact cards | Dependence on number0's relays | Relay list implemented; no OurNet relay deployed yet |
 | 6 | Call media over iroh when ICE fails | Calls behind carrier-grade NAT without TURN | Spiked, not shipped (below) |
 | 7 | Packaged friend node (relay, carrier, push) | Making 3–5 one command to offer | Planned |
+| 8 | Friend relays: live traffic through a mutual friend's device | No direct path, and relays blocked or down | Implemented, not yet tested across real NATs ([FRIEND_RELAY.md](FRIEND_RELAY.md)) |
 
 ### Relay list (implemented)
 

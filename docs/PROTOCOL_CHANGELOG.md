@@ -7,6 +7,16 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: Friend relays
+
+Additive: a new ALPN `ournet/fwd/1` for friend relay links (datagrams only;
+format in `vendor/iroh_mobile/rust/src/friend_relay.rs`) and a new peer
+capability `friend_relay`, listed while a device relays. Older builds refuse
+the ALPN and ignore the capability, and they are never sent friend-relay
+addresses. iroh is pinned to exactly 1.0.0 for its unstable custom transport
+API. See [FRIEND_RELAY.md](FRIEND_RELAY.md). No change to `ournet/2`,
+existing kinds, or required capabilities.
+
 ## Unreleased: Messages beyond friends
 
 Additive: `message` payloads may carry `title` (a subject, at most 200

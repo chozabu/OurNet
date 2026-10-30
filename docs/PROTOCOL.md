@@ -500,7 +500,9 @@ heard from most recently first.
 
 ## Transfers and limits
 
-The iroh ALPN is `ournet/2`. Requests use bounded JSON QUIC streams. Pull/push
+The iroh ALPN is `ournet/2`. Friend relay links use `ournet/fwd/1`
+(datagrams only; [FRIEND_RELAY.md](FRIEND_RELAY.md)), and a device that relays
+lists the capability `friend_relay`. Requests use bounded JSON QUIC streams. Pull/push
 exchange up to 32 objects and about 1 MiB per page, with at most 16 rounds in one
 sync. Exhausted pages schedule a continuation after yielding. Changes trigger
 debounced sync; failed peers get exponential retry backoff.
