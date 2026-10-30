@@ -323,3 +323,16 @@ fn addresses_round_trip() {
     assert_eq!(parse_via(&via(a, b)), Some((a, b)));
     assert_eq!(parse_via(&CustomAddr::from_parts(0x20, &[0; 64])), None);
 }
+
+#[test]
+fn debug_format_dart_parses() {
+    let a = iroh::SecretKey::from([1u8; 32]).public();
+    let addr = TransportAddr::Custom(via(a, a));
+    let text = format!("{addr:?}");
+    // transport/lib/src/peer_path.dart reads this rendering from path events.
+    let hex = hex(a.as_bytes());
+    assert_eq!(
+        text,
+        format!("Custom(CustomAddr {{ id: 1330529874, data: [{hex}{hex}] }})")
+    );
+}

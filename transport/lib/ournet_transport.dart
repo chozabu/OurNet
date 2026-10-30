@@ -6,3 +6,4 @@ export 'src/folder_sync.dart';
 export 'src/transfers.dart';
 export 'src/traffic.dart';
 export 'src/peer_path.dart';
+export 'src/friend_relay.dart';

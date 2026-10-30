@@ -149,6 +149,7 @@ String? connectedSummary(PeerNetwork network) {
       (PathKind.lan, 'on the local network'),
       (PathKind.direct, 'direct over the internet'),
       (PathKind.relay, 'through a relay'),
+      (PathKind.friend, 'through a friend\'s device'),
     ])
       if (counts[kind] case final n?) '$n $label',
   ];

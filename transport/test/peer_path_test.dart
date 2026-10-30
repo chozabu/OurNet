@@ -25,6 +25,23 @@ void main() {
     expect(kind('Ip(81.2.3.4:5)'), PathKind.direct);
     expect(kind('Ip([2001:db8::1]:5)'), PathKind.direct);
     expect(kind('Custom(x)'), isNull);
+    final friend = PeerPath.parse(
+      'Custom(CustomAddr { id: 1330529874, data: [ababababababababababababababababababababababababababababababababcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd] })',
+      at,
+    )!;
+    expect(friend.kind, PathKind.friend);
+    expect(
+      friend.address,
+      'abababababababababababababababababababababababababababababababab',
+    );
+    expect(friend.isDirect, isFalse);
+    expect(friend.describe(), "through a friend's device");
+    expect(
+      kind(
+        'Custom(CustomAddr { id: 32, data: [abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab] })',
+      ),
+      isNull,
+    );
   });
 
   test('counts connections by the path each ended on', () {
@@ -44,6 +61,7 @@ void main() {
       'direct4': 1,
       'direct6': 1,
       'relay': 1,
+      'friend': 0,
       'unknown': 1,
       'upgraded': 1,
     });

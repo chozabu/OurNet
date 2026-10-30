@@ -9,29 +9,42 @@ enum PathKind {
 
   /// Through a relay server.
   relay,
+
+  /// Through a mutual friend's device (docs/FRIEND_RELAY.md).
+  friend,
 }
 
 /// The path a device was last reached over.
 class PeerPath {
   final PathKind kind;
 
-  /// The relay URL or the socket address.
+  /// The relay URL, the socket address, or for [PathKind.friend] the
+  /// friend's endpoint id in hex.
   final String address;
   final DateTime at;
   const PeerPath(this.kind, this.address, this.at);
 
-  bool get isDirect => kind != PathKind.relay;
+  bool get isDirect => kind != PathKind.relay && kind != PathKind.friend;
 
   /// Whether a direct path uses IPv6 (its socket address is bracketed).
   bool get isIpv6 => isDirect && address.startsWith('[');
 
-  /// Reads iroh's debug rendering of a transport address: `Relay(<url>)`
-  /// or `Ip(<socket address>)`. Null for anything else.
-  static final _relay = RegExp(r'^Relay\((.+)\)$'), _ip = RegExp(r'^Ip\((.+)\)$');
+  /// Reads iroh's debug rendering of a transport address: `Relay(<url>)`,
+  /// `Ip(<socket address>)`, or a friend relay's custom address (transport
+  /// id 0x4f4e4652, data the friend's id then the peer's; pinned by
+  /// `debug_format_dart_parses` in friend_relay_tests.rs). Null for
+  /// anything else.
+  static final _relay = RegExp(r'^Relay\((.+)\)$'),
+      _ip = RegExp(r'^Ip\((.+)\)$'),
+      _friend = RegExp(
+        r'^Custom\(CustomAddr \{ id: 1330529874, data: \[([0-9a-f]{64})[0-9a-f]{64}\] \}\)$',
+      );
 
   static PeerPath? parse(String remoteAddr, DateTime at) {
     final relay = _relay.firstMatch(remoteAddr);
     if (relay != null) return PeerPath(PathKind.relay, relay[1]!, at);
+    final friend = _friend.firstMatch(remoteAddr);
+    if (friend != null) return PeerPath(PathKind.friend, friend[1]!, at);
     final ip = _ip.firstMatch(remoteAddr);
     if (ip == null) return null;
     final address = ip[1]!;
@@ -69,6 +82,7 @@ class PeerPath {
     PathKind.lan => 'direct on the local network',
     PathKind.direct => 'direct over the internet',
     PathKind.relay => 'through relay ${Uri.tryParse(address)?.host ?? address}',
+    PathKind.friend => 'through a friend\'s device',
   };
 
   Map<String, Object?> toJson() => {
@@ -82,15 +96,15 @@ class PeerPath {
 /// (never by scanning), for diagnostics: how often devices reach each other
 /// directly, and how.
 class PathCounts {
-  int lan4 = 0, lan6 = 0, direct4 = 0, direct6 = 0, relay = 0;
+  int lan4 = 0, lan6 = 0, direct4 = 0, direct6 = 0, relay = 0, friend = 0;
 
   /// Connections whose path was never seen.
   int unknown = 0;
 
-  /// Connections that began through a relay and ended direct.
+  /// Connections that began through a relay or a friend and ended direct.
   int upgraded = 0;
 
-  int get total => lan4 + lan6 + direct4 + direct6 + relay + unknown;
+  int get total => lan4 + lan6 + direct4 + direct6 + relay + friend + unknown;
 
   /// Counts one connection that was first seen on [first] and ended on
   /// [last].
@@ -100,12 +114,16 @@ class PathCounts {
         unknown++;
       case PathKind.relay:
         relay++;
+      case PathKind.friend:
+        friend++;
       case PathKind.lan:
         last!.isIpv6 ? lan6++ : lan4++;
       case PathKind.direct:
         last!.isIpv6 ? direct6++ : direct4++;
     }
-    if (first?.kind == PathKind.relay && (last?.isDirect ?? false)) upgraded++;
+    if (first != null && !first.isDirect && (last?.isDirect ?? false)) {
+      upgraded++;
+    }
   }
 
   Map<String, int> toJson() => {
@@ -115,6 +133,7 @@ class PathCounts {
     'direct4': direct4,
     'direct6': direct6,
     'relay': relay,
+    'friend': friend,
     'unknown': unknown,
     'upgraded': upgraded,
   };

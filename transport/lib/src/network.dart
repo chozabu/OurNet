@@ -10,6 +10,7 @@ import 'package:ournet_core/ournet_core.dart';
 import 'sync_queue.dart';
 import 'traffic.dart';
 import 'peer_path.dart';
+import 'friend_relay.dart';
 
 part 'pairing.dart';
 part 'friend_invitation.dart';
@@ -404,14 +405,143 @@ class PeerNetwork implements PluginLink {
     'ping',
   ];
 
-  /// [caps], and what modules add (plugins that take live messages). A peer
-  /// takes at most 32, so modules get what the built-in ones leave.
+  /// [caps], [FriendRelayPolicy.cap] while relaying, and what modules add
+  /// (plugins that take live messages). A peer takes at most 32, so modules
+  /// get what the built-in ones leave.
   List<String> get _caps => [
     ...caps,
+    if (relaying) FriendRelayPolicy.cap,
     ...node.registry.capabilities
         .where((c) => c.length <= 32)
-        .take(32 - caps.length),
+        .take(32 - caps.length - (relaying ? 1 : 0)),
   ];
+
+  // Friend relays (docs/FRIEND_RELAY.md): this device forwards between its
+  // friends' devices when eligible, and offers friends that do when a device
+  // was last reached only through a relay or a friend, or cannot be dialled.
+
+  /// Reads power and network conditions for relaying; set by the app. Without
+  /// it, nothing is known to rule relaying out.
+  Future<RelayConditions> Function()? relayConditions;
+
+  /// Whether this device relays for friends now, and [relayStatus] why (not).
+  bool relaying = false;
+  String relayStatus = 'Off';
+
+  /// Offer friends on every dial, not only after a relayed path or a failure:
+  /// for tests and diagnostics.
+  bool offerFriendsAlways = false;
+
+  static const relayRefreshInterval = Duration(minutes: 1);
+  Timer? _relayTimer;
+  String _relayAllowed = '';
+
+  static FriendRelayNative? _friendNative;
+  static bool _friendNativeTried = false;
+
+  /// The friend relay controls, once iroh's library is loaded; null when it
+  /// has none.
+  static FriendRelayNative? get _friend {
+    if (!_friendNativeTried) {
+      _friendNativeTried = true;
+      _friendNative = FriendRelayNative.load();
+    }
+    return _friendNative;
+  }
+
+  /// Whether this build's iroh library can relay for friends. Known once the
+  /// network has started.
+  bool get friendRelaySupported => _friendNativeTried && _friendNative != null;
+
+  /// What this device forwarded for whom, and other counters, from the
+  /// native side; null while stopped or unsupported.
+  Json? friendRelayStats() {
+    final ep = _endpoint;
+    if (ep == null) return null;
+    return _friend?.stats(ep.id.asBytes());
+  }
+
+  /// Tells the native side who this device's friends' devices are and
+  /// whether it relays, from the setting and [relayConditions]. Runs on
+  /// start, every [relayRefreshInterval], and when the setting changes.
+  Future<void> refreshFriendRelay() async {
+    final ep = _endpoint;
+    final native = ep == null ? null : _friend;
+    if (ep == null || native == null) {
+      _setRelaying(
+        false,
+        native == null && ep != null ? 'Not available in this build' : 'Off',
+      );
+      return;
+    }
+    final conditions =
+        await (relayConditions?.call() ?? Future.value(const RelayConditions()))
+            .catchError((Object _) => const RelayConditions());
+    if (!identical(ep, _endpoint)) return;
+    final id = ep.id.asBytes();
+    final allowed = [
+      for (final device in node.contacts.keys)
+        if (device != node.identity.device && node.allowedPeer(device)) device,
+    ]..sort();
+    final signature = allowed.join(',');
+    if (signature != _relayAllowed && native.allow(id, allowed.map(unb64))) {
+      _relayAllowed = signature;
+    }
+    final reachable =
+        conditions.reachable ??
+        (local || ep.addr.ipAddrs.any(FriendRelayPolicy.publicAddress));
+    final decision = FriendRelayPolicy.decide(
+      enabled: FriendRelayPolicy.enabled(
+        node.store.setting(FriendRelayPolicy.setting),
+      ),
+      supported: true,
+      isDesktop: FriendRelayPolicy.desktop,
+      conditions: conditions,
+      reachable: reachable,
+    );
+    native.policy(
+      id,
+      relay: decision.relay,
+      rate: FriendRelayPolicy.rate,
+      daily: FriendRelayPolicy.daily,
+    );
+    _setRelaying(decision.relay, decision.reason);
+  }
+
+  void _setRelaying(bool relay, String reason) {
+    if (relaying == relay && relayStatus == reason) return;
+    if (relaying != relay)
+      log(relay ? 'Relaying for friends' : 'Not relaying: $reason');
+    relaying = relay;
+    relayStatus = reason;
+    notifyListeners();
+  }
+
+  /// Whether to offer friends' devices when dialling [device]: when the last
+  /// connection to it ended through a relay or a friend, or dialling it has
+  /// failed since. A device reached directly last time is dialled directly,
+  /// with relays behind, sparing friends the traffic.
+  bool _wantsFriends(String device) {
+    if (offerFriendsAlways) return true;
+    final last = paths[device];
+    return (_failures[device] ?? 0) > 0 || (last != null && !last.isDirect);
+  }
+
+  /// Sets the friends the next dial to [device] offers (none when it does not
+  /// want them).
+  void _offerFriends(iroh.Endpoint ep, String device) {
+    final native = _friend;
+    if (native == null) return;
+    final relays = _wantsFriends(device)
+        ? FriendRelayPolicy.routes(
+            node,
+            device,
+            peerCaps: peerCaps,
+            lastSync: lastSync,
+          )
+        : const <String>[];
+    native.routes(ep.id.asBytes(), unb64(device), relays.map(unb64));
+  }
 
   /// Capabilities a peer must list to sync with this build: 0.2.27 and later.
   /// Older builds are refused, so the sync paths they needed are gone.
@@ -778,6 +908,12 @@ class PeerNetwork implements PluginLink {
       for (var i = 0; i < acceptors; i++) {
         unawaited(_accept());
       }
+      _relayAllowed = '';
+      _relayTimer = Timer.periodic(
+        relayRefreshInterval,
+        (_) => unawaited(refreshFriendRelay()),
+      );
+      await refreshFriendRelay();
       log(local ? 'Local network started' : 'Network started');
       if (automatic) unawaited(syncAll());
     } catch (e) {
@@ -1044,6 +1180,7 @@ class PeerNetwork implements PluginLink {
         ? iroh.EndpointAddr(iroh.PublicKey.fromBytes(unb64(device)))
         : iroh.EndpointAddr.decode(unb64(encoded));
     var abandoned = false;
+    _offerFriends(ep, device);
     final pending = ep.connect(address, _alpn).then((connection) {
       if (abandoned || !identical(ep, _endpoint)) {
         connection.close();
@@ -2082,6 +2219,9 @@ class PeerNetwork implements PluginLink {
     _networkChange = null;
     _watchdog?.cancel();
     _watchdog = null;
+    _relayTimer?.cancel();
+    _relayTimer = null;
+    relaying = false;
     _relaysDownSince = null;
     final endpoint = _endpoint;
     _endpoint = null;
@@ -2362,11 +2502,13 @@ class DesktopViewing {
     final head = ByteData(5)
       ..setUint8(0, type)
       ..setUint32(1, body.length, Endian.little);
-    return _controlling = _controlling.then((_) async {
-      if (_closed) return;
-      final send = _controls ??= await _connection.openUni();
-      await send.writeAll([...head.buffer.asUint8List(), ...body]);
-    }).catchError((Object _) {});
+    return _controlling = _controlling
+        .then((_) async {
+          if (_closed) return;
+          final send = _controls ??= await _connection.openUni();
+          await send.writeAll([...head.buffer.asUint8List(), ...body]);
+        })
+        .catchError((Object _) {});
   }
 
   /// Sends one datagram to the served side; false if it could not go.
