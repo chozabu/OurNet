@@ -175,6 +175,8 @@ class FriendRelayNative {
   final int Function(Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>, int)
   _routes;
   final int Function(Pointer<Uint8>, Pointer<Uint8>, int) _stats;
+  final int Function(Pointer<Uint8>, int, Pointer<Uint8>, Pointer<Uint64>, int)?
+  _usage;
 
   FriendRelayNative._(DynamicLibrary lib)
     : _policy = lib
@@ -201,7 +203,25 @@ class FriendRelayNative {
           .lookupFunction<
             IntPtr Function(Pointer<Uint8>, Pointer<Uint8>, Size),
             int Function(Pointer<Uint8>, Pointer<Uint8>, int)
-          >('ournet_friend_relay_stats');
+          >('ournet_friend_relay_stats'),
+      _usage = lib.providesSymbol('ournet_friend_relay_usage')
+          ? lib.lookupFunction<
+              Int32 Function(
+                Pointer<Uint8>,
+                Uint64,
+                Pointer<Uint8>,
+                Pointer<Uint64>,
+                Size,
+              ),
+              int Function(
+                Pointer<Uint8>,
+                int,
+                Pointer<Uint8>,
+                Pointer<Uint64>,
+                int,
+              )
+            >('ournet_friend_relay_usage')
+          : null;
 
   static FriendRelayNative? load() {
     try {
@@ -264,6 +284,31 @@ class FriendRelayNative {
         (p) => _with(ids, (r) => _routes(e, p, r, ids.length ~/ 32) == 0),
       ),
     );
+  }
+
+  /// Restores what each sender (32-byte id) had forwarded on UTC [day]
+  /// (days since 1970), so the daily limit holds across restarts.
+  bool restoreUsage(List<int> endpoint, int day, Map<List<int>, int> usage) {
+    final usageFn = _usage;
+    if (usageFn == null) return false;
+    final entries = [
+      for (final e in usage.entries)
+        if (e.key.length == 32) e,
+    ];
+    final ids = _join(entries.map((e) => e.key));
+    final bytes = calloc<Uint64>(entries.isEmpty ? 1 : entries.length);
+    try {
+      for (var i = 0; i < entries.length; i++) {
+        bytes[i] = entries[i].value;
+      }
+      return _with(
+        endpoint,
+        (e) =>
+            _with(ids, (p) => usageFn(e, day, p, bytes, entries.length) == 0),
+      );
+    } finally {
+      calloc.free(bytes);
+    }
   }
 
   /// The native counters (see `stats_json` in friend_relay.rs), or null.

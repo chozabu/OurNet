@@ -615,6 +615,29 @@ impl FriendRelay {
         true
     }
 
+    /// Restores what each sender had forwarded on UTC `day`, saved by Dart before a restart,
+    /// so the daily limit holds across restarts. Ignored for any other day.
+    pub fn seed_usage(&self, day: u64, usage: impl IntoIterator<Item = (EndpointId, u64)>) {
+        if day != utc_day() {
+            return;
+        }
+        let now = Instant::now();
+        let mut meters = self.meters.lock().unwrap();
+        for (id, bytes) in usage {
+            let m = meters.entry(id).or_insert(Meter {
+                tokens: 0.0,
+                refilled: now,
+                day,
+                today: 0,
+                total: 0,
+            });
+            if m.day == day {
+                m.today = m.today.max(bytes);
+                m.total = m.total.max(m.today);
+            }
+        }
+    }
+
     fn deliver(&self, src: CustomAddr, data: Bytes) {
         let len = data.len() as u64;
         if self.inbox_tx.try_send((src, data)).is_ok() {
@@ -825,7 +848,7 @@ impl FriendRelay {
             .collect();
         let policy = self.policy.lock().unwrap().clone();
         format!(
-            "{{\"relay\":{},\"rate\":{},\"daily\":{},\"links\":[{}],\"senders\":{{{}}},\
+            "{{\"relay\":{},\"rate\":{},\"daily\":{},\"day\":{day},\"links\":[{}],\"senders\":{{{}}},\
              \"sent\":{},\"sentBytes\":{},\"received\":{},\"receivedBytes\":{},\
              \"forwarded\":{},\"forwardedBytes\":{},\"halved\":{},\"denied\":{},\
              \"limited\":{},\"noLink\":{},\"dropped\":{},\"linksOpened\":{}}}",
@@ -1113,6 +1136,35 @@ pub unsafe extern "C" fn ournet_friend_relay_routes(
     };
     let _guard = rt().enter();
     r.set_routes(peer, ids_from(relays, count));
+    0
+}
+
+/// Restores per-sender usage for UTC `day` (days since 1970): `count` 32-byte ids and as many
+/// byte counts. Ignored unless `day` is today. Returns 0, or -1 for an unknown endpoint.
+///
+/// # Safety
+/// `endpoint` points to 32 readable bytes, `ids` to `count * 32` and `bytes` to `count` u64s.
+#[no_mangle]
+pub unsafe extern "C" fn ournet_friend_relay_usage(
+    endpoint: *const u8,
+    day: u64,
+    ids: *const u8,
+    bytes: *const u64,
+    count: usize,
+) -> i32 {
+    let Some(r) = relay_for(endpoint) else {
+        return -1;
+    };
+    if count > 0 && (ids.is_null() || bytes.is_null()) {
+        return -1;
+    }
+    let ids = std::slice::from_raw_parts(ids, count * 32);
+    let bytes = std::slice::from_raw_parts(bytes, count);
+    let usage = ids
+        .chunks_exact(32)
+        .zip(bytes)
+        .filter_map(|(id, b)| Some((EndpointId::from_bytes(id.try_into().ok()?).ok()?, *b)));
+    r.seed_usage(day, usage.collect::<Vec<_>>());
     0
 }
 

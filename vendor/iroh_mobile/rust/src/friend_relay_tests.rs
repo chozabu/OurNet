@@ -275,6 +275,24 @@ fn limits_each_sender() {
 }
 
 #[test]
+fn restores_todays_usage_only() {
+    run(async {
+        let (a, f, c) = isolated(quick(), true).await;
+        f.relay.set_policy(true, 0, 1 << 20);
+        let today = utc_day();
+        f.relay.seed_usage(today - 1, [(c.id(), 1 << 20)]);
+        f.relay.seed_usage(today, [(a.id(), 1 << 20)]);
+        let json = f.relay.stats_json();
+        assert!(json.contains(&format!("\"day\":{today}")), "{json}");
+        assert!(!json.contains(&hex(c.id().as_bytes())), "{json}");
+        // A's allowance for today is already spent.
+        let conn = a.dial_via(&c, &[&f]).await;
+        assert!(conn.is_err());
+        assert!(f.relay.stats.limited.load(Relaxed) > 0);
+    });
+}
+
+#[test]
 fn keeps_one_of_two_crossing_links() {
     run(async {
         let t = quick();

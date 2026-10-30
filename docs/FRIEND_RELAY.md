@@ -56,8 +56,10 @@ approach is in `notes/spike-friend-relay.md` on the
   for that peer for 30 s.
 - **Limits.** For each sender, F forwards at most 1 MiB/s (a 2 s burst) and
   512 MiB per UTC day. Packets over the limit are dropped, and the inner
-  connection's congestion control slows down. Usage is counted in memory, so
-  a restart resets the daily count.
+  connection's congestion control slows down. Today's usage per sender is
+  saved in the setting `friendRelayUsage` with each refresh and restored when
+  the network starts (`ournet_friend_relay_usage`), so a restart keeps the
+  daily count, up to the last minute's forwarding.
 
 ## Advertising and dialling
 
@@ -100,6 +102,7 @@ one without the feature, has no friend relays, and the setting says so.
 | `ournet_friend_relay_allow(ep, ids, n)` | friends' devices |
 | `ournet_friend_relay_routes(ep, peer, ids, n)` | friends to offer when dialling `peer` |
 | `ournet_friend_relay_stats(ep, out, cap)` | counters and per-sender usage as JSON |
+| `ournet_friend_relay_usage(ep, day, ids, bytes, n)` | restore today's per-sender usage after a restart |
 
 `ep` is the endpoint's 32-byte id.
 
@@ -118,7 +121,6 @@ one without the feature, has no friend relays, and the setting says so.
 ## Known gaps
 
 - Not yet tested across real NATs or on phones. The tests run on one machine.
-- The daily usage count is lost on restart.
 - Link setup relies on iroh knowing the friend's address, from address
   lookup (n0 and stored hints in internet mode) or an earlier connection in
   this run.

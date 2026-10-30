@@ -144,6 +144,25 @@ void main() {
         contains(hex(unb64(a.identity.device))),
       );
       expect(na.friendRelayStats()!['sent'] as int, greaterThan(0));
+
+      // Today's usage is saved, to be restored after a restart.
+      await nf.refreshFriendRelay();
+      final saved = f.store.setting(PeerNetwork.relayUsageSetting) as Map;
+      expect(saved['day'], stats['day']);
+      expect(
+        (saved['senders'] as Map).keys,
+        contains(hex(unb64(a.identity.device))),
+      );
+      final before = nf.friendRelayStats()!['linksOpened'];
+      await nf.restart('test');
+      expect(
+        nf.events.where((e) => e.contains('Restarting network')),
+        isNotEmpty,
+      );
+      // A new endpoint, so new counters: only the restored usage remains.
+      expect(nf.friendRelayStats()!['linksOpened'], isNot(before));
+      final restored = nf.friendRelayStats()!['senders'] as Map;
+      expect(restored.keys, contains(hex(unb64(a.identity.device))));
     },
     timeout: const Timeout(Duration(seconds: 90)),
   );

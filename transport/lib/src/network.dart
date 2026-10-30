@@ -436,6 +436,10 @@ class PeerNetwork implements PluginLink {
   Timer? _relayTimer;
   String _relayAllowed = '';
 
+  /// Where today's per-sender relay usage is kept across restarts:
+  /// `{day, senders: {hex id: bytes}}`, saved with each refresh.
+  static const relayUsageSetting = 'friendRelayUsage';
+
   static FriendRelayNative? _friendNative;
   static bool _friendNativeTried = false;
 
@@ -505,7 +509,43 @@ class PeerNetwork implements PluginLink {
       rate: FriendRelayPolicy.rate,
       daily: FriendRelayPolicy.daily,
     );
+    _saveRelayUsage(native.stats(id));
     _setRelaying(decision.relay, decision.reason);
+  }
+
+  /// Gives the native side the usage saved today, once per endpoint.
+  void _restoreRelayUsage(iroh.Endpoint ep, FriendRelayNative native) {
+    final saved = node.store.setting(relayUsageSetting);
+    if (saved is! Map || saved['day'] is! int || saved['senders'] is! Map) {
+      return;
+    }
+    final usage = <List<int>, int>{
+      for (final MapEntry(:key, :value) in (saved['senders'] as Map).entries)
+        if (key is String && key.length == 64 && value is int && value > 0)
+          [
+            for (var i = 0; i < 64; i += 2)
+              int.parse(key.substring(i, i + 2), radix: 16),
+          ]: value,
+    };
+    if (usage.isNotEmpty) {
+      native.restoreUsage(ep.id.asBytes(), saved['day'] as int, usage);
+    }
+  }
+
+  void _saveRelayUsage(Json? stats) {
+    if (stats == null || stats['day'] is! int) return;
+    final senders = <String, int>{
+      for (final MapEntry(:key, :value)
+          in (stats['senders'] as Map? ?? const {}).entries)
+        if ((value as Map)['today'] case final int today when today > 0)
+          key as String: today,
+    };
+    final saved = node.store.setting(relayUsageSetting);
+    if (senders.isEmpty && saved == null) return;
+    node.store.set(relayUsageSetting, {
+      'day': stats['day'],
+      'senders': senders,
+    });
   }
 
   void _setRelaying(bool relay, String reason) {
@@ -909,6 +949,7 @@ class PeerNetwork implements PluginLink {
         unawaited(_accept());
       }
       _relayAllowed = '';
+      if (_friend case final native?) _restoreRelayUsage(_endpoint!, native);
       _relayTimer = Timer.periodic(
         relayRefreshInterval,
         (_) => unawaited(refreshFriendRelay()),
