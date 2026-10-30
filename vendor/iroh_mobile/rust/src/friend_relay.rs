@@ -20,9 +20,11 @@
 //! | 5    | id is seen at this address (F to id)      | 4 or 6, IP bytes, port u16 BE |
 //!
 //! Kind 5 lets a device learn its public address without iroh's relays: each friend reports the
-//! UDP address it sees a direct link come from. An address two friends agree on (same IP and
-//! port, so the NAT maps one port for every destination) is given to iroh as an external
-//! address, which it advertises in holepunching; it is withdrawn when the reports stop.
+//! UDP address it sees a direct link come from. Addresses two friends agree on (same IP and
+//! port, so the NAT maps one port for every destination) are given to iroh as external
+//! addresses, which it advertises in holepunching; failing those, one friend's address is.
+//! Reports of one IP at different ports mean a per-destination NAT, and single reports are then
+//! not used. Addresses are withdrawn when the reports stop.
 //!
 //! A packet is split in two only when it does not fit the link's datagram size: QUIC Initials
 //! are at least 1200 bytes, and a link whose path MTU discovery has not (or cannot) go past
@@ -603,26 +605,16 @@ impl FriendRelay {
         self.update_external();
     }
 
-    /// Gives iroh the addresses at least two friends currently agree on, and withdraws the
-    /// rest.
+    /// Gives iroh the addresses [`choose_external`] picks from fresh reports, and withdraws
+    /// the rest.
     fn update_external(&self) {
         let ttl = self.timings.report_ttl;
-        let mut counts: HashMap<SocketAddr, usize> = HashMap::new();
-        self.seen_at.lock().unwrap().retain(|_, (addr, at)| {
-            let fresh = at.elapsed() < ttl;
-            if fresh {
-                *counts.entry(*addr).or_insert(0) += 1;
-            }
-            fresh
-        });
-        let mut agreed: Vec<_> = counts
-            .into_iter()
-            .filter(|(_, n)| *n >= 2)
-            .map(|(a, _)| a)
-            .collect();
-        agreed.sort();
-        agreed.truncate(MAX_EXTERNAL);
-        let agreed: HashSet<SocketAddr> = agreed.into_iter().collect();
+        let reports: Vec<(SocketAddr, Instant)> = {
+            let mut seen_at = self.seen_at.lock().unwrap();
+            seen_at.retain(|_, (_, at)| at.elapsed() < ttl);
+            seen_at.values().copied().collect()
+        };
+        let agreed = choose_external(&reports);
         let (add, remove) = {
             let mut external = self.external.lock().unwrap();
             let add: Vec<_> = agreed.difference(&external).copied().collect();
@@ -1028,6 +1020,43 @@ impl FriendRelay {
             external.join(","),
         )
     }
+}
+
+/// The addresses to give iroh from friends' fresh reports (address, when): those two or more
+/// friends agree on, up to [`MAX_EXTERNAL`]; or, when none agree, the most recent single
+/// report. Reports of one IP at different ports show the NAT maps a port per destination, so
+/// then no single report is used.
+pub fn choose_external(reports: &[(SocketAddr, Instant)]) -> HashSet<SocketAddr> {
+    let mut counts: HashMap<SocketAddr, (usize, Instant)> = HashMap::new();
+    for (addr, at) in reports {
+        let entry = counts.entry(*addr).or_insert((0, *at));
+        entry.0 += 1;
+        entry.1 = entry.1.max(*at);
+    }
+    let mut agreed: Vec<SocketAddr> = counts
+        .iter()
+        .filter(|(_, (n, _))| *n >= 2)
+        .map(|(a, _)| *a)
+        .collect();
+    if !agreed.is_empty() {
+        agreed.sort();
+        agreed.truncate(MAX_EXTERNAL);
+        return agreed.into_iter().collect();
+    }
+    let per_destination = counts.keys().any(|a| {
+        counts
+            .keys()
+            .any(|b| a.ip() == b.ip() && a.port() != b.port())
+    });
+    if per_destination {
+        return HashSet::new();
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, (_, at))| *at)
+        .map(|(a, _)| a)
+        .into_iter()
+        .collect()
 }
 
 /// Whether an address can be reached from the internet: not private, loopback, link-local,

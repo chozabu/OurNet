@@ -42,20 +42,24 @@ device would offer only its interface addresses (and port mappings) for
 holepunching. So every friend with a direct link to a device tells it the
 UDP address the link comes from (link kind 5), on connect and every 30 s
 after. Reports come only over links, which only friends' devices can open,
-and only public addresses count. A device uses an address only when two
-friends currently agree on it: the same IP and port from two destinations
-shows the NAT keeps one port for all of them, which is what makes the
-address worth trying. It gives the address to iroh with
+and only public addresses count. A device prefers addresses two friends
+currently agree on: the same IP and port from two destinations shows the NAT
+keeps one port for all of them, which is what makes the address worth
+trying. When none agree, it uses the most recent single friend's address
+(one at most). When reports show one IP at different ports, the NAT maps a
+port per destination, and single reports are not used. It gives the
+addresses to iroh with
 `Endpoint::add_external_addr`, a public API, so iroh needs no patch. iroh
 then advertises the address in holepunching (its own address list changing
-starts another round). The address is withdrawn with `remove_external_addr`
-once fewer than two reports are fresh (2 min). At most four such addresses
-are kept. Reports do not count as link use, so idle links still close.
+starts another round). Addresses are withdrawn with `remove_external_addr` once
+their reports are no longer fresh (2 min). At most four agreed addresses are
+kept. Reports do not count as link use, so idle links still close.
 
-This needs two friends linked at once, which happens when a dial offers two
-(the most it offers). With one friend, or behind a NAT that maps a new port
-for each destination (common on mobile carriers), nothing is added, and
-traffic stays on the friend path if holepunching cannot otherwise succeed.
+One friend's report is a guess: behind a NAT that maps a new port for each
+destination (common on mobile carriers) its address will not reach the
+device, and holepunching to it fails harmlessly. With a second friend linked
+the conflict shows and the guess is dropped. Traffic then stays on the
+friend path if holepunching cannot otherwise succeed.
 Stats list the addresses in use (`external`), with `reportsSent` and
 `reportsTaken`.
 
@@ -138,8 +142,9 @@ one without the feature, has no friend relays, and the setting says so.
   route"); refusing links from strangers; moving to direct and then dropping
   the friend path and the links; per-sender limits; crossing links; learning
   a device's address from two friends with no relays, until iroh advertises it
-  and opens a direct path to it, and withdrawing it when one friend goes; one
-  friend's report not being enough; and the
+  and opens a direct path to it, keeping one friend's report when the other
+  goes and withdrawing it when both have; one friend's report being used;
+  agreed addresses first, and single reports dropped on conflict; and the
   path-event rendering Dart parses.
 - `transport/test/friend_relay_test.dart`: the eligibility rules, and three
   `PeerNetwork`s where A syncs with C through F (and F, not relaying, is

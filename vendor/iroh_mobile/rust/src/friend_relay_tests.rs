@@ -435,9 +435,13 @@ fn learns_its_address_from_two_friends_and_holepunches_to_it() {
         assert!(f1.relay.stats.reports_sent.load(Relaxed) > 0);
         assert!(a.relay.stats_json().contains(&format!("\"{a_at}\"")));
 
-        // One friend gone: the address is no longer agreed, and is withdrawn.
+        // One friend gone: its report alone still counts. Both gone: withdrawn.
         f2.relay.closed();
         f2.ep.close().await;
+        tokio::time::sleep(t.report_ttl + Duration::from_secs(1)).await;
+        assert_eq!(external(&a), HashSet::from([a_at]));
+        f1.relay.closed();
+        f1.ep.close().await;
         until("A withdraws it", || {
             external(&a).is_empty() && !advertised(&a, a_at)
         })
@@ -446,7 +450,7 @@ fn learns_its_address_from_two_friends_and_holepunches_to_it() {
 }
 
 #[test]
-fn one_friends_report_is_not_enough() {
+fn one_friends_report_is_enough_alone() {
     run(async {
         let t = quick();
         let a = node(&["0.0.0.0:0"], t, true).await;
@@ -461,11 +465,57 @@ fn one_friends_report_is_not_enough() {
         f.friends(&[&a, &c]);
         f.relay.set_policy(true, 0, 0);
         let _conn = a.dial_via(&c, &[&f]).await.expect("dial via F");
-        until("a report", || a.relay.stats.reports_taken.load(Relaxed) > 0).await;
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        assert!(external(&a).is_empty());
-        assert!(!advertised(&a, seen_at(&a)));
+        let (a_at, c_at) = (seen_at(&a), seen_at(&c));
+        until("A takes F's report", || {
+            external(&a) == HashSet::from([a_at])
+        })
+        .await;
+        until("C takes F's report", || {
+            external(&c) == HashSet::from([c_at])
+        })
+        .await;
+        until("A advertises it", || advertised(&a, a_at)).await;
     });
+}
+
+#[test]
+fn chooses_agreed_then_single_and_drops_singles_on_conflict() {
+    let now = Instant::now();
+    let at = |s: &str, ago: u64| (s.parse().unwrap(), now - Duration::from_secs(ago));
+    let set = |v: &[&str]| -> HashSet<std::net::SocketAddr> {
+        v.iter().map(|s| s.parse().unwrap()).collect()
+    };
+    // One friend: its address.
+    assert_eq!(
+        choose_external(&[at("81.2.3.4:5000", 1)]),
+        set(&["81.2.3.4:5000"])
+    );
+    // Two single reports from different IPs (say IPv4 and IPv6): the newer.
+    assert_eq!(
+        choose_external(&[at("81.2.3.4:5000", 5), at("[2001:db8::1]:5000", 1)]),
+        set(&["[2001:db8::1]:5000"])
+    );
+    // Agreement wins over a single report.
+    assert_eq!(
+        choose_external(&[
+            at("81.2.3.4:5000", 3),
+            at("81.2.3.4:5000", 2),
+            at("[2001:db8::1]:5000", 1)
+        ]),
+        set(&["81.2.3.4:5000"])
+    );
+    // One IP at two ports: a per-destination NAT, so no single report is used.
+    assert!(choose_external(&[at("81.2.3.4:5000", 2), at("81.2.3.4:6000", 1)]).is_empty());
+    // An agreed address stays even then.
+    assert_eq!(
+        choose_external(&[
+            at("81.2.3.4:5000", 3),
+            at("81.2.3.4:5000", 2),
+            at("81.2.3.4:6000", 1)
+        ]),
+        set(&["81.2.3.4:5000"])
+    );
+    assert!(choose_external(&[]).is_empty());
 }
 
 #[test]
