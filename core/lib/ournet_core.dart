@@ -11,7 +11,7 @@ export 'src/plugin_manifest.dart';
 export 'src/plugins.dart';
 export 'src/plugin_release.dart';
 export 'package:ournet_native/plugin_host.dart' show PluginHost;
-export 'package:ournet_native/ournet_native.dart' show NativeDisk;
+export 'package:ournet_native/ournet_native.dart' show NativeDisk, NativePower;
 export 'package:ournet_native/noise_suppression.dart' show NoiseSuppression;
 export 'package:ournet_native/desktop.dart'
     show

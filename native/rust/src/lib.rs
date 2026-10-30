@@ -14,6 +14,7 @@ mod denoise;
 mod desktop;
 mod desktop_os;
 mod desktop_audio;
+mod power;
 
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, Tag};
@@ -45,7 +46,7 @@ unsafe fn array<const N: usize>(data: *const u8) -> [u8; N] {
 /// Bumped when a function is added or changes.
 #[no_mangle]
 pub extern "C" fn ournet_native_version() -> u32 {
-    3
+    4
 }
 
 /// Strict verification: rejects non-canonical and small-order values. Dart

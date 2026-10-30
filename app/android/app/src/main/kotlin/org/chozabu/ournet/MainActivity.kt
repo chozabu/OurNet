@@ -27,6 +27,22 @@ class MainActivity : FlutterActivity() {
         else "$maker $model"
     }
 
+    // For relaying for friends: plugged in, battery or data saver on, and
+    // a metered network (docs/FRIEND_RELAY.md).
+    private fun powerState(): Map<String, Boolean> {
+        val power = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        val net = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val battery = registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val plugged = (battery?.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+        val dataSaver = net.restrictBackgroundStatus ==
+            android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
+        return mapOf(
+            "mains" to plugged,
+            "saver" to (power.isPowerSaveMode || dataSaver),
+            "metered" to net.isActiveNetworkMetered,
+        )
+    }
+
     // Many Wi-Fi drivers drop broadcast packets unless an app holds this, so
     // an open Add device screen would never hear a new device's probe.
     private var multicast: android.net.wifi.WifiManager.MulticastLock? = null
@@ -137,6 +153,7 @@ class MainActivity : FlutterActivity() {
         MethodChannel(engine.dartExecutor.binaryMessenger, "ournet/device").setMethodCallHandler { call, result ->
             when (call.method) {
                 "model" -> result.success(deviceModel())
+                "power" -> result.success(powerState())
                 "lanDiscovery" -> {
                     lanDiscovery(call.arguments == true)
                     result.success(null)

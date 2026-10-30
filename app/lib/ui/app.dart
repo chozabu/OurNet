@@ -5,6 +5,7 @@ import 'conversation_history.dart';
 import 'conversation_search.dart';
 import 'chat_bubble.dart';
 import 'message_text.dart';
+import '../services/relay_conditions.dart';
 import '../services/noise_suppression.dart';
 import '../services/typing.dart';
 import '../services/windows_tun.dart';
@@ -49,6 +50,7 @@ import 'package:ournet_transport/ournet_transport.dart'
         FirstSyncKind,
         FirstSyncPlan,
         FolderSync,
+        FriendRelayPolicy,
         plainError;
 import '../services/network.dart';
 import '../services/files.dart';
@@ -690,6 +692,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     calls.busyElsewhere = () => groupCalls.active;
     // Rebuilding the endpoint would cut a call's signalling.
     network.canRestart = () => calls.phase == 'idle' && !groupCalls.active;
+    if (widget.enablePlatform) network.relayConditions = relayConditions;
     if (widget.enablePlatform && Platform.isAndroid) {
       onNetworkChanged(network.networkChanged);
     }

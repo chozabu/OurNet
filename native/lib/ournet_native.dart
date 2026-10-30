@@ -315,6 +315,33 @@ abstract final class NativeImage {
   }
 }
 
+@Native<Uint32 Function()>(symbol: 'ournet_power_state')
+external int _powerState();
+
+/// Power and network cost, for whether this device relays for friends.
+abstract final class NativePower {
+  static final bool _available = () {
+    try {
+      return _version() >= 4;
+    } catch (_) {
+      return false;
+    }
+  }();
+
+  /// Whether the machine runs on mains, a battery saver is on, and the
+  /// network is metered; each null when not known here (no library, or a
+  /// platform that does not say).
+  static ({bool? mains, bool saver, bool? metered}) state() {
+    if (!_available) return (mains: null, saver: false, metered: null);
+    final bits = _powerState();
+    return (
+      mains: bits & 1 != 0 ? bits & 2 != 0 : null,
+      saver: bits & 4 != 0,
+      metered: bits & 8 != 0 ? bits & 16 != 0 : null,
+    );
+  }
+}
+
 /// Disk questions Dart cannot ask itself.
 abstract final class NativeDisk {
   static final bool _available = () {

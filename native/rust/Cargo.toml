@@ -26,7 +26,7 @@ nnnoiseless = { version = "=0.5.2", default-features = false }
 sysinfo = { version = "=0.39.6", default-features = false, features = ["system", "network", "component", "disk"] }
 windows-sys = { version = "0.61.2", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_ProcessStatus", "Win32_System_Performance", "Win32_System_LibraryLoader", "Win32_Storage_FileSystem", "Win32_UI_HiDpi", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole"] }
 # Remote desktop (src/desktop.rs): DXGI capture, D3D11 video, Media Foundation H.264.
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Media_MediaFoundation", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_Variant"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Media_MediaFoundation", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_Variant", "Win32_System_Power", "Win32_Networking_NetworkListManager"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni-sys = "0.3"

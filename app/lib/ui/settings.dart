@@ -740,6 +740,34 @@ extension _SettingsPages on _OurNetAppState {
         child: Text(network.running ? 'Disconnect' : 'Connect locally'),
       ),
     ),
+    SwitchListTile(
+      title: const Text('Relay for friends'),
+      subtitle: Text(
+        '${network.friendRelaySupported ? network.relayStatus : 'Not available in this build'}. '
+        'When two of your friends cannot connect directly, their devices can '
+        'pass traffic through this one, up to 1 MB/s and 512 MB a day each. '
+        'It stays end-to-end encrypted, but this device sees which of your '
+        'friends talk to each other, when and how much; friends who relay for '
+        'you see the same about you. Pauses on battery, metered networks and '
+        'savers. On by default for computers, off for phones.',
+      ),
+      value: FriendRelayPolicy.enabled(
+        node.store.setting(FriendRelayPolicy.setting),
+      ),
+      onChanged: network.friendRelaySupported
+          ? (v) => act(() async {
+              node.store.set(FriendRelayPolicy.setting, v);
+              await network.refreshFriendRelay();
+              refresh();
+            })
+          : null,
+    ),
+    if (friendRelayUsage(network) case final usage?)
+      ListTile(
+        leading: const Icon(Icons.swap_horiz),
+        title: const Text('Friend relay use'),
+        subtitle: Text(usage),
+      ),
     ListTile(
       title: const Text('Relays'),
       subtitle: Text(
@@ -953,4 +981,27 @@ extension _SettingsPages on _OurNetAppState {
           ),
         ),
   ];
+}
+
+/// What this device relayed for friends and sent through them since the
+/// network started, or null when neither happened.
+String? friendRelayUsage(Network network) {
+  final stats = network.friendRelayStats();
+  if (stats == null) return null;
+  var today = 0, senders = 0;
+  for (final usage in (stats['senders'] as Map? ?? const {}).values) {
+    final bytes = (usage as Map)['today'] as int? ?? 0;
+    if (bytes > 0) senders++;
+    today += bytes;
+  }
+  final sent = stats['sentBytes'] as int? ?? 0;
+  final received = stats['receivedBytes'] as int? ?? 0;
+  if (today == 0 && sent + received == 0) return null;
+  return [
+    if (today > 0)
+      'Relayed ${bytesText(today)} today for $senders '
+          'friend${senders == 1 ? '\'s device' : 's\' devices'}',
+    if (sent + received > 0)
+      'Through friends: ${bytesText(sent)} sent, ${bytesText(received)} received',
+  ].join('\n');
 }
