@@ -1,7 +1,7 @@
 //! Three in-process endpoints, A and C reaching each other through their mutual friend F.
 //! Run with `cargo test --release friend_relay` (debug builds work, more slowly).
 
-use std::{future::Future, sync::atomic::Ordering::Relaxed, time::Duration};
+use std::{collections::HashSet, future::Future, sync::atomic::Ordering::Relaxed, time::Duration};
 
 use iroh::{
     address_lookup::{EndpointData, EndpointInfo, MemoryLookup},
@@ -25,6 +25,9 @@ fn quick() -> Timings {
         redial: Duration::from_millis(500),
         half_ttl: Duration::from_secs(2),
         sweep: Duration::from_millis(250),
+        report_every: Duration::from_secs(1),
+        report_ttl: Duration::from_secs(3),
+        private_reports: true,
     }
 }
 
@@ -97,13 +100,19 @@ impl Node {
         self.ep.id()
     }
 
-    /// Lets this node's lookup find `other` at its bound sockets.
+    /// Lets this node's lookup find `other` at its bound sockets (on loopback when bound to
+    /// the unspecified address).
     fn knows(&self, other: &Node) {
         let data: EndpointData = other
             .ep
             .bound_sockets()
             .into_iter()
-            .map(TransportAddr::Ip)
+            .map(|mut s| {
+                if s.ip().is_unspecified() {
+                    s.set_ip(std::net::Ipv4Addr::LOCALHOST.into());
+                }
+                TransportAddr::Ip(s)
+            })
             .collect();
         self.lookup
             .add_endpoint_info(EndpointInfo::from_parts(other.id(), data));
@@ -323,6 +332,163 @@ fn keeps_one_of_two_crossing_links() {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     });
+}
+
+/// The loopback address a node bound to 0.0.0.0 is seen at by friends on loopback. iroh does
+/// not advertise loopback while the machine has another interface, so only friends' reports
+/// tell anyone about it.
+fn seen_at(n: &Node) -> std::net::SocketAddr {
+    let port = n.ep.bound_sockets()[0].port();
+    std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), port)
+}
+
+fn external(n: &Node) -> HashSet<std::net::SocketAddr> {
+    n.relay.external.lock().unwrap().clone()
+}
+
+fn advertised(n: &Node, addr: std::net::SocketAddr) -> bool {
+    n.ep.addr().ip_addrs().any(|a| *a == addr)
+}
+
+async fn until(what: &str, mut check: impl FnMut() -> bool) {
+    let start = Instant::now();
+    while !check() {
+        assert!(start.elapsed() < Duration::from_secs(10), "{what}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[test]
+fn learns_its_address_from_two_friends_and_holepunches_to_it() {
+    run(async {
+        let t = quick();
+        let a = node(&["0.0.0.0:0"], t, true).await;
+        let f1 = node(&["127.0.0.1:0"], t, true).await;
+        let f2 = node(&["127.0.0.1:0"], t, true).await;
+        let c = node(&["0.0.0.0:0"], t, true).await;
+        for f in [&f1, &f2] {
+            a.knows(f);
+            c.knows(f);
+            f.knows(&a);
+            f.knows(&c);
+            f.friends(&[&a, &c]);
+            f.relay.set_policy(true, 0, 0);
+        }
+        a.friends(&[&f1, &f2]);
+        c.friends(&[&f1, &f2]);
+        let (a_at, c_at) = (seen_at(&a), seen_at(&c));
+        assert!(
+            !advertised(&a, a_at) && !advertised(&c, c_at),
+            "loopback already advertised"
+        );
+
+        let conn = a.dial_via(&c, &[&f1, &f2]).await.expect("dial via friends");
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        {
+            let opened = opened.clone();
+            let mut events = conn.path_events();
+            tokio::spawn(async move {
+                while let Some(e) = events.next().await {
+                    if let PathEvent::Opened { remote_addr, .. } = e {
+                        opened.lock().unwrap().push(remote_addr);
+                    }
+                }
+            });
+        }
+        // Both friends report; A and C each take the address they agree on, and iroh
+        // advertises it.
+        until("A's address agreed", || external(&a).contains(&a_at)).await;
+        until("C's address agreed", || external(&c).contains(&c_at)).await;
+        until("A advertises it", || advertised(&a, a_at)).await;
+        until("C advertises it", || advertised(&c, c_at)).await;
+        // Holepunching reaches C at the address only its friends told it.
+        let reached = |conn: &Connection| {
+            conn.paths()
+                .iter()
+                .any(|p| matches!(p.remote_addr(), TransportAddr::Ip(x) if *x == c_at))
+                || opened
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|a| matches!(a, TransportAddr::Ip(x) if *x == c_at))
+        };
+        let start = Instant::now();
+        while !reached(&conn) {
+            let paths: Vec<_> = conn
+                .paths()
+                .iter()
+                .map(|p| p.remote_addr().clone())
+                .collect();
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "no path to {c_at}; paths {paths:?}, opened {:?}, C advertises {:?}",
+                opened.lock().unwrap(),
+                c.ep.addr()
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        until("a direct path selected", || {
+            matches!(selected(&conn), Some(TransportAddr::Ip(_)))
+        })
+        .await;
+        assert_eq!(request(&conn, 64 << 10).await.unwrap(), 64 << 10);
+        assert!(f1.relay.stats.reports_sent.load(Relaxed) > 0);
+        assert!(a.relay.stats_json().contains(&format!("\"{a_at}\"")));
+
+        // One friend gone: the address is no longer agreed, and is withdrawn.
+        f2.relay.closed();
+        f2.ep.close().await;
+        until("A withdraws it", || {
+            external(&a).is_empty() && !advertised(&a, a_at)
+        })
+        .await;
+    });
+}
+
+#[test]
+fn one_friends_report_is_not_enough() {
+    run(async {
+        let t = quick();
+        let a = node(&["0.0.0.0:0"], t, true).await;
+        let f = node(&["127.0.0.1:0"], t, true).await;
+        let c = node(&["0.0.0.0:0"], t, true).await;
+        a.knows(&f);
+        c.knows(&f);
+        f.knows(&a);
+        f.knows(&c);
+        a.friends(&[&f]);
+        c.friends(&[&f]);
+        f.friends(&[&a, &c]);
+        f.relay.set_policy(true, 0, 0);
+        let _conn = a.dial_via(&c, &[&f]).await.expect("dial via F");
+        until("a report", || a.relay.stats.reports_taken.load(Relaxed) > 0).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(external(&a).is_empty());
+        assert!(!advertised(&a, seen_at(&a)));
+    });
+}
+
+#[test]
+fn only_public_reports_count_outside_tests() {
+    let p = |s: &str| public(&s.parse().unwrap());
+    assert!(p("81.2.3.4"));
+    assert!(p("2001:db8::1"));
+    for s in [
+        "10.0.0.1",
+        "192.168.1.1",
+        "172.16.0.1",
+        "100.64.0.1",
+        "127.0.0.1",
+        "169.254.1.1",
+        "0.0.0.0",
+        "224.0.0.1",
+        "::1",
+        "fe80::1",
+        "fd00::1",
+        "::ffff:10.0.0.1",
+    ] {
+        assert!(!p(s), "{s}");
+    }
 }
 
 #[test]

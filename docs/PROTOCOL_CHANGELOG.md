@@ -7,7 +7,13 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
-## Unreleased: Friend relays
+## Unreleased: Addresses from friends
+
+Additive: friend relay links (`ournet/fwd/1`) gain datagram kind 5, the
+address a friend sees the link come from (FRIEND_RELAY.md, "Public addresses
+from friends"). 0.2.59 ignores unknown kinds. No ALPN or capability change.
+
+## 0.2.59: Friend relays
 
 Additive: a new ALPN `ournet/fwd/1` for friend relay links (datagrams only;
 format in `vendor/iroh_mobile/rust/src/friend_relay.rs`) and a new peer

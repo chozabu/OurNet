@@ -17,6 +17,12 @@
 //! | 2    | forward to id, half of a packet           | frag id u16 BE, index u8, half |
 //! | 3    | delivered from id, half of a packet       | frag id u16 BE, index u8, half |
 //! | 4    | no route to id (F to sender)              | -                             |
+//! | 5    | id is seen at this address (F to id)      | 4 or 6, IP bytes, port u16 BE |
+//!
+//! Kind 5 lets a device learn its public address without iroh's relays: each friend reports the
+//! UDP address it sees a direct link come from. An address two friends agree on (same IP and
+//! port, so the NAT maps one port for every destination) is given to iroh as an external
+//! address, which it advertises in holepunching; it is withdrawn when the reports stop.
 //!
 //! A packet is split in two only when it does not fit the link's datagram size: QUIC Initials
 //! are at least 1200 bytes, and a link whose path MTU discovery has not (or cannot) go past
@@ -28,6 +34,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt, io,
+    net::{IpAddr, SocketAddr},
     num::NonZeroUsize,
     sync::{
         atomic::{AtomicU16, AtomicU64, Ordering::Relaxed},
@@ -63,6 +70,9 @@ const KIND_DELIVER: u8 = 1;
 const KIND_FORWARD_HALF: u8 = 2;
 const KIND_DELIVER_HALF: u8 = 3;
 const KIND_NO_ROUTE: u8 = 4;
+const KIND_SEEN_AT: u8 = 5;
+/// Friend-reported addresses given to iroh at most.
+const MAX_EXTERNAL: usize = 4;
 const HEADER: usize = 33;
 const HALF_HEADER: usize = HEADER + 3;
 
@@ -86,6 +96,12 @@ pub struct Timings {
     pub half_ttl: Duration,
     /// How often idle links, stale halves and expired marks are swept.
     pub sweep: Duration,
+    /// How often a friend repeats the address it sees a link come from.
+    pub report_every: Duration,
+    /// A friend's report counts for this long after it last arrived.
+    pub report_ttl: Duration,
+    /// Accept reported addresses that are not public: tests on loopback only.
+    pub private_reports: bool,
 }
 
 impl Default for Timings {
@@ -97,6 +113,9 @@ impl Default for Timings {
             redial: Duration::from_secs(5),
             half_ttl: Duration::from_secs(2),
             sweep: Duration::from_secs(5),
+            report_every: Duration::from_secs(30),
+            report_ttl: Duration::from_secs(120),
+            private_reports: false,
         }
     }
 }
@@ -185,6 +204,9 @@ pub struct Stats {
     /// Packets too large even in halves, or refused by a link.
     pub dropped: AtomicU64,
     pub links_opened: AtomicU64,
+    /// Address reports sent to and taken from friends.
+    pub reports_sent: AtomicU64,
+    pub reports_taken: AtomicU64,
 }
 
 type Packet = (CustomAddr, Bytes);
@@ -197,6 +219,8 @@ struct Link {
     /// crossing links.
     preferred: bool,
     active: Arc<AtomicU64>,
+    /// The address last reported to this friend, and when.
+    reported: Option<(SocketAddr, Instant)>,
 }
 
 /// Per-endpoint friend relay state, shared by the custom transport, the links and Dart.
@@ -218,6 +242,10 @@ pub struct FriendRelay {
     meters: Mutex<HashMap<EndpointId, Meter>>,
     halves: Mutex<Halves>,
     next_half: AtomicU16,
+    /// The address each friend last said it sees this device at, and when.
+    seen_at: Mutex<HashMap<EndpointId, (SocketAddr, Instant)>>,
+    /// Addresses given to iroh as external.
+    external: Mutex<HashSet<SocketAddr>>,
     inbox_tx: mpsc::Sender<Packet>,
     inbox_rx: Mutex<Option<mpsc::Receiver<Packet>>>,
     local_addrs: n0_watcher::Watchable<Vec<CustomAddr>>,
@@ -276,6 +304,8 @@ impl FriendRelay {
             meters: Default::default(),
             halves: Default::default(),
             next_half: AtomicU16::new(0),
+            seen_at: Default::default(),
+            external: Default::default(),
             inbox_tx: tx,
             inbox_rx: Mutex::new(Some(rx)),
             local_addrs: n0_watcher::Watchable::new(Vec::new()),
@@ -451,15 +481,20 @@ impl FriendRelay {
                     conn: conn.clone(),
                     preferred,
                     active: active.clone(),
+                    reported: None,
                 },
             );
         }
         self.stats.links_opened.fetch_add(1, Relaxed);
+        self.report_links();
         let relay = Arc::downgrade(self);
         rt().spawn(async move {
             while let Ok(d) = conn.read_datagram().await {
                 let Some(relay) = relay.upgrade() else { break };
-                active.store(relay.now_ms(), Relaxed);
+                // Address reports keep coming while a link is open: they are not use.
+                if d.first() != Some(&KIND_SEEN_AT) {
+                    active.store(relay.now_ms(), Relaxed);
+                }
                 relay.on_datagram(remote, d);
             }
             if let Some(relay) = relay.upgrade() {
@@ -500,6 +535,115 @@ impl FriendRelay {
             .lock()
             .unwrap()
             .retain(|_, at| at.elapsed() < redial);
+        self.report_links();
+        self.update_external();
+    }
+
+    /// Tells each friend with a direct link the address its link comes from, when that changed
+    /// or [`Timings::report_every`] has passed.
+    fn report_links(&self) {
+        let every = self.timings.report_every;
+        for (id, link) in self.links.lock().unwrap().iter_mut() {
+            let seen = link
+                .conn
+                .paths()
+                .iter()
+                .find_map(|p| match p.remote_addr() {
+                    TransportAddr::Ip(addr) if p.is_selected() => Some(*addr),
+                    _ => None,
+                });
+            let Some(seen) = seen else { continue };
+            if link
+                .reported
+                .is_some_and(|(addr, at)| addr == seen && at.elapsed() < every)
+            {
+                continue;
+            }
+            let mut b = BytesMut::with_capacity(HEADER + 19);
+            b.put_u8(KIND_SEEN_AT);
+            b.put_slice(id.as_bytes());
+            match seen.ip() {
+                IpAddr::V4(ip) => {
+                    b.put_u8(4);
+                    b.put_slice(&ip.octets());
+                }
+                IpAddr::V6(ip) => {
+                    b.put_u8(6);
+                    b.put_slice(&ip.octets());
+                }
+            }
+            b.put_u16(seen.port());
+            if link.conn.send_datagram(b.freeze()).is_ok() {
+                link.reported = Some((seen, Instant::now()));
+                self.stats.reports_sent.fetch_add(1, Relaxed);
+            }
+        }
+    }
+
+    /// Takes a friend's report of the address it sees this device at.
+    fn seen_at(&self, from: EndpointId, d: &[u8]) {
+        let rest = &d[HEADER..];
+        let ip = match rest {
+            [4, a, b, c, e, ..] if rest.len() == 7 => IpAddr::from([*a, *b, *c, *e]),
+            [6, ..] if rest.len() == 19 => {
+                IpAddr::from(<[u8; 16]>::try_from(&rest[1..17]).unwrap())
+            }
+            _ => return,
+        };
+        let port = u16::from_be_bytes([rest[rest.len() - 2], rest[rest.len() - 1]]);
+        let addr = SocketAddr::new(ip, port);
+        if port == 0 || !(self.timings.private_reports || public(&ip)) {
+            return;
+        }
+        self.seen_at
+            .lock()
+            .unwrap()
+            .insert(from, (addr, Instant::now()));
+        self.stats.reports_taken.fetch_add(1, Relaxed);
+        self.update_external();
+    }
+
+    /// Gives iroh the addresses at least two friends currently agree on, and withdraws the
+    /// rest.
+    fn update_external(&self) {
+        let ttl = self.timings.report_ttl;
+        let mut counts: HashMap<SocketAddr, usize> = HashMap::new();
+        self.seen_at.lock().unwrap().retain(|_, (addr, at)| {
+            let fresh = at.elapsed() < ttl;
+            if fresh {
+                *counts.entry(*addr).or_insert(0) += 1;
+            }
+            fresh
+        });
+        let mut agreed: Vec<_> = counts
+            .into_iter()
+            .filter(|(_, n)| *n >= 2)
+            .map(|(a, _)| a)
+            .collect();
+        agreed.sort();
+        agreed.truncate(MAX_EXTERNAL);
+        let agreed: HashSet<SocketAddr> = agreed.into_iter().collect();
+        let (add, remove) = {
+            let mut external = self.external.lock().unwrap();
+            let add: Vec<_> = agreed.difference(&external).copied().collect();
+            let remove: Vec<_> = external.difference(&agreed).copied().collect();
+            *external = agreed;
+            (add, remove)
+        };
+        if add.is_empty() && remove.is_empty() {
+            return;
+        }
+        let Some(endpoint) = self.endpoint.get().cloned() else {
+            return;
+        };
+        rt().spawn(async move {
+            for addr in remove {
+                endpoint.remove_external_addr(&addr).await;
+            }
+            for addr in add {
+                endpoint.add_external_addr(addr).await;
+            }
+        });
     }
 
     /// Sends `data` to `other` on a link as one datagram, or as two halves when it does not
@@ -684,6 +828,7 @@ impl FriendRelay {
                     }
                 }
             }
+            KIND_SEEN_AT if Some(&other) == self.me.get() => self.seen_at(from, &d),
             KIND_NO_ROUTE => {
                 self.no_route
                     .lock()
@@ -846,12 +991,21 @@ impl FriendRelay {
             .keys()
             .map(|id| format!("\"{}\"", hex(id.as_bytes())))
             .collect();
+        let mut external: Vec<String> = self
+            .external
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|a| format!("\"{a}\""))
+            .collect();
+        external.sort();
         let policy = self.policy.lock().unwrap().clone();
         format!(
             "{{\"relay\":{},\"rate\":{},\"daily\":{},\"day\":{day},\"links\":[{}],\"senders\":{{{}}},\
              \"sent\":{},\"sentBytes\":{},\"received\":{},\"receivedBytes\":{},\
              \"forwarded\":{},\"forwardedBytes\":{},\"halved\":{},\"denied\":{},\
-             \"limited\":{},\"noLink\":{},\"dropped\":{},\"linksOpened\":{}}}",
+             \"limited\":{},\"noLink\":{},\"dropped\":{},\"linksOpened\":{},\
+             \"reportsSent\":{},\"reportsTaken\":{},\"external\":[{}]}}",
             policy.relay,
             policy.rate,
             policy.daily,
@@ -869,7 +1023,39 @@ impl FriendRelay {
             g(&s.no_link),
             g(&s.dropped),
             g(&s.links_opened),
+            g(&s.reports_sent),
+            g(&s.reports_taken),
+            external.join(","),
         )
+    }
+}
+
+/// Whether an address can be reached from the internet: not private, loopback, link-local,
+/// shared (100.64/10), unique-local, multicast or unspecified.
+fn public(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || a == 0
+                || a == 100 && (64..128).contains(&b))
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return public(&IpAddr::V4(v4));
+            }
+            let first = v6.segments()[0];
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || first & 0xfe00 == 0xfc00
+                || first & 0xffc0 == 0xfe80)
+        }
     }
 }
 

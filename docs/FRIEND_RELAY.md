@@ -35,6 +35,30 @@ approach is in `notes/spike-friend-relay.md` on the
   and never returns them to Dart. Of two crossing links, both ends keep the
   one the lower endpoint id dialled.
 
+## Public addresses from friends
+
+iroh learns a device's public address from its relays. Without relays, a
+device would offer only its interface addresses (and port mappings) for
+holepunching. So every friend with a direct link to a device tells it the
+UDP address the link comes from (link kind 5), on connect and every 30 s
+after. Reports come only over links, which only friends' devices can open,
+and only public addresses count. A device uses an address only when two
+friends currently agree on it: the same IP and port from two destinations
+shows the NAT keeps one port for all of them, which is what makes the
+address worth trying. It gives the address to iroh with
+`Endpoint::add_external_addr`, a public API, so iroh needs no patch. iroh
+then advertises the address in holepunching (its own address list changing
+starts another round). The address is withdrawn with `remove_external_addr`
+once fewer than two reports are fresh (2 min). At most four such addresses
+are kept. Reports do not count as link use, so idle links still close.
+
+This needs two friends linked at once, which happens when a dial offers two
+(the most it offers). With one friend, or behind a NAT that maps a new port
+for each destination (common on mobile carriers), nothing is added, and
+traffic stays on the friend path if holepunching cannot otherwise succeed.
+Stats list the addresses in use (`external`), with `reportsSent` and
+`reportsTaken`.
+
 ## Who relays
 
 - **Eligibility** (`FriendRelayPolicy.decide` in
@@ -112,7 +136,10 @@ one without the feature, has no friend relays, and the setting says so.
   in-process endpoints. The tests cover: connecting through a friend only;
   halves without path MTU discovery; refusing when not relaying (and "no
   route"); refusing links from strangers; moving to direct and then dropping
-  the friend path and the links; per-sender limits; crossing links; and the
+  the friend path and the links; per-sender limits; crossing links; learning
+  a device's address from two friends with no relays, until iroh advertises it
+  and opens a direct path to it, and withdrawing it when one friend goes; one
+  friend's report not being enough; and the
   path-event rendering Dart parses.
 - `transport/test/friend_relay_test.dart`: the eligibility rules, and three
   `PeerNetwork`s where A syncs with C through F (and F, not relaying, is
