@@ -7,6 +7,16 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## 0.2.61: Call media over iroh
+
+Additive: a new ALPN `ournet/media/1` carrying a call's WebRTC packets as
+datagrams between the two devices' call shims, when ICE finds no other path
+(format in `vendor/iroh_mobile/rust/src/call_media.rs`, CONNECTIVITY.md
+piece 6). Older builds refuse the ALPN, and nothing in signalling changes:
+each side offers its own shim to its own WebRTC. Call entries in `message`
+payloads gain an optional `route` (`local`, `direct`, `friend` or `relay`),
+which older builds ignore. No capability change.
+
 ## 0.2.60: Addresses from friends
 
 Additive: friend relay links (`ournet/fwd/1`) gain datagram kind 5, the
