@@ -22,7 +22,18 @@ class PeerPath {
   /// friend's endpoint id in hex.
   final String address;
   final DateTime at;
-  const PeerPath(this.kind, this.address, this.at);
+
+  /// For a direct path: the relay or friend the connection began on, which
+  /// only helped the devices find each other.
+  final PathKind? startedVia;
+  const PeerPath(this.kind, this.address, this.at, {this.startedVia});
+
+  /// This path, noting that the connection began on [first] when that was a
+  /// relay or a friend and this one is direct.
+  PeerPath after(PeerPath? first) =>
+      isDirect && first != null && !first.isDirect
+      ? PeerPath(kind, address, at, startedVia: first.kind)
+      : this;
 
   bool get isDirect => kind != PathKind.relay && kind != PathKind.friend;
 
@@ -79,16 +90,26 @@ class PeerPath {
 
   /// A short description for people, such as `direct on the local network`.
   String describe() => switch (kind) {
-    PathKind.lan => 'direct on the local network',
-    PathKind.direct => 'direct over the internet',
-    PathKind.relay => 'through relay ${Uri.tryParse(address)?.host ?? address}',
+    PathKind.lan => 'direct on the local network$_helped',
+    PathKind.direct => 'direct over the internet$_helped',
+    PathKind.relay => 'through relay $relayName',
     PathKind.friend => 'through a friend\'s device',
+  };
+
+  /// The relay server's host name, for [PathKind.relay].
+  String get relayName => Uri.tryParse(address)?.host ?? address;
+
+  String get _helped => switch (startedVia) {
+    PathKind.relay => ' (relay used to connect)',
+    PathKind.friend => ' (friend used to connect)',
+    _ => '',
   };
 
   Map<String, Object?> toJson() => {
     'kind': kind.name,
     'address': address,
     'at': at.toIso8601String(),
+    if (startedVia != null) 'startedVia': startedVia!.name,
   };
 }
 

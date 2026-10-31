@@ -10,6 +10,15 @@ void main() {
     final answered = {'video': true, 'outcome': 'answered', 'seconds': 754};
     expect(callSummary(answered, mine: true), 'Outgoing video call · 12 min');
     expect(callSummary(answered, mine: false), 'Incoming video call · 12 min');
+    // Newer callers record how media travelled.
+    expect(
+      callSummary({...answered, 'route': 'relay'}, mine: true),
+      'Outgoing video call · 12 min · Via relay',
+    );
+    expect(
+      callSummary({...answered, 'route': 'something-new'}, mine: true),
+      'Outgoing video call · 12 min',
+    );
     final declined = {'video': false, 'outcome': 'declined'};
     expect(callSummary(declined, mine: true), 'Call declined');
     expect(callSummary(declined, mine: false), 'You declined a call');

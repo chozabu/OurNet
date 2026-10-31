@@ -44,6 +44,20 @@ void main() {
     );
   });
 
+  test('a direct path says when a relay only helped to connect', () {
+    final relay = PeerPath.parse('Relay(https://r.example/)', at)!;
+    final direct = PeerPath.parse('Ip(81.2.3.4:5)', at)!;
+    expect(
+      direct.after(relay).describe(),
+      'direct over the internet (relay used to connect)',
+    );
+    expect(direct.after(relay).toJson()['startedVia'], 'relay');
+    expect(direct.after(direct).describe(), 'direct over the internet');
+    // Staying on the relay is not "used to connect".
+    expect(relay.after(relay).describe(), 'through relay r.example');
+    expect(direct.after(null).startedVia, isNull);
+  });
+
   test('counts connections by the path each ended on', () {
     PeerPath path(String s) => PeerPath.parse(s, at)!;
     final relay = path('Relay(https://euc1-1.relay.n0.iroh.link./)');

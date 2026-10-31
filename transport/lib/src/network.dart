@@ -496,6 +496,18 @@ class PeerNetwork implements PluginLink {
     if (ep != null) _callMedia?.stop(ep.id.asBytes(), unb64(device));
   }
 
+  /// The path the call shim's media connection to [device] takes; null
+  /// when there is none.
+  PeerPath? callMediaPath(String device) {
+    final paths = callMediaStats()?['paths'];
+    if (paths is! Map) return null;
+    final hex = [
+      for (final b in unb64(device)) b.toRadixString(16).padLeft(2, '0'),
+    ].join();
+    final path = paths[hex];
+    return path is String ? PeerPath.parse(path, DateTime.now()) : null;
+  }
+
   /// Call shim counters from the native side; null while stopped or
   /// unsupported.
   Json? callMediaStats() {
@@ -1191,7 +1203,7 @@ class PeerNetwork implements PluginLink {
       first ??= path;
       seen = path;
       final last = paths[device];
-      paths[device] = path;
+      paths[device] = path.after(first);
       if (last?.kind != path.kind) {
         // Kept in [events], so diagnostics show upgrades and fallbacks.
         log('Path to ${device.substring(0, 8)}: ${path.describe()}');

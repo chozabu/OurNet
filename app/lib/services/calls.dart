@@ -4,6 +4,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart' show CallShim;
 import 'messaging.dart' show profileName;
+import 'call_route.dart';
 import 'network.dart';
 import 'noise_suppression.dart';
 
@@ -42,11 +43,15 @@ class CallRecord {
 
   /// How long the call lasted, when answered.
   final int seconds;
+
+  /// The [RouteKind] name media took for most of the call, when answered.
+  final String? route;
   const CallRecord({
     required this.person,
     required this.video,
     required this.outcome,
     this.seconds = 0,
+    this.route,
   });
 }
 
@@ -151,6 +156,15 @@ class Calls extends ChangeNotifier {
   /// The device whose call shim runs (see [_offerShim]).
   String? _shimDevice;
 
+  CallShim? _shim;
+
+  /// How media travels now (see [CallRoute]), read from WebRTC every
+  /// [routeEvery] while connected; null until a route is chosen.
+  CallRoute? route;
+  Duration routeEvery = const Duration(seconds: 2);
+  Timer? _routeTimer;
+  final Map<RouteKind, int> _routeTime = {};
+
   /// When media first flowed, for the call timer.
   DateTime? connectedAt;
   bool _initialised = false;
@@ -254,6 +268,10 @@ class Calls extends ChangeNotifier {
         // Muted or camera paused before the call connected: say so now.
         if (connectedAt == null && (muted || cameraOff)) _tellState();
         connectedAt ??= DateTime.now();
+        _routeTimer ??= Timer.periodic(routeEvery, (_) {
+          unawaited(_pollRoute(generation));
+        });
+        unawaited(_pollRoute(generation));
       }
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected &&
           phase == 'connected') {
@@ -445,6 +463,7 @@ class Calls extends ChangeNotifier {
       return;
     }
     _shimDevice = device;
+    _shim = shim;
     try {
       final remote = await pc.getRemoteDescription();
       final mid = RegExp(
@@ -461,6 +480,7 @@ class Calls extends ChangeNotifier {
   void _stopShim() {
     final device = _shimDevice;
     _shimDevice = null;
+    _shim = null;
     if (device != null) network.callMediaStop(device);
   }
 
@@ -470,6 +490,35 @@ class Calls extends ChangeNotifier {
   void networkChanged() {
     if (_shimDevice == null || _pc == null) return;
     unawaited(_offerShim(_session));
+  }
+
+  Future<void> _pollRoute(int generation) async {
+    final pc = _pc, device = peer;
+    if (pc == null || device == null || generation != _generation) return;
+    final CallRoute? now;
+    try {
+      now = CallRoute.fromStats(
+        await pc.getStats(),
+        shim: _shim,
+        shimPath: _shim == null ? null : network.callMediaPath(device),
+      );
+    } catch (_) {
+      return;
+    }
+    if (now == null || generation != _generation) return;
+    _routeTime.update(now.kind, (n) => n + 1, ifAbsent: () => 1);
+    final changed = !now.sameAs(route) || now.rttMs != route?.rttMs;
+    route = now;
+    if (changed) notifyListeners();
+  }
+
+  /// The route media took for most of the call.
+  RouteKind? _mainRoute() {
+    RouteKind? best;
+    for (final MapEntry(:key, :value) in _routeTime.entries) {
+      if (best == null || value > _routeTime[best]!) best = key;
+    }
+    return best;
   }
 
   /// The media connection could not be recovered: end the call, and say why.
@@ -1025,6 +1074,7 @@ class Calls extends ChangeNotifier {
           seconds: since == null
               ? 0
               : DateTime.now().difference(since).inSeconds,
+          route: since == null ? null : _mainRoute()?.name,
         ),
       );
     }
@@ -1045,6 +1095,10 @@ class Calls extends ChangeNotifier {
     _restarting = false;
     _restarts = 0;
     _stopShim();
+    _routeTimer?.cancel();
+    _routeTimer = null;
+    _routeTime.clear();
+    route = null;
     connectedAt = null;
     _outgoing.clear();
     _signallingReady = false;

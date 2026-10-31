@@ -1,4 +1,5 @@
 import 'package:ournet_core/ournet_core.dart';
+import 'call_route.dart' show RouteKind;
 
 /// Messaging shared by the app and by work done without it (notification
 /// replies handled in the background).
@@ -76,6 +77,7 @@ Future<SignedObject> sendCallRecord(
   required bool video,
   required String outcome,
   int seconds = 0,
+  String? route,
 }) => node.publish(
   'message',
   {
@@ -84,6 +86,7 @@ Future<SignedObject> sendCallRecord(
       'video': video,
       'outcome': outcome,
       if (outcome == 'answered') 'seconds': seconds,
+      if (outcome == 'answered' && route != null) 'route': route,
     },
   },
   space: '_messages',
@@ -129,9 +132,11 @@ String callSummary(Json call, {required bool mine}) {
   final kind = video ? 'video call' : 'call';
   final title = video ? 'Video call' : 'Call';
   final seconds = (call['seconds'] as num?)?.toInt() ?? 0;
+  final route = RouteKind.named(call['route'])?.label;
   return switch (call['outcome']) {
     'answered' =>
-      '${mine ? 'Outgoing' : 'Incoming'} $kind · ${callLength(seconds)}',
+      '${mine ? 'Outgoing' : 'Incoming'} $kind · ${callLength(seconds)}'
+          '${route == null ? '' : ' · $route'}',
     'declined' => mine ? '$title declined' : 'You declined a $kind',
     'failed' => '$title did not connect',
     _ => mine ? '$title · no answer' : 'Missed $kind',

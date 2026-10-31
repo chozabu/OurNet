@@ -707,6 +707,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
         video: record.video,
         outcome: record.outcome,
         seconds: record.seconds,
+        route: record.route,
       ).then<void>((_) {}, onError: (Object e) => network.log('$e')),
     );
     notifications =

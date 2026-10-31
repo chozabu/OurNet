@@ -58,6 +58,12 @@ fn too_large_or_empty_packets_are_refused() {
 }
 
 #[test]
+fn paths_are_json_strings() {
+    assert_eq!(json_string("Relay(https://a/)"), "\"Relay(https://a/)\"");
+    assert_eq!(json_string("a\"b\\c\n"), r#""a\"b\\c\u000a""#);
+}
+
+#[test]
 fn unknown_datagrams_are_ignored() {
     assert_eq!(parse(Bytes::new()), None);
     assert_eq!(parse(Bytes::from_static(&[0])), None);
@@ -210,6 +216,19 @@ fn shims_carry_rtp_sized_packets_both_ways() {
                 && b.relay.media().stats_json().contains("\"connected\":1")
         })
         .await;
+
+        // Dart learns which path the media connection takes.
+        let b_hex: String =
+            b.ep.id()
+                .as_bytes()
+                .iter()
+                .map(|x| format!("{x:02x}"))
+                .collect();
+        let stats = a.relay.media().stats_json();
+        assert!(
+            stats.contains(&format!("\"paths\":{{\"{b_hex}\":\"Ip(127.0.0.1:")),
+            "{stats}"
+        );
 
         // Each side's "WebRTC" socket: what it sends to its own shim reaches the other.
         let wa = socket().await;

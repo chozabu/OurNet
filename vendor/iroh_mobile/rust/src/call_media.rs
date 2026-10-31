@@ -562,7 +562,17 @@ impl CallMedia {
         let mut conns = 0;
         let mut learned = 0;
         let mut incomplete = 0;
+        let mut paths = Vec::new();
         for shim in shims.values() {
+            if let Some(path) = shim.live().as_ref().and_then(selected_path) {
+                let peer: String = shim
+                    .peer
+                    .as_bytes()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                paths.push(format!("\"{peer}\":{}", json_string(&path)));
+            }
             conns += shim.live().map_or(0, |_| 1);
             learned += shim.webrtc.lock().unwrap().map_or(0, |_| 1);
             incomplete += shim.halves.lock().unwrap().dropped;
@@ -573,7 +583,7 @@ impl CallMedia {
                 "\"sent\":{},\"sentBytes\":{},\"received\":{},\"receivedBytes\":{},",
                 "\"halved\":{},\"incomplete\":{},\"tooLarge\":{},\"noConnection\":{},",
                 "\"foreign\":{},\"unlearned\":{},\"dials\":{},\"dialFailures\":{},",
-                "\"accepted\":{},\"refused\":{}}}"
+                "\"accepted\":{},\"refused\":{},\"paths\":{{{}}}}}"
             ),
             shims.len(),
             conns,
@@ -592,8 +602,33 @@ impl CallMedia {
             s.dial_failures.load(Relaxed),
             s.accepted.load(Relaxed),
             s.refused.load(Relaxed),
+            paths.join(","),
         )
     }
+}
+
+/// The path a media connection uses, in iroh's debug rendering (as path events give it to
+/// Dart): `Ip(..)`, `Relay(..)` or a friend relay's custom address.
+fn selected_path(conn: &Connection) -> Option<String> {
+    conn.paths()
+        .iter()
+        .find(|p| p.is_selected())
+        .map(|p| format!("{:?}", p.remote_addr()))
+}
+
+fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 // --- C functions for Dart -------------------------------------------------------------------

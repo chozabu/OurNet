@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/call_link.dart';
+import '../services/call_route.dart';
 import '../services/calls.dart';
 import 'package:ournet_core/ournet_core.dart' show Avatar;
 import 'call_widgets.dart';
@@ -207,6 +208,7 @@ class _CallScreenState extends State<CallScreen> {
                 Text(
                   [
                     _status,
+                    if (_live) ?calls.route?.label,
                     if (_live) _theirState,
                   ].where((t) => t.isNotEmpty).join(' · '),
                   style: const TextStyle(fontSize: 12, color: Colors.white70),
@@ -254,6 +256,10 @@ class _CallScreenState extends State<CallScreen> {
                 _status,
                 style: const TextStyle(fontSize: 16, color: Colors.white70),
               ),
+              if (_live && calls.route != null) ...[
+                const SizedBox(height: 10),
+                _routeChip(calls.route!),
+              ],
               if (_live && _theirState.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Row(
@@ -288,6 +294,52 @@ class _CallScreenState extends State<CallScreen> {
         ),
       );
     },
+  );
+
+  /// How media travels: a quiet chip, with the details on tap.
+  Widget _routeChip(CallRoute route) => ActionChip(
+    key: const ValueKey('call-route'),
+    avatar: Icon(routeIcon(route.kind), size: 16, color: Colors.white70),
+    label: Text(route.label),
+    labelStyle: const TextStyle(color: Colors.white70, fontSize: 13),
+    backgroundColor: Colors.white10,
+    side: BorderSide.none,
+    visualDensity: VisualDensity.compact,
+    tooltip: 'How this call connects',
+    onPressed: () => showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: ListenableBuilder(
+          listenable: calls,
+          builder: (context, _) {
+            final now = calls.route ?? route;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: Icon(routeIcon(now.kind)),
+                  title: Text(now.detail),
+                  subtitle: Text(switch (now.kind) {
+                    RouteKind.local || RouteKind.direct =>
+                      'Media goes straight between the two devices.',
+                    RouteKind.friend =>
+                      "A mutual friend's device passes on the encrypted media.",
+                    RouteKind.relay =>
+                      'A relay server passes on the encrypted media; '
+                          'it cannot hear or see the call.',
+                  }),
+                ),
+                if (now.rttMs != null)
+                  ListTile(
+                    leading: const Icon(Icons.timer_outlined),
+                    title: Text('Round trip ${now.rttMs} ms'),
+                  ),
+              ],
+            );
+          },
+        ),
+      ),
+    ),
   );
 
   Widget _incomingControls() => Padding(
@@ -453,3 +505,10 @@ class CallBar extends StatelessWidget {
     );
   }
 }
+
+IconData routeIcon(RouteKind kind) => switch (kind) {
+  RouteKind.local => Icons.lan_outlined,
+  RouteKind.direct => Icons.swap_horiz,
+  RouteKind.friend => Icons.people_outline,
+  RouteKind.relay => Icons.cloud_outlined,
+};

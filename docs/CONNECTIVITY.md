@@ -106,7 +106,25 @@ entry that is not a relay URL is skipped rather than stopping the network.
 Each device's health shows how it was last reached: direct on the local
 network, direct over the internet, or through which relay. This comes from
 iroh's path events on every admitted connection (`PeerNetwork.paths`, also in
-diagnostics).
+diagnostics). A connection that began on a relay or a friend and moved to a
+direct path says so, "direct over the internet (relay used to connect)", so
+a relay that only helped two devices find each other is not mistaken for
+one carrying their traffic.
+
+### Showing how a call connects (implemented)
+
+Chat, sync and calls use the same four words: **Local**, **Direct**, **Via a
+friend**, **Via relay**. While a call is connected, `Calls` reads WebRTC's
+selected candidate pair every 2 s (`app/lib/services/call_route.dart`) and
+the call screen shows the route as a quiet chip under the timer; tapping it
+gives the details: "Direct (found with STUN)" when a server-reflexive
+candidate was needed (every call asks STUN; only some routes depend on it),
+the relay's name, whether media is carried over iroh (a pair to the call
+shim, whose own path the native side reports in `callMediaStats()['paths']`),
+and the round trip. A TURN server from the user's ICE settings shows as a
+relay too. The caller's call entry records the route used for most of the
+call (`route` in the entry, an optional field older builds ignore), shown
+as "Outgoing call · 12 min · Direct".
 
 ### More direct paths (implemented)
 
@@ -182,8 +200,9 @@ Tested: Rust unit tests (halves, the source filter, two endpoints carrying
 WebRTC links whose real candidates are thrown away connect through the
 shims alone and carry audio. Not yet tried: a phone and a desktop on
 separate networks with no other path (both behind carrier-grade NAT, say),
-Android, and how a call sounds over a distant relay. `callMediaStats()` on
-the network gives the counters for checking which path carried a call.
+Android, and how a call sounds over a distant relay. The call screen's
+route chip and the call entry show which path carried a call (above);
+`callMediaStats()` on the network gives the counters.
 
 ### Default STUN (implemented)
 

@@ -9,7 +9,7 @@ import 'package:ournet/services/calls.dart';
 import 'package:ournet/services/network.dart';
 import 'package:ournet/ui/call_screen.dart';
 import 'package:ournet_core/ournet_core.dart';
-import 'package:ournet_transport/ournet_transport.dart' show CallShim;
+import 'package:ournet_transport/ournet_transport.dart' show CallShim, PeerPath;
 
 class CallNetwork extends Network {
   CallNetwork(super.node);
@@ -30,6 +30,10 @@ class CallNetwork extends Network {
 
   @override
   void callMediaStop(String device) => stopped.add(device);
+
+  PeerPath? shimPath;
+  @override
+  PeerPath? callMediaPath(String device) => shimPath;
 
   @override
   Future<Json> request(String device, Json message) async {
@@ -60,6 +64,7 @@ void main() {
   var texture = 0;
   Completer<void>? captureGate;
   bool denyCapture = false;
+  Object? stats;
 
   Json track(String kind) => {
     'id': 'remote-$kind',
@@ -142,6 +147,8 @@ void main() {
           return {'sdp': 'offer-sdp', 'type': 'offer'};
         case 'createAnswer':
           return {'sdp': 'answer-sdp', 'type': 'answer'};
+        case 'getStats':
+          return stats;
         case 'getSources':
           return {
             'sources': [
@@ -695,6 +702,54 @@ void main() {
       expect(records.single.person, friend.person);
       expect(records.single.video, isTrue);
       expect(records.single.outcome, 'answered');
+    });
+
+    test('the route media took is shown live and recorded', () async {
+      calls.routeEvery = const Duration(milliseconds: 10);
+      Json report(String id, String type, Json values) => {
+        'id': id,
+        'type': type,
+        'timestamp': 0,
+        'values': values,
+      };
+      // Media goes through the call shim, whose connection is relayed.
+      stats = {
+        'stats': [
+          report('T', 'transport', {'selectedCandidatePairId': 'P'}),
+          report('P', 'candidate-pair', {
+            'localCandidateId': 'L',
+            'remoteCandidateId': 'R',
+          }),
+          report('L', 'local-candidate', {
+            'candidateType': 'host',
+            'ip': '192.168.1.5',
+            'port': 5000,
+          }),
+          report('R', 'remote-candidate', {
+            'candidateType': 'host',
+            'ip': '192.168.1.5',
+            'port': 4000,
+          }),
+        ],
+      };
+      network.shimPath = PeerPath.parse(
+        'Relay(https://euc1-1.relay.n0.iroh.link./)',
+        DateTime(2026),
+      );
+      await calls.call(friend.device);
+      await signal(network, friend.device, {
+        'type': 'answer',
+        'session': network.sent.first['session'],
+        'sdp': 'answer-sdp',
+      });
+      await pumpEventQueue();
+      await event({'event': 'peerConnectionState', 'state': 'connected'});
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(calls.route?.label, 'Via relay');
+      expect(calls.route?.overIroh, isTrue);
+      await calls.hangup();
+      expect(calls.route, isNull);
+      expect(records.single.route, 'relay');
     });
 
     test('a call nobody answered is missed', () async {
