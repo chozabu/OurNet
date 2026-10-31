@@ -266,26 +266,7 @@ extension _Scopes on _OurNetAppState {
         backgroundColor: theme.colorScheme.secondaryContainer,
         child: const Icon(Icons.people_outline),
       ),
-      title: Row(
-        children: [
-          Flexible(
-            child: Text(
-              room.data['name'],
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (muted)
-            Padding(
-              padding: const EdgeInsets.only(left: 4),
-              child: Icon(
-                Icons.volume_off,
-                size: 14,
-                color: theme.colorScheme.outline,
-              ),
-            ),
-        ],
-      ),
+      title: chatRowTitle(theme, room.data['name'], muted: muted),
       subtitle: latest == null || !node.visible(latest)
           ? fallback
           : FutureBuilder<Json?>(
@@ -303,38 +284,23 @@ extension _Scopes on _OurNetAppState {
                 );
               },
             ),
-      trailing: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (latest != null)
-            Text(
-              chatTime(latest.created),
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: count > 0
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.onSurfaceVariant,
-              ),
+      trailing: chatRowTrailing(
+        theme,
+        latest?.created,
+        unread: count > 0,
+        marks: [
+          if (groupCalls.infoFor(room.object.space) case final call?)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: GroupCallChip(people: call.people.length),
             ),
-          const SizedBox(height: 4),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (groupCalls.infoFor(room.object.space) case final call?)
-                Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: GroupCallChip(people: call.people.length),
-                ),
-              if (count > 0)
-                Badge(
-                  backgroundColor: muted
-                      ? theme.colorScheme.outline
-                      : theme.colorScheme.primary,
-                  label: Text('$count'),
-                ),
-            ],
-          ),
+          if (count > 0)
+            Badge(
+              backgroundColor: muted
+                  ? theme.colorScheme.outline
+                  : theme.colorScheme.primary,
+              label: Text('$count'),
+            ),
         ],
       ),
       selected: listRoom?.object.space == room.object.space,

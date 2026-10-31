@@ -1,5 +1,22 @@
 part of 'app.dart';
 
+/// Shows a popup menu of [items] at the global position [at].
+Future<T?> showMenuAt<T>(
+  BuildContext context,
+  Offset at,
+  List<PopupMenuEntry<T>> items,
+) {
+  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+  return showMenu<T>(
+    context: context,
+    position: RelativeRect.fromRect(
+      at & const Size(1, 1),
+      Offset.zero & overlay.size,
+    ),
+    items: items,
+  );
+}
+
 /// A message shown at once while it is saved and sent; [error] is set when
 /// saving failed, until it is retried or discarded.
 class OutgoingMessage {
@@ -110,6 +127,51 @@ extension _ConversationPages on _OurNetAppState {
         return (active: active, archived: archived);
       });
 
+  /// A chat list row's title: [text], marked when the chat is [muted].
+  Widget chatRowTitle(ThemeData theme, String text, {required bool muted}) =>
+      Row(
+        children: [
+          Flexible(
+            child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+          if (muted)
+            Padding(
+              padding: const EdgeInsets.only(left: 4),
+              child: Icon(
+                Icons.volume_off,
+                size: 14,
+                color: theme.colorScheme.outline,
+              ),
+            ),
+        ],
+      );
+
+  /// A chat list row's trailing column: the time [latest] was sent, over
+  /// [marks].
+  Widget chatRowTrailing(
+    ThemeData theme,
+    int? latest, {
+    required bool unread,
+    required List<Widget> marks,
+  }) => Column(
+    mainAxisAlignment: MainAxisAlignment.center,
+    crossAxisAlignment: CrossAxisAlignment.end,
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      if (latest != null)
+        Text(
+          chatTime(latest),
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: unread
+                ? theme.colorScheme.primary
+                : theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      const SizedBox(height: 4),
+      Row(mainAxisSize: MainAxisSize.min, children: marks),
+    ],
+  );
+
   String chatTime(int created) {
     final t = DateTime.fromMillisecondsSinceEpoch(created).toLocal();
     final now = DateTime.now();
@@ -174,65 +236,27 @@ extension _ConversationPages on _OurNetAppState {
       onSecondaryTapUp: (d) => menu(d.globalPosition),
       child: ListTile(
         leading: conversationAvatar(person, radius: 20),
-        title: Row(
-          children: [
-            Flexible(
-              child: Text(
-                name(person),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (muted)
-              Padding(
-                padding: const EdgeInsets.only(left: 4),
-                child: Icon(
-                  Icons.volume_off,
-                  size: 14,
-                  color: theme.colorScheme.outline,
-                ),
-              ),
-          ],
-        ),
+        title: chatRowTitle(theme, name(person), muted: muted),
         subtitle: subtitle,
         selected: contact == person && publicChat == null && listRoom == null,
-        trailing: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (latest != null)
-              Text(
-                chatTime(latest.created),
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: count > 0
-                      ? theme.colorScheme.primary
-                      : theme.colorScheme.onSurfaceVariant,
+        trailing: chatRowTrailing(
+          theme,
+          latest?.created,
+          unread: count > 0,
+          marks: [
+            if (pinned)
+              Icon(Icons.push_pin, size: 14, color: theme.colorScheme.outline),
+            if (count > 0 || markedUnread)
+              Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: Badge(
+                  backgroundColor: muted
+                      ? theme.colorScheme.outline
+                      : theme.colorScheme.primary,
+                  label: count > 0 ? Text('$count') : null,
+                  smallSize: 10,
                 ),
               ),
-            const SizedBox(height: 4),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (pinned)
-                  Icon(
-                    Icons.push_pin,
-                    size: 14,
-                    color: theme.colorScheme.outline,
-                  ),
-                if (count > 0 || markedUnread)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 4),
-                    child: Badge(
-                      backgroundColor: muted
-                          ? theme.colorScheme.outline
-                          : theme.colorScheme.primary,
-                      label: count > 0 ? Text('$count') : null,
-                      smallSize: 10,
-                    ),
-                  ),
-              ],
-            ),
           ],
         ),
         onTap: () => openConversation(person),
@@ -247,32 +271,24 @@ extension _ConversationPages on _OurNetAppState {
     final unread =
         node.store.conversationUnread(node.person, peer: person) > 0 ||
         node.store.setting('chatUnread/$person') == true;
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final action = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromRect(
-        at & const Size(1, 1),
-        Offset.zero & overlay.size,
+    final action = await showMenuAt<String>(context, at, [
+      PopupMenuItem(
+        value: 'pin',
+        child: Text(pinned ? 'Unpin chat' : 'Pin chat'),
       ),
-      items: [
-        PopupMenuItem(
-          value: 'pin',
-          child: Text(pinned ? 'Unpin chat' : 'Pin chat'),
-        ),
-        PopupMenuItem(
-          value: 'mute',
-          child: Text(muted ? 'Unmute notifications' : 'Mute notifications'),
-        ),
-        PopupMenuItem(
-          value: 'archive',
-          child: Text(archived ? 'Unarchive chat' : 'Archive chat'),
-        ),
-        PopupMenuItem(
-          value: 'unread',
-          child: Text(unread ? 'Mark as read' : 'Mark as unread'),
-        ),
-      ],
-    );
+      PopupMenuItem(
+        value: 'mute',
+        child: Text(muted ? 'Unmute notifications' : 'Mute notifications'),
+      ),
+      PopupMenuItem(
+        value: 'archive',
+        child: Text(archived ? 'Unarchive chat' : 'Archive chat'),
+      ),
+      PopupMenuItem(
+        value: 'unread',
+        child: Text(unread ? 'Mark as read' : 'Mark as unread'),
+      ),
+    ]);
     switch (action) {
       case 'pin':
         update(
@@ -451,19 +467,11 @@ extension _ConversationPages on _OurNetAppState {
     OutgoingMessage item,
     Offset at,
   ) async {
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final action = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromRect(
-        at & const Size(1, 1),
-        Offset.zero & overlay.size,
-      ),
-      items: const [
-        PopupMenuItem(value: 'retry', child: Text('Try again')),
-        PopupMenuItem(value: 'edit', child: Text('Edit and resend')),
-        PopupMenuItem(value: 'discard', child: Text('Discard')),
-      ],
-    );
+    final action = await showMenuAt<String>(context, at, const [
+      PopupMenuItem(value: 'retry', child: Text('Try again')),
+      PopupMenuItem(value: 'edit', child: Text('Edit and resend')),
+      PopupMenuItem(value: 'discard', child: Text('Discard')),
+    ]);
     switch (action) {
       case 'retry':
         update(() => item.error = null);
@@ -1090,27 +1098,19 @@ extension _ConversationPages on _OurNetAppState {
     Offset at,
   ) async {
     final mine = o.author == node.person;
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final action = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromRect(
-        at & const Size(1, 1),
-        Offset.zero & overlay.size,
-      ),
-      items: [
-        const _QuickReactions(),
-        const PopupMenuDivider(),
-        const PopupMenuItem(value: 'reply', child: Text('Reply')),
-        if (body.isNotEmpty)
-          const PopupMenuItem(value: 'copy', child: Text('Copy text')),
-        const PopupMenuItem(value: 'forward', child: Text('Forward')),
-        if (mine && p['chunks'] == null)
-          const PopupMenuItem(value: 'edit', child: Text('Edit')),
-        const PopupMenuItem(value: 'select', child: Text('Select')),
-        const PopupMenuItem(value: 'info', child: Text('Message info')),
-        const PopupMenuItem(value: 'delete', child: Text('Delete…')),
-      ],
-    );
+    final action = await showMenuAt<String>(context, at, [
+      const _QuickReactions(),
+      const PopupMenuDivider(),
+      const PopupMenuItem(value: 'reply', child: Text('Reply')),
+      if (body.isNotEmpty)
+        const PopupMenuItem(value: 'copy', child: Text('Copy text')),
+      const PopupMenuItem(value: 'forward', child: Text('Forward')),
+      if (mine && p['chunks'] == null)
+        const PopupMenuItem(value: 'edit', child: Text('Edit')),
+      const PopupMenuItem(value: 'select', child: Text('Select')),
+      const PopupMenuItem(value: 'info', child: Text('Message info')),
+      const PopupMenuItem(value: 'delete', child: Text('Delete…')),
+    ]);
     if (!context.mounted || action == null) return;
     if (action.startsWith('react:')) {
       var emoji = action.substring(6);

@@ -469,31 +469,23 @@ extension _GroupChat on _OurNetAppState {
     final p = item.data;
     final mine = ((p['originalAuthor'] ?? item.object.author)) == node.person;
     final attachment = p['type'] == 'file';
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final action = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromRect(
-        at & const Size(1, 1),
-        Offset.zero & overlay.size,
+    final action = await showMenuAt<String>(context, at, [
+      const _QuickReactions(),
+      const PopupMenuDivider(),
+      const PopupMenuItem(value: 'reply', child: Text('Reply')),
+      if (!attachment)
+        const PopupMenuItem(value: 'copy', child: Text('Copy text')),
+      if (mine && !attachment)
+        const PopupMenuItem(value: 'edit', child: Text('Edit')),
+      if (attachment)
+        const PopupMenuItem(value: 'save', child: Text('Save original')),
+      PopupMenuItem(
+        value: 'pin',
+        child: Text(pins.contains(p['entry']) ? 'Unpin' : 'Pin'),
       ),
-      items: [
-        const _QuickReactions(),
-        const PopupMenuDivider(),
-        const PopupMenuItem(value: 'reply', child: Text('Reply')),
-        if (!attachment)
-          const PopupMenuItem(value: 'copy', child: Text('Copy text')),
-        if (mine && !attachment)
-          const PopupMenuItem(value: 'edit', child: Text('Edit')),
-        if (attachment)
-          const PopupMenuItem(value: 'save', child: Text('Save original')),
-        PopupMenuItem(
-          value: 'pin',
-          child: Text(pins.contains(p['entry']) ? 'Unpin' : 'Pin'),
-        ),
-        const PopupMenuItem(value: 'info', child: Text('Message info')),
-        if (mine) const PopupMenuItem(value: 'delete', child: Text('Remove')),
-      ],
-    );
+      const PopupMenuItem(value: 'info', child: Text('Message info')),
+      if (mine) const PopupMenuItem(value: 'delete', child: Text('Remove')),
+    ]);
     if (!context.mounted || action == null) return;
     if (action.startsWith('react:')) {
       var emoji = action.substring(6);

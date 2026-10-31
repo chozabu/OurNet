@@ -191,21 +191,11 @@ extension _PublicChatPages on _OurNetAppState {
         overflow: TextOverflow.ellipsis,
       ),
       selected: publicChat == space && listRoom == null,
-      trailing: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (latest != null)
-            Text(
-              chatTime(latest.created),
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: count > 0
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          const SizedBox(height: 4),
+      trailing: chatRowTrailing(
+        theme,
+        latest?.created,
+        unread: count > 0,
+        marks: [
           if (count > 0)
             Badge(
               backgroundColor: theme.colorScheme.primary,
@@ -238,15 +228,12 @@ extension _PublicChatPages on _OurNetAppState {
     final scheme = theme.colorScheme;
     final messages = publicChatMessages(space);
     final limit = publicChatLimit[space] ?? 100;
-    final description = memo(
-      'chatAbout/$space',
-      () {
-        final own = publicChats.info(space)?.description ?? '';
-        // A chat called by name has no owner's record: friends' adverts say
-        // what it is for.
-        return own.isNotEmpty ? own : listings.descriptionOf(space);
-      },
-    );
+    final description = memo('chatAbout/$space', () {
+      final own = publicChats.info(space)?.description ?? '';
+      // A chat called by name has no owner's record: friends' adverts say
+      // what it is for.
+      return own.isNotEmpty ? own : listings.descriptionOf(space);
+    });
     // Reading the chat marks it read on this device, after the frame.
     if (messages.isNotEmpty &&
         messages.first.object.created > publicChats.seenUpTo(space)) {
@@ -447,26 +434,14 @@ extension _PublicChatPages on _OurNetAppState {
     final mine = m.object.author == node.person;
     final space = m.object.space;
     Future<void> menu(Offset at) async {
-      final overlay =
-          Overlay.of(context).context.findRenderObject() as RenderBox;
-      final choice = await showMenu<String>(
-        context: context,
-        position: RelativeRect.fromRect(
-          at & const Size(1, 1),
-          Offset.zero & overlay.size,
-        ),
-        items: [
-          const PopupMenuItem(value: 'copy', child: Text('Copy text')),
-          const PopupMenuItem(value: 'link', child: Text('Copy link')),
-          if (!mine)
-            const PopupMenuItem(
-              value: 'person',
-              child: Text('About the sender'),
-            ),
-          if (publicChats.owns(space))
-            const PopupMenuItem(value: 'hide', child: Text('Remove from chat')),
-        ],
-      );
+      final choice = await showMenuAt<String>(context, at, [
+        const PopupMenuItem(value: 'copy', child: Text('Copy text')),
+        const PopupMenuItem(value: 'link', child: Text('Copy link')),
+        if (!mine)
+          const PopupMenuItem(value: 'person', child: Text('About the sender')),
+        if (publicChats.owns(space))
+          const PopupMenuItem(value: 'hide', child: Text('Remove from chat')),
+      ]);
       if (!context.mounted) return;
       switch (choice) {
         case 'copy':

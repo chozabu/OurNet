@@ -185,7 +185,6 @@ class GroupCalls extends ChangeNotifier {
   bool get active => phase != 'idle';
   CallInfo? get _mine => space == null ? null : _info[space];
   bool get isHost => _mine?.host == _me;
-  RTCVideoRenderer? get localRenderer => _media?.renderer;
 
   /// The call in [space], if one is going: this device's own, or one it has
   /// been told about recently.
