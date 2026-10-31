@@ -61,6 +61,7 @@ use iroh::{
 use iroh_base::CustomAddr;
 use tokio::sync::mpsc;
 
+use crate::call_media::{CallMedia, MEDIA_ALPN};
 use crate::runtime::rt;
 
 /// Not registered with iroh ("ONFR"); only OurNet peers use it.
@@ -251,6 +252,8 @@ pub struct FriendRelay {
     inbox_tx: mpsc::Sender<Packet>,
     inbox_rx: Mutex<Option<mpsc::Receiver<Packet>>>,
     local_addrs: n0_watcher::Watchable<Vec<CustomAddr>>,
+    /// Call media over iroh (`call_media.rs`), made on first use.
+    media: OnceLock<Arc<CallMedia>>,
     pub stats: Stats,
 }
 
@@ -275,8 +278,10 @@ pub fn install(
     timings: Timings,
 ) -> (Builder, Arc<FriendRelay>) {
     let relay = FriendRelay::new(timings);
-    if !alpns.iter().any(|a| a == FWD_ALPN) {
-        alpns.push(FWD_ALPN.to_vec());
+    for alpn in [FWD_ALPN, MEDIA_ALPN] {
+        if !alpns.iter().any(|a| a == alpn) {
+            alpns.push(alpn.to_vec());
+        }
     }
     let builder = builder
         .add_custom_transport(Arc::new(FriendTransport(relay.clone())))
@@ -311,6 +316,7 @@ impl FriendRelay {
             inbox_tx: tx,
             inbox_rx: Mutex::new(Some(rx)),
             local_addrs: n0_watcher::Watchable::new(Vec::new()),
+            media: OnceLock::new(),
             stats: Stats::default(),
         })
     }
@@ -349,6 +355,20 @@ impl FriendRelay {
         for (_, link) in self.links.lock().unwrap().drain() {
             link.conn.close(0u32.into(), b"closing");
         }
+        if let Some(media) = self.media.get() {
+            media.stop_all();
+        }
+    }
+
+    /// The endpoint's call media shims.
+    pub fn media(self: &Arc<Self>) -> Arc<CallMedia> {
+        self.media
+            .get_or_init(|| Arc::new(CallMedia::new(Arc::downgrade(self))))
+            .clone()
+    }
+
+    pub(crate) fn endpoint(&self) -> Option<Endpoint> {
+        self.endpoint.get().cloned()
     }
 
     fn now_ms(&self) -> u64 {
@@ -412,7 +432,7 @@ impl FriendRelay {
         }
     }
 
-    fn allowed(&self, id: &EndpointId) -> bool {
+    pub(crate) fn allowed(&self, id: &EndpointId) -> bool {
         self.policy.lock().unwrap().allow.contains(id)
     }
 

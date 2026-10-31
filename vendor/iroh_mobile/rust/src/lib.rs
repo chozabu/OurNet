@@ -6,6 +6,8 @@
 #[cfg(target_os = "android")]
 mod android;
 pub mod api;
+#[cfg(feature = "friend-relay")]
+pub mod call_media;
 mod frb_generated;
 #[cfg(feature = "friend-relay")]
 pub mod friend_relay;

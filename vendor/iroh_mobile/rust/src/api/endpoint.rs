@@ -126,8 +126,12 @@ impl Endpoint {
     #[frb(sync)]
     pub fn set_alpns(&self, #[allow(unused_mut)] mut alpns: Vec<Vec<u8>>) {
         #[cfg(feature = "friend-relay")]
-        if self.relay.is_some() && !alpns.iter().any(|a| a == crate::friend_relay::FWD_ALPN) {
-            alpns.push(crate::friend_relay::FWD_ALPN.to_vec());
+        if self.relay.is_some() {
+            for alpn in [crate::friend_relay::FWD_ALPN, crate::call_media::MEDIA_ALPN] {
+                if !alpns.iter().any(|a| a == alpn) {
+                    alpns.push(alpn.to_vec());
+                }
+            }
         }
         self.inner.set_alpns(alpns);
     }
@@ -168,8 +172,8 @@ impl Endpoint {
     }
 
     /// Accepts the next inbound connection, collapsing the lazy `Accept -> Incoming -> Accepting ->
-    /// Connection` chain. Resolves to `None` once the endpoint is closed. Friend relay links
-    /// (OurNet) are taken here and never returned.
+    /// Connection` chain. Resolves to `None` once the endpoint is closed. Friend relay links and
+    /// call media connections (OurNet) are taken here and never returned.
     pub async fn accept(&self) -> Result<Option<Connection>> {
         let ep = self.inner.clone();
         #[cfg(feature = "friend-relay")]
@@ -186,6 +190,14 @@ impl Endpoint {
                     if conn.alpn() == crate::friend_relay::FWD_ALPN {
                         match &relay {
                             Some(relay) => relay.accept_link(conn),
+                            None => conn.close(0u32.into(), b"unsupported"),
+                        }
+                        continue;
+                    }
+                    #[cfg(feature = "friend-relay")]
+                    if conn.alpn() == crate::call_media::MEDIA_ALPN {
+                        match &relay {
+                            Some(relay) => relay.media().accept(conn),
                             None => conn.close(0u32.into(), b"unsupported"),
                         }
                         continue;

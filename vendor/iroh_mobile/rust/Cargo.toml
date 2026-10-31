@@ -22,7 +22,8 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
 default = ["friend-relay"]
 # Friend relays (src/friend_relay.rs): reach a peer through a mutual friend's device, as an
 # iroh custom transport. Uses iroh's unstable custom transport API, which may change in any
-# release: hence iroh, iroh-base, noq-udp and n0-watcher are pinned exactly below.
+# release: hence iroh, iroh-base, noq-udp and n0-watcher are pinned exactly below. Call media
+# over iroh (src/call_media.rs) rides on the same feature.
 friend-relay = ["iroh/unstable-custom-transports", "dep:noq-udp", "dep:n0-watcher"]
 
 [dependencies]
@@ -37,7 +38,7 @@ iroh = { version = "=1.0.0", default-features = false, features = ["tls-ring", "
 iroh-base = "=1.0.0"
 noq-udp = { version = "=1.0.0", optional = true }
 n0-watcher = { version = "=1.0.0", optional = true }
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
 # Stream bridging for Watcher / path_events / accept loop.
 futures = "0.3"
 # Custom AddressLookup returns an n0_future BoxStream of resolved Items; async-stream
