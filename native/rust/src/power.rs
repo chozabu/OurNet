@@ -1,5 +1,7 @@
 //! Power and network cost, for deciding whether this device relays for friends
 //! (docs/FRIEND_RELAY.md). Cheap: called about once a minute, off any frame.
+// The Windows implementation uses all of this; elsewhere only tests do.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 /// Bits of [ournet_power_state]'s answer.
 pub const POWER_KNOWN: u32 = 1;

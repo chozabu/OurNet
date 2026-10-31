@@ -1,6 +1,8 @@
 //! Small pieces of the remote desktop (docs/REMOTE_DESKTOP.md) that talk to
 //! the system or reshape its data: clipboard text, and the pointer's shape
 //! as RGBA the viewer can draw.
+// The Windows implementation uses all of this; elsewhere only tests do.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 /// The pointer's shape as DXGI gives it.
 #[derive(Clone, Copy, Debug, PartialEq)]

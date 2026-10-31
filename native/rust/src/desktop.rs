@@ -12,6 +12,8 @@
 //! A view decodes on a thread of its own into a triple buffer of RGBA that
 //! the Windows runner's texture reads on Flutter's raster thread; nothing
 //! per frame runs on the UI isolate.
+// The Windows implementation uses all of this; elsewhere only tests do.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
