@@ -89,7 +89,7 @@ fact of friendship.
 | 4c | Windows notification area | The same on a desktop: closing the window no longer disconnects | Implemented |
 | 4b | Push wake-up (FCM through a push server) | The same with less battery | Implemented; needs a Firebase project and the server deployed |
 | 5 | Own relays, shared in contact cards | Dependence on number0's relays | Relay list implemented; no OurNet relay deployed yet |
-| 6 | Call media over iroh when ICE fails | Calls behind carrier-grade NAT without TURN | Spiked, not shipped (below) |
+| 6 | Call media over iroh when ICE fails | Calls behind carrier-grade NAT without TURN | Implemented, not yet tested across real networks (below) |
 | 7 | Packaged friend node (relay, carrier, push) | Making 3–5 one command to offer | Planned |
 | 8 | Friend relays: live traffic through a mutual friend's device | No direct path, and relays blocked or down | Implemented, not yet tested across real NATs ([FRIEND_RELAY.md](FRIEND_RELAY.md)) |
 
@@ -137,37 +137,61 @@ more of them, with no new infrastructure:
   on a relay and moved to a direct path. The counts are kept as connections
   close, never by scanning.
 
-### Call media over iroh (spiked, not shipped)
+### Call media over iroh (implemented, not yet tested across networks)
 
-The idea: when ICE fails, carry WebRTC's packets as QUIC datagrams on the
-iroh connection the call's signalling already uses, which reaches through a
-relay where nothing else does. Each side runs a local UDP shim and offers it
-to its own WebRTC as an extra candidate; ICE, DTLS and SRTP run through it
-unchanged. The spike (`app/integration_test/call_iroh_spike_test.dart`,
-October 2026, Windows) found:
+When ICE finds no path, a call's WebRTC packets travel as QUIC datagrams on
+an iroh connection between the two devices, which reaches wherever iroh
+does: direct, through a friend's device, or through a relay. ICE, DTLS and
+SRTP run through it unchanged, so the connection only carries WebRTC's
+encrypted packets.
 
-- libwebrtc never sends to a loopback candidate (127.0.0.1): no packet
-  reached the shim and the link failed. The planned loopback shim does not
-  work.
-- A shim on the device's own network address does connect, through iroh
-  datagrams alone (ICE and DTLS, packets up to 628 bytes). Not tried: media
-  (RTP packets near 1,200 bytes, which may exceed what a datagram carries
-  over a relay), Android, two devices on different networks, and the cost of
-  passing every packet through Dart.
+- **The shim.** Each side runs a UDP socket in the iroh binding
+  (`vendor/iroh_mobile/rust/src/call_media.rs`, plain C functions for Dart
+  in `transport/lib/src/call_media.dart`, like the friend relay's). It binds
+  to the device's own network address: libwebrtc never sends to a loopback
+  candidate. It answers one WebRTC socket, the first to send from that
+  address (a newer one once the first has been quiet for 3 s, as after an
+  ICE restart); packets from anything else are dropped and counted.
+- **The connection.** Packets go on a connection of their own to the peer,
+  ALPN `ournet/media/1`, rather than the signalling connection: the native
+  side cannot reach a connection Dart holds, and this one lives exactly as
+  long as the call. It is taken inside `Endpoint.accept` and never reaches
+  Dart, and only from the peer of a running shim, or from a friend's device
+  for 30 s while that device's shim starts first. The lower endpoint id
+  dials at once, the higher after 2 s without a connection; both read every
+  connection, so a crossing pair is harmless. Dials back off to 30 s, and a
+  keep-alive every 10 s holds the connection open while ICE uses another
+  path. The friend relay's routes are offered when dialling.
+- **Size.** A relay path carries datagrams of about 1,160 bytes; DTLS and
+  video packets reach about 1,200. A packet too large for one datagram goes
+  as two halves (id and index in a 4-byte header); a half whose partner does
+  not arrive within 500 ms is dropped.
+- **In a call** (`app/lib/services/calls.dart`). Both sides start the shim
+  once the remote description is set and give it to their own WebRTC as the
+  peer's candidate, with priority 1, so a path ICE finds itself wins when it
+  works. Each ICE restart rebinds the shim and offers it again (a restart
+  drops the old candidates), and on Android so does a network change.
+  Hanging up stops it. An older peer has no shim, so nothing changes with
+  it; neither does a library without one (Linux, which still uses the
+  upstream iroh library, and upstream-only builds). Group calls do not use
+  it yet.
 
-So nothing ships; calls keep ICE with STUN as before. Continuing would mean
-the own-address shim, a fallback for packets too large for a datagram, and
-moving the packet pump out of the UI isolate (or into native code), then
-checking it between a phone and a desktop on separate networks.
+Tested: Rust unit tests (halves, the source filter, two endpoints carrying
+1,200-byte packets at QUIC's minimum path MTU, strangers refused), and
+`app/integration_test/call_media_iroh_test.dart` on Windows, where two
+WebRTC links whose real candidates are thrown away connect through the
+shims alone and carry audio. Not yet tried: a phone and a desktop on
+separate networks with no other path (both behind carrier-grade NAT, say),
+Android, and how a call sounds over a distant relay. `callMediaStats()` on
+the network gives the counters for checking which path carried a call.
 
 ### Default STUN (implemented)
 
 Calls previously used no ICE servers unless configured, so they could not
 connect across two NATs. With no configuration, calls now use public STUN
 servers (Google, Cloudflare); local mode uses none. STUN operators learn the
-caller's IP address, not the call. TURN is still needed on networks where a
-direct path is impossible; piece 6 aimed to remove that need, and is not
-shipped (above).
+caller's IP address, not the call. Where no direct path is possible, the call falls back to
+carrying media over iroh (piece 6, above) rather than needing TURN.
 
 ### Android background sync (implemented)
 
