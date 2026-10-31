@@ -525,10 +525,6 @@ class Calendar {
   Map<String, Rsvp> rsvps(String calendar, String entry, String key) =>
       _index.rsvps(calendar, entry, key);
 
-  /// This person's answer, or null.
-  Rsvp? myRsvp(String calendar, String entry, String key) =>
-      rsvps(calendar, entry, key)[node.person];
-
   /// The people who can see a calendar's events.
   Future<List<String>> members(String calendar) async {
     if (calendar == personal) return [node.person];

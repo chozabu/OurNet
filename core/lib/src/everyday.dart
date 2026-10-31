@@ -766,41 +766,34 @@ class Everyday {
     // people joining need copies, and people leaving take their events with
     // them unless the owner passes those on as its own.
     final leaving = before.where((p) => !nextMembers.contains(p)).toSet();
+    List<String> readersOf(SignedObject object, {required bool ownerLeft}) {
+      if (reseal) return nextMembers;
+      if (id != room.object.space) {
+        return shareHistory
+            ? nextMembers
+            : nextMembers.where(object.audience.contains).toList();
+      }
+      return [if (shareHistory) ...joining, if (ownerLeft) ...nextMembers];
+    }
+
     await Calendar.reshare(
       node,
       room,
       into: id,
       seal: reseal ? seal : null,
-      audience: (e) {
-        if (reseal) return nextMembers;
-        if (id != room.object.space) {
-          return shareHistory
-              ? nextMembers
-              : nextMembers.where(e.object.audience.contains).toList();
-        }
-        return [
-          if (shareHistory) ...joining,
-          if (leaving.contains(e.author)) ...nextMembers,
-        ];
-      },
+      audience: (e) =>
+          readersOf(e.object, ownerLeft: leaving.contains(e.author)),
     );
     await Places.reshare(
       node,
       room,
       into: id,
       seal: reseal ? seal : null,
-      audience: (e) {
-        if (reseal) return nextMembers;
-        if (id != room.object.space) {
-          return shareHistory
-              ? nextMembers
-              : nextMembers.where(e.object.audience.contains).toList();
-        }
-        return [
-          if (shareHistory) ...joining,
-          if (leaving.contains(e.owner) || leaving.contains(e.object.author)) ...nextMembers,
-        ];
-      },
+      audience: (e) => readersOf(
+        e.object,
+        ownerLeft:
+            leaving.contains(e.owner) || leaving.contains(e.object.author),
+      ),
     );
     await beforePublish?.call(data, nextMembers);
     final next = EverydayItem(

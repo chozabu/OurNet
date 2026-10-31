@@ -202,10 +202,21 @@ class PublicChats {
       final named = slugOf(space);
       return named == null ? null : (name: named, description: '');
     }
+    return ownerRecord(node, recordKind, space, creator);
+  }
+
+  /// The name and description in [owner]'s latest public [kind] record in
+  /// [space], or null until one has arrived.
+  static ({String name, String description})? ownerRecord(
+    Node node,
+    String kind,
+    String space,
+    String owner,
+  ) {
     for (final o in node.store.objects(
-      kind: recordKind,
+      kind: kind,
       space: space,
-      author: creator,
+      author: owner,
       limit: 20,
     )) {
       if (!o.isPublic || !node.visible(o)) continue;

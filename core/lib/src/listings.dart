@@ -111,21 +111,7 @@ class Listings {
     }
     final owner = PublicNames.forum2Owner(space);
     if (owner != null) {
-      for (final o in node.store.objects(
-        kind: 'forum',
-        space: space,
-        author: owner,
-        limit: 20,
-      )) {
-        if (!o.isPublic || !node.visible(o)) continue;
-        final p = o.data['payload'];
-        if (p is! Json || p['name'] is! String) continue;
-        return (
-          name: p['name'] as String,
-          description: p['description'] as String? ?? '',
-        );
-      }
-      return null;
+      return PublicChats.ownerRecord(node, 'forum', space, owner);
     }
     return (name: space, description: description);
   }

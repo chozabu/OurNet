@@ -252,12 +252,6 @@ class Registry {
     }
   }
 
-  /// The kinds [owner] declared.
-  Iterable<String> kindsOf(String owner) => [
-    for (final e in _kinds.entries)
-      if (e.value.owner == owner) e.key,
-  ];
-
   /// Answers live requests of [type] with [handler]. [poolable] requests are
   /// safe to send twice, so they may share a pooled connection. Replaces any
   /// earlier handler for the type.
