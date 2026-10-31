@@ -2513,9 +2513,10 @@ class DesktopServing {
 
 /// The viewing side of a desktop stream ([PeerNetwork.openDesktop]).
 class DesktopViewing {
-  DesktopViewing._(this._connection, this._recv, this._closedHook);
+  DesktopViewing._(this._connection, iroh.RecvStream recv, this._closedHook)
+    : _reader = _FrameReader(recv);
   final iroh.Connection _connection;
-  final iroh.RecvStream _recv;
+  final _FrameReader _reader;
   final void Function() _closedHook;
   bool _closed = false;
 
@@ -2525,43 +2526,8 @@ class DesktopViewing {
   /// What the served side said when it accepted.
   Json header = const {};
 
-  Uint8List _pending = Uint8List(0);
-
-  Future<Uint8List> _take(int n) async {
-    while (_pending.length < n) {
-      final chunk = await _recv.read(256 * 1024);
-      if (chunk == null) throw StateError('Stream ended');
-      _pending = _pending.isEmpty
-          ? chunk
-          : (BytesBuilder(copy: false)
-                  ..add(_pending)
-                  ..add(chunk))
-                .takeBytes();
-    }
-    final out = Uint8List.sublistView(_pending, 0, n);
-    _pending = Uint8List.sublistView(_pending, n);
-    return out;
-  }
-
   Future<void> _readHeader() async {
-    final line = BytesBuilder(copy: false);
-    while (true) {
-      final newline = _pending.indexOf(0x0a);
-      if (newline >= 0) {
-        line.add(Uint8List.sublistView(_pending, 0, newline));
-        _pending = Uint8List.sublistView(_pending, newline + 1);
-        break;
-      }
-      line.add(_pending);
-      if (line.length > 64 * 1024) throw StateError('Header too long');
-      final chunk = await _recv.read(64 * 1024);
-      if (chunk == null) {
-        _pending = Uint8List(0);
-        break;
-      }
-      _pending = chunk;
-    }
-    final j = jsonDecode(utf8.decode(line.takeBytes())) as Json;
+    final j = jsonDecode(utf8.decode(await _reader.line())) as Json;
     if (j['error'] != null) throw StateError('${j['error']}');
     header = j;
   }
@@ -2570,10 +2536,7 @@ class DesktopViewing {
   Stream<(int, Uint8List)> get frames async* {
     try {
       while (!_closed) {
-        final head = await _take(5);
-        final length = ByteData.sublistView(head).getUint32(1, Endian.little);
-        if (length > maxFrame) throw StateError('Frame too large');
-        yield (head[0], await _take(length));
+        yield await _reader.next(maxFrame);
       }
     } on StateError {
       // Ended.
@@ -2644,6 +2607,28 @@ class _FrameReader {
     final out = Uint8List.sublistView(_pending, 0, n);
     _pending = Uint8List.sublistView(_pending, n);
     return out;
+  }
+
+  /// The bytes up to the next newline, or to the end of the stream.
+  Future<Uint8List> line() async {
+    final line = BytesBuilder(copy: false);
+    while (true) {
+      final newline = _pending.indexOf(0x0a);
+      if (newline >= 0) {
+        line.add(Uint8List.sublistView(_pending, 0, newline));
+        _pending = Uint8List.sublistView(_pending, newline + 1);
+        break;
+      }
+      line.add(_pending);
+      if (line.length > 64 * 1024) throw StateError('Header too long');
+      final chunk = await _recv.read(64 * 1024);
+      if (chunk == null) {
+        _pending = Uint8List(0);
+        break;
+      }
+      _pending = chunk;
+    }
+    return line.takeBytes();
   }
 
   Future<(int, Uint8List)> next(int max) async {

@@ -1,16 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
 
 import 'map_page.dart' show bytesText;
 import 'sync_health.dart';
 
 const _gib = 1024 * 1024 * 1024;
-
-/// What the storage line in Settings says.
-String storageSummary(Store store) =>
-    '${bytesText(store.storedBytes)} used · warns at '
-    '${bytesText(store.storageWarning)} · limit ${bytesText(store.storageLimit)}';
 
 /// A size in GB as typed, or null when it is not a positive number.
 int? gigabytes(String text) {

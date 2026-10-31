@@ -2,6 +2,8 @@
 //! plays, captured from its default output with WASAPI loopback, sent as
 //! 10 ms of 16-bit PCM, and played on the viewing device with a short,
 //! bounded buffer. 1.5 Mbit/s for 48 kHz stereo, small beside the video.
+// The Windows implementation uses all of this; elsewhere only tests do.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};

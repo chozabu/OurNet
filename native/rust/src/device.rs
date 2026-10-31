@@ -1,4 +1,6 @@
 //! Permissioned device capabilities. Called on a plugin thread, never a frame.
+// The Windows implementation uses all of this; elsewhere only tests do.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 use serde_json::{json, Value};
 
 /// Processes one sample lists at most, by CPU then memory.
