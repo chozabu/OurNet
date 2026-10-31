@@ -11,6 +11,7 @@ import 'sync_queue.dart';
 import 'traffic.dart';
 import 'peer_path.dart';
 import 'friend_relay.dart';
+import 'call_media.dart';
 
 part 'pairing.dart';
 part 'friend_invitation.dart';
@@ -463,6 +464,44 @@ class PeerNetwork implements PluginLink {
     final ep = _endpoint;
     if (ep == null) return null;
     return _friend?.stats(ep.id.asBytes());
+  }
+
+  static CallMediaNative? _callMediaNative;
+  static bool _callMediaTried = false;
+
+  static CallMediaNative? get _callMedia {
+    if (!_callMediaTried) {
+      _callMediaTried = true;
+      _callMediaNative = CallMediaNative.load();
+    }
+    return _callMediaNative;
+  }
+
+  /// Starts (or rebinds) the call shim for [device] on this device's own
+  /// address: the last-resort path for a call's media, as datagrams on an
+  /// iroh connection to it (docs/CONNECTIVITY.md, piece 6). Null when the
+  /// network is stopped, the library has no shim, or there is no address.
+  Future<CallShim?> callMediaStart(String device) async {
+    final address = await CallMediaNative.ownAddress();
+    final ep = _endpoint;
+    final native = ep == null ? null : _callMedia;
+    if (address == null || ep == null || native == null) return null;
+    final port = native.start(ep.id.asBytes(), unb64(device), address);
+    return port == null ? null : CallShim(address, port);
+  }
+
+  /// Stops the call shim for [device] and closes its media connections.
+  void callMediaStop(String device) {
+    final ep = _endpoint;
+    if (ep != null) _callMedia?.stop(ep.id.asBytes(), unb64(device));
+  }
+
+  /// Call shim counters from the native side; null while stopped or
+  /// unsupported.
+  Json? callMediaStats() {
+    final ep = _endpoint;
+    if (ep == null) return null;
+    return _callMedia?.stats(ep.id.asBytes());
   }
 
   /// Tells the native side who this device's friends' devices are and

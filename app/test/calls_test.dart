@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:ournet/services/calls.dart';
 import 'package:ournet/services/network.dart';
 import 'package:ournet/ui/call_screen.dart';
 import 'package:ournet_core/ournet_core.dart';
+import 'package:ournet_transport/ournet_transport.dart' show CallShim;
 
 class CallNetwork extends Network {
   CallNetwork(super.node);
@@ -16,6 +18,18 @@ class CallNetwork extends Network {
   final Set<String> unreachable = {};
   Future<void> Function(Json)? onRequest;
   Future<void> Function(String, Json)? onDeviceRequest;
+  final shims = <String>[];
+  final stopped = <String>[];
+  var shimPort = 4000;
+
+  @override
+  Future<CallShim?> callMediaStart(String device) async {
+    shims.add(device);
+    return CallShim(InternetAddress('192.168.1.5'), shimPort++);
+  }
+
+  @override
+  void callMediaStop(String device) => stopped.add(device);
 
   @override
   Future<Json> request(String device, Json message) async {
@@ -205,6 +219,34 @@ void main() {
     );
     await calls.toggleSpeaker();
     expect(calls.speaker, isFalse);
+  });
+
+  test('each side offers its call shim as the lowest-priority candidate, '
+      'again after a restart, and stops it with the call', () async {
+    List<String> shimCandidates() => [
+      for (final m in methods)
+        if (m.method == 'addCandidate')
+          (m.arguments['candidate'] as Map)['candidate'] as String,
+    ].where((c) => c.contains('192.168.1.5')).toList();
+    await offer(friend.device);
+    await calls.answer();
+    await pumpEventQueue();
+    expect(network.shims, [friend.device]);
+    expect(shimCandidates(), [
+      'candidate:ournet 1 udp 1 192.168.1.5 4000 typ host',
+    ]);
+    // The caller's network changed: its new offer drops every candidate,
+    // so the shim is rebound and offered again.
+    await signal(network, friend.device, {
+      'type': 'restart',
+      'session': 'session',
+      'sdp': 'restart-sdp',
+    });
+    await pumpEventQueue();
+    expect(network.shims, [friend.device, friend.device]);
+    expect(shimCandidates().last, contains('192.168.1.5 4001 typ host'));
+    await calls.hangup();
+    expect(network.stopped, [friend.device]);
   });
 
   test('answer pressed twice starts only one capture', () async {

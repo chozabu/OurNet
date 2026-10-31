@@ -694,7 +694,10 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     network.canRestart = () => calls.phase == 'idle' && !groupCalls.active;
     if (widget.enablePlatform) network.relayConditions = relayConditions;
     if (widget.enablePlatform && Platform.isAndroid) {
-      onNetworkChanged(network.networkChanged);
+      onNetworkChanged(() {
+        network.networkChanged();
+        calls.networkChanged();
+      });
     }
     // Each call this device places goes in the chat's history.
     calls.onRecord = (record) => unawaited(

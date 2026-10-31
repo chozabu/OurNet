@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:ournet_core/ournet_core.dart';
+import 'package:ournet_transport/ournet_transport.dart' show CallShim;
 import 'messaging.dart' show profileName;
 import 'network.dart';
 import 'noise_suppression.dart';
@@ -146,6 +147,9 @@ class Calls extends ChangeNotifier {
   Timer? _disconnectTimer;
   bool _restarting = false;
   int _restarts = 0;
+
+  /// The device whose call shim runs (see [_offerShim]).
+  String? _shimDevice;
 
   /// When media first flowed, for the call timer.
   DateTime? connectedAt;
@@ -410,11 +414,62 @@ class Calls extends ChangeNotifier {
       await pc.setRemoteDescription(
         RTCSessionDescription(reply['sdp'], 'answer'),
       );
+      if (_session != session) return;
+      unawaited(_offerShim(session));
     } catch (_) {
       // An older build refuses; the connection state decides what happens.
     } finally {
       _restarting = false;
     }
+  }
+
+  /// Starts (or rebinds) this call's shim and gives it to WebRTC as the
+  /// peer's lowest-priority candidate: the last-resort path, carrying media
+  /// as datagrams on an iroh connection, which reaches through a relay when
+  /// ICE finds nothing else (docs/CONNECTIVITY.md, piece 6). Both sides do
+  /// this; with an older peer, or a library without the shim, nothing
+  /// changes. Called once the remote description is set, and again after
+  /// each ICE restart, whose new candidates replace the old.
+  Future<void> _offerShim(String? session) async {
+    final device = peer, pc = _pc;
+    if (device == null || pc == null || session == null) return;
+    final CallShim? shim;
+    try {
+      shim = await network.callMediaStart(device);
+    } catch (_) {
+      return;
+    }
+    if (shim == null) return;
+    if (_session != session || _pc != pc) {
+      if (_shimDevice != device) network.callMediaStop(device);
+      return;
+    }
+    _shimDevice = device;
+    try {
+      final remote = await pc.getRemoteDescription();
+      final mid = RegExp(
+        r'^a=mid:(\S+)',
+        multiLine: true,
+      ).firstMatch(remote?.sdp ?? '')?.group(1);
+      if (_session != session) return;
+      await pc.addCandidate(RTCIceCandidate(shim.candidate, mid ?? '0', 0));
+    } catch (_) {
+      // WebRTC refused it; the call goes on without the fallback.
+    }
+  }
+
+  void _stopShim() {
+    final device = _shimDevice;
+    _shimDevice = null;
+    if (device != null) network.callMediaStop(device);
+  }
+
+  /// The device moved to another network during a call: the shim's address
+  /// may be gone, so it moves to the new one and WebRTC is told. ICE's own
+  /// restart, if the call drops, offers it again too.
+  void networkChanged() {
+    if (_shimDevice == null || _pc == null) return;
+    unawaited(_offerShim(_session));
   }
 
   /// The media connection could not be recovered: end the call, and say why.
@@ -779,6 +834,7 @@ class Calls extends ChangeNotifier {
         if (_session != session) return {'ignored': true};
         await _flush();
         if (_session != session) return {'ignored': true};
+        unawaited(_offerShim(session));
         // An auto-answer can arrive before the offer acknowledgement.
         await _flushOutgoing();
       case 'ice':
@@ -809,6 +865,8 @@ class Calls extends ChangeNotifier {
         );
         final reply = await pc.createAnswer();
         await pc.setLocalDescription(reply);
+        // The restart dropped the shim's candidate with the others.
+        unawaited(_offerShim(_session));
         return {'ok': true, 'sdp': reply.sdp};
       case 'state':
         if (device != peer) return {'ignored': true};
@@ -884,6 +942,7 @@ class Calls extends ChangeNotifier {
       if (_session != session) return;
       await pc.setLocalDescription(answer);
       if (_session != session) return;
+      unawaited(_offerShim(session));
       await network.request(peer!, {
         'type': 'signal',
         'payload': {
@@ -985,6 +1044,7 @@ class Calls extends ChangeNotifier {
     _offerer = false;
     _restarting = false;
     _restarts = 0;
+    _stopShim();
     connectedAt = null;
     _outgoing.clear();
     _signallingReady = false;

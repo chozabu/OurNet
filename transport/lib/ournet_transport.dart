@@ -7,3 +7,4 @@ export 'src/transfers.dart';
 export 'src/traffic.dart';
 export 'src/peer_path.dart';
 export 'src/friend_relay.dart';
+export 'src/call_media.dart';
