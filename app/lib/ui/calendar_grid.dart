@@ -161,6 +161,53 @@ class _TimeGridState extends State<TimeGrid> {
 
   void _begin(_DragState state) => setState(() => drag = state);
 
+  /// A new event dragged out from [at], [minutes] long to begin with.
+  _DragState _creating((int, double) at, int minutes) {
+    final m = _snap(at.$2);
+    return _DragState(_Drag.create, null, at.$1, m, m + minutes, m);
+  }
+
+  /// A drag recognizer made by [make] that begins what [start] returns for
+  /// the day and minute under the pointer, then moves and ends it.
+  GestureRecognizerFactory _drag<T extends DragGestureRecognizer>(
+    T Function() make,
+    _DragState? Function((int, double)? at) start,
+  ) => GestureRecognizerFactoryWithHandlers<T>(
+    make,
+    (r) => r
+      ..onStart = (d) {
+        final state = start(_locate(d.globalPosition));
+        if (state != null) _begin(state);
+      }
+      ..onUpdate = (d) {
+        _update(d.globalPosition);
+      }
+      ..onEnd = (_) {
+        unawaited(_finish());
+      }
+      ..onCancel = () => setState(() => drag = null),
+  );
+
+  /// [_drag] after a long press, for touch, so scrolling still works.
+  GestureRecognizerFactory _longPressDrag(
+    Set<PointerDeviceKind> devices,
+    _DragState? Function((int, double)? at) start,
+  ) => GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
+    () => LongPressGestureRecognizer(supportedDevices: devices),
+    (r) => r
+      ..onLongPressStart = (d) {
+        final state = start(_locate(d.globalPosition));
+        if (state != null) _begin(state);
+      }
+      ..onLongPressMoveUpdate = (d) {
+        _update(d.globalPosition);
+      }
+      ..onLongPressEnd = (_) {
+        unawaited(_finish());
+      }
+      ..onLongPressCancel = () => setState(() => drag = null),
+  );
+
   void _update(Offset global) {
     final state = drag;
     final at = _locate(global);
@@ -480,46 +527,14 @@ class _TimeGridState extends State<TimeGrid> {
             child: RawGestureDetector(
               behavior: HitTestBehavior.translucent,
               gestures: {
-                VerticalDragGestureRecognizer:
-                    GestureRecognizerFactoryWithHandlers<VerticalDragGestureRecognizer>(
-                      () => VerticalDragGestureRecognizer(supportedDevices: mouse),
-                      (r) => r
-                        ..onStart = (d) {
-                          final at = _locate(d.globalPosition);
-                          if (at == null) return;
-                          final m = _snap(at.$2);
-                          _begin(_DragState(_Drag.create, null, at.$1, m, m + 15, m));
-                        }
-                        ..onUpdate = (d) {
-                          _update(d.globalPosition);
-                        }
-                        ..onEnd = (_) {
-                          unawaited(_finish());
-                        }
-                        ..onCancel = () {
-                          setState(() => drag = null);
-                        },
-                    ),
-                LongPressGestureRecognizer:
-                    GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
-                      () => LongPressGestureRecognizer(supportedDevices: touch),
-                      (r) => r
-                        ..onLongPressStart = (d) {
-                          final at = _locate(d.globalPosition);
-                          if (at == null) return;
-                          final m = _snap(at.$2);
-                          _begin(_DragState(_Drag.create, null, at.$1, m, m + 30, m));
-                        }
-                        ..onLongPressMoveUpdate = (d) {
-                          _update(d.globalPosition);
-                        }
-                        ..onLongPressEnd = (_) {
-                          unawaited(_finish());
-                        }
-                        ..onLongPressCancel = () {
-                          setState(() => drag = null);
-                        },
-                    ),
+                VerticalDragGestureRecognizer: _drag(
+                  () => VerticalDragGestureRecognizer(supportedDevices: mouse),
+                  (at) => at == null ? null : _creating(at, 15),
+                ),
+                LongPressGestureRecognizer: _longPressDrag(
+                  touch,
+                  (at) => at == null ? null : _creating(at, 30),
+                ),
               },
             ),
           ),
@@ -541,6 +556,9 @@ class _TimeGridState extends State<TimeGrid> {
     final dragging = drag?.occurrence?.id == o.id;
     final mouse = {PointerDeviceKind.mouse, PointerDeviceKind.trackpad, PointerDeviceKind.stylus};
     final touch = {PointerDeviceKind.touch};
+    _DragState? moving((int, double)? at) => at == null
+        ? null
+        : _DragState(_Drag.move, o, at.$1, p.startMinute, p.endMinute, (at.$2 - p.startMinute).round());
     return Positioned(
       top: top,
       left: left,
@@ -562,62 +580,11 @@ class _TimeGridState extends State<TimeGrid> {
                           () => TapGestureRecognizer(),
                           (r) => r.onTap = () => widget.onOpen(o),
                         ),
-                    PanGestureRecognizer:
-                        GestureRecognizerFactoryWithHandlers<PanGestureRecognizer>(
-                          () => PanGestureRecognizer(supportedDevices: mouse),
-                          (r) => r
-                            ..onStart = (d) {
-                              final at = _locate(d.globalPosition);
-                              if (at == null) return;
-                              _begin(
-                                _DragState(
-                                  _Drag.move,
-                                  o,
-                                  at.$1,
-                                  p.startMinute,
-                                  p.endMinute,
-                                  (at.$2 - p.startMinute).round(),
-                                ),
-                              );
-                            }
-                            ..onUpdate = (d) {
-                          _update(d.globalPosition);
-                        }
-                            ..onEnd = (_) {
-                          unawaited(_finish());
-                        }
-                            ..onCancel = () {
-                          setState(() => drag = null);
-                        },
-                        ),
-                    LongPressGestureRecognizer:
-                        GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
-                          () => LongPressGestureRecognizer(supportedDevices: touch),
-                          (r) => r
-                            ..onLongPressStart = (d) {
-                              final at = _locate(d.globalPosition);
-                              if (at == null) return;
-                              _begin(
-                                _DragState(
-                                  _Drag.move,
-                                  o,
-                                  at.$1,
-                                  p.startMinute,
-                                  p.endMinute,
-                                  (at.$2 - p.startMinute).round(),
-                                ),
-                              );
-                            }
-                            ..onLongPressMoveUpdate = (d) {
-                          _update(d.globalPosition);
-                        }
-                            ..onLongPressEnd = (_) {
-                          unawaited(_finish());
-                        }
-                            ..onLongPressCancel = () {
-                          setState(() => drag = null);
-                        },
-                        ),
+                    PanGestureRecognizer: _drag(
+                      () => PanGestureRecognizer(supportedDevices: mouse),
+                      moving,
+                    ),
+                    LongPressGestureRecognizer: _longPressDrag(touch, moving),
                   },
                   child: _blockBody(context, o, color, textColor, height, p),
                 ),
@@ -633,31 +600,10 @@ class _TimeGridState extends State<TimeGrid> {
                     child: RawGestureDetector(
                       behavior: HitTestBehavior.translucent,
                       gestures: {
-                        VerticalDragGestureRecognizer:
-                            GestureRecognizerFactoryWithHandlers<VerticalDragGestureRecognizer>(
-                              () => VerticalDragGestureRecognizer(supportedDevices: mouse),
-                              (r) => r
-                                ..onStart = (_) {
-                                  _begin(
-                                  _DragState(
-                                    _Drag.resize,
-                                    o,
-                                    index,
-                                    p.startMinute,
-                                    p.endMinute,
-                                  ),
-                                );
-                                }
-                                ..onUpdate = (d) {
-                          _update(d.globalPosition);
-                        }
-                                ..onEnd = (_) {
-                          unawaited(_finish());
-                        }
-                                ..onCancel = () {
-                          setState(() => drag = null);
-                        },
-                            ),
+                        VerticalDragGestureRecognizer: _drag(
+                          () => VerticalDragGestureRecognizer(supportedDevices: mouse),
+                          (_) => _DragState(_Drag.resize, o, index, p.startMinute, p.endMinute),
+                        ),
                       },
                     ),
                   ),
