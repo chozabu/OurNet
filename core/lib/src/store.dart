@@ -743,10 +743,7 @@ class Store {
     (int, String)? after,
     (int, String)? through,
   }) {
-    final lower = through != null && through.$1 >= from ? through : (from, '');
-    final ceiling = until ?? 253402300799999;
-    final resume = after != null && after.$1 <= ceiling;
-    final upper = resume ? after : (ceiling, '\uffff');
+    final (lower, upper, resume) = _window(from, until, after, through);
     // A single range on the composite index seeks directly to the cursor,
     // including when thousands of records share a timestamp.
     return [
@@ -760,6 +757,20 @@ class Store {
     ];
   }
 
+  /// The `(created,id)` bounds of a [recentEntries] page, and whether the
+  /// upper one is exclusive.
+  static ((int, String), (int, String), bool) _window(
+    int from,
+    int? until,
+    (int, String)? after,
+    (int, String)? through,
+  ) {
+    final lower = through != null && through.$1 >= from ? through : (from, '');
+    final ceiling = until ?? 253402300799999;
+    final resume = after != null && after.$1 <= ceiling;
+    return (lower, resume ? after : (ceiling, '\uffff'), resume);
+  }
+
   List<String> ids({int limit = 10000}) => [
     for (final row in _select('SELECT id FROM objects ORDER BY id LIMIT ?', [
       limit,
@@ -767,14 +778,10 @@ class Store {
       row['id'] as String,
   ];
 
-  /// Sharing fields of stored objects, for inventories, newest first in the
-  /// order a sync page walks them. They come from the derived index, so a
-  /// page costs an index scan rather than reparsing objects. [after] resumes
-  /// just past an entry already examined, so a caller reads the pages it
-  /// needs instead of holding every object's route in memory for the life of
-  /// the process.
-  /// [recentEntries] as routes, for walks that decide what to offer from the
-  /// sharing fields before reading an object.
+  /// [recentEntries] as routes: the sharing fields of stored objects, newest
+  /// first in the order a sync page walks them, so a walk decides what to
+  /// offer before reading an object. They come from the derived index, so a
+  /// page costs an index scan rather than reparsing objects.
   List<ObjectRoute> recentRoutes({
     int limit = 512,
     int from = 0,
@@ -782,10 +789,7 @@ class Store {
     (int, String)? after,
     (int, String)? through,
   }) {
-    final lower = through != null && through.$1 >= from ? through : (from, '');
-    final ceiling = until ?? 253402300799999;
-    final resume = after != null && after.$1 <= ceiling;
-    final upper = resume ? after : (ceiling, '￿');
+    final (lower, upper, resume) = _window(from, until, after, through);
     return [
       for (final row in _select(
         'SELECT id,kind,space,author,created,device,expires,audience,via '
