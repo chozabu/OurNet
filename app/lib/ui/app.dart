@@ -16,6 +16,7 @@ import 'map_page.dart';
 import 'place_links.dart';
 import 'plugin_view.dart';
 import 'wall_page.dart';
+import 'liquid_page.dart';
 import 'transfers_view.dart';
 import 'plugins_page.dart';
 import 'remote_session_banner.dart';

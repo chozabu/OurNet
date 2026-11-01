@@ -7,6 +7,13 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: Proposals and liquid delegation
+
+Additive: kinds `proposal`, `ballot`, `delegation` and `tally` (PROTOCOL.md,
+"Proposals and liquid delegation"). Older builds store and relay them without
+showing them. The Voting page now shows proposals; the earlier `vote` and
+`delegate` kinds are unchanged and still used for forum post votes.
+
 ## 0.2.61: Call media over iroh
 
 Additive: a new ALPN `ournet/media/1` carrying a call's WebRTC packets as

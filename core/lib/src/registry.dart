@@ -36,6 +36,7 @@ const builtinModules = <Module>[
   forumsModule,
   wallModule,
   votingModule,
+  liquidModule,
   listingsModule,
   pluginReleasesModule,
   groupsModule,

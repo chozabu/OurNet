@@ -5,6 +5,7 @@ library;
 
 import 'locations.dart' show LocationChoice;
 import 'model.dart';
+import 'public_names.dart' show PublicNames;
 import 'recurrence.dart' show Repeat;
 import 'registry.dart';
 
@@ -115,6 +116,74 @@ const votingModule = Module(
 bool _vote(Json p) => p['object'] is String && [-1, 0, 1].contains(p['value']);
 
 bool _delegate(Json p) => p['person'] is String;
+
+/// Proposals voted on with liquid delegation: see `Liquid`.
+const liquidModule = Module(
+  'liquid',
+  kinds: {
+    'proposal': _proposal,
+    'ballot': _ballot,
+    'delegation': _delegation,
+    'tally': _tally,
+  },
+);
+
+/// A topic path such as `science/physics`: at most 6 segments, each a
+/// public name slug. The empty path is the whole forum or group.
+bool _topic(Object? t) =>
+    t is String &&
+    t.length <= 200 &&
+    (t.isEmpty ||
+        (t.split('/').length <= 6 &&
+            t.split('/').every((s) => PublicNames.slug(s) == s)));
+
+bool _proposal(Json p) =>
+    p['text'] is String &&
+    (p['text'] as String).length <= 20000 &&
+    (p['title'] == null ||
+        (p['title'] is String && (p['title'] as String).length <= 200)) &&
+    _topic(p['topic']) &&
+    p['options'] is List &&
+    (p['options'] as List).length >= 2 &&
+    (p['options'] as List).length <= 10 &&
+    (p['options'] as List).every(
+      (o) => o is String && o.isNotEmpty && o.length <= 200,
+    ) &&
+    p['closes'] is int &&
+    p['closes'] >= 0;
+
+/// One of `choice` (an option's index), `abstain: true` or `clear: true`.
+bool _ballot(Json p) =>
+    p['proposal'] is String &&
+    (p['proposal'] as String).length <= 64 &&
+    [
+          p['choice'] != null,
+          p['abstain'] == true,
+          p['clear'] == true,
+        ].where((b) => b).length ==
+        1 &&
+    (p['choice'] == null ||
+        (p['choice'] is int && p['choice'] >= 0 && p['choice'] < 10));
+
+/// `to` (ranked representatives, empty for nobody) or `clear: true`.
+bool _delegation(Json p) =>
+    _topic(p['topic']) &&
+    (p['clear'] == true
+        ? p['to'] == null
+        : _ids(p['to'], 3) &&
+              (p['transitive'] == null || p['transitive'] is bool));
+
+/// The proposer's count at close: see `Liquid.checkpoint`.
+bool _tally(Json p) =>
+    p['proposal'] is String &&
+    (p['proposal'] as String).length <= 64 &&
+    p['digest'] is String &&
+    (p['digest'] as String).length == 64 &&
+    p['counts'] is List &&
+    (p['counts'] as List).length <= 10 &&
+    (p['counts'] as List).every((c) => c is int && c >= 0) &&
+    p['abstain'] is int &&
+    p['voters'] is int;
 
 /// Friends' adverts for public forums and chats: see `Listings`.
 const listingsModule = Module('listings', kinds: {'listing': _listing});
