@@ -63,6 +63,17 @@ extension _ObjectsPages on _OurNetAppState {
             final author = o.kind == 'room_post' && p['history'] == true
                 ? (p['originalAuthor'] as String? ?? o.author)
                 : o.author;
+            // A block list's entry shows as a note that can be opened.
+            if (author != node.person && !node.blocks.shownAnyway(o.id)) {
+              if (node.blocks.listHidden(author, o.space) case final hit?) {
+                return HiddenByList(
+                  node: node,
+                  hit: hit,
+                  objectId: o.id,
+                  name: name,
+                );
+              }
+            }
             final written = DateTime.fromMillisecondsSinceEpoch(
               o.kind == 'room_post'
                   ? p['sent'] as int? ?? o.created
@@ -381,7 +392,16 @@ extension _ObjectsPages on _OurNetAppState {
       }
       if (action == 'block') {
         searchIndex = null;
-        unawaited(setBlocked(author, true));
+        unawaited(
+          showBlockChoices(
+            context,
+            node,
+            author,
+            space: o.space,
+            name: name,
+            setBlocked: setBlocked,
+          ),
+        );
       }
       if (action == 'moderate') {
         act(() async {
@@ -409,7 +429,7 @@ extension _ObjectsPages on _OurNetAppState {
         PopupMenuItem(value: 'profile', child: Text('About ${name(author)}')),
       const PopupMenuItem(value: 'hide', child: Text('Hide for me')),
       if (author != node.person)
-        const PopupMenuItem(value: 'block', child: Text('Block author')),
+        const PopupMenuItem(value: 'block', child: Text('Block or mute…')),
       if (ownsForum(o.space))
         const PopupMenuItem(
           value: 'moderate',

@@ -13,6 +13,7 @@ import '../services/remote_desktop.dart';
 import '../services/location_share.dart';
 import '../services/map_tiles.dart';
 import 'map_page.dart';
+import 'blocking.dart';
 import 'place_links.dart';
 import 'plugin_view.dart';
 import 'wall_page.dart';

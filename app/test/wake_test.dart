@@ -205,7 +205,7 @@ void main() {
     expect(server.requests.length, sent);
 
     // Blocking Priya revokes her token and leaves Sam's.
-    phone.block(priya.person, true);
+    await phone.setContactState(priya.person, ContactState.blocked);
     await registration.refresh();
     expect(server.allows(toPriya), isFalse);
     expect(server.allows(toSam), isTrue);

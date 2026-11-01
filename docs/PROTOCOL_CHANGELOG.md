@@ -7,7 +7,19 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
-## Unreleased: Proposals and liquid delegation
+## 0.2.62: Blocking in places, mutes and block lists
+
+Additive: kinds `block_scope` and `block_sub` (in `_contacts`, sealed to the
+author, newest wins like `contact_state`) and public `block_list` and
+`block_entry` in new `blocks:<owner>/<list>` spaces (PROTOCOL.md, "Blocking").
+Links gain `ournet://blocks/<owner>/<list>`. Older builds store and relay the
+kinds without reading them and never follow list spaces; a block everywhere is
+still the `contact_state` they know. A device that blocks someone in a forum,
+chat or wall no longer takes in or passes on their objects there (in a private
+group it only hides them), and its counts of proposals leave out people it
+blocks. No capability or ALPN change.
+
+## 0.2.62: Proposals and liquid delegation
 
 Additive: kinds `proposal`, `ballot`, `delegation` and `tally` (PROTOCOL.md,
 "Proposals and liquid delegation"). Older builds store and relay them without

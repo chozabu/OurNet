@@ -266,7 +266,7 @@ class _PlaceIndex {
     ).rooms()).where((r) => r.data['note'] != true).toList();
     final signature =
         '${nextRooms.map((r) => '${r.object.id}:${r.data['members']}').toList()..sort()}|'
-        '${node.blocked.toList()..sort()}|${node.revoked.toList()..sort()}';
+        '${node.blocks.version}|${node.revoked.toList()..sort()}';
     var changed = false;
     if (signature != _access) {
       _access = signature;

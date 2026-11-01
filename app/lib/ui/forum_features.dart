@@ -35,6 +35,9 @@ extension _ForumFeatures on _OurNetAppState {
   bool ownsForum(String id) => id.startsWith('forum2:${node.person}:');
   bool contentVisible(SignedObject o) {
     if (!node.visible(o) ||
+        (o.author != node.person &&
+            node.blocks.mutedIn(o.author, o.space) &&
+            !node.blocks.shownAnyway(o.id)) ||
         memo(
           'hidden',
           () => node.store.trueSettings('hidden/'),

@@ -64,6 +64,7 @@ class MessageText extends StatefulWidget {
           'forum' => '💬 ${link!.space}',
           'post' => '💬 ${link!.title ?? 'Forum post'}',
           'message' => '💬 Chat message',
+          'blocks' => '🚫 Block list',
           _ => m.group(0)!,
         };
       })
@@ -204,7 +205,8 @@ class _MessageTextState extends State<MessageText> {
         ...PublicChats.linkPattern.allMatches(text),
       if (text.contains('ournet://forum/') ||
           text.contains('ournet://post/') ||
-          text.contains('ournet://message/'))
+          text.contains('ournet://message/') ||
+          text.contains('ournet://blocks/'))
         ...Links.pattern.allMatches(text),
     ]..sort((a, b) => a.start.compareTo(b.start));
     for (final m in links) {

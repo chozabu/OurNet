@@ -187,7 +187,7 @@ class Activity {
   /// entries changed.
   Future<bool> refresh() => _serial(() async {
     final before = version;
-    final blocked = '${node.blocked.toList()..sort()}';
+    final blocked = '${node.blocks.version}';
     if (_loaded && blocked != _blocked) _reset();
     _blocked = blocked;
     if (!_loaded) {
@@ -335,7 +335,7 @@ class Activity {
     final author =
         (data?['history'] == true ? data!['originalAuthor'] as String? : null) ??
         o.author;
-    if (node.blocked.contains(author)) return null;
+    if (node.blocks.hidden(author, o.space)) return null;
     final place = _place(o, data);
     if (place == null) return null;
     final (section, space, group) = place;

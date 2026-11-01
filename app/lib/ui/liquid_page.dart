@@ -153,8 +153,9 @@ class _LiquidPageState extends State<LiquidPage> {
       await action();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
       }
     }
     reload();
@@ -332,6 +333,12 @@ class _LiquidPageState extends State<LiquidPage> {
                 '${weak.length} of ${tally.votes.length} votes come from '
                 'accounts with at most one known contact.',
                 style: TextStyle(color: theme.colorScheme.error),
+              ),
+            if (tally.excluded.isNotEmpty)
+              Text(
+                'Your view excludes people you block '
+                '(${tally.excluded.length}).',
+                style: theme.textTheme.bodySmall,
               ),
             if (l.checkpoint case final c?)
               Text(

@@ -23,11 +23,11 @@ void main() {
           received++;
         }, owner: 'test');
         final pending = na.datagram(b.identity.device, 'test', [42]);
-        a.block(b.person, true);
+        await a.setContactState(b.person, ContactState.blocked);
         expect(await pending, isFalse);
         await Future<void>.delayed(const Duration(milliseconds: 100));
         expect(received, 0);
-        a.block(b.person, false);
+        await a.setContactState(b.person, ContactState.unblocked);
         expect(await na.datagram(b.identity.device, 'test', [42]), isTrue);
       } finally {
         await na.stop();
@@ -80,7 +80,7 @@ void main() {
           // still works. UDP delivery of the burst itself is not guaranteed.
           expect(await na.datagram(b.identity.device, 'test', [42]), isTrue);
           await received.future.timeout(const Duration(seconds: 5));
-          a.block(b.person, true);
+          await a.setContactState(b.person, ContactState.blocked);
           expect(await na.datagram(b.identity.device, 'test', [42]), isFalse);
         } finally {
           await na.stop();

@@ -215,7 +215,7 @@ void main() {
       expect(b.store.count, 0);
       final post = await a.publish('post', {'text': 'hello'});
       await syncPair(a, b);
-      b.block(a.person, true);
+      await b.setContactState(a.person, ContactState.blocked);
       expect(b.visible(post), isFalse);
     },
   );

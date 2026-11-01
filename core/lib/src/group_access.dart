@@ -90,7 +90,7 @@ class GroupAccess {
       _learning ??= _learn().whenComplete(() => _learning = null);
 
   Future<void> _learn() async {
-    final policy = '${node.blocked.toList()..sort()}';
+    final policy = '${node.blocks.version}';
     if (policy != _policy) {
       // Unblocking someone makes their records readable again.
       _policy = policy;
@@ -141,7 +141,7 @@ class GroupAccess {
   /// Sync calls this before offering or taking objects.
   Future<void> refresh() {
     if (node.store.insertionCursor == _settled &&
-        '${node.blocked.toList()..sort()}' == _policy) {
+        '${node.blocks.version}' == _policy) {
       return Future.value();
     }
     return _refreshing ??= _refresh().whenComplete(() => _refreshing = null);

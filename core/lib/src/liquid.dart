@@ -43,7 +43,21 @@ class LiquidTally {
   /// the same digest counted the same records.
   final String digest;
 
-  LiquidTally(this.votes, this.options, this.digest);
+  /// People whose records this device left out because this person blocks
+  /// them: their ballots do not count and delegating to them counts as a
+  /// representative who did not vote. Each device's view, not the record.
+  final Set<String> excluded;
+
+  LiquidTally(
+    this.votes,
+    this.options,
+    this.digest, {
+    this.excluded = const {},
+  });
+
+  /// This tally, saying it left out [people].
+  LiquidTally withExcluded(Set<String> people) =>
+      LiquidTally(votes, options, digest, excluded: people);
 
   /// Votes per option, counting only votes [where] allows: a lens such as
   /// "people with at least two contacts", never a change to the record.
@@ -104,6 +118,12 @@ class LiquidTally {
 /// group, as the group's forum posts are. Nothing is hidden or dropped for
 /// looking suspicious: [LiquidTally.counts] takes filters (contacts, distance)
 /// so people can see how much of a result rests on weakly connected accounts.
+///
+/// People this person blocks (everywhere, in the space, or through a block
+/// list in block mode) are the exception: their proposals, ballots and
+/// delegations are not taken in, passed on or counted here, and a delegation
+/// to one of them falls through to the next representative. A tally says
+/// whom it left out ([LiquidTally.excluded]), so a view can say so.
 class Liquid {
   static const proposalKind = 'proposal';
   static const ballotKind = 'ballot';
@@ -200,8 +220,13 @@ class Liquid {
   );
 
   /// Every object of [kind] in [space] this device can read with its
-  /// payload, newest first.
-  Future<List<(SignedObject, Json)>> _read(String kind, String space) async {
+  /// payload, newest first, leaving out (and adding to [excluded]) those of
+  /// people this person blocks there.
+  Future<List<(SignedObject, Json)>> _read(
+    String kind,
+    String space, [
+    Set<String>? excluded,
+  ]) async {
     final result = <(SignedObject, Json)>[];
     (int, String)? after;
     while (true) {
@@ -212,6 +237,10 @@ class Liquid {
         limit: 1000,
       );
       for (final o in page) {
+        if (node.blocks.excludes(o.author, space)) {
+          excluded?.add(o.author);
+          continue;
+        }
         final p = await node.content(o);
         if (p != null) result.add((o, p));
       }
@@ -230,9 +259,10 @@ class Liquid {
   Future<Map<String, Map<String, LiquidDelegation?>>> delegations(
     String space, {
     int before = 0,
+    Set<String>? excluded,
   }) async {
     final result = <String, Map<String, LiquidDelegation?>>{};
-    for (final (o, p) in await _read(delegationKind, space)) {
+    for (final (o, p) in await _read(delegationKind, space, excluded)) {
       if (before != 0 && o.created > before) continue;
       final byTopic = result[o.author] ??= {};
       final topic = p['topic'] as String;
@@ -276,7 +306,8 @@ class Liquid {
     final topic = payload['topic'] as String? ?? '';
     final options = (payload['options'] as List? ?? const []).length;
     final ballots = <String, LiquidBallot?>{};
-    for (final (o, p) in await _read(ballotKind, proposal.space)) {
+    final excluded = <String>{};
+    for (final (o, p) in await _read(ballotKind, proposal.space, excluded)) {
       if (p['proposal'] != proposal.id) continue;
       if (closes != 0 && o.created > closes) continue;
       if (ballots.containsKey(o.author)) continue;
@@ -284,7 +315,11 @@ class Liquid {
           ? null
           : LiquidBallot(o.id, p['choice'] as int?);
     }
-    final delegations = await this.delegations(proposal.space, before: closes);
+    final delegations = await this.delegations(
+      proposal.space,
+      before: closes,
+      excluded: excluded,
+    );
     return resolve(
       topic: topic,
       options: options,
@@ -294,7 +329,12 @@ class Liquid {
       },
       delegations: delegations,
       electorate: electorate,
-    );
+      excluded: (p) {
+        if (!node.blocks.excludes(p, proposal.space)) return false;
+        excluded.add(p);
+        return true;
+      },
+    ).withExcluded(excluded);
   }
 
   /// The pure part of [tally]: see the class comment for the rules.
@@ -304,8 +344,14 @@ class Liquid {
     required Map<String, LiquidBallot> ballots,
     required Map<String, Map<String, LiquidDelegation?>> delegations,
     Set<String>? electorate,
+
+    /// People whose votes are not counted and who are skipped as
+    /// representatives: those this person blocks.
+    bool Function(String person)? excluded,
   }) {
-    bool eligible(String p) => electorate == null || electorate.contains(p);
+    bool eligible(String p) =>
+        (electorate == null || electorate.contains(p)) &&
+        !(excluded?.call(p) ?? false);
     final used = <String>{};
 
     List<String>? walk(String person, Set<String> seen, bool follow) {

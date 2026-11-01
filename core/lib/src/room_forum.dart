@@ -49,7 +49,7 @@ class RoomForum {
     : space = room.object.space,
       _room = room,
       _cursor = node.store.insertionCursor,
-      _blocked = '${node.blocked.toList()..sort()}';
+      _blocked = '${node.blocks.version}';
 
   bool get loaded => _loaded;
   EverydayItem get room => _room;
@@ -82,7 +82,7 @@ class RoomForum {
   Future<void> _load() async {
     final everyday = Everyday(node);
     _room = await everyday.current(_room);
-    _blocked = '${node.blocked.toList()..sort()}';
+    _blocked = '${node.blocks.version}';
     _posts.clear();
     _tree = null;
     final start = node.store.insertionCursor;
@@ -114,7 +114,7 @@ class RoomForum {
     final target = node.store.insertionCursor;
     final everyday = Everyday(node);
     final next = await everyday.current(_room);
-    final blocked = '${node.blocked.toList()..sort()}';
+    final blocked = '${node.blocks.version}';
     if (everyday.epoch(next) != everyday.epoch(_room) ||
         next.data['generation'] != _room.data['generation'] ||
         blocked != _blocked) {
@@ -155,7 +155,7 @@ class RoomForum {
               p['originalAuthor'] is String &&
               members.contains(p['originalAuthor'])
         : members.contains(o.author);
-    if (!accepted || node.blocked.contains(post.author)) return false;
+    if (!accepted || node.blocks.hidden(post.author, o.space)) return false;
     _posts[o.id] = post;
     _tree = null;
     return true;

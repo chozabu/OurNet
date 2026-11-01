@@ -42,11 +42,13 @@ class ObjectLinkChip extends StatelessWidget {
     final label = switch (parsed.type) {
       'forum' => parsed.space.startsWith('forum2:') ? 'Forum' : parsed.space,
       'post' => links?.preview(parsed) ?? parsed.title ?? 'Forum post',
+      'blocks' => 'Block list',
       _ => links?.preview(parsed) ?? 'Chat message',
     };
     final icon = switch (parsed.type) {
       'forum' => Icons.forum_outlined,
       'post' => Icons.article_outlined,
+      'blocks' => Icons.block,
       _ => Icons.chat_bubble_outline,
     };
     return LinkChip(

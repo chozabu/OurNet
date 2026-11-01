@@ -375,6 +375,22 @@ extension _ContactDetails on _OurNetAppState {
                         icon: Icon(blocked ? Icons.undo : Icons.block),
                         label: Text(blocked ? 'Unblock' : 'Block'),
                       ),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.pop(sheet);
+                          unawaited(
+                            showBlockChoices(
+                              context,
+                              node,
+                              person,
+                              name: name,
+                              setBlocked: setBlocked,
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.tune),
+                        label: const Text('Mute, lists…'),
+                      ),
                       if (friend)
                         OutlinedButton.icon(
                           onPressed: () {

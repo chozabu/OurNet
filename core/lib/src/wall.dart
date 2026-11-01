@@ -506,7 +506,7 @@ abstract class WallView {
 
   /// What decides which posts are shown besides the posts: a change reads
   /// everything again.
-  String _policy() => '${node.blocked.toList()..sort()}';
+  String _policy() => '${node.blocks.version}';
 
   static const pageSize = 30;
 
@@ -545,7 +545,7 @@ abstract class WallView {
   List<WallPost> get posts => _sorted ??= () {
     final shown = [
       for (final p in _posts.values)
-        if (!_hidden.contains(p.id) && !node.blocked.contains(p.owner)) p,
+        if (!_hidden.contains(p.id) && !node.blocks.hides(p.object)) p,
     ]..sort(_newest);
     for (final p in shown) {
       p.comments = _thread(p);
@@ -563,7 +563,7 @@ abstract class WallView {
         [
           for (final c in (_comments[post.id] ?? const {}).values)
             if (!_hidden.contains(c.id) &&
-                !node.blocked.contains(c.author) &&
+                !node.blocks.hides(c.object) &&
                 c.epoch == post.epoch)
               c,
         ]..sort((a, b) {

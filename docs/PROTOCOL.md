@@ -303,8 +303,9 @@ browse what exists instead of being sent an address.
 Links are text, as for chats. Besides `ournet://chat/<name or address>`,
 `ournet://forum/<name or address>` is a forum, `ournet://post/<space>/<id>`
 (optional `?title=`) a forum post, `ournet://message/<space>/<id>` a message
-in a public chat and `ournet://wall/<person>` (optional `/<id>`) a person's
-wall or a post on it (see Walls). A device not yet in the space joins it, then
+in a public chat, `ournet://wall/<person>` (optional `/<id>`) a person's
+wall or a post on it (see Walls) and `ournet://blocks/<owner>/<list>` a
+public block list, which opens a dialog to subscribe to it (see Blocking). A device not yet in the space joins it, then
 opens the link (a wall link opens the wall and offers to follow it);
 a post not held yet shows once it has synced. Links to things only some people
 can read (a note, a group message) are resolved only against what a device
@@ -338,6 +339,59 @@ counted. In a group only members count. `digest` is the SHA-256 of the sorted
 IDs of the ballots and delegations a count used, so two devices can tell
 whether they counted the same records. Older builds store and pass on all four
 kinds without reading them.
+
+People this person blocks (everywhere, in the space, or through a block list
+in block mode; see Blocking) get no exemption: their proposals, ballots and
+delegations are not taken in, passed on or counted on this device, and a
+delegation to one of them is skipped like a representative who did not vote
+(the next ranked one, else no vote). Each device's count is its own view, so
+the tally view says when it left people out.
+
+## Blocking
+
+Code: `BlockPolicy` in `core/lib/src/blocks.dart`, module `blocks`.
+
+A block everywhere is the `contact_state` `blocked` record, unchanged: nothing
+of theirs is shown, taken in or passed on, and their devices are not synced
+with. Besides it, a person can block, mute or allow someone in some places, and
+publish or subscribe to public block lists. A *space* here is a forum's
+address, `chat:<name>`, a group's `room2:` space or `wall:<person>`; `*` means
+everywhere.
+
+| Kind | Space | Payload |
+|---|---|---|
+| `block_scope` | `_contacts`, sealed to the author | `{person, spaces, mute?, allow?, removed?}`: block (none set), mute, allow (`spaces: ["*"]` only) or lift, in 1-32 spaces. A block everywhere is a `contact_state` instead. |
+| `block_sub` | `_contacts`, sealed to the author | `{owner, list, mode, removed?}`: follow `owner`'s list, `mode` `hide` (default) or `block`. |
+| `block_list` | `blocks:<owner>/<list>`, public | `{name, description?}`: a list's name; the newest wins. |
+| `block_entry` | `blocks:<owner>/<list>`, public | `{person, scope, reason?, evidence?, removed?}`: `scope` is `*` or 1-32 spaces; `evidence` up to 16 object IDs. The newest per person on the list wins. |
+
+`block_scope` and `block_sub` are kept like `contact_state`: the newest record
+per person and space (per list for subscriptions) wins on every one of the
+author's devices. Only a list's owner writes to its space; a device drops
+anything else there. `<list>` is a public-name slug, and list spaces are never
+forums.
+
+What each does:
+
+- **Block in a space**: their objects in it are hidden, not taken in and not
+  passed on; everything else of theirs, direct messages included, is
+  unchanged. In a group's `room2:` space it only hides, so the device still
+  carries their sealed items to the other members.
+- **Mute** (everywhere or in a space): hidden only. Their objects are taken
+  in, passed on and readable (a muted person's ballot still counts).
+- **Subscribing to a list** follows its space (within the 256 followed
+  spaces). In `hide` mode the people on it are hidden with a note naming the
+  list, which can be opened ("Show anyway") or turned into an allow. In
+  `block` mode they are treated as blocked in the entry's spaces. Lists are
+  not transitive: an entry never pulls in another list. A list never hides or
+  blocks someone with an admitted device (a friend) or someone the subscriber
+  allowed; the app shows that they are on it instead.
+
+A change to `block_scope` or `block_sub` changes what is offered, so like
+group records it makes two devices compare everything again; the policy
+digest a device uses for change syncs covers them. Builds before these kinds
+store and relay all four without reading them, and keep only their own
+`contact_state` blocks.
 
 ## Walls
 

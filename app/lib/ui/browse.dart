@@ -33,10 +33,7 @@ extension _BrowsePages on _OurNetAppState {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-          child: Text(
-            'Friends follow',
-            style: theme.textTheme.labelLarge,
-          ),
+          child: Text('Friends follow', style: theme.textTheme.labelLarge),
         ),
         for (final l in all.take(5)) listedTile(context, l),
         if (all.length > 5)
@@ -178,6 +175,15 @@ extension _BrowsePages on _OurNetAppState {
     // A wall opens as a page, which offers to follow it.
     if (link.type == 'wall') {
       if (Walls.ownerOf(link.space) case final owner?) openWall(owner);
+      return;
+    }
+    if (link.type == 'blocks') {
+      final context = noteNavigator.currentContext;
+      if (BlockPolicy.parseSpace(link.space) case (final owner, final list)?
+          when context != null) {
+        await subscribeBlockList(context, node, owner, list, name);
+        if (network.running) unawaited(network.syncAll());
+      }
       return;
     }
     final isChat = link.type == 'message';

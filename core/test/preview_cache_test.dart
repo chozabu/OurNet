@@ -140,7 +140,7 @@ void main() {
     node.store.putEvidence(evidence);
     expect(node.store.hasEvidence(first.first.id, evidence.id), isTrue);
     expect(node.store.evidenceDigest(first.first.id), hash([evidence.id]));
-    node.block(node.person, true);
+    node.blocked.add(node.person);
     expect(await node.content(first.first), isNull);
   });
 }

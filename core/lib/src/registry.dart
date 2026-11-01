@@ -43,6 +43,7 @@ const builtinModules = <Module>[
   messagesModule,
   driveModule,
   peopleModule,
+  blocksModule,
   calendarModule,
   locationsModule,
   placesModule,

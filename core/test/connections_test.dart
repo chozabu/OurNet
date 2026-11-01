@@ -185,7 +185,7 @@ void main() {
     expect(capped.omitted, 1);
 
     // Blocked people and everyone only reached through them drop out.
-    alice.block(carol.person, true);
+    await alice.setContactState(carol.person, ContactState.blocked);
     final blocked = alice.connections.graph(depth: 6);
     expect(blocked.people.map((p) => p.id), [alice.person, bob.person]);
     expect(blocked.omitted, 0);

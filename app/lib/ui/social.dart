@@ -61,6 +61,7 @@ extension _SocialPages on _OurNetAppState {
       s != 'files' &&
       !PublicChats.isChat(s) &&
       !PublicNames.isPluginSpace(s) &&
+      !s.startsWith(BlockPolicy.prefix) &&
       Walls.ownerOf(s) == null;
 
   Widget communities(BuildContext context) {

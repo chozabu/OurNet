@@ -1051,7 +1051,7 @@ class _EverydayIndex {
     return _running ??= _run().whenComplete(() => _running = null);
   }
 
-  String _blocked() => '${node.blocked.toList()..sort()}';
+  String _blocked() => node.blocks.digest;
 
   /// Rechecks the gate: by the time a pass starts, the one it joined behind
   /// may already have read everything there was.
@@ -1194,7 +1194,7 @@ class RoomFeed {
     : space = room.object.space,
       _room = room,
       _cursor = node.store.insertionCursor,
-      _blocked = '${node.blocked.toList()..sort()}';
+      _blocked = '${node.blocks.version}';
 
   /// The room record this window was last checked against.
   EverydayItem get room => _room;
@@ -1267,7 +1267,7 @@ class RoomFeed {
   /// have changed, including a membership change that restarts the window.
   Future<bool> refresh() async {
     final target = node.store.insertionCursor;
-    final blocked = '${node.blocked.toList()..sort()}';
+    final blocked = '${node.blocks.version}';
     final everyday = Everyday(node);
     final next = await everyday.current(_room);
     if (everyday.epoch(next) != everyday.epoch(_room) ||
@@ -1313,6 +1313,11 @@ class RoomFeed {
     if (o.isPublic || !node.visible(o)) return _Merge.none;
     final p = await node.content(o);
     if (p == null) return _Merge.none;
+    // Muted here or everywhere, or hidden by a block list: see BlockPolicy.
+    final author = p['history'] == true ? p['originalAuthor'] : o.author;
+    if (author is String && node.blocks.hidden(author, space)) {
+      return _Merge.none;
+    }
     var item = EverydayItem(o, p);
     if (!everyday._belongs(_room, item)) return _Merge.none;
     item = everyday.dated(item);

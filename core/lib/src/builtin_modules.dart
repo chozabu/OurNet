@@ -470,6 +470,73 @@ bool _contactState(Json p) =>
     (p['person'] as String).length <= 64 &&
     ['friend', 'blocked', 'unblocked', 'forgotten'].contains(p['state']);
 
+/// Blocks in some spaces, mutes and public block lists: see `BlockPolicy`.
+const blocksModule = Module(
+  'blocks',
+  kinds: {
+    'block_scope': _blockScope,
+    'block_sub': _blockSub,
+    'block_list': _blockList,
+    'block_entry': _blockEntry,
+  },
+);
+
+/// A space, or `*` for everywhere.
+bool _space(Object? s) => s is String && s.isNotEmpty && s.length <= 200;
+
+/// What the author chose about `person` in `spaces`: a block, `mute`,
+/// `allow` (everywhere only: lists never hide them) or `removed`. A block
+/// everywhere is a `contact_state` instead.
+bool _blockScope(Json p) =>
+    p['person'] is String &&
+    (p['person'] as String).length <= 64 &&
+    p['spaces'] is List &&
+    (p['spaces'] as List).isNotEmpty &&
+    (p['spaces'] as List).length <= 32 &&
+    (p['spaces'] as List).every(_space) &&
+    [
+          p['mute'] == true,
+          p['allow'] == true,
+          p['removed'] == true,
+        ].where((b) => b).length <=
+        1 &&
+    (p['mute'] == null || p['mute'] is bool) &&
+    (p['allow'] == null || p['allow'] is bool) &&
+    (p['removed'] == null || p['removed'] is bool) &&
+    (p['allow'] != true || (p['spaces'] as List).every((s) => s == '*'));
+
+/// Following someone's block list: see `BlockPolicy.subscribe`.
+bool _blockSub(Json p) =>
+    p['owner'] is String &&
+    (p['owner'] as String).length <= 64 &&
+    p['list'] is String &&
+    PublicNames.slug(p['list']) == p['list'] &&
+    ['hide', 'block'].contains(p['mode']) &&
+    (p['removed'] == null || p['removed'] is bool);
+
+/// A public block list's name and description.
+bool _blockList(Json p) =>
+    _line(p['name'], 100) &&
+    (p['description'] == null || _text(p['description'], 2000));
+
+/// Someone on a public block list, everywhere (`*`) or in some spaces.
+bool _blockEntry(Json p) =>
+    p['person'] is String &&
+    (p['person'] as String).length <= 64 &&
+    (p['scope'] == '*' ||
+        p['scope'] is List &&
+            (p['scope'] as List).isNotEmpty &&
+            (p['scope'] as List).length <= 32 &&
+            (p['scope'] as List).every(_space)) &&
+    (p['reason'] == null || _text(p['reason'], 500)) &&
+    (p['evidence'] == null ||
+        p['evidence'] is List &&
+            (p['evidence'] as List).length <= 16 &&
+            (p['evidence'] as List).every(
+              (e) => e is String && e.length <= 128,
+            )) &&
+    (p['removed'] == null || p['removed'] is bool);
+
 /// Who the author is connected to, and their devices: see `Connections`.
 bool _friends(Json p) =>
     _ids(p['friends'], 1000) &&

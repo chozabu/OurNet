@@ -136,7 +136,7 @@ void main() {
     ];
     expect(await texts(), ['From b']);
     // A projection must not outlive the policy it was made under.
-    a.block(b.person, true);
+    await a.setContactState(b.person, ContactState.blocked);
     expect(await texts(), isEmpty);
     expect(
       (await Everyday(a).records(
@@ -145,7 +145,7 @@ void main() {
       isEmpty,
       reason: 'the blocked author is gone, this device\'s own room is not',
     );
-    a.block(b.person, false);
+    await a.setContactState(b.person, ContactState.unblocked);
     expect(await texts(), ['From b']);
   });
 
@@ -223,7 +223,7 @@ void main() {
     // Blocking without this device looking, then starting again: the stored
     // cursor must not carry over, or records that became readable would sit
     // behind it forever.
-    a.block(b.person, true);
+    await a.setContactState(b.person, ContactState.blocked);
     final reopened = Node(a.identity, a.store);
     addTearDown(reopened.close);
     expect(await Everyday(reopened).items(room), isEmpty);

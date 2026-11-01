@@ -52,6 +52,8 @@ class PublicNames {
       !space.startsWith('chat:') &&
       // A person's wall: see `Walls`.
       !space.startsWith('wall:') &&
+      // A public block list: see `BlockPolicy`.
+      !space.startsWith('blocks:') &&
       !reserved.contains(space) &&
       !RegExp(r'[\x00-\x1f]').hasMatch(space);
 

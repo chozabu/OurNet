@@ -558,6 +558,20 @@ extension _SettingsPages on _OurNetAppState {
         onTap: () => update(() => tab = Destination.plugins),
       ),
     ListTile(
+      leading: const Icon(Icons.block),
+      title: const Text('Blocking'),
+      subtitle: const Text(
+        'Blocks and mutes, your public block lists and lists you follow',
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              BlockingPage(node: node, name: name, setBlocked: setBlocked),
+        ),
+      ),
+    ),
+    ListTile(
       leading: const Icon(Icons.storage),
       title: const Text('Storage'),
       subtitle: Text(

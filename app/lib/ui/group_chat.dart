@@ -484,6 +484,8 @@ extension _GroupChat on _OurNetAppState {
         child: Text(pins.contains(p['entry']) ? 'Unpin' : 'Pin'),
       ),
       const PopupMenuItem(value: 'info', child: Text('Message info')),
+      if (!mine)
+        const PopupMenuItem(value: 'blocking', child: Text('Block or mute…')),
       if (mine) const PopupMenuItem(value: 'delete', child: Text('Remove')),
     ]);
     if (!context.mounted || action == null) return;
@@ -504,6 +506,15 @@ extension _GroupChat on _OurNetAppState {
         startGroupEdit(item);
       case 'info':
         await groupMessageInfo(context, item);
+      case 'blocking':
+        await showBlockChoices(
+          context,
+          node,
+          (p['originalAuthor'] ?? item.object.author) as String,
+          space: item.object.space,
+          name: name,
+          setBlocked: setBlocked,
+        );
       default:
         everydayItemAction(context, item, action, pins);
     }

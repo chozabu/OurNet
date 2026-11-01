@@ -439,6 +439,8 @@ extension _PublicChatPages on _OurNetAppState {
         const PopupMenuItem(value: 'link', child: Text('Copy link')),
         if (!mine)
           const PopupMenuItem(value: 'person', child: Text('About the sender')),
+        if (!mine)
+          const PopupMenuItem(value: 'blocking', child: Text('Block or mute…')),
         if (publicChats.owns(space))
           const PopupMenuItem(value: 'hide', child: Text('Remove from chat')),
       ]);
@@ -454,6 +456,16 @@ extension _PublicChatPages on _OurNetAppState {
           notice('Link copied');
         case 'person':
           await showPersonDetails(context, m.object.author);
+        case 'blocking':
+          await showBlockChoices(
+            context,
+            node,
+            m.object.author,
+            space: space,
+            name: name,
+            setBlocked: setBlocked,
+          );
+          publicMessages.clear();
         case 'hide':
           await act(() async {
             await publicChats.hide(space, m.object.id);
@@ -463,6 +475,21 @@ extension _PublicChatPages on _OurNetAppState {
       }
     }
 
+    // Muted senders are left out; a block list's are shown as a note.
+    if (!mine && !node.blocks.shownAnyway(m.object.id)) {
+      if (node.blocks.blockedIn(m.object.author, space) ||
+          node.blocks.mutedIn(m.object.author, space)) {
+        return const SizedBox.shrink();
+      }
+      if (node.blocks.listHidden(m.object.author, space) case final hit?) {
+        return HiddenByList(
+          node: node,
+          hit: hit,
+          objectId: m.object.id,
+          name: name,
+        );
+      }
+    }
     return GestureDetector(
       onLongPressStart: (d) => unawaited(menu(d.globalPosition)),
       onSecondaryTapUp: (d) => unawaited(menu(d.globalPosition)),

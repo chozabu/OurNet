@@ -22,6 +22,7 @@ export 'package:ournet_native/desktop.dart'
         DesktopFrame,
         desktopAvailable;
 export 'src/node.dart';
+export 'src/blocks.dart';
 export 'src/store.dart';
 export 'src/blob_worker.dart' show BlobWorker;
 export 'src/voting.dart';

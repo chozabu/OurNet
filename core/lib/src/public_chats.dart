@@ -326,7 +326,7 @@ class PublicChats {
     messageKind,
     space,
     seenUpTo(space),
-    except: {node.person, ...node.blocked},
+    except: {node.person, ...node.blocks.hiddenAuthors(space)},
   );
 
   /// Marks everything in [space] read on this device.

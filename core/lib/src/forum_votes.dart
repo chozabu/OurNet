@@ -142,7 +142,7 @@ class ForumVotes {
             value['space'] == space &&
             value['public'] == public &&
             (voters == null || voters.contains(key)) &&
-            !node.blocked.contains(key))
+            !node.blocks.excludes(key, space))
           key as String: value['value'] as int,
     };
   }
@@ -171,7 +171,7 @@ class ForumVotes {
     };
     final author = authorOf(post, payload);
     if ((voters == null || voters.contains(author)) &&
-        !node.blocked.contains(author)) {
+        !node.blocks.excludes(author, post.space)) {
       all.putIfAbsent(author, () => 1);
     }
     var up = 0, down = 0;

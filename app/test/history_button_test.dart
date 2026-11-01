@@ -119,7 +119,7 @@ void main() {
     final node = Node(await LocalIdentity.create(), Store());
     final friend = Node(await LocalIdentity.create(), Store());
     await node.addContact(friend.identity.certificate);
-    node.block(friend.person, true);
+    await node.setContactState(friend.person, ContactState.blocked);
     await tester.pumpWidget(OurNetApp(node: node, enablePlatform: false));
     await settle(tester);
     await tester.tap(find.text('Settings').first);

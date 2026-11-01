@@ -1,3 +1,4 @@
+import 'blocks.dart';
 import 'model.dart';
 import 'node.dart';
 import 'public_chats.dart';
@@ -7,7 +8,7 @@ import 'wall.dart';
 /// A link to a public forum, a post in one, a message in a public chat, or a
 /// person's wall or a post on it.
 typedef ObjectLink = ({
-  /// `forum`, `post`, `message` or `wall`.
+  /// `forum`, `post`, `message`, `wall` or `blocks`.
   String type,
   String space,
 
@@ -26,6 +27,8 @@ typedef ObjectLink = ({
 /// - `ournet://message/<space>/<id>`: one message in a public chat.
 /// - `ournet://wall/<person>`: a person's wall, to follow it; with `/<id>`,
 ///   one post on it.
+/// - `ournet://blocks/<owner>/<list>`: a public block list, to subscribe to
+///   it (see [BlockPolicy]).
 ///
 /// A link to a post or message names its space so that a device not in it can
 /// join first. Links to things only some people can read (a note, a message
@@ -54,11 +57,13 @@ class Links {
 
   /// Links of these kinds in [text].
   static final pattern = RegExp(
-    r'ournet://(?:forum|post|message|wall)/[^\s<>"\x27]+[^\s<>"\x27.,;:!?)\]}]',
+    r'ournet://(?:forum|post|message|wall|blocks)/[^\s<>"\x27]+[^\s<>"\x27.,;:!?)\]}]',
   );
 
   static bool _plainId(String id) =>
-      id.isNotEmpty && id.length <= 200 && !RegExp(r'[\s\x00-\x1f]').hasMatch(id);
+      id.isNotEmpty &&
+      id.length <= 200 &&
+      !RegExp(r'[\s\x00-\x1f]').hasMatch(id);
 
   /// What [link] names, or null if it is not a forum, post, message or wall
   /// link.
@@ -88,6 +93,15 @@ class Links {
           title: title == null || title.isEmpty
               ? null
               : PublicNames.cap(title, 100),
+        );
+      case 'blocks':
+        final list = BlockPolicy.parseLink(link);
+        if (list == null) return null;
+        return (
+          type: 'blocks',
+          space: BlockPolicy.space(list.$1, list.$2),
+          object: null,
+          title: null,
         );
       case 'wall':
         if (parts.isEmpty || parts.length > 2 || !_plainId(parts[0])) {

@@ -9,6 +9,7 @@ import 'store.dart';
 import 'blob_worker.dart';
 import 'locations.dart';
 import 'avatars.dart';
+import 'blocks.dart';
 import 'connections.dart';
 import 'distant.dart';
 import 'listings.dart';
@@ -83,6 +84,9 @@ class Node {
     'room_leave',
     'revoke',
     'contact_state',
+    BlockPolicy.scopeKind,
+    BlockPolicy.subKind,
+    BlockPolicy.entryKind,
   };
 
   /// Calls [changed] after changes that may concern objects of [kinds]: those
@@ -105,7 +109,13 @@ class Node {
   });
   final Map<String, DeviceCertificate> contacts = {};
   final Set<String> subscriptions = {};
-  final Set<String> blocked = {};
+
+  /// People blocked everywhere: see [blocks] for blocks in some spaces,
+  /// mutes and block lists.
+  final blocked = PolicySet();
+
+  /// Who is blocked or muted where, and subscribed block lists.
+  late final blocks = BlockPolicy(this);
 
   /// People this person disconnected from: their devices were forgotten and
   /// are not learned again from others, until one is added on purpose.
@@ -338,16 +348,6 @@ class Node {
     notify();
   }
 
-  void block(String personId, bool enabled) {
-    if (enabled) {
-      blocked.add(personId);
-    } else {
-      blocked.remove(personId);
-    }
-    store.set('blocked', blocked.toList()..sort());
-    notify();
-  }
-
   /// Whether [device] is this device or one certified to this person and
   /// not revoked.
   bool ownDevice(String device) =>
@@ -491,6 +491,7 @@ class Node {
     }
     if (!keep) return object;
     store.put(object);
+    if (BlockPolicy.kinds.contains(kind)) blocks.stored(object);
     if (kind == 'avatar') avatars.changed(person);
     if (kind == Connections.listKind) connections.changed();
     notify();
@@ -757,8 +758,11 @@ class Node {
     return granted;
   }
 
+  /// Whether this device shows and reads [o]: not expired, addressed here,
+  /// and its author not blocked in its space (or everywhere). Mutes and
+  /// block lists only hide: see [BlockPolicy.hides].
   bool visible(SignedObject o) =>
-      !blocked.contains(o.author) &&
+      !blocks.blockedIn(o.author, o.space) &&
       (!o.hasExpiry || o.expires > now()) &&
       (o.isPublic || o.audience.contains(person) || groups.opens(o));
 
@@ -1026,7 +1030,13 @@ class Node {
   /// Kinds that change which objects may be offered to whom (group state and
   /// revocations). A change to one of them makes devices compare everything
   /// again rather than only what changed.
-  static const policyKinds = {'room', 'room_invite', 'revoke'};
+  static const policyKinds = {
+    'room',
+    'room_invite',
+    'revoke',
+    BlockPolicy.scopeKind,
+    BlockPolicy.subKind,
+  };
 
   /// This profile's change log epoch. A backup leaves it out, so a restored
   /// profile starts a new one and what peers recorded of it no longer applies.
@@ -1061,6 +1071,7 @@ class Node {
     'peer': peerDevice,
     'header': _inventoryHeader(contacts[peerDevice]),
     'blocked': blocked.toList()..sort(),
+    if (blocks.active) 'blocks': blocks.digest,
   });
 
   /// The objects changed here after change [since], or null when a full
@@ -1340,7 +1351,7 @@ class Node {
     Set<String> wanted, {
     bool relay = false,
   }) {
-    if (blocked.contains(o.author) ||
+    if (!blocks.relays(o.author, o.space) ||
         (revoked.contains(o.device) && !_relayable(o, peer, relay)) ||
         (o.hasExpiry && o.expires <= now()))
       return false;
@@ -1748,9 +1759,11 @@ class Node {
     final own = contacts[peerDevice]?.person == person;
     if ((revoked.contains(o.certificate.device) &&
             !(own && o.author == person)) ||
-        blocked.contains(o.author)) {
+        !blocks.relays(o.author, o.space)) {
       return 0;
     }
+    // Only a block list's owner writes to it.
+    if (!BlockPolicy.accepted(o)) return 0;
     // Carried for someone who is not a friend: see [DistantMessages.mayCarry].
     if (!distant.mayCarry(o)) return 0;
     // Only a wall's owner posts on it: see [Walls.accepted].
@@ -1850,6 +1863,12 @@ class Node {
       ].where((added) => added).length,
     );
     if (o.kind == 'avatar') avatars.changed(o.author);
+    if (BlockPolicy.kinds.contains(o.kind)) {
+      blocks.stored(o);
+      if (o.author == person && BlockPolicy.privateKinds.contains(o.kind)) {
+        if (await content(o) case final payload?) blocks.received(o, payload);
+      }
+    }
     if (o.kind == Connections.listKind) connections.changed();
     if (o.kind == Connections.requestKind) await connections.received(o);
     if (o.kind == 'read') {
@@ -2100,7 +2119,7 @@ class Node {
     person,
     after: roomReadFloor(space),
     cap: cap,
-    blocked: blocked,
+    blocked: blocks.hiddenAuthors(space),
   );
 
   /// Unseen [kind] objects by others in [space], up to [cap], for spaces read
@@ -2117,7 +2136,7 @@ class Node {
       person,
       after: floor,
       cap: cap,
-      blocked: blocked,
+      blocked: blocks.hiddenAuthors(space),
     );
     if (count == 0) {
       final newest = store.latestIn(kind, space)?.created ?? 0;

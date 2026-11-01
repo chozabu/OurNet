@@ -1217,7 +1217,7 @@ class _Index {
   Future<bool> refresh() async {
     final before = version;
     if (_settled == node.store.insertionCursor &&
-        _blocked == '${node.blocked.toList()..sort()}') {
+        _blocked == '${node.blocks.version}') {
       final signature = await _roomSignature();
       if (signature == _rooms) return false;
     }
@@ -1238,7 +1238,7 @@ class _Index {
     final slice = TimeSlice();
     var changed = false;
     final dirty = <(String, String)>{};
-    final blocked = '${node.blocked.toList()..sort()}';
+    final blocked = '${node.blocks.version}';
     if (blocked != _blocked) {
       // Blocking someone stores nothing, so nothing arrives to notice it.
       _blocked = blocked;
@@ -1337,7 +1337,7 @@ class _Index {
     if (room == null) return false;
     final members = (room.data['members'] as List).cast<String>();
     if (!o.audience.every(members.contains)) return false;
-    if (node.blocked.contains(e.author)) return false;
+    if (node.blocks.hidden(e.author, o.space)) return false;
     return e.data['history'] == true
         ? o.author == room.data['owner']
         : members.contains(o.author);

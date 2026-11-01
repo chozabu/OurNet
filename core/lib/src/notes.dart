@@ -288,8 +288,7 @@ class Notes {
   Future<void> refresh() =>
       _refreshing ??= _refresh().whenComplete(() => _refreshing = null);
   Future<void> _refresh() async {
-    final policy =
-        '${node.blocked.toList()..sort()}/${node.revoked.toList()..sort()}';
+    final policy = '${node.blocks.version}/${node.revoked.toList()..sort()}';
     if (policy != _policy) {
       _cache.clear();
       _summaries.clear();

@@ -519,10 +519,10 @@ void main() {
       ]);
 
       // Permission changes must reconsider older versions in a warm index.
-      a.block(b.person, true);
+      await a.setContactState(b.person, ContactState.blocked);
       await ca.refresh();
       expect(titles(ca.between(range[0], range[1], calendars: {space})), ['Wall night']);
-      a.block(b.person, false);
+      await a.setContactState(b.person, ContactState.unblocked);
       await ca.refresh();
       expect(titles(ca.between(range[0], range[1], calendars: {space})), ['Wall night (bring chalk)']);
     });
