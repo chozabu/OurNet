@@ -514,19 +514,4 @@ extension _NetworkPages on _OurNetAppState {
           : 'Couldn’t sync with $label. ${friendlySyncError(error)}',
     );
   }
-
-  Future<String?> choosePerson(BuildContext context) => showDialog<String>(
-    context: context,
-    builder: (context) => SimpleDialog(
-      title: const Text('Choose a person'),
-      children: people
-          .map(
-            (p) => SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, p),
-              child: Text(name(p)),
-            ),
-          )
-          .toList(),
-    ),
-  );
 }

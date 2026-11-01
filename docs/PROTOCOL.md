@@ -311,6 +311,34 @@ can read (a note, a group message) are resolved only against what a device
 holds and show as unavailable to anyone else, as event links do; they are not
 implemented yet.
 
+## Proposals and liquid delegation
+
+A forum's or group's members vote on proposals directly or through
+representatives they name per topic (code: `Liquid` in `core/lib/src/liquid.dart`,
+module `liquid`). All four kinds live in the forum's space, public, or in the
+group's room space, sealed to its members like `room_post`.
+
+| Kind | Payload |
+|---|---|
+| `proposal` | `{text, title?, topic, options, closes}`: 2-10 options, `closes` ms since epoch or 0 for open. |
+| `ballot` | `{proposal, choice}` (option index), `{proposal, abstain: true}`, or `{proposal, clear: true}` to hand the vote back to representatives. |
+| `delegation` | `{topic, to, transitive?}`: up to 3 ranked people, `[]` for nobody (stops inheritance); or `{topic, clear: true}` to inherit from the parent topic. |
+| `tally` | `{proposal, digest, counts, abstain, voters}`: the proposer's count. |
+
+A topic is a path of up to 6 public-name slugs (`science/physics`); `''` is
+the whole space. Each person's newest ballot per proposal and newest delegation
+per topic count; with `closes` set, records signed after it are ignored.
+
+A person's vote is their own ballot if any; otherwise the delegation at the
+proposal's topic or its nearest set ancestor, whose representatives are
+resolved in order on the same proposal (so their own subtopic delegations
+apply; with `transitive: false` only their own ballot counts). Anyone already
+reached for that person is skipped, so cycles end; nothing found means not
+counted. In a group only members count. `digest` is the SHA-256 of the sorted
+IDs of the ballots and delegations a count used, so two devices can tell
+whether they counted the same records. Older builds store and pass on all four
+kinds without reading them.
+
 ## Walls
 
 A person's wall (`core/lib/src/wall.dart`, user view in `docs/WALL.md`) is
