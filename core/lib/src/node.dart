@@ -1262,13 +1262,17 @@ class Node {
 
   /// Root-signed certificates a peer may learn: a person's own devices learn
   /// every admitted contact, and friends learn this person's other devices,
-  /// so linked devices can read and send the same conversations.
+  /// so linked devices can read and send the same conversations. A friend
+  /// also learns its own person's other devices known here: a device linked
+  /// from one that was then removed may never have reached the rest, and
+  /// they refuse it until something introduces it.
   List<Json> sharedCertificates(DeviceCertificate peer) => [
     for (final c in [identity.certificate, ...contacts.values])
       if (c.device != peer.device &&
           !revoked.contains(c.device) &&
           (peer.person == person ||
-              (c.person == person && !blocked.contains(peer.person))))
+              ((c.person == person || c.person == peer.person) &&
+                  !blocked.contains(peer.person))))
         c.toJson(),
   ].take(maxSharedCertificates).toList();
 
@@ -1288,7 +1292,11 @@ class Node {
         if (c.device == identity.device ||
             revoked.contains(c.device) ||
             (known != null && known.signature == c.signature) ||
-            (peer.person != person && c.person != peer.person) ||
+            // A friend introduces their own devices, or this person's: a
+            // root-signed certificate proves the latter whoever carries it.
+            (peer.person != person &&
+                c.person != peer.person &&
+                c.person != person) ||
             forgotten.contains(c.person) ||
             // Keep an existing binding unless the owner re-certified it.
             (known != null && known.person != c.person) ||
@@ -1308,6 +1316,24 @@ class Node {
       notify();
     }
     return added;
+  }
+
+  /// Admits [c] when it is one of this person's devices not yet known here:
+  /// anything it wrote carries its root-signed certificate, so a device
+  /// linked from another that was removed before the two synced is still
+  /// found through whoever relays its objects (a friend, usually).
+  Future<void> _learnOwnDevice(DeviceCertificate c) async {
+    if (c.person != person ||
+        c.device == identity.device ||
+        contacts.containsKey(c.device) ||
+        revoked.contains(c.device) ||
+        !await c.valid()) {
+      return;
+    }
+    contacts[c.device] = c;
+    store.putContact(c, now());
+    _followWalls();
+    notify();
   }
 
   /// [peerKeys], when known, are the group keys the peer said it holds: an
@@ -1853,6 +1879,7 @@ class Node {
     if (!held && store.storedBytes >= store.storageLimit)
       throw StateError('Storage limit reached');
     await applyRevocation(o);
+    await _learnOwnDevice(o.certificate);
     if (o.author != person && _readKinds.contains(o.kind)) {
       _applyHistoryRead(o);
     }
