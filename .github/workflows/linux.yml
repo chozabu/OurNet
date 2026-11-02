@@ -38,7 +38,7 @@ jobs:
       - run: tool/setup.sh
       - name: Vault test
         working-directory: app
-        run: flutter test test/vault_test.dart
+        run: flutter test test/vault_test.dart test/update_banner_test.dart
       - name: Build
         working-directory: app
         run: |
