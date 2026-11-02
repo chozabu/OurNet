@@ -6,17 +6,38 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'sync_health.dart';
 
-/// Where this platform's builds come from, or null when there is no store.
-Uri? updateLink() {
-  if (Platform.isAndroid) {
-    return Uri.parse(
-      'https://play.google.com/apps/internaltest/4701143104149213002',
-    );
+/// Public store listings. The Microsoft Store page is the same URL whether
+/// the product is search-visible or link-only; that is set in Partner Center.
+const playListing =
+    'https://play.google.com/store/apps/details?id=org.chozabu.ournet';
+const microsoftStoreId = '9N6P4X13QG9M';
+const microsoftListing = 'https://apps.microsoft.com/detail/$microsoftStoreId';
+
+/// Where to check for an update on [os] (`Platform.operatingSystem`), best
+/// first: the store app itself, then its web page. Empty when there is no
+/// store for this platform.
+List<Uri> updateLinks([String? os]) => switch (os ?? Platform.operatingSystem) {
+  'android' => [
+    Uri.parse('market://details?id=org.chozabu.ournet'),
+    Uri.parse(playListing),
+  ],
+  'windows' => [
+    Uri.parse('ms-windows-store://pdp/?ProductId=$microsoftStoreId'),
+    Uri.parse(microsoftListing),
+  ],
+  _ => const [],
+};
+
+/// Opens the first of [links] that launches.
+Future<bool> openUpdateLink(List<Uri> links) async {
+  for (final link in links) {
+    final ok = await launchUrl(
+      link,
+      mode: LaunchMode.externalApplication,
+    ).catchError((Object _) => false);
+    if (ok) return true;
   }
-  if (Platform.isWindows) {
-    return Uri.parse('https://apps.microsoft.com/detail/9N6P4X13QG9M');
-  }
-  return null;
+  return false;
 }
 
 /// What the banner says about the device that showed a newer release exists.
@@ -59,7 +80,7 @@ class _UpdateBannerState extends State<UpdateBanner> {
           (compareReleases(version, dismissed) ?? 1) <= 0) {
         return const SizedBox.shrink();
       }
-      final link = updateLink();
+      final links = updateLinks();
       return MaterialBanner(
         key: const Key('update-banner'),
         leading: const Icon(Icons.system_update),
@@ -77,12 +98,9 @@ class _UpdateBannerState extends State<UpdateBanner> {
                 setState(() => network.node.store.set(_dismissed, version)),
             child: const Text('Not now'),
           ),
-          if (link != null)
+          if (links.isNotEmpty)
             FilledButton.tonal(
-              onPressed: () => launchUrl(
-                link,
-                mode: LaunchMode.externalApplication,
-              ).catchError((Object _) => false),
+              onPressed: () => openUpdateLink(links),
               child: const Text('Check for update'),
             ),
         ],
