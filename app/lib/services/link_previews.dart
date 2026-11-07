@@ -20,7 +20,10 @@ import 'package:ournet_core/ournet_core.dart';
 /// a message.
 class LinkPreviews {
   static const enabledSetting = 'linkPreviews';
-  static const _maxHtmlBytes = 512 * 1024;
+
+  /// Reading stops at the end of a page's head, so this only matters for
+  /// pages with huge heads: YouTube puts its tags about 780 KB in.
+  static const _maxHtmlBytes = 2 * 1024 * 1024;
   static const _maxImageSourceBytes = 4 * 1024 * 1024;
   static const _maxRedirects = 3;
   static const _timeout = Duration(seconds: 8);
@@ -60,7 +63,8 @@ class LinkPreviews {
       final page = await _get(client, url, _maxHtmlBytes, html: true);
       if (page == null) return null;
       final (at, bytes) = page;
-      final meta = parseHtml(utf8.decode(bytes, allowMalformed: true), at);
+      // Heads run to hundreds of KB, too much to parse on the UI isolate.
+      final meta = await compute(_parsePage, (bytes, at));
       Uint8List? image;
       if (meta.image case final source?) {
         try {
@@ -77,6 +81,7 @@ class LinkPreviews {
         site: meta.site,
         image: image,
       );
+      if (preview.isEmpty) debugPrint('No link preview in ${url.host}');
       return preview.isEmpty ? null : preview;
     } finally {
       client.close();
@@ -126,6 +131,7 @@ class LinkPreviews {
       final declared = response.contentLength;
       if (!html && declared != null && declared > limit) return null;
       final out = BytesBuilder(copy: false);
+      var seen = '';
       await for (final chunk in response.stream.timeout(_timeout)) {
         out.add(chunk);
         // A page's head is all a preview needs, so a long page is cut;
@@ -133,6 +139,12 @@ class LinkPreviews {
         if (out.length >= limit) {
           if (!html) return null;
           break;
+        }
+        if (html) {
+          // Keeps the end of the last chunk, as the tag can span two.
+          seen += latin1.decode(chunk).toLowerCase();
+          if (seen.contains('</head')) break;
+          seen = seen.substring(math.max(0, seen.length - 5));
         }
       }
       return (at, out.takeBytes());
@@ -185,6 +197,10 @@ class LinkPreviews {
     }
     return true;
   }
+
+  static ({String? title, String? description, String? site, Uri? image})
+  _parsePage((Uint8List, Uri) page) =>
+      parseHtml(utf8.decode(page.$1, allowMalformed: true), page.$2);
 
   /// Title, description, site name and image of an HTML page at [at], from
   /// its Open Graph and Twitter card tags, falling back to `<title>` and the
