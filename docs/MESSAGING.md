@@ -210,7 +210,7 @@ the site unless they open the link, so a contact cannot learn when they read a
 message or what address they are at by sending a link.
 
 - **Sender's device fetches.** Once typing pauses on a web link in a direct
-  message, the app reads the page's head (at most 512 KB) for Open Graph,
+  message, the app reads the page's head (at most 2 MB) for Open Graph,
   Twitter card and `<title>` tags, and its image (at most 4 MB), which the
   engine decodes at 320 px or less and the avatar encoder fits into 24 KB.
   The site sees the sender's address: Settings, "Link previews", turns this off.
