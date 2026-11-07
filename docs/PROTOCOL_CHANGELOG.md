@@ -7,7 +7,7 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
-## Unreleased: Link previews
+## 0.2.65: Link previews
 
 Additive: an optional `link` field in `message` payloads, a preview of the
 first web link in the text made on the sending device (`url`, `title`,
