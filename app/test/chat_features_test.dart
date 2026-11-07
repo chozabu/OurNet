@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ournet/ui/app.dart';
 import 'package:ournet/ui/conversation_history.dart';
+import 'package:ournet/ui/link_preview_card.dart';
 import 'package:ournet/ui/message_text.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'features_test.dart' show settled;
@@ -101,6 +102,61 @@ void main() {
     await node.close();
     await quiet.close();
     await chatty.close();
+  });
+
+  testWidgets('a link preview from the sender shows the real host', (
+    tester,
+  ) async {
+    wide(tester);
+    final (node, [friend]) = await friends(1);
+    final sent = await friend.publish(
+      'message',
+      {
+        'text': 'Look https://www.example.com/story',
+        'link': {
+          'url': 'https://www.example.com/story',
+          'title': 'A story',
+          'description': 'What happened',
+          'site': 'Totally Your Bank',
+        },
+      },
+      space: '_messages',
+      audience: [node.person],
+    );
+    // A preview of a link that is not in the text is never shown.
+    await friend.publish(
+      'message',
+      {
+        'text': 'Nothing to see',
+        'link': {'url': 'https://elsewhere.example/', 'title': 'Spoof'},
+      },
+      space: '_messages',
+      audience: [node.person],
+    );
+    await tester.runAsync(() => syncPair(node, friend));
+    await tester.pumpWidget(
+      OurNetApp(
+        node: node,
+        enablePlatform: false,
+        initialTab: Destination.messages,
+      ),
+    );
+    await settled(tester);
+    expect(find.byType(LinkPreviewCard), findsOneWidget);
+    expect(inChat('example.com'), findsOneWidget);
+    expect(inChat('A story'), findsOneWidget);
+    expect(inChat('Spoof'), findsNothing);
+    expect(inChat('Totally Your Bank'), findsNothing);
+    // Editing the link out of the message removes its preview.
+    await tester.runAsync(() async {
+      await MessageUpdates(friend).edit(sent, 'Never mind');
+      await syncPair(node, friend);
+    });
+    await settled(tester);
+    expect(find.byType(LinkPreviewCard), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await node.close();
+    await friend.close();
   });
 
   testWidgets('reply, react, edit and delete from the message menu', (
