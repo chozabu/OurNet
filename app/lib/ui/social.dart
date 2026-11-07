@@ -676,6 +676,7 @@ extension _SocialPages on _OurNetAppState {
     final item = OutgoingMessage(
       submitted.trim(),
       messageReply.remove(recipient),
+      link: outgoingLink(submitted),
     );
     update(() {
       (outgoing[recipient] ??= []).add(item);

@@ -201,3 +201,29 @@ Android device was connected. WAN and real audio/video remain unvalidated.
   Separate local QUIC tests cover failed exchange retry, restart with partial
   attachment chunks and encrypted helper delivery while the sender is offline.
   These results do not establish WAN, Android sleep/wakeup or call reliability.
+
+## Link previews
+
+The sender makes the preview and sends it inside the encrypted message, as
+`link` (see `core/lib/src/link_preview.dart`). People it goes to never contact
+the site unless they open the link, so a contact cannot learn when they read a
+message or what address they are at by sending a link.
+
+- **Sender's device fetches.** Once typing pauses on a web link in a direct
+  message, the app reads the page's head (at most 512 KB) for Open Graph,
+  Twitter card and `<title>` tags, and its image (at most 4 MB), which the
+  engine decodes at 320 px or less and the avatar encoder fits into 24 KB.
+  The site sees the sender's address: Settings, "Link previews", turns this off.
+- **Only public hosts.** Loopback, private, link-local and `.local`-style
+  hosts are never fetched, checked after DNS and on each of at most three
+  redirects, so pasting a router's address does not put its page in a message.
+- **Never waits for the sender.** The message is shown at once; delivery waits
+  at most 3 s for a preview still being made, then sends without one. The
+  sender can remove the preview from above the composer.
+- **The preview is the sender's word.** The card names the site by the host
+  in `url`, never by the sender's `site`, opens `url` itself, and is only
+  shown while `url` is in the message text, so an edit that removes the link
+  removes the card. Out-of-bounds fields drop the preview; an unusable image
+  is left out. Showing it makes no request.
+- First cut: direct messages (including people beyond friends). Group chats,
+  public chats and walls can carry the same field later.

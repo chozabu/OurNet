@@ -22,8 +22,11 @@ Future<T?> showMenuAt<T>(
 class OutgoingMessage {
   final String text;
   final String? reply;
+
+  /// The link to send a preview of, made on this device.
+  final Uri? link;
   String? error;
-  OutgoingMessage(this.text, this.reply);
+  OutgoingMessage(this.text, this.reply, {this.link});
 }
 
 const _quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -496,11 +499,19 @@ extension _ConversationPages on _OurNetAppState {
     final previous = _sendChains[recipient] ?? Future<void>.value();
     final next = previous.then((_) async {
       try {
+        // The message is already shown; a preview still being made gets a
+        // few seconds, then the message goes without it.
+        final link = item.link == null
+            ? null
+            : await linkPreviews
+                  .preview(item.link!)
+                  .timeout(const Duration(seconds: 3), onTimeout: () => null);
         final sent = await sendMessage(
           node,
           recipient,
           item.text,
           reply: item.reply,
+          link: link,
         );
         update(() {
           outgoing[recipient]?.remove(item);
@@ -914,6 +925,11 @@ extension _ConversationPages on _OurNetAppState {
                   Padding(padding: const EdgeInsets.only(top: 4), child: meta),
                 ],
               ),
+              if (messageLinkPreview(o.id, p, body) case final preview?)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4, bottom: 2),
+                  child: LinkPreviewCard(preview),
+                ),
             ],
           ),
         );
@@ -1489,10 +1505,98 @@ extension _ConversationPages on _OurNetAppState {
     );
   }
 
-  /// Above the composer: the message being replied to or edited.
+  /// Above the composer: the message being replied to or edited, and a
+  /// preview of the link being sent.
   Widget? composerContextBar(BuildContext context) {
     final peer = contact;
     if (peer == null) return null;
+    final replying = composerReplyBar(context, peer);
+    final link = composerLinkPreview(peer);
+    if (link == null) return replying;
+    if (replying == null) return link;
+    return Column(mainAxisSize: MainAxisSize.min, children: [replying, link]);
+  }
+
+  /// The preview that will go with the message being written to [peer]:
+  /// a spinner while it is made, nothing if there is none.
+  Widget? composerLinkPreview(String peer) {
+    final link = composerLink;
+    if (link == null ||
+        messageEdit.containsKey(peer) ||
+        !linkPreviews.enabled ||
+        dismissedLinkPreviews.contains(link.toString())) {
+      return null;
+    }
+    final pending = linkPreviews.cached(link);
+    if (pending == null) return null;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+      child: FutureBuilder<LinkPreview?>(
+        key: ValueKey(link),
+        future: pending,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Align(
+              alignment: Alignment.centerLeft,
+              child: SizedBox.square(
+                dimension: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            );
+          }
+          final preview = snapshot.data;
+          if (preview == null) return const SizedBox.shrink();
+          return Align(
+            alignment: Alignment.centerLeft,
+            child: LinkPreviewCard(
+              preview,
+              onRemove: () =>
+                  update(() => dismissedLinkPreviews.add(link.toString())),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Notes the first web link in the direct-message composer once typing
+  /// pauses, and starts making its preview.
+  void watchComposerLink(String text) {
+    _composerLinkTimer?.cancel();
+    final direct = composerContext?.startsWith('message/') ?? false;
+    final link = direct ? MessageText.links(text).firstOrNull : null;
+    if (link == null) {
+      if (composerLink != null) {
+        _composerLinkTimer = Timer(Duration.zero, () {
+          composerLink = null;
+          redraw();
+        });
+      }
+      return;
+    }
+    if (link == composerLink) return;
+    _composerLinkTimer = Timer(const Duration(milliseconds: 700), () {
+      composerLink = link;
+      if (linkPreviews.enabled &&
+          !dismissedLinkPreviews.contains(link.toString())) {
+        unawaited(linkPreviews.preview(link).whenComplete(redraw));
+      }
+      redraw();
+    });
+  }
+
+  /// The link whose preview goes with [text], unless previews are off or
+  /// the sender removed it.
+  Uri? outgoingLink(String text) {
+    if (!linkPreviews.enabled) return null;
+    final link = MessageText.links(text).firstOrNull;
+    if (link == null || dismissedLinkPreviews.contains(link.toString())) {
+      return null;
+    }
+    return link;
+  }
+
+  Widget? composerReplyBar(BuildContext context, String peer) {
     final editing = messageEdit[peer];
     final reply = messageReply[peer];
     if (editing == null && reply == null) return null;
@@ -1536,6 +1640,7 @@ extension _ConversationPages on _OurNetAppState {
     final text = composer.text;
     if (text == _typedText) return;
     _typedText = text;
+    watchComposerLink(text);
     final peer = contact;
     if (switchingDraft ||
         text.isEmpty ||

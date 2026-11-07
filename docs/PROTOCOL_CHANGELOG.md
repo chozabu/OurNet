@@ -7,6 +7,14 @@ written in a later one** (see "Rollout switches").
 
 Versions are app versions (`app/pubspec.yaml`).
 
+## Unreleased: Link previews
+
+Additive: an optional `link` field in `message` payloads, a preview of the
+first web link in the text made on the sending device (`url`, `title`,
+`description`, `site`, base64 `image` of at most 24 KB; `LinkPreview` in
+core, design in `docs/MESSAGING.md`, "Link previews"). Older builds ignore it
+and show the text as before. No capability or ALPN change.
+
 ## 0.2.62: Blocking in places, mutes and block lists
 
 Additive: kinds `block_scope` and `block_sub` (in `_contacts`, sealed to the

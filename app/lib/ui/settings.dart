@@ -685,6 +685,17 @@ extension _SettingsPages on _OurNetAppState {
           : null,
     ),
     SwitchListTile(
+      title: const Text('Link previews'),
+      subtitle: const Text(
+        'When you send a web link, this device fetches its title and picture '
+        'and sends them with the message, so friends never contact the site. '
+        'The site sees your address.',
+      ),
+      value: linkPreviews.enabled,
+      onChanged: (v) =>
+          update(() => node.store.set(LinkPreviews.enabledSetting, v)),
+    ),
+    SwitchListTile(
       title: const Text('Typing indicators'),
       subtitle: const Text(
         'Let friends see when you are typing to them, and see when they are. '

@@ -18,18 +18,21 @@ List<String> messageHelpers(Node node, String recipient) {
 
 /// Sends [text] to [recipient], optionally as a reply to message [reply] or
 /// with a subject ([title], so it reads as mail). Someone who is not a
-/// friend is reached through friends: see [DistantMessages].
+/// friend is reached through friends: see [DistantMessages]. A [link]
+/// preview made on this device goes with it (see [LinkPreview]).
 Future<SignedObject> sendMessage(
   Node node,
   String recipient,
   String text, {
   String? reply,
   String? title,
+  LinkPreview? link,
 }) {
   final content = {
     'text': text.trim(),
     'reply': ?reply,
     if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
+    'link': ?link?.toJson(),
   };
   if (node.distant.isDistant(recipient)) {
     return node.distant.send(recipient, content);

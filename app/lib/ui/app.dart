@@ -8,6 +8,8 @@ import 'message_text.dart';
 import '../services/relay_conditions.dart';
 import '../services/noise_suppression.dart';
 import '../services/typing.dart';
+import '../services/link_previews.dart';
+import 'link_preview_card.dart';
 import '../services/windows_tun.dart';
 import '../services/remote_desktop.dart';
 import '../services/location_share.dart';
@@ -474,6 +476,13 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   late final MessageUpdates messageUpdates;
   late final ForumVotes forumVotes;
   late final Typing typing;
+  late final LinkPreviews linkPreviews;
+
+  /// The first web link in the direct-message composer, once typing has
+  /// paused, and links whose preview the sender removed.
+  Uri? composerLink;
+  final dismissedLinkPreviews = <String>{};
+  Timer? _composerLinkTimer;
   late final LocationShare locationShare;
   late final MapTiles mapTiles;
   final messageErrors = <String, String>{};
@@ -634,6 +643,7 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
     network = Network(node)..addListener(refresh);
     startPlugins();
     typing = Typing(network)..addListener(redraw);
+    linkPreviews = LinkPreviews(node);
     locationShare = LocationShare(
       network,
       state: notes.state,

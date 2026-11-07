@@ -53,6 +53,7 @@ export 'src/public_chats.dart';
 export 'src/public_names.dart';
 export 'src/listings.dart';
 export 'src/links.dart';
+export 'src/link_preview.dart';
 export 'src/storage_report.dart';
 export 'src/activity.dart';
 export 'src/wall.dart';
