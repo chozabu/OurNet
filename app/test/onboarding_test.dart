@@ -45,6 +45,68 @@ void main() {
     expect(find.text('Restore from a backup'), findsOneWidget);
   });
 
+  testWidgets('reachability suggests saving battery when push works', (
+    tester,
+  ) async {
+    Reachability? chosen;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView(
+            children: [
+              ReachabilityChoice(push: true, onChoose: (c) => chosen = c),
+            ],
+          ),
+        ),
+      ),
+    );
+    expect(find.text('Save battery (suggested)'), findsOneWidget);
+    expect(find.text('Always connected'), findsOneWidget);
+    await tester.tap(find.text('Continue'));
+    expect(chosen, Reachability.batterySaver);
+    await tester.tap(find.text('Only check now and then'));
+    await tester.pump();
+    await tester.tap(find.text('Continue'));
+    expect(chosen, Reachability.minimal);
+  });
+
+  testWidgets('reachability suggests staying connected without push', (
+    tester,
+  ) async {
+    Reachability? chosen;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView(
+            children: [
+              ReachabilityChoice(push: false, onChoose: (c) => chosen = c),
+            ],
+          ),
+        ),
+      ),
+    );
+    expect(find.text('Always connected (suggested)'), findsOneWidget);
+    expect(find.textContaining('not available on this phone'), findsOneWidget);
+    await tester.tap(find.text('Continue'));
+    expect(chosen, Reachability.alwaysConnected);
+  });
+
+  test('each reachability choice maps onto the background settings', () {
+    final store = Store();
+    addTearDown(store.close);
+    storeReachability(store, Reachability.batterySaver);
+    expect(store.setting('stayConnected'), false);
+    expect(store.setting('pushWake'), true);
+    expect(store.setting('backgroundSync'), true);
+    storeReachability(store, Reachability.alwaysConnected);
+    expect(store.setting('stayConnected'), true);
+    expect(store.setting('pushWake'), true);
+    storeReachability(store, Reachability.minimal);
+    expect(store.setting('stayConnected'), false);
+    expect(store.setting('pushWake'), false);
+    expect(store.setting('backgroundSync'), true);
+  });
+
   testWidgets('the backup passphrase is checked before any work starts', (
     tester,
   ) async {

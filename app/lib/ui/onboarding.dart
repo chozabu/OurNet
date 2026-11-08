@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
 import '../services/session.dart';
 import '../services/device_model.dart';
 import '../services/pairing_discovery.dart';
+import '../services/wake.dart' show FcmChannel;
 import 'app.dart';
 import 'backup.dart';
 import 'friend_invite.dart' show CodeText;
@@ -17,21 +19,76 @@ class SetupApp extends StatelessWidget {
 
   /// Same-network device discovery; disabled in widget tests.
   final bool discover;
-  const SetupApp({super.key, required this.node, this.discover = true});
+
+  /// See [SetupPage.askReachability].
+  final bool? askReachability;
+
+  /// See [SetupPage.pushAvailable].
+  final Future<bool> Function()? pushAvailable;
+  const SetupApp({
+    super.key,
+    required this.node,
+    this.discover = true,
+    this.askReachability,
+    this.pushAvailable,
+  });
   @override
   Widget build(BuildContext context) => MaterialApp(
     theme: ThemeData(
       colorSchemeSeed: const Color(0xff137d72),
       useMaterial3: true,
     ),
-    home: SetupPage(node: node, discover: discover),
+    home: SetupPage(
+      node: node,
+      discover: discover,
+      askReachability: askReachability,
+      pushAvailable: pushAvailable,
+    ),
   );
+}
+
+/// How a phone keeps receiving while OurNet is closed, chosen once during
+/// setup and changeable later in Settings (each maps onto the existing
+/// `stayConnected`, `pushWake` and `backgroundSync` settings).
+enum Reachability {
+  /// Push wake-up and periodic sync, no foreground service.
+  batterySaver,
+
+  /// The "Stay connected" foreground service (push wake kept as a backup).
+  alwaysConnected,
+
+  /// Periodic sync only.
+  minimal,
+}
+
+/// Whether this device can be woken by push: FCM gives it a token.
+Future<bool> fcmAvailable() async {
+  try {
+    final token = await FcmChannel.token().timeout(const Duration(seconds: 5));
+    return token != null && token.isNotEmpty;
+  } catch (_) {
+    return false;
+  }
 }
 
 class SetupPage extends StatefulWidget {
   final Node node;
   final bool discover;
-  const SetupPage({super.key, required this.node, this.discover = true});
+
+  /// Ask how to stay reachable in the background before opening the app.
+  /// Defaults to Android, the only platform with these settings.
+  final bool? askReachability;
+
+  /// Whether push wake-up works on this device; picks the suggested option.
+  /// Defaults to [fcmAvailable].
+  final Future<bool> Function()? pushAvailable;
+  const SetupPage({
+    super.key,
+    required this.node,
+    this.discover = true,
+    this.askReachability,
+    this.pushAvailable,
+  });
   @override
   State<SetupPage> createState() => _SetupPageState();
 }
@@ -52,6 +109,11 @@ class _SetupPageState extends State<SetupPage> {
   int searches = 0;
   PeerNetwork? network;
 
+  /// The profile set up here, waiting on the reachability choice.
+  Node? ready;
+  bool created = false;
+  bool? push;
+
   @override
   void initState() {
     super.initState();
@@ -64,6 +126,7 @@ class _SetupPageState extends State<SetupPage> {
       }),
     );
   }
+
   Future<void> act(Future<void> Function() action) async {
     setState(() {
       busy = true;
@@ -93,12 +156,44 @@ class _SetupPageState extends State<SetupPage> {
     await saveIdentity(node.identity);
     node.store.set('autoConnect', true);
     if (!mounted) return;
-    runApp(
-      OurNetApp(
-        node: node,
-        initialTab: page == 'create' ? Destination.profile : Destination.notes,
-      ),
-    );
+    created = page == 'create';
+    if (widget.askReachability ?? Platform.isAndroid) {
+      setState(() {
+        ready = node;
+        page = 'reach';
+        status = '';
+      });
+      final available = await (widget.pushAvailable ?? fcmAvailable)();
+      if (!mounted) return;
+      setState(() => push = available);
+      return;
+    }
+    launch(node);
+  }
+
+  void launch(Node node) => runApp(
+    OurNetApp(
+      node: node,
+      initialTab: created ? Destination.profile : Destination.notes,
+    ),
+  );
+
+  /// Stores the reachability choice, asks for notifications with the reason
+  /// on screen, and opens the app.
+  Future<void> applyReachability(Reachability choice) async {
+    final node = ready!;
+    storeReachability(node.store, choice);
+    node.store.set('notificationsAsked', true);
+    try {
+      await FlutterLocalNotificationsPlugin()
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.requestNotificationsPermission();
+    } catch (_) {
+      // Settings › Notifications asks again.
+    }
+    if (mounted) launch(node);
   }
 
   /// Looks for an open Add device screen on this network while joining.
@@ -154,7 +249,8 @@ class _SetupPageState extends State<SetupPage> {
 
   @override
   Widget build(BuildContext context) => PopScope(
-    canPop: !busy,
+    // The profile already exists on the reachability page.
+    canPop: !busy && page != 'reach',
     child: Scaffold(
       body: SafeArea(
         child: Center(
@@ -173,6 +269,8 @@ class _SetupPageState extends State<SetupPage> {
                 Text(
                   page == 'welcome'
                       ? 'Your people. Your devices.'
+                      : page == 'reach'
+                      ? 'Staying reachable'
                       : page == 'create'
                       ? 'Create your profile'
                       : 'Connect your profile',
@@ -181,7 +279,14 @@ class _SetupPageState extends State<SetupPage> {
                 const SizedBox(height: 12),
                 Text(
                   page == 'welcome'
-                      ? 'One profile for you, wherever you use OurNet.'
+                      ? 'One profile for you, wherever you use OurNet. There '
+                            'is no OurNet server holding your notes and '
+                            'messages: your devices and your friends’ devices '
+                            'sync directly with each other.'
+                      : page == 'reach'
+                      ? 'Because there is no server to hold messages for you, '
+                            'OurNet needs a way to hear from friends while it '
+                            'is closed. Choose how.'
                       : page == 'create'
                       ? 'Choose how people see you and name this device.'
                       : 'On a device already linked to your profile, open Profile → Add device. Keep both apps open.',
@@ -233,6 +338,14 @@ class _SetupPageState extends State<SetupPage> {
                     icon: const Icon(Icons.unarchive_outlined),
                     label: const Text('Restore from a backup'),
                   ),
+                ] else if (page == 'reach') ...[
+                  if (push != null)
+                    ReachabilityChoice(
+                      push: push!,
+                      enabled: !busy,
+                      onChoose: (choice) =>
+                          act(() => applyReachability(choice)),
+                    ),
                 ] else ...[
                   if (page == 'create') ...[
                     TextField(
@@ -376,6 +489,105 @@ class _SetupPageState extends State<SetupPage> {
         ),
       ),
     ),
+  );
+}
+
+/// Maps a [Reachability] choice onto the settings the app reads.
+void storeReachability(Store store, Reachability choice) {
+  store.set('stayConnected', choice == Reachability.alwaysConnected);
+  store.set('pushWake', choice != Reachability.minimal);
+  store.set('backgroundSync', true);
+}
+
+/// The "Staying reachable" options, with the suggestion depending on
+/// whether [push] wake-up works on this device.
+class ReachabilityChoice extends StatefulWidget {
+  final bool push;
+  final bool enabled;
+  final void Function(Reachability choice) onChoose;
+  const ReachabilityChoice({
+    super.key,
+    required this.push,
+    required this.onChoose,
+    this.enabled = true,
+  });
+  @override
+  State<ReachabilityChoice> createState() => _ReachabilityChoiceState();
+}
+
+class _ReachabilityChoiceState extends State<ReachabilityChoice> {
+  // Without push, saving battery would mean slow messages and calls that
+  // never ring, so staying connected is suggested instead.
+  late Reachability choice = widget.push
+      ? Reachability.batterySaver
+      : Reachability.alwaysConnected;
+
+  Widget option(
+    Reachability value,
+    String title,
+    String subtitle, {
+    bool suggested = false,
+  }) => RadioListTile<Reachability>(
+    value: value,
+    enabled: widget.enabled,
+    contentPadding: EdgeInsets.zero,
+    title: Text(suggested ? '$title (suggested)' : title),
+    subtitle: Text(subtitle),
+  );
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      RadioGroup<Reachability>(
+        groupValue: choice,
+        onChanged: (v) => setState(() => choice = v ?? choice),
+        child: Column(
+          children: [
+            option(
+              Reachability.batterySaver,
+              'Save battery',
+              widget.push
+                  ? 'Friends’ devices wake OurNet through Google’s push '
+                        'service when they have something for you, so '
+                        'messages arrive soon and calls ring. Wakes carry '
+                        'nothing: messages still come straight from friends.'
+                  : 'Push wake-up is not available on this phone, so '
+                        'messages arrive about every 15 minutes and calls '
+                        'ring only while OurNet is open.',
+              suggested: widget.push,
+            ),
+            option(
+              Reachability.alwaysConnected,
+              'Always connected',
+              'Keeps a connection to friends open, without Google. Fastest '
+                  'messages and calls, but uses more battery and shows a '
+                  'notification while on. Some phones also need battery '
+                  'optimisation turned off for OurNet.',
+              suggested: !widget.push,
+            ),
+            option(
+              Reachability.minimal,
+              'Only check now and then',
+              'Exchange with friends about every 15 minutes while closed, '
+                  'with no push. Calls ring only while OurNet is open.',
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 8),
+      Text(
+        'Next, Android asks to allow notifications, so you see messages and '
+        'calls while OurNet is closed. You can change all of this in '
+        'Settings.',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+      const SizedBox(height: 16),
+      FilledButton(
+        onPressed: widget.enabled ? () => widget.onChoose(choice) : null,
+        child: const Text('Continue'),
+      ),
+    ],
   );
 }
 
