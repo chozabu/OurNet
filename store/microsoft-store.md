@@ -7,9 +7,10 @@ Updates after the first submission go through `tool/publish-store.ps1`.
 
 Free, all markets. No trial, no sale.
 
-**Discoverability:** available by direct link only, not shown in Store search
-(set in Submission 2, September 2026). Packages uploaded by
-`tool/publish-store.ps1` keep this setting; changing it takes a new submission.
+**Discoverability:** public, shown in Store search (submitted 2026-11-11 with
+the 0.2.66 package; it was direct link only from Submission 2, September 2026).
+Packages uploaded by `tool/publish-store.ps1` keep this setting; changing it
+takes a new submission: `python tool/store_visibility.py public|private [--dry]`.
 The overview page's availability toggle blocks installs entirely instead.
 
 ## Properties

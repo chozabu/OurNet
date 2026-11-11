@@ -107,8 +107,9 @@ saved profile with the current build.
   CLI only updates after that. The CLI cannot add a package to a submission
   started on the website, and the Store takes one submission at a time: wait
   for a website submission to publish (or delete it) before running the script.
-- OurNet is available by direct link only, not in Store search (Submission 2,
-  September 2026). Changing that takes a new submission; the overview page's
+- OurNet is public and shown in Store search (submitted 2026-11-11; direct link
+  only before that). Changing that takes a new submission
+  (`python tool/store_visibility.py public|private`); the overview page's
   availability toggle blocks installs entirely instead.
 - Listing copy, age-rating answers and certification notes are in
   `store/microsoft-store.md`; `store/submitted-version.txt` is the last version
