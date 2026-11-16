@@ -80,10 +80,12 @@ the previous window for that desktop profile before launching its replacement.
 
 The debug APK is built at:
 
-`app\build\app\outputs\flutter-apk\app-debug.apk`
+`app\build\app\outputs\flutter-apk\app-full-debug.apk`
 
 Install it as a development APK on your own device, or use
-`flutter run -d <device-id>` from `app`. The package is `org.chozabu.ournet`, separate
+`flutter run -d <device-id> --flavor full` from `app`. Android builds need a
+flavor: `full` has everything; `play` is the Google Play build, which leaves
+out the friend network (Play refuses its VPN). The package is `org.chozabu.ournet`, separate
 from the old prototype. APK compilation has been checked; on-device behaviour
 must still be verified. Background receipt while the app is suspended is not
 promised. Private messages use encrypted device envelopes, not a forward-secret

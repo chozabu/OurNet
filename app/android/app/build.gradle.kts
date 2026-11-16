@@ -37,6 +37,16 @@ android {
         manifestPlaceholders["appLabel"] = "ournet"
     }
 
+    // Builds: `--flavor full` (sideload, development, F-Droid) has
+    // everything; `--flavor play` is the Google Play build, without the
+    // friend network's VpnService (src/full), which Play refuses for OurNet.
+    // Both keep the same application ID.
+    flavorDimensions += "store"
+    productFlavors {
+        create("full") { dimension = "store" }
+        create("play") { dimension = "store" }
+    }
+
     signingConfigs {
         if (keystoreProperties.containsKey("storeFile")) {
             create("upload") {

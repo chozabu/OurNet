@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:ournet_core/ournet_core.dart';
 
+import '../build_info.dart';
 import 'remote_session_banner.dart' show showRemoteLog;
 
 /// What each grant lets a plugin do, as the install prompt says it.
@@ -29,7 +30,13 @@ const grantMeanings = {
       '(desktop only)',
 };
 
-/// The packages shipped in `assets/plugins/`, read off the UI isolate.
+/// Whether this build can run a plugin with [grants]: the Google Play build
+/// has no VPN (see [playBuild]).
+bool grantsAvailable(Set<String> grants) =>
+    !(playBuild && grants.contains('tun'));
+
+/// The packages shipped in `assets/plugins/`, read off the UI isolate, less
+/// those this build cannot run.
 Future<List<PluginPackage>> bundledPlugins() async {
   final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
   final found = <PluginPackage>[];
@@ -39,7 +46,10 @@ Future<List<PluginPackage>> bundledPlugins() async {
       continue;
     }
     final data = (await rootBundle.load(asset)).buffer.asUint8List();
-    found.add(await Isolate.run(() => PluginPackage.read(data)..digest));
+    final package = await Isolate.run(
+      () => PluginPackage.read(data)..digest,
+    );
+    if (grantsAvailable(package.manifest.grants)) found.add(package);
   }
   return found;
 }
@@ -62,6 +72,25 @@ Future<bool> confirmPluginInstall(
   PluginPackage? runtime,
   Json? source,
 }) async {
+  if (!grantsAvailable(grants)) {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('$name can’t run here'),
+        content: const Text(
+          'It needs a VPN, which the Google Play version of OurNet does not '
+          'include. OurNet installed from outside Google Play has it.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    return false;
+  }
   final existing = plugins[id];
   final replaces =
       existing?.publisher != null && existing!.publisher != publisher;

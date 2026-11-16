@@ -346,6 +346,8 @@ Learned building it:
   friend still passes through Dart's iroh, one datagram each, until phase 4's
   single library. Android opens the interface through `FriendVpn` (a
   VpnService, with the system's consent) and hands its descriptor to Rust.
+  Only the `full` Android flavor has it: the Google Play build (`play`)
+  leaves out the VpnService, which Play refused, and refuses `tun` plugins.
   OurNet itself is excluded from it: otherwise its own connections could
   route through the network they carry, and the app would take the
   interface for a new default network and rebuild its endpoint.
