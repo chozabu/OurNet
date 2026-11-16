@@ -1,0 +1,20 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- The F-Droid build: the full build without Google's libraries. It has
+         the friend network's VpnService (as src/full) and no Firebase push
+         wake-up (declared in src/full and src/play only). image_picker's
+         empty Play services metadata service is removed too. -->
+    <application>
+        <service
+            android:name=".FriendVpn"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+        <service
+            android:name="com.google.android.gms.metadata.ModuleDependencies"
+            tools:node="remove" />
+    </application>
+</manifest>
