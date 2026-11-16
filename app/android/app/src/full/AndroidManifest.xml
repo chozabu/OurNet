@@ -1,7 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Only in the full build (sideload; src/fdroid has a copy): Google Play refuses a
+    <!-- The full build (sideload). The VpnService is here and in src/fdroid only: Google Play refuses a
          VpnService for OurNet, so the play flavor leaves it out. -->
     <application>
+        <!-- Push wake-up: friends wake OurNet through FCM (PushWake, in
+             src/gms). Firebase starts only when res/values/firebase.xml is
+             filled in, and makes no token until push wake-up is turned on. -->
+        <service android:name=".PushWake" android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <meta-data android:name="firebase_messaging_auto_init_enabled" android:value="false" />
         <!-- The friend network plugin's interface: see FriendVpn and docs/PLUGINS.md. -->
         <service
             android:name=".FriendVpn"

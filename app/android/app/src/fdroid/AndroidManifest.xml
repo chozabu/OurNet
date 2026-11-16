@@ -2,7 +2,8 @@
     xmlns:tools="http://schemas.android.com/tools">
     <!-- The F-Droid build: the full build without Google's libraries. It has
          the friend network's VpnService (as src/full) and no Firebase push
-         wake-up, so main's PushWake service is removed. -->
+         wake-up (declared in src/full and src/play only). image_picker's
+         empty Play services metadata service is removed too. -->
     <application>
         <service
             android:name=".FriendVpn"
@@ -12,7 +13,8 @@
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
-        <service android:name=".PushWake" tools:node="remove" />
-        <meta-data android:name="firebase_messaging_auto_init_enabled" tools:node="remove" />
+        <service
+            android:name="com.google.android.gms.metadata.ModuleDependencies"
+            tools:node="remove" />
     </application>
 </manifest>

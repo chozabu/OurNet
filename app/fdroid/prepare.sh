@@ -24,7 +24,7 @@ for package in google_mlkit_text_recognition mobile_scanner geolocator; do
   grep -q "^  $package:" "$pubspec" || { echo "$package is not in pubspec.yaml" >&2; exit 1; }
   sed -i "/^  $package:/d" "$pubspec"
 done
-sed -i 's/^dependencies:$/dependencies:\n  flutter_zxing: 3.1.1\n  permission_handler: 13.0.2/' "$pubspec"
+sed -i 's/^dependencies:$/dependencies:\n  flutter_zxing: 3.1.1\n  permission_handler: 12.0.1/' "$pubspec"
 
 # The packages app/assets/plugins ships; keep in step with it.
 shipped="device-dashboard git js microblog pong remote-desktop remote-input tictactoe vpn wiki"
