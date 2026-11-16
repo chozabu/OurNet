@@ -2214,6 +2214,9 @@ class _OurNetAppState extends State<OurNetApp> with WidgetsBindingObserver {
   }
 
   Future<Json> openPluginInterface(String plugin, Json settings) async {
+    if (playBuild) {
+      throw StateError('The Google Play version of OurNet has no VPN');
+    }
     if (Platform.isAndroid) {
       try {
         final fd = await _vpn.invokeMethod<int>('open', settings);

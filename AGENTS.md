@@ -63,8 +63,13 @@ their packages (test fixtures in `core/test/fixtures`) need no build.
 - Android profile runs install as `org.chozabu.ournet.profile`; never run
   measurement builds under the everyday application ID. Extend
   `integration_test/photo_scroll_test.dart` for list/image changes.
+- Android builds need `--flavor`: `full` (development, sideload, F-Droid)
+  has everything; `play` is the Google Play build, which has no VpnService
+  (Play refused it) and so hides plugins granted `tun`, such as the friend
+  network (`playBuild` in `app/lib/build_info.dart`). Run and drive Android
+  with `--flavor full`.
 - Tester builds go to Google Play internal testing via
-  `tool/release-android.ps1 -Notes "..."`. `tool/release-all.ps1 -Notes "..."`
+  `tool/release-android.ps1 -Notes "..."` (the play flavor). `tool/release-all.ps1 -Notes "..."`
   releases to Play and the Microsoft Store together (checks both stores'
   credentials before building). The upload keystore and Play service
   account key live in `%USERPROFILE%\.ournet-signing`, never in the repo.

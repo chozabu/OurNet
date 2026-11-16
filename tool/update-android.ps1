@@ -37,7 +37,7 @@ if ($Device) {
 elseif ($taskDevices.Count -eq 0) { throw 'No authorised Android device found. Connect your phone, enable USB debugging and accept its authorisation prompt.' }
 else { throw "Multiple devices found: $($taskDevices -join ', '). Select one with -Device SERIAL." }
 
-$taskApk = Join-Path $taskRoot "app/build/app/outputs/flutter-apk/app-$taskMode.apk"
+$taskApk = Join-Path $taskRoot "app/build/app/outputs/flutter-apk/app-full-$taskMode.apk"
 if (!$SkipBuild) {
   $taskAbi = (Invoke-Native { & $taskAdb -s $Device shell getprop ro.product.cpu.abi } | Out-String).Trim()
   if ($LASTEXITCODE -ne 0) { throw 'Unable to read the Android CPU architecture.' }
@@ -52,7 +52,7 @@ if (!$SkipBuild) {
   $taskVersionCode = [int][Math]::Floor(([DateTime]::UtcNow - [DateTime]::new(2026, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)).TotalMinutes) + 1000
   Push-Location (Join-Path $taskRoot 'app')
   try {
-    Invoke-Native { flutter build apk "--$taskMode" --no-tree-shake-icons --target-platform $taskPlatform --build-number $taskVersionCode "--dart-define=OURNET_BUILD=$(Get-Date -Format 'yyyyMMdd-HHmmss')" }
+    Invoke-Native { flutter build apk --flavor full "--$taskMode" --no-tree-shake-icons --target-platform $taskPlatform --build-number $taskVersionCode "--dart-define=OURNET_BUILD=$(Get-Date -Format 'yyyyMMdd-HHmmss')" }
     if ($LASTEXITCODE -ne 0) { throw 'Android build failed. The installed app has not been changed.' }
   } finally { Pop-Location }
 }

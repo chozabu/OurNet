@@ -27,7 +27,9 @@ if ($Performance) {
       # from the everyday app and its data. Compile once; reports retain their
       # journey keys, including when an acceptance gate fails.
       Remove-Item build/integration_response_data.json -ErrorAction SilentlyContinue
-      flutter drive --profile -d $Device --driver=test_driver/performance.dart --target=integration_test/performance_test.dart --dart-define=PERF_ENFORCE=true
+      # Android builds need a flavor (full: everything, as sideloaded).
+      $taskFlavor = if ($Device -in 'windows','linux','macos') { @() } else { @('--flavor','full') }
+      flutter drive --profile -d $Device @taskFlavor --driver=test_driver/performance.dart --target=integration_test/performance_test.dart --dart-define=PERF_ENFORCE=true
       $taskExit = $LASTEXITCODE
       if (Test-Path build/integration_response_data.json) {
         Copy-Item build/integration_response_data.json "build/performance_test-$Device.json" -Force

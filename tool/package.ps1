@@ -113,9 +113,9 @@ Start-Process -FilePath (Join-Path $PSScriptRoot 'ournet.exe') -ArgumentList "--
     if($Android){
       Pop-Location
       Push-Location (Join-Path $taskRoot 'app')
-      flutter build apk --debug --target-platform android-arm64 "--dart-define=OURNET_BUILD=$taskBuild"
+      flutter build apk --flavor full --debug --target-platform android-arm64 "--dart-define=OURNET_BUILD=$taskBuild"
       if($LASTEXITCODE -ne 0){throw 'Android build failed'}
-      Copy-Item -LiteralPath 'build/app/outputs/flutter-apk/app-debug.apk' -Destination "$taskOutput-android-debug.apk"
+      Copy-Item -LiteralPath 'build/app/outputs/flutter-apk/app-full-debug.apk' -Destination "$taskOutput-android-debug.apk"
     }
     Get-ChildItem -Path "$taskOutput-*" -File | Get-FileHash -Algorithm SHA256 | ForEach-Object {
       "$($_.Hash)  $([IO.Path]::GetFileName($_.Path))" | Set-Content "$($_.Path).sha256"

@@ -1,0 +1,15 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Only in the full build (sideload, F-Droid): Google Play refuses a
+         VpnService for OurNet, so the play flavor leaves it out. -->
+    <application>
+        <!-- The friend network plugin's interface: see FriendVpn and docs/PLUGINS.md. -->
+        <service
+            android:name=".FriendVpn"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

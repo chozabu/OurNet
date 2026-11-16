@@ -213,8 +213,8 @@ instantiations, previews generated, RSS, image cache size, and the share of
 
 ```powershell
 cd app
-flutter drive --profile -d DEVICE_ID --driver=test_driver/performance.dart --target=integration_test/photo_scroll_test.dart
-flutter drive --profile -d DEVICE_ID --driver=test_driver/performance.dart --target=integration_test/photo_scroll_test.dart --dart-define=PHOTO_SCENARIO=large --dart-define=WARM_CYCLES=2
+flutter drive --profile -d DEVICE_ID --flavor full --driver=test_driver/performance.dart --target=integration_test/photo_scroll_test.dart
+flutter drive --profile -d DEVICE_ID --flavor full --driver=test_driver/performance.dart --target=integration_test/photo_scroll_test.dart --dart-define=PHOTO_SCENARIO=large --dart-define=WARM_CYCLES=2
 ```
 
 Android profile builds use the application ID `org.chozabu.ournet.profile`
@@ -304,7 +304,7 @@ time, so the app was never measured there.
 
 ```powershell
 cd app
-flutter drive --profile -d DEVICE_ID --driver=test_driver/performance.dart --target=integration_test/note_history_test.dart --dart-define=NOTES=200 --dart-define=EDITS=60
+flutter drive --profile -d DEVICE_ID --flavor full --driver=test_driver/performance.dart --target=integration_test/note_history_test.dart --dart-define=NOTES=200 --dart-define=EDITS=60
 ```
 
 That builds roughly 12,000 note objects before the measured camera return.
@@ -627,7 +627,7 @@ The external camera and the network stack are not exercised.
 
 ```powershell
 cd app
-flutter drive --profile -d DEVICE_ID --driver=test_driver/performance.dart --target=integration_test/note_history_test.dart
+flutter drive --profile -d DEVICE_ID --flavor full --driver=test_driver/performance.dart --target=integration_test/note_history_test.dart
 ```
 
 `NOTE_HISTORY_BASELINE.json` records single profile runs on the BV6600 Pro,

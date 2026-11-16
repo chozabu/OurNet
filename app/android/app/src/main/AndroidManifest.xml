@@ -51,15 +51,8 @@
         <meta-data android:name="firebase_messaging_auto_init_enabled" android:value="false" />
         <!-- Decline on a call ringing from a push (IncomingCall). -->
         <receiver android:name=".IncomingCall$Decline" android:exported="false" />
-        <!-- The friend network plugin's interface: see FriendVpn and docs/PLUGINS.md. -->
-        <service
-            android:name=".FriendVpn"
-            android:exported="false"
-            android:permission="android.permission.BIND_VPN_SERVICE">
-            <intent-filter>
-                <action android:name="android.net.VpnService" />
-            </intent-filter>
-        </service>
+        <!-- The friend network's VpnService is in src/full only (not the
+             Google Play build). -->
         <receiver android:name=".ConnectionService$Starter" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
