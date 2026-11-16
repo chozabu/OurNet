@@ -42,7 +42,8 @@
         </service>
         <!-- Push wake-up: friends wake OurNet through FCM (PushWake). Firebase
              starts only when res/values/firebase.xml is filled in, and makes
-             no token until push wake-up is turned on. -->
+             no token until push wake-up is turned on. The class is in
+             src/gms; the F-Droid build removes this (src/fdroid). -->
         <service android:name=".PushWake" android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />

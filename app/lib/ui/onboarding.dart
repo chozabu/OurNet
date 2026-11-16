@@ -3,12 +3,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
 import '../services/session.dart';
 import '../services/device_model.dart';
 import '../services/pairing_discovery.dart';
+import '../services/qr_scanner.dart';
 import '../services/wake.dart' show FcmChannel;
 import 'app.dart';
 import 'backup.dart';
@@ -606,27 +606,19 @@ class _ScanPairingPageState extends State<ScanPairingPage> {
     body: Column(
       children: [
         Expanded(
-          child: MobileScanner(
-            errorBuilder: (context, error) => const Center(
-              child: Text(
+          child: QrScanner(
+            unavailable:
                 'Camera unavailable. Go back and use nearby discovery or paste an invitation.',
-              ),
-            ),
-            onDetect: (capture) {
+            onCode: (value) {
               if (done) return;
-              for (final barcode in capture.barcodes) {
-                try {
-                  final value = barcode.rawValue;
-                  if (value == null) continue;
-                  PairingSession.parse(value);
-                  done = true;
-                  Navigator.of(context).pop(value);
-                  return;
-                } catch (_) {
-                  setState(
-                    () => error = 'Use a current OurNet pairing QR code.',
-                  );
-                }
+              try {
+                PairingSession.parse(value);
+                done = true;
+                Navigator.of(context).pop(value);
+              } catch (_) {
+                setState(
+                  () => error = 'Use a current OurNet pairing QR code.',
+                );
               }
             },
           ),

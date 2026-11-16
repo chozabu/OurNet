@@ -4,11 +4,11 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
 import '../services/pairing_discovery.dart';
+import '../services/qr_scanner.dart';
 
 /// Returned when a friendship completes and the person chose a next step.
 class FriendAdded {
@@ -603,27 +603,18 @@ class _ScanFriendPageState extends State<ScanFriendPage> {
     body: Column(
       children: [
         Expanded(
-          child: MobileScanner(
-            errorBuilder: (_, _) => const Center(
-              child: Text(
-                'Camera unavailable. Go back and paste the invitation.',
-              ),
-            ),
-            onDetect: (capture) {
+          child: QrScanner(
+            unavailable: 'Camera unavailable. Go back and paste the invitation.',
+            onCode: (text) {
               if (done) return;
-              for (final code in capture.barcodes) {
-                try {
-                  final text = code.rawValue;
-                  if (text == null) continue;
-                  FriendSession.parse(text);
-                  done = true;
-                  Navigator.pop(context, text);
-                  return;
-                } catch (_) {
-                  setState(
-                    () => error = 'Use a current OurNet friend invitation.',
-                  );
-                }
+              try {
+                FriendSession.parse(text);
+                done = true;
+                Navigator.pop(context, text);
+              } catch (_) {
+                setState(
+                  () => error = 'Use a current OurNet friend invitation.',
+                );
               }
             },
           ),

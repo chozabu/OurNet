@@ -37,14 +37,30 @@ android {
         manifestPlaceholders["appLabel"] = "ournet"
     }
 
-    // Builds: `--flavor full` (sideload, development, F-Droid) has
-    // everything; `--flavor play` is the Google Play build, without the
-    // friend network's VpnService (src/full), which Play refuses for OurNet.
-    // Both keep the same application ID.
+    // Builds: `--flavor full` (sideload, development) has everything;
+    // `--flavor play` is the Google Play build, without the friend network's
+    // VpnService (src/full), which Play refuses for OurNet; `--flavor fdroid`
+    // is the F-Droid build: the VPN but none of Google's libraries, so no
+    // Firebase push wake-up (src/gms). Its Dart side needs
+    // app/fdroid/prepare.sh first. All keep the same application ID.
     flavorDimensions += "store"
     productFlavors {
         create("full") { dimension = "store" }
         create("play") { dimension = "store" }
+        create("fdroid") { dimension = "store" }
+    }
+    sourceSets {
+        getByName("full") {
+            java.srcDir("src/gms/kotlin")
+            res.srcDir("src/gms/res")
+        }
+        getByName("play") {
+            java.srcDir("src/gms/kotlin")
+            res.srcDir("src/gms/res")
+        }
+        getByName("fdroid") {
+            java.srcDir("src/full/kotlin")
+        }
     }
 
     signingConfigs {
@@ -90,9 +106,11 @@ dependencies {
     add("profileImplementation", "androidx.test:runner:1.7.0")
     add("profileImplementation", "junit:junit:4.13.2")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-    // Push wake-up (PushWake.kt). Configured by res/values/firebase.xml
-    // rather than the google-services plugin, so builds without it work.
-    implementation("com.google.firebase:firebase-messaging:25.0.0")
+    // Push wake-up (src/gms PushWake.kt). Configured by res/values/firebase.xml
+    // rather than the google-services plugin, so builds without it work. Not
+    // in the F-Droid build.
+    add("fullImplementation", "com.google.firebase:firebase-messaging:25.0.0")
+    add("playImplementation", "com.google.firebase:firebase-messaging:25.0.0")
     implementation("androidx.work:work-runtime:2.11.2")
     // NoiseSuppressor.kt implements flutter_webrtc's capture hook, whose
     // interface comes from the WebRTC SDK; keep this equal to the version in
