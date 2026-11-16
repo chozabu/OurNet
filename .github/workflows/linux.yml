@@ -54,7 +54,7 @@ jobs:
     needs: bundle
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
       options: --privileged
     steps:
       - uses: actions/checkout@v4
@@ -68,6 +68,20 @@ jobs:
         run: |
           git clone https://github.com/flathub/shared-modules app/linux/flatpak/shared-modules
           git -C app/linux/flatpak/shared-modules checkout a58e654b9113feffaee113cc7167ebbbdb406bee
+      # The image ships its runtimes in a read-only overlay layer. When Flathub
+      # has a newer runtime commit, flatpak-builder updates them in place and
+      # ostree renames directories from that layer, which overlayfs refuses
+      # ("Invalid cross-device link"). Copy the installations up first.
+      - name: Make Flatpak installations writable
+        run: |
+          flatpak --installations
+          for d in /var/lib/flatpak "$HOME/.local/share/flatpak"; do
+            [ -d "$d" ] || continue
+            cp -a "$d" "$d.rw"
+            rm -rf "$d"
+            mv "$d.rw" "$d"
+          done
+          flatpak list --runtime
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: OurNet.flatpak
