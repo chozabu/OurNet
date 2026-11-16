@@ -2,7 +2,9 @@ param(
   [string]$Notes,
   [ValidateSet('internal','alpha','beta','production')][string]$Track = 'internal',
   [string]$Key = (Join-Path $env:USERPROFILE '.ournet-signing/play-service-account.json'),
-  [switch]$SkipUpload
+  [switch]$SkipUpload,
+  # Play holds the release until 'Send changes for review' in Play Console; needed while Console has changes waiting for manual review.
+  [switch]$NoReview
 )
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell turns native stderr (e.g. Gradle/Kotlin warnings) into
@@ -42,6 +44,7 @@ Push-Location (Join-Path $PSScriptRoot 'play_upload')
 try {
   $taskArgs = @('run', 'bin/play_upload.dart', '--key', $Key, '--bundle', $taskBundle, '--track', $Track)
   if ($Notes) { $taskArgs += @('--notes', $Notes) }
+  if ($NoReview) { $taskArgs += '--no-review' }
   Invoke-Native { dart @taskArgs }
   if ($LASTEXITCODE -ne 0) { throw 'Upload to Google Play failed.' }
 } finally { Pop-Location }

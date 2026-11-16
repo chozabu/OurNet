@@ -1,7 +1,7 @@
 // Uploads an Android App Bundle to a Google Play track and rolls it out.
 //
 // dart run bin/play_upload.dart --key service-account.json --bundle app.aab
-//   [--package org.chozabu.ournet] [--track internal] [--notes "What changed"]
+//   [--package org.chozabu.ournet] [--track internal] [--notes "What changed"] [--no-review]
 import 'dart:io';
 
 import 'package:googleapis/androidpublisher/v3.dart';
@@ -9,14 +9,19 @@ import 'package:googleapis_auth/auth_io.dart';
 
 Future<void> main(List<String> args) async {
   final options = <String, String>{};
-  for (var i = 0; i + 1 < args.length; i += 2) {
-    if (!args[i].startsWith('--')) break;
-    options[args[i].substring(2)] = args[i + 1];
+  var noReview = false;
+  for (var i = 0; i < args.length; i++) {
+    if (args[i] == '--no-review') {
+      noReview = true;
+      continue;
+    }
+    if (!args[i].startsWith('--') || i + 1 >= args.length) break;
+    options[args[i].substring(2)] = args[++i];
   }
   final key = options['key'];
   final bundlePath = options['bundle'];
   if (key == null || bundlePath == null) {
-    stderr.writeln('Usage: play_upload --key FILE --bundle FILE [--package ID] [--track NAME] [--notes TEXT]');
+    stderr.writeln('Usage: play_upload --key FILE --bundle FILE [--package ID] [--track NAME] [--notes TEXT] [--no-review]');
     exit(64);
   }
   final packageName = options['package'] ?? 'org.chozabu.ournet';
@@ -50,8 +55,12 @@ Future<void> main(List<String> args) async {
       editId,
       track,
     );
-    await api.edits.commit(packageName, editId);
-    stdout.writeln('Released version code $versionCode to the $track track.');
+    // With --no-review Play holds the edit until someone presses 'Send changes
+    // for review' in Play Console.
+    await api.edits.commit(packageName, editId, changesNotSentForReview: noReview ? true : null);
+    stdout.writeln(noReview
+        ? 'Committed version code $versionCode to the $track track; send it for review in Play Console.'
+        : 'Released version code $versionCode to the $track track.');
   } finally {
     client.close();
   }
