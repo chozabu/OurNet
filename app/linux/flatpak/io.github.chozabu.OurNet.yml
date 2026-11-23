@@ -3,7 +3,7 @@
 # also checks out flathub/shared-modules beside this file. See docs/LINUX.md.
 id: io.github.chozabu.OurNet
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 command: ournet
 finish-args:
