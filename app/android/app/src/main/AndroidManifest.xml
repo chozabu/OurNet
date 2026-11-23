@@ -40,15 +40,9 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Peer-to-peer messaging without a server: keeps an encrypted connection to the user's friends' devices open so their messages and calls arrive immediately. Turned off in the app's settings." />
         </service>
-        <!-- Push wake-up: friends wake OurNet through FCM (PushWake). Firebase
-             starts only when res/values/firebase.xml is filled in, and makes
-             no token until push wake-up is turned on. -->
-        <service android:name=".PushWake" android:exported="false">
-            <intent-filter>
-                <action android:name="com.google.firebase.MESSAGING_EVENT" />
-            </intent-filter>
-        </service>
-        <meta-data android:name="firebase_messaging_auto_init_enabled" android:value="false" />
+        <!-- Firebase push wake-up (PushWake) is declared in src/full and
+             src/play only: the F-Droid build has none, and release lint
+             checks this manifest before flavors could remove it. -->
         <!-- Decline on a call ringing from a push (IncomingCall). -->
         <receiver android:name=".IncomingCall$Decline" android:exported="false" />
         <!-- The friend network's VpnService is in src/full only (not the

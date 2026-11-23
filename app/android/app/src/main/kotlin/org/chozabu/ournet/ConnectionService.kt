@@ -262,6 +262,7 @@ class ConnectionService : Service() {
             cache.put(ENGINE, engine)
             attach(context, engine)
             PushWake.attach(context, engine)
+            DeviceLocation.attach(context, engine)
             engine.dartExecutor.executeDartEntrypoint(DartExecutor.DartEntrypoint.createDefault())
             return engine
         }

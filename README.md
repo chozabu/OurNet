@@ -4,6 +4,9 @@ OurNet is a serverless app for notes, chat, forums and calendars. It shares your
 data directly between your own devices and the people you trust, with no
 central platform in between.
 
+[![Get it from Microsoft Store](https://img.shields.io/badge/Microsoft_Store-Get_it-0078D4?logo=microsoft&logoColor=white)](https://apps.microsoft.com/detail/9N6P4X13QG9M)
+[![Get it on Google Play](https://img.shields.io/badge/Google_Play-Get_it-01875F?logo=googleplay&logoColor=white)](https://play.google.com/store/apps/details?id=org.chozabu.ournet)
+
 ![Notes on Windows](docs/screenshots/notes.png)
 
 Most communication tools depend on a company's servers: they hold your data,
@@ -116,9 +119,10 @@ from `transport`. It stores an encrypted identity vault and SQLite content in
 the chosen folder, and accepts `card`, `add <card>`, `sync`,
 `subscribe <space>`, `post <text>` and `quit`.
 
-The README screenshots come from
-`flutter test test/readme_shots_test.dart --dart-define=README_SHOTS=<folder>`
-in `app`, which draws the app with made-up content.
+The README and store screenshots come from
+`flutter test test/store_shots_test.dart --dart-define=STORE_SHOTS=<folder>`
+in `app`, which draws the app with made-up content; `tool/store_shots.py`
+has the steps.
 
 ## Product and protocol
 

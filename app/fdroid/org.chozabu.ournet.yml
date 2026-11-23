@@ -1,0 +1,122 @@
+# Draft of fdroiddata's metadata/org.chozabu.ournet.yml, for the merge
+# request to https://gitlab.com/fdroid/fdroiddata. Kept here so it changes
+# with the build; copy it over when submitting or updating.
+#
+# One build per ABI (versionCode 10 * pubspec build number + ABI), as each
+# compiles iroh, OurNet's native library and whisper.cpp from source.
+Categories:
+  - Internet
+  - Connectivity
+License: AGPL-3.0-only
+AuthorName: Chozabu
+SourceCode: https://github.com/chozabu/OurNet
+IssueTracker: https://github.com/chozabu/OurNet/issues
+
+AutoName: OurNet
+
+RepoType: git
+Repo: https://github.com/chozabu/OurNet.git
+
+Builds:
+  - versionName: 0.2.66
+    versionCode: 631
+    commit: v0.2.66
+    subdir: app
+    submodules: false
+    sudo:
+      - apt-get update
+      - apt-get install -y cmake ninja-build clang
+    output: build/app/outputs/flutter-apk/app-fdroid-release.apk
+    srclibs:
+      - flutter@3.47.7
+      - rustup@1.28.2
+    rm:
+      - app/assets/plugins
+    prebuild:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$rustup$$/rustup-init.sh -y --default-toolchain 1.91.0 --profile minimal
+        --target armv7-linux-androideabi,aarch64-linux-android,x86_64-linux-android,wasm32-unknown-unknown
+      - source $HOME/.cargo/env
+      - $$flutter$$/bin/flutter config --no-analytics
+      - export PATH=$$flutter$$/bin:$PATH
+      - ./fdroid/prepare.sh --plugins
+    scanignore:
+      - app/.pub-cache
+    build:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - source $HOME/.cargo/env
+      - $$flutter$$/bin/flutter build apk --release --flavor fdroid --no-tree-shake-icons
+        --target-platform android-arm --build-number 631
+    ndk: 29.0.14206865
+
+  - versionName: 0.2.66
+    versionCode: 632
+    commit: v0.2.66
+    subdir: app
+    submodules: false
+    sudo:
+      - apt-get update
+      - apt-get install -y cmake ninja-build clang
+    output: build/app/outputs/flutter-apk/app-fdroid-release.apk
+    srclibs:
+      - flutter@3.47.7
+      - rustup@1.28.2
+    rm:
+      - app/assets/plugins
+    prebuild:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$rustup$$/rustup-init.sh -y --default-toolchain 1.91.0 --profile minimal
+        --target armv7-linux-androideabi,aarch64-linux-android,x86_64-linux-android,wasm32-unknown-unknown
+      - source $HOME/.cargo/env
+      - $$flutter$$/bin/flutter config --no-analytics
+      - export PATH=$$flutter$$/bin:$PATH
+      - ./fdroid/prepare.sh --plugins
+    scanignore:
+      - app/.pub-cache
+    build:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - source $HOME/.cargo/env
+      - $$flutter$$/bin/flutter build apk --release --flavor fdroid --no-tree-shake-icons
+        --target-platform android-arm64 --build-number 632
+    ndk: 29.0.14206865
+
+  - versionName: 0.2.66
+    versionCode: 633
+    commit: v0.2.66
+    subdir: app
+    submodules: false
+    sudo:
+      - apt-get update
+      - apt-get install -y cmake ninja-build clang
+    output: build/app/outputs/flutter-apk/app-fdroid-release.apk
+    srclibs:
+      - flutter@3.47.7
+      - rustup@1.28.2
+    rm:
+      - app/assets/plugins
+    prebuild:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$rustup$$/rustup-init.sh -y --default-toolchain 1.91.0 --profile minimal
+        --target armv7-linux-androideabi,aarch64-linux-android,x86_64-linux-android,wasm32-unknown-unknown
+      - source $HOME/.cargo/env
+      - $$flutter$$/bin/flutter config --no-analytics
+      - export PATH=$$flutter$$/bin:$PATH
+      - ./fdroid/prepare.sh --plugins
+    scanignore:
+      - app/.pub-cache
+    build:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - source $HOME/.cargo/env
+      - $$flutter$$/bin/flutter build apk --release --flavor fdroid --no-tree-shake-icons
+        --target-platform android-x64 --build-number 633
+    ndk: 29.0.14206865
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^v[0-9.]+$
+VercodeOperation:
+  - 10*%c+1
+  - 10*%c+2
+  - 10*%c+3
+UpdateCheckData: app/pubspec.yaml|version:\s.+\+(\d+)|.|version:\s(.+)\+
+CurrentVersion: 0.2.66
+CurrentVersionCode: 633

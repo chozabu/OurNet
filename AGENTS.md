@@ -63,11 +63,20 @@ their packages (test fixtures in `core/test/fixtures`) need no build.
 - Android profile runs install as `org.chozabu.ournet.profile`; never run
   measurement builds under the everyday application ID. Extend
   `integration_test/photo_scroll_test.dart` for list/image changes.
-- Android builds need `--flavor`: `full` (development, sideload, F-Droid)
-  has everything; `play` is the Google Play build, which has no VpnService
+- Android builds need `--flavor`: `full` (development, sideload) has
+  everything; `play` is the Google Play build, which has no VpnService
   (Play refused it) and so hides plugins granted `tun`, such as the friend
-  network (`playBuild` in `app/lib/build_info.dart`). Run and drive Android
+  network (`playBuild` in `app/lib/build_info.dart`); `fdroid` is the
+  F-Droid build, with the VPN but no Google libraries. Run and drive Android
   with `--flavor full`.
+- The F-Droid build swaps a few files for versions without Google's
+  libraries: `app/fdroid/prepare.sh` copies `app/fdroid/lib` over `app/lib`
+  and edits `pubspec.yaml` (QR scanning with zxing, location through
+  `DeviceLocation.kt`, no image text, no Firebase push in `src/gms`). Keep
+  each swapped file's public API identical to the one it replaces, and keep
+  Firebase and ML Kit out of `src/main` and `lib` outside those files. The
+  fdroiddata recipe draft is `app/fdroid/org.chozabu.ournet.yml`; F-Droid
+  builds the tag `v<version>`.
 - Tester builds go to Google Play internal testing via
   `tool/release-android.ps1 -Notes "..."` (the play flavor). `tool/release-all.ps1 -Notes "..."`
   releases to Play and the Microsoft Store together (checks both stores'

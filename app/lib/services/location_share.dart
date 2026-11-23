@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:math' show min;
 import 'package:flutter/foundation.dart';
-import 'package:geolocator/geolocator.dart' as geo;
 import 'package:ournet_core/ournet_core.dart';
 import 'package:ournet_transport/ournet_transport.dart';
+import 'device_position.dart';
 
 /// Whether this device may read its own position.
 enum LocationAccess {
@@ -24,76 +24,6 @@ abstract class PositionSource {
 
   /// One fix now, for when the device has been still for a while.
   Future<Fix?> now();
-}
-
-class DevicePositionSource implements PositionSource {
-  const DevicePositionSource();
-
-  /// Phones and PCs with a location service; the app is only built for these.
-  static bool get supported => Platform.isAndroid || Platform.isWindows;
-
-  @override
-  Future<LocationAccess> access({bool request = false}) async {
-    if (!supported) return LocationAccess.unsupported;
-    try {
-      if (!await geo.Geolocator.isLocationServiceEnabled()) {
-        return LocationAccess.serviceOff;
-      }
-      var permission = await geo.Geolocator.checkPermission();
-      if (permission == geo.LocationPermission.denied && request) {
-        permission = await geo.Geolocator.requestPermission();
-      }
-      return switch (permission) {
-        geo.LocationPermission.always ||
-        geo.LocationPermission.whileInUse => LocationAccess.granted,
-        geo.LocationPermission.deniedForever => LocationAccess.deniedForever,
-        _ => LocationAccess.denied,
-      };
-    } catch (_) {
-      return LocationAccess.unsupported;
-    }
-  }
-
-  static Fix _fix(geo.Position p) => Fix(
-    lat: p.latitude,
-    lng: p.longitude,
-    at: p.timestamp.millisecondsSinceEpoch,
-    accuracy: p.accuracy.isFinite && p.accuracy >= 0 ? p.accuracy : null,
-    heading: p.heading.isFinite && p.heading >= 0 && p.heading <= 360
-        ? p.heading
-        : null,
-    speed: p.speed.isFinite && p.speed >= 0 ? p.speed : null,
-  );
-
-  @override
-  Stream<Fix> fixes() => geo.Geolocator.getPositionStream(
-    locationSettings: Platform.isAndroid
-        ? geo.AndroidSettings(
-            accuracy: geo.LocationAccuracy.high,
-            distanceFilter: 15,
-            intervalDuration: const Duration(seconds: 20),
-          )
-        : const geo.LocationSettings(
-            accuracy: geo.LocationAccuracy.high,
-            distanceFilter: 15,
-          ),
-  ).map(_fix);
-
-  @override
-  Future<Fix?> now() async {
-    try {
-      return _fix(
-        await geo.Geolocator.getCurrentPosition(
-          locationSettings: const geo.LocationSettings(
-            accuracy: geo.LocationAccuracy.medium,
-            timeLimit: Duration(seconds: 30),
-          ),
-        ),
-      );
-    } catch (_) {
-      return null;
-    }
-  }
 }
 
 /// Live location sharing: this device's position goes to this person's other
@@ -422,7 +352,7 @@ class LocationShare extends ChangeNotifier {
   /// Opens the system page where location permission is granted.
   Future<void> openSystemSettings() async {
     try {
-      await geo.Geolocator.openAppSettings();
+      await openLocationSettings();
     } catch (_) {}
   }
 

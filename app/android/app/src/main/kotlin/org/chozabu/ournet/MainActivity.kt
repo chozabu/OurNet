@@ -131,6 +131,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(engine)
         ConnectionService.attach(applicationContext, engine)
         PushWake.attach(applicationContext, engine)
+        DeviceLocation.attach(applicationContext, engine)
         if (ConnectionService.enabled(this)) {
             FlutterEngineCache.getInstance().put(ConnectionService.ENGINE, engine)
         }
