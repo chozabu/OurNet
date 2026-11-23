@@ -119,9 +119,10 @@ from `transport`. It stores an encrypted identity vault and SQLite content in
 the chosen folder, and accepts `card`, `add <card>`, `sync`,
 `subscribe <space>`, `post <text>` and `quit`.
 
-The README screenshots come from
-`flutter test test/readme_shots_test.dart --dart-define=README_SHOTS=<folder>`
-in `app`, which draws the app with made-up content.
+The README and store screenshots come from
+`flutter test test/store_shots_test.dart --dart-define=STORE_SHOTS=<folder>`
+in `app`, which draws the app with made-up content; `tool/store_shots.py`
+has the steps.
 
 ## Product and protocol
 
