@@ -12,6 +12,7 @@ on:
       - 'native/**'
       - 'vendor/**'
       - 'tool/setup.sh'
+      - 'tool/build-iroh.sh'
       - '.github/workflows/linux.yml'
   workflow_dispatch:
 
@@ -34,7 +35,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: native/rust
+          workspaces: |
+            native/rust
+            vendor/iroh_mobile/rust
       - run: tool/setup.sh
       - name: Vault test
         working-directory: app

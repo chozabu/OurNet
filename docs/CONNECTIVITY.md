@@ -139,8 +139,8 @@ more of them, with no new infrastructure:
   behind a home router that allows it becomes directly reachable even from
   networks where hole punching fails. Windows builds now use our own build
   of the binding (`tool/build-iroh.ps1`, run by `tool/setup.ps1` and
-  `tool/package.ps1`), as Android already did; Linux still uses the
-  upstream library (see `tool/setup.sh`).
+  `tool/package.ps1`), as Android already did, and so do Linux builds
+  (`tool/build-iroh.sh`, run by `tool/setup.sh`).
 - **Friends' address hints in the lookup.** Devices already gossip each
   other's addresses (`address/<device>`, learned in every exchange). iroh's
   address lookup now asks those stored hints as well as number0's DNS
@@ -190,9 +190,8 @@ encrypted packets.
   works. Each ICE restart rebinds the shim and offers it again (a restart
   drops the old candidates), and on Android so does a network change.
   Hanging up stops it. An older peer has no shim, so nothing changes with
-  it; neither does a library without one (Linux, which still uses the
-  upstream iroh library, and upstream-only builds). Group calls do not use
-  it yet.
+  it; neither does a library without one (upstream-only builds). Group
+  calls do not use it yet.
 
 Tested: Rust unit tests (halves, the source filter, two endpoints carrying
 1,200-byte packets at QUIC's minimum path MTU, strangers refused), and

@@ -1153,7 +1153,7 @@ class PeerNetwork implements PluginLink {
   /// Whether the loaded iroh library adds a custom address lookup to n0's
   /// rather than replacing it: true for ours (vendor/iroh_mobile), which
   /// exports a marker symbol, false for an upstream prebuilt one or when the
-  /// library cannot be found by name (Linux, loaded by path).
+  /// library cannot be found by name (on Linux, a library without a SONAME).
   static bool get lookupKeepsN0 => _lookupKeepsN0 ??= () {
     try {
       final library = Platform.isIOS || Platform.isMacOS
