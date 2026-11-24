@@ -1,21 +1,10 @@
 #!/usr/bin/env bash
-# Linux counterpart of tool/setup.ps1: fetches dependencies and installs the
-# signed iroh library (verified by iroh_quic:setup) where the Linux build
-# bundles it. That upstream library maps no router ports and is not given the
-# app's address lookup (PeerNetwork.lookupKeepsN0); building
-# vendor/iroh_mobile/rust with cargo and copying its .so to app/native gets
-# both, as tool/build-iroh.ps1 does on Windows.
+# Linux counterpart of tool/setup.ps1: fetches dependencies and builds OurNet's
+# iroh binding where the Linux build bundles it.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$root/app"
-flutter pub get
-dart run iroh_quic:setup --force
-case "$(uname -m)" in
-  x86_64) triple=x86_64-unknown-linux-gnu ;;
-  aarch64) triple=aarch64-unknown-linux-gnu ;;
-  *) echo "No iroh library for $(uname -m)" >&2; exit 1 ;;
-esac
-mkdir -p native
-cp "${XDG_CACHE_HOME:-$HOME/.cache}/iroh_quic/v1.0.3/$triple/libirohdart_ffi.so" native/
+(cd "$root/app" && flutter pub get)
+# Our iroh binding, not the upstream prebuilt one (see tool/build-iroh.sh).
+"$root/tool/build-iroh.sh"
 (cd "$root/core" && dart pub get)
 (cd "$root/transport" && dart pub get)

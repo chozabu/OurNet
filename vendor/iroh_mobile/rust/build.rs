@@ -16,6 +16,14 @@ fn main() {
         .unwrap_or_else(|| "1.0".to_string());
 
     println!("cargo:rustc-env=IROH_CRATE_VERSION={version}");
+
+    // iroh_quic loads the Linux library by path, and OurNet's FFI
+    // (friend_relay.dart, call_media.dart, PeerNetwork.lookupKeepsN0) then opens
+    // it by bare name. glibc matches a bare name to a loaded library only
+    // through its SONAME, which rustc does not set on a cdylib.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libirohdart_ffi.so");
+    }
 }
 
 /// Finds the `version` of the `[[package]]` entry named `iroh` in a Cargo.lock file.

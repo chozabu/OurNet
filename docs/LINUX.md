@@ -8,7 +8,7 @@ On Ubuntu 24.04 or similar, with Flutter and a Rust toolchain:
 sudo apt-get install ninja-build libgtk-3-dev liblzma-dev libsecret-1-dev \
   libjsoncpp-dev libayatana-appindicator3-dev libgstreamer1.0-dev \
   libgstreamer-plugins-base1.0-dev libpulse-dev
-tool/setup.sh            # dependencies + the signed iroh library
+tool/setup.sh            # dependencies + OurNet's iroh library (cargo)
 (
   cd app
   task_profile=$(cat ../native/build-profile.txt)

@@ -16,7 +16,8 @@ import 'package:ournet_transport/ournet_transport.dart';
 /// microphone. Each side is given its own shim as the other's candidate,
 /// as `Calls` does.
 ///
-/// Needs OurNet's iroh library (`tool/build-iroh.ps1`). Run by hand:
+/// Needs OurNet's iroh library (`tool/build-iroh.ps1`, or
+/// `tool/build-iroh.sh` on Linux). Run by hand:
 /// `flutter test integration_test/call_media_iroh_test.dart -d windows`.
 /// Earlier, with a shim in Dart, this showed libwebrtc never sends to a
 /// loopback candidate, which is why shims bind to the device's own address.
